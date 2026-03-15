@@ -55,11 +55,11 @@ def list_assets(
 
     with _pg() as conn:
         with conn.cursor() as cur:
-            cur.execute(f"SELECT COUNT(*) FROM assets a JOIN collections c ON c.uuid=a.collection_uuid LEFT JOIN asset_editorial ae ON ae.asset_uuid=a.uuid {wsql}", params)
+            cur.execute(f"SELECT COUNT(*) FROM assets a JOIN containers c ON c.uuid=a.container_id LEFT JOIN asset_editorial ae ON ae.asset_uuid=a.uuid {wsql}", params)
             total = cur.fetchone()[0]
-            cur.execute("SELECT COUNT(*) FROM assets a JOIN collections c ON c.uuid=a.collection_uuid WHERE c.name=ANY(%s) AND NOT EXISTS(SELECT 1 FROM asset_tags at2 WHERE at2.asset_uuid=a.uuid)", [INTERSTITIAL_COLS])
+            cur.execute("SELECT COUNT(*) FROM assets a JOIN containers c ON c.uuid=a.container_id WHERE c.name=ANY(%s) AND NOT EXISTS(SELECT 1 FROM asset_tags at2 WHERE at2.asset_uuid=a.uuid)", [INTERSTITIAL_COLS])
             untagged = cur.fetchone()[0]
-            cur.execute(f"SELECT a.uuid, a.uri, a.duration_ms, c.name, ae.payload FROM assets a JOIN collections c ON c.uuid=a.collection_uuid LEFT JOIN asset_editorial ae ON ae.asset_uuid=a.uuid {wsql} ORDER BY c.name, a.uri LIMIT %s OFFSET %s", params + [per_page, offset])
+            cur.execute(f"SELECT a.uuid, a.uri, a.duration_ms, c.name, ae.payload FROM assets a JOIN containers c ON c.uuid=a.container_id LEFT JOIN asset_editorial ae ON ae.asset_uuid=a.uuid {wsql} ORDER BY c.name, a.uri LIMIT %s OFFSET %s", params + [per_page, offset])
             rows = cur.fetchall()
             uuids = [str(r[0]) for r in rows]
             tmap: dict = {u: [] for u in uuids}

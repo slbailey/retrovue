@@ -179,8 +179,8 @@ The hierarchy is exposed through the CLI and API:
   - `retrovue source ingest` - Bulk ingest all collections _(Contract: [SourceIngest](../contracts/resources/SourceIngestContract.md))_
   - `retrovue source list`, `retrovue source show`, `retrovue source update` _(Contracts: Planned)_
 - **Collection operations**:
-  - `retrovue collection ingest` - Targeted collection ingest _(Contract: [CollectionIngest](../contracts/resources/CollectionIngestContract.md))_
-  - `retrovue collection wipe` - Complete collection cleanup _(Contract: [CollectionWipe](../contracts/resources/CollectionWipeContract.md))_
+  - `retrovue collection ingest` - Targeted collection ingest _(Contract: [CollectionIngest](../contracts/resources/ContainerIngestContract.md))_
+  - `retrovue collection wipe` - Complete collection cleanup _(Contract: [CollectionWipe](../contracts/resources/ContainerWipeContract.md))_
   - `retrovue collection list`, `retrovue collection update`, `retrovue collection delete` _(Contracts: Planned)_
 - **Asset operations**:
   - `retrovue assets select` _(Contract: [AssetsSelect](../contracts/resources/AssetsSelectContract.md))_

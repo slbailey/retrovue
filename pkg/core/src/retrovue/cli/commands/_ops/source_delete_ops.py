@@ -23,7 +23,7 @@ from typing import Any
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from ....domain.entities import Asset, Collection, PathMapping, Source
+from ....domain.entities import Asset, Container, PathMapping, Source
 from .confirmation import PendingDeleteSummary, SourceImpact
 
 
@@ -120,13 +120,13 @@ def build_pending_delete_summary(db: Session, sources: list[Source]) -> PendingD
 
     for source in sources:
         # Count collections for this source
-        collections_count = db.query(Collection).filter(Collection.source_id == source.id).count()
+        collections_count = db.query(Container).filter(Container.source_id == source.id).count()
 
         # Count path mappings for this source (through collections)
         path_mappings_count = (
             db.query(PathMapping)
-            .join(Collection, PathMapping.collection_uuid == Collection.uuid)
-            .filter(Collection.source_id == source.id)
+            .join(Container, PathMapping.container_id == Container.uuid)
+            .filter(Container.source_id == source.id)
             .count()
         )
 
@@ -239,20 +239,20 @@ def delete_one_source_transactionally(db: Session, source_id: str) -> dict[str, 
         # TODO: Add lock validation when concurrent operation support is added
 
         # Get counts before deletion for audit logging
-        collections_count = db.query(Collection).filter(Collection.source_id == source_id).count()
+        collections_count = db.query(Container).filter(Container.source_id == source_id).count()
 
         path_mappings_count = (
             db.query(PathMapping)
-            .join(Collection, PathMapping.collection_uuid == Collection.uuid)
-            .filter(Collection.source_id == source_id)
+            .join(Container, PathMapping.container_id == Container.uuid)
+            .filter(Container.source_id == source_id)
             .count()
         )
 
         # Pre-check for dependent assets to avoid FK violations and produce friendly message
         assets_count = (
             db.query(Asset)
-            .join(Collection, Asset.collection_uuid == Collection.uuid)
-            .filter(Collection.source_id == source_id)
+            .join(Container, Asset.container_id == Container.uuid)
+            .filter(Container.source_id == source_id)
             .count()
         )
         if assets_count > 0:
@@ -274,7 +274,7 @@ def delete_one_source_transactionally(db: Session, source_id: str) -> dict[str, 
 
         # Verify no orphaned collections remain
         remaining_collections = (
-            db.query(Collection).filter(Collection.source_id == source_id).count()
+            db.query(Container).filter(Container.source_id == source_id).count()
         )
         if remaining_collections > 0:
             raise RuntimeError(

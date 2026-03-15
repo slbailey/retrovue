@@ -126,7 +126,7 @@ retrovue source collections --source-id "My Plex"
 ### Path Mappings Table
 
 - **id**: UUID primary key
-- **collection_id**: Foreign key to source_collections table
+- **container reference**: Foreign key to containers (contract term; DB table may still be `collections` until final migration)
 - **plex_path**: External system path
 - **local_path**: Local filesystem path
 - **created_at**: Timestamp
@@ -135,8 +135,8 @@ retrovue source collections --source-id "My Plex"
 
 ### Content Discovery
 
-- **IngestOrchestrator**: Consumes enabled collections for content discovery
-- **SourceService**: Manages source lifecycle and collection discovery
+- **IngestOrchestrator**: Consumes enabled containers for content discovery
+- **SourceService**: Manages source lifecycle and container discovery
 - **ImporterRegistry**: Provides factory methods for creating importer instances
 
 ### Metadata Enrichment

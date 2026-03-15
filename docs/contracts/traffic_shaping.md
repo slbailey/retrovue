@@ -310,7 +310,7 @@ When `DatabaseAssetLibrary` is constructed without a `channel_slug`, cooldown an
 - An asset with `state='new'` MUST NOT appear in the pool.
 - An asset with null `duration_ms` MUST NOT appear in the pool.
 - An asset with `duration_ms` exceeding `max_duration_ms` MUST NOT appear in the pool.
-- The pool query MUST NOT reference `collection_uuid` or `collection_name`.
+- The pool query MUST NOT reference container identity (e.g. `collection_uuid` or `collection_name`; contract: container_id/container_name) for traffic-layer filtering — filler selection is by type/tags, not by container.
 
 ### Type Filtering
 

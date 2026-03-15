@@ -1,8 +1,8 @@
-# Testing Strategy: Collection Contracts with Asset Dependencies
+# Testing Strategy: Container (Collection) Contracts with Asset Dependencies
 
 ## Problem Statement
 
-Collection ingest contracts have significant dependencies on the Asset domain:
+Container ingest contracts (contract entity: Container; code/test names may still use "Collection" until later phases) have significant dependencies on the Asset domain:
 
 - **D-9 to D-17**: Asset persistence, lifecycle states, duplicate detection, timestamps
 - **B-15 to B-20**: Asset statistics, duplicate detection, content change detection
@@ -17,7 +17,7 @@ However, the Asset domain hasn't been built yet. How should we proceed?
 
 #### Behavior Rules (B-#):
 
-- **B-1 to B-13**: Collection validation, scope resolution, prerequisites, importer enumeration
+- **B-1 to B-13**: Container validation, scope resolution, prerequisites, importer enumeration
 - **B-14**: Importer/service separation (verify importer doesn't write to DB)
 
 #### Data Rules (D-#):
@@ -46,7 +46,7 @@ However, the Asset domain hasn't been built yet. How should we proceed?
 1. **Asset Model** (minimal):
 
    - `uuid` (primary key)
-   - `collection_uuid` (foreign key)
+   - `collection_uuid` (foreign key to container; contract: container_id)
    - `state` (`new`, `enriching`, `ready`, `retired`)
    - `canonical_id` (for duplicate detection)
    - `content_hash` (for change detection)
@@ -226,7 +226,7 @@ def test_d13_asset_lifecycle_state():
 
 ## See Also
 
-- [Collection Ingest Contract](../contracts/resources/CollectionIngestContract.md)
+- [Collection Ingest Contract](../contracts/resources/ContainerIngestContract.md)
 - [Asset Domain](../domain/Asset.md)
 - [Ingest Architecture](../developer/IngestArchitecture.md)
 - [Contract Test Guidelines](../contracts/resources/CONTRACT_TEST_GUIDELINES.md)

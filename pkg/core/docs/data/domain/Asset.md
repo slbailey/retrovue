@@ -1,4 +1,4 @@
-_Related: [Collection](Collection.md) • [Source](Source.md) • [Scheduling](Scheduling.md) • [Ingest Pipeline](IngestPipeline.md)_
+_Related: [Container](Container.md) • [Source](Source.md) • [Scheduling](Scheduling.md) • [Ingest Pipeline](IngestPipeline.md)_
 
 # Domain — Asset
 
@@ -248,7 +248,7 @@ The current schema provides a solid foundation for upcoming enrichment and sched
 ## See also
 
 - [Asset Contracts](../contracts/resources/AssetContract.md) - Complete behavioral contracts for all Asset operations
-- [Collection](Collection.md) - Content groupings that contain assets
+- [Container](Container.md) - Content groupings that contain assets
 - [Source](Source.md) - Content sources that contain collections
 - [Scheduling](Scheduling.md) - How ready assets become scheduled content
 - [Ingest Pipeline](IngestPipeline.md) - Content discovery workflow

@@ -156,7 +156,7 @@ This document tracks the migration from legacy tests to contract-based testing a
 ### CollectionList
 
 **Status:** ENFORCED  
-**Contracts:** docs/contracts/resources/CollectionListContract.md  
+**Contracts:** docs/contracts/resources/ContainerListContract.md  
 **Tests:**
 
 - tests/contracts/test_collection_list_contract.py
@@ -167,7 +167,7 @@ This document tracks the migration from legacy tests to contract-based testing a
 ### CollectionShow
 
 **Status:** ENFORCED  
-**Contracts:** docs/contracts/resources/CollectionShowContract.md  
+**Contracts:** docs/contracts/resources/ContainerShowContract.md  
 **Tests:**
 
 - tests/contracts/test_collection_show_contract.py  
@@ -177,7 +177,7 @@ This document tracks the migration from legacy tests to contract-based testing a
 ### CollectionUpdate
 
 **Status:** ENFORCED  
-**Contracts:** docs/contracts/resources/CollectionUpdateContract.md  
+**Contracts:** docs/contracts/resources/ContainerUpdateContract.md  
 **Tests:**
 
 - tests/contracts/test_collection_update_contract.py  
@@ -187,7 +187,7 @@ This document tracks the migration from legacy tests to contract-based testing a
 ### CollectionWipe
 
 **Status:** ENFORCED  
-**Contracts:** docs/contracts/resources/CollectionWipeContract.md  
+**Contracts:** docs/contracts/resources/ContainerWipeContract.md  
 **Tests:**
 
 - tests/contracts/test_collection_wipe_contract.py  
@@ -197,7 +197,7 @@ This document tracks the migration from legacy tests to contract-based testing a
 ### CollectionIngest
 
 **Status:** ENFORCED  
-**Contracts:** docs/contracts/resources/CollectionIngestContract.md  
+**Contracts:** docs/contracts/resources/ContainerIngestContract.md  
 **Tests:**
 
 - tests/contracts/test_collection_ingest_contract.py
@@ -271,7 +271,7 @@ This document tracks the migration from legacy tests to contract-based testing a
 ### Source ↔ Collection Guarantees
 
 **Status:** CROSS-DOMAIN  
-**Document:** docs/contracts/resources/cross-domain/Source_Collection_Guarantees.md  
+**Document:** docs/contracts/resources/cross-domain/Source_Container_Guarantees.md  
 **Tests:** tests/contracts/cross-domain/test_source_collection_guarantees.py  
 **CI:** YES  
 **Notes:** Defines guarantees for source-collection interactions, discovery coordination, and lifecycle synchronization. All 9 tests passing (G-1 through G-6 + exit code semantics + error standards + transaction boundaries).

@@ -133,7 +133,7 @@ def write_active_revision_from_compiled_schedule(
             start_time=start_at,
             duration_sec=int(block["slot_duration_sec"]),
             asset_id=_parse_uuid(block.get("asset_id")),
-            collection_id=_parse_uuid(block.get("collection")),
+            container_id=_parse_uuid(block.get("collection")),
             content_type=_infer_content_type(block),
             window_uuid=_parse_uuid(block.get("window_uuid")),
             slot_index=slot_index,

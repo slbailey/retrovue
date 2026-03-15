@@ -8,9 +8,11 @@ from sqlalchemy.orm import Session
 from ..domain.entities import Source
 
 
-def discover_collections(db: Session, *, source_id: str) -> list[dict[str, Any]]:
+def discover_containers(db: Session, *, source_id: str) -> list[dict[str, Any]]:
     """
-    Discover collections from a Source. Single operation; no persistence.
+    Discover containers from a Source. Single operation; no persistence.
+
+    Pipeline: source resolution → importer list_containers (or list_collections) → return.
     """
     # Try by UUID first (only if it's a valid UUID)
     source = None
@@ -62,12 +64,14 @@ def discover_collections(db: Session, *, source_id: str) -> list[dict[str, Any]]
     # Create importer instance
     importer = get_importer(source.type, **importer_config)
 
-    # Discover collections using the importer
-    collections = importer.list_collections({})
-
-    return collections
+    # Discover containers using the importer (list_collections is the adapter method name)
+    return importer.list_collections({})
 
 
-__all__ = ["discover_collections"]
+# Compatibility: do not use in new code.
+discover_collections = discover_containers
+
+
+__all__ = ["discover_containers", "discover_collections"]
 
 

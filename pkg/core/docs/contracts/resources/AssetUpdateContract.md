@@ -236,5 +236,5 @@ Follow this lifecycle for any change:
 
 - [Asset Contract](AssetContract.md) - Overview of all Asset operations
 - [Asset Domain Documentation](../../domain/Asset.md) - Core domain model
-- [Collection Update Contract](CollectionUpdateContract.md) - Collection update operations
+- [Container Update Contract](ContainerUpdateContract.md) - Collection update operations
 

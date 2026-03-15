@@ -148,7 +148,7 @@ def _reschedule_tier1(
                 start_time=it.start_time,
                 duration_sec=it.duration_sec,
                 asset_id=it.asset_id,
-                collection_id=it.collection_id,
+                collection_id=it.container_id,
                 content_type=it.content_type,
                 window_uuid=it.window_uuid,
                 slot_index=it.slot_index,

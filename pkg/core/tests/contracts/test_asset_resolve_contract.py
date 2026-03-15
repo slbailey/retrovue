@@ -26,7 +26,7 @@ class TestAssetResolveContract:
         # Arrange a fake asset object returned by the usecase layer
         fake_asset = SimpleNamespace(
             uuid="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-            collection_uuid="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            container_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
             uri="/media/a.mp4",
             state="enriching",
             approved_for_broadcast=False,
@@ -50,7 +50,7 @@ class TestAssetResolveContract:
                 fake_db.add(fake_asset)
                 return {
                     "uuid": fake_asset.uuid,
-                    "collection_uuid": fake_asset.collection_uuid,
+                    "collection_uuid": fake_asset.container_id,
                     "uri": fake_asset.uri,
                     "state": "ready",
                     "approved_for_broadcast": True,

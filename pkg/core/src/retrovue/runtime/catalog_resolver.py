@@ -29,7 +29,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from ..domain.entities import Asset, AssetEditorial, AssetProbed, AssetTag, Collection, Marker
+from ..domain.entities import Asset, AssetEditorial, AssetProbed, AssetTag, Container, Marker
 from ..adapters.enrichers.loudness_enricher import get_gain_db_from_probed, needs_loudness_measurement
 from .asset_resolver import AssetMetadata
 
@@ -182,7 +182,7 @@ class CatalogAssetResolver:
             asset_tags[key].append(at.tag)
 
         # Load collection and source name mappings
-        collections = db.query(Collection).all()
+        collections = db.query(Container).all()
         col_name_map: dict[str, str] = {}  # collection_uuid → collection_name
         col_source_map: dict[str, str] = {}  # collection_uuid → source_name
         for col in collections:
@@ -209,7 +209,7 @@ class CatalogAssetResolver:
             season = int(season_raw) if season_raw is not None else None
             episode_num = int(episode_raw) if episode_raw is not None else None
 
-            col_uuid = str(asset.collection_uuid)
+            col_uuid = str(asset.container_id)
             col_name = col_name_map.get(col_uuid, "")
             source_name = col_source_map.get(col_uuid, "")
 

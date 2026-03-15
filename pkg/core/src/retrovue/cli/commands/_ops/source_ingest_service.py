@@ -24,8 +24,8 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from ....domain.entities import Collection, Source
-from .collection_ingest_service import CollectionIngestService
+from ....domain.entities import Container, Source
+from .collection_ingest_service import ContainerIngestService
 
 logger = structlog.get_logger(__name__)
 
@@ -105,7 +105,7 @@ class SourceIngestService:
     """Service for source-level ingest operations.
 
     Orchestrates collection ingest across all eligible collections for a
-    source, delegating each collection to ``CollectionIngestService``.
+    source, delegating each container to ``ContainerIngestService``.
     """
 
     def __init__(self, db: Session):
@@ -122,7 +122,7 @@ class SourceIngestService:
 
         For each collection where ``sync_enabled=True`` AND
         ``ingestible=True``, constructs an importer and delegates to
-        ``CollectionIngestService.ingest_collection()``.
+        ``ContainerIngestService.ingest_container()``.
 
         Args:
             source: The source to ingest.
@@ -137,18 +137,18 @@ class SourceIngestService:
         errors: list[str] = []
         skipped = 0
 
-        # B-2, D-2: Only sync_enabled AND ingestible collections
-        all_collections = (
-            self.db.query(Collection)
+        # B-2, D-2: Only sync_enabled AND ingestible containers
+        all_containers = (
+            self.db.query(Container)
             .filter(
-                Collection.source_id == source.id,
-                Collection.sync_enabled.is_(True),
+                Container.source_id == source.id,
+                Container.sync_enabled.is_(True),
             )
             .all()
         )
 
-        eligible: list[Collection] = []
-        for coll in all_collections:
+        eligible: list[Container] = []
+        for coll in all_containers:
             if coll.ingestible:
                 eligible.append(coll)
             else:
@@ -162,9 +162,9 @@ class SourceIngestService:
         for coll in eligible:
             try:
                 importer = _construct_importer(coll, self.db)
-                cis = CollectionIngestService(self.db)
-                cis_result = cis.ingest_collection(
-                    collection=coll,
+                cis = ContainerIngestService(self.db)
+                cis_result = cis.ingest_container(
+                    container=coll,
                     importer=importer,
                     dry_run=dry_run,
                     test_db=test_db,

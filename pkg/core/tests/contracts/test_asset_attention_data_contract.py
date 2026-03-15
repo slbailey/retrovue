@@ -16,7 +16,7 @@ from retrovue.usecases.asset_attention import list_assets_needing_attention
 def _asset(**kwargs):
     defaults = dict(
         uuid="11111111-1111-1111-1111-111111111111",
-        collection_uuid="22222222-2222-2222-2222-222222222222",
+        container_id="22222222-2222-2222-2222-222222222222",
         uri="/media/a.mp4",
         state="enriching",
         approved_for_broadcast=False,

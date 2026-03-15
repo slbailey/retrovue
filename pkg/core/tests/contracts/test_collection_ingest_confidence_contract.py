@@ -21,7 +21,7 @@ class TestCollectionIngestConfidenceContract:
 
     @patch("retrovue.cli.commands.collection._get_db_context")
     @patch("retrovue.cli.commands.collection.resolve_collection_selector")
-    @patch("retrovue.cli.commands.collection.CollectionIngestService")
+    @patch("retrovue.cli.commands.collection.ContainerIngestService")
     def test_json_includes_thresholds_and_confidence_buckets(
         self, mock_service_cls, mock_resolve, mock_get_db_ctx
     ):
@@ -47,7 +47,7 @@ class TestCollectionIngestConfidenceContract:
 
         payload = {
             "status": "success",
-            "scope": "collection",
+            "scope": "container",
             "collection_id": str(collection.uuid),
             "collection_name": collection.name,
             "thresholds": {"auto_ready": 0.8, "review": 0.5},
@@ -65,7 +65,7 @@ class TestCollectionIngestConfidenceContract:
         }
 
         mock_service = MagicMock()
-        mock_service.ingest_collection.return_value = _FakeResult(payload)
+        mock_service.ingest_container.return_value = _FakeResult(payload)
         mock_service_cls.return_value = mock_service
 
         # Act
@@ -89,7 +89,7 @@ class TestCollectionIngestConfidenceContract:
 
     @patch("retrovue.cli.commands.collection._get_db_context")
     @patch("retrovue.cli.commands.collection.resolve_collection_selector")
-    @patch("retrovue.cli.commands.collection.CollectionIngestService")
+    @patch("retrovue.cli.commands.collection.ContainerIngestService")
     def test_verbose_created_assets_always_new_never_approved(
         self, mock_service_cls, mock_resolve, mock_get_db_ctx
     ):
@@ -113,7 +113,7 @@ class TestCollectionIngestConfidenceContract:
 
         payload = {
             "status": "success",
-            "scope": "collection",
+            "scope": "container",
             "collection_id": str(collection.uuid),
             "collection_name": collection.name,
             "thresholds": {"auto_ready": 0.8, "review": 0.5},
@@ -149,7 +149,7 @@ class TestCollectionIngestConfidenceContract:
         }
 
         mock_service = MagicMock()
-        mock_service.ingest_collection.return_value = _FakeResult(payload)
+        mock_service.ingest_container.return_value = _FakeResult(payload)
         mock_service_cls.return_value = mock_service
 
         result = self.runner.invoke(

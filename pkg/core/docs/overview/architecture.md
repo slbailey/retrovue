@@ -47,16 +47,16 @@ RetroVue is composed of several layers working together to maintain, schedule, a
 **Source**  
 An origin of media content (e.g., Plex server, local filesystem, ad library). Sources are discovered and enumerated to find available content.
 
-**Collection**  
-A logical grouping of related content from a source (e.g., "The Simpsons", "Classic Movies", "Commercials"). Collections organize content into broadcast-relevant categories.
+**Container**  
+A subdivision of a source used for discovery (e.g., Plex library, filesystem directory). Containers organize content into broadcast-relevant categories (e.g., "The Simpsons", "Classic Movies", "Commercials"). *Terminology: architecture uses "Container"; see repo docs/contracts/architecture/TERMINOLOGY_COLLECTION_TO_CONTAINER.md.*
 
 **Asset**  
-The leaf unit RetroVue can eventually broadcast. Each asset belongs to exactly one collection and has a lifecycle state indicating its readiness for scheduling.
+The leaf unit RetroVue can eventually broadcast. Each asset belongs to exactly one container and has a lifecycle state indicating its readiness for scheduling.
 
 #### Ingest Flow
 
 1. **Content Discovery**: Content is discovered from a source
-2. **Organization**: Content is organized into a collection
+2. **Organization**: Content is organized into a container
 3. **Storage**: Content is stored as an asset
 4. **Enrichment**: Assets progress through a state machine: `new` → `enriching` → `ready` → `retired`
 

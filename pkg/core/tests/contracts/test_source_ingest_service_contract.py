@@ -4,10 +4,10 @@ Contract tests for SourceIngestService (service-level).
 Rules covered:
 - B-2: Only sync_enabled AND ingestible collections processed
 - B-5: Partial failure produces partial status
-- B-6: dry-run forwarded to CollectionIngestService
+- B-6: dry-run forwarded to ContainerIngestService
 - B-10: Service does not commit (caller owns transaction)
 - B-14: Stats aggregation across collections
-- D-4: Delegates to CollectionIngestService (full collection scope)
+- D-4: Delegates to ContainerIngestService (full collection scope)
 - D-7: New assets start in state="new", never auto-approved (via CIS)
 """
 
@@ -33,7 +33,7 @@ def _fake_source(*, source_id="s-1", name="Test Plex") -> SimpleNamespace:
     return SimpleNamespace(id=source_id, name=name, type="plex")
 
 
-def _fake_collection(
+def _fake_container(
     *,
     uuid="c-1",
     name="TV Shows",
@@ -41,6 +41,7 @@ def _fake_collection(
     sync_enabled=True,
     ingestible=True,
 ) -> SimpleNamespace:
+    """Fake container (ingest entity) for source ingest tests."""
     return SimpleNamespace(
         uuid=uuid,
         name=name,
@@ -53,7 +54,7 @@ def _fake_collection(
 
 
 class _FakeCISResult:
-    """Mimics CollectionIngestResult.to_dict()."""
+    """Mimics ContainerIngestResult.to_dict()."""
 
     def __init__(
         self,
@@ -73,7 +74,7 @@ class _FakeCISResult:
     def to_dict(self) -> dict[str, Any]:
         return {
             "status": "success",
-            "scope": "collection",
+            "scope": "container",
             "collection_id": "cid",
             "collection_name": self._name,
             "stats": {
@@ -101,17 +102,17 @@ class TestEligibleCollectionFiltering:
 
     def test_skips_not_ingestible(self):
         db = MagicMock()
-        c_ok = _fake_collection(uuid="c-ok", name="OK", ingestible=True)
-        c_skip = _fake_collection(uuid="c-skip", name="Skip", ingestible=False)
+        c_ok = _fake_container(uuid="c-ok", name="OK", ingestible=True)
+        c_skip = _fake_container(uuid="c-skip", name="Skip", ingestible=False)
         db.query.return_value.filter.return_value.all.return_value = [c_ok, c_skip]
 
         with patch(
             "retrovue.cli.commands._ops.source_ingest_service._construct_importer"
         ) as mock_cif, patch(
-            "retrovue.cli.commands._ops.source_ingest_service.CollectionIngestService"
+            "retrovue.cli.commands._ops.source_ingest_service.ContainerIngestService"
         ) as mock_cis_cls:
             mock_cis = MagicMock()
-            mock_cis.ingest_collection.return_value = _FakeCISResult(
+            mock_cis.ingest_container.return_value = _FakeCISResult(
                 collection_name="OK", discovered=10, ingested=5
             )
             mock_cis_cls.return_value = mock_cis
@@ -122,7 +123,7 @@ class TestEligibleCollectionFiltering:
 
         assert result.collections_processed == 1
         assert result.collections_skipped == 1
-        mock_cis.ingest_collection.assert_called_once()
+        mock_cis.ingest_container.assert_called_once()
 
     def test_no_eligible_collections(self):
         db = MagicMock()
@@ -144,8 +145,8 @@ class TestStatsAggregation:
 
     def test_aggregates_across_two_collections(self):
         db = MagicMock()
-        c1 = _fake_collection(uuid="c-1", name="TV")
-        c2 = _fake_collection(uuid="c-2", name="Movies")
+        c1 = _fake_container(uuid="c-1", name="TV")
+        c2 = _fake_container(uuid="c-2", name="Movies")
         db.query.return_value.filter.return_value.all.return_value = [c1, c2]
 
         call_count = {"n": 0}
@@ -159,10 +160,10 @@ class TestStatsAggregation:
         with patch(
             "retrovue.cli.commands._ops.source_ingest_service._construct_importer"
         ) as mock_cif, patch(
-            "retrovue.cli.commands._ops.source_ingest_service.CollectionIngestService"
+            "retrovue.cli.commands._ops.source_ingest_service.ContainerIngestService"
         ) as mock_cis_cls:
             mock_cis = MagicMock()
-            mock_cis.ingest_collection.side_effect = _make_result
+            mock_cis.ingest_container.side_effect = _make_result
             mock_cis_cls.return_value = mock_cis
             mock_cif.return_value = MagicMock()
 
@@ -176,7 +177,7 @@ class TestStatsAggregation:
 
 
 # ---------------------------------------------------------------------------
-# D-4: Delegates to CollectionIngestService
+# D-4: Delegates to ContainerIngestService
 # ---------------------------------------------------------------------------
 
 class TestDelegatesToCIS:
@@ -184,18 +185,18 @@ class TestDelegatesToCIS:
 
     def test_calls_collection_ingest_service(self):
         db = MagicMock()
-        c1 = _fake_collection(uuid="c-1", name="TV")
+        c1 = _fake_container(uuid="c-1", name="TV")
         db.query.return_value.filter.return_value.all.return_value = [c1]
 
         with patch(
             "retrovue.cli.commands._ops.source_ingest_service._construct_importer"
         ) as mock_cif, patch(
-            "retrovue.cli.commands._ops.source_ingest_service.CollectionIngestService"
+            "retrovue.cli.commands._ops.source_ingest_service.ContainerIngestService"
         ) as mock_cis_cls:
             mock_importer = MagicMock()
             mock_cif.return_value = mock_importer
             mock_cis = MagicMock()
-            mock_cis.ingest_collection.return_value = _FakeCISResult(
+            mock_cis.ingest_container.return_value = _FakeCISResult(
                 collection_name="TV", discovered=10, ingested=5
             )
             mock_cis_cls.return_value = mock_cis
@@ -203,9 +204,9 @@ class TestDelegatesToCIS:
             svc = SourceIngestService(db)
             svc.ingest_source(_fake_source())
 
-        mock_cis.ingest_collection.assert_called_once()
-        call_kwargs = mock_cis.ingest_collection.call_args
-        assert call_kwargs.kwargs.get("collection") is c1
+        mock_cis.ingest_container.assert_called_once()
+        call_kwargs = mock_cis.ingest_container.call_args
+        assert call_kwargs.kwargs.get("container") is c1
 
 
 # ---------------------------------------------------------------------------
@@ -217,17 +218,17 @@ class TestDryRun:
 
     def test_dry_run_forwarded_to_cis(self):
         db = MagicMock()
-        c1 = _fake_collection(uuid="c-1", name="TV")
+        c1 = _fake_container(uuid="c-1", name="TV")
         db.query.return_value.filter.return_value.all.return_value = [c1]
 
         with patch(
             "retrovue.cli.commands._ops.source_ingest_service._construct_importer"
         ) as mock_cif, patch(
-            "retrovue.cli.commands._ops.source_ingest_service.CollectionIngestService"
+            "retrovue.cli.commands._ops.source_ingest_service.ContainerIngestService"
         ) as mock_cis_cls:
             mock_cif.return_value = MagicMock()
             mock_cis = MagicMock()
-            mock_cis.ingest_collection.return_value = _FakeCISResult(
+            mock_cis.ingest_container.return_value = _FakeCISResult(
                 collection_name="TV", discovered=10, ingested=0
             )
             mock_cis_cls.return_value = mock_cis
@@ -235,7 +236,7 @@ class TestDryRun:
             svc = SourceIngestService(db)
             svc.ingest_source(_fake_source(), dry_run=True)
 
-        call_kwargs = mock_cis.ingest_collection.call_args
+        call_kwargs = mock_cis.ingest_container.call_args
         assert call_kwargs.kwargs.get("dry_run") is True
 
 
@@ -248,8 +249,8 @@ class TestPartialFailure:
 
     def test_partial_failure_status(self):
         db = MagicMock()
-        c1 = _fake_collection(uuid="c-1", name="TV")
-        c2 = _fake_collection(uuid="c-2", name="Movies")
+        c1 = _fake_container(uuid="c-1", name="TV")
+        c2 = _fake_container(uuid="c-2", name="Movies")
         db.query.return_value.filter.return_value.all.return_value = [c1, c2]
 
         call_count = {"n": 0}
@@ -263,11 +264,11 @@ class TestPartialFailure:
         with patch(
             "retrovue.cli.commands._ops.source_ingest_service._construct_importer"
         ) as mock_cif, patch(
-            "retrovue.cli.commands._ops.source_ingest_service.CollectionIngestService"
+            "retrovue.cli.commands._ops.source_ingest_service.ContainerIngestService"
         ) as mock_cis_cls:
             mock_cif.return_value = MagicMock()
             mock_cis = MagicMock()
-            mock_cis.ingest_collection.side_effect = _side_effect
+            mock_cis.ingest_container.side_effect = _side_effect
             mock_cis_cls.return_value = mock_cis
 
             svc = SourceIngestService(db)
@@ -281,17 +282,17 @@ class TestPartialFailure:
 
     def test_all_collections_fail_still_partial(self):
         db = MagicMock()
-        c1 = _fake_collection(uuid="c-1", name="TV")
+        c1 = _fake_container(uuid="c-1", name="TV")
         db.query.return_value.filter.return_value.all.return_value = [c1]
 
         with patch(
             "retrovue.cli.commands._ops.source_ingest_service._construct_importer"
         ) as mock_cif, patch(
-            "retrovue.cli.commands._ops.source_ingest_service.CollectionIngestService"
+            "retrovue.cli.commands._ops.source_ingest_service.ContainerIngestService"
         ) as mock_cis_cls:
             mock_cif.return_value = MagicMock()
             mock_cis = MagicMock()
-            mock_cis.ingest_collection.side_effect = RuntimeError("boom")
+            mock_cis.ingest_container.side_effect = RuntimeError("boom")
             mock_cis_cls.return_value = mock_cis
 
             svc = SourceIngestService(db)
@@ -328,17 +329,17 @@ class TestOutputShape:
 
     def test_to_dict_has_required_keys(self):
         db = MagicMock()
-        c1 = _fake_collection(uuid="c-1", name="TV")
+        c1 = _fake_container(uuid="c-1", name="TV")
         db.query.return_value.filter.return_value.all.return_value = [c1]
 
         with patch(
             "retrovue.cli.commands._ops.source_ingest_service._construct_importer"
         ) as mock_cif, patch(
-            "retrovue.cli.commands._ops.source_ingest_service.CollectionIngestService"
+            "retrovue.cli.commands._ops.source_ingest_service.ContainerIngestService"
         ) as mock_cis_cls:
             mock_cif.return_value = MagicMock()
             mock_cis = MagicMock()
-            mock_cis.ingest_collection.return_value = _FakeCISResult(
+            mock_cis.ingest_container.return_value = _FakeCISResult(
                 collection_name="TV", discovered=10, ingested=5
             )
             mock_cis_cls.return_value = mock_cis
@@ -365,17 +366,17 @@ class TestOutputShape:
 
     def test_success_status_when_all_ok(self):
         db = MagicMock()
-        c1 = _fake_collection(uuid="c-1", name="TV")
+        c1 = _fake_container(uuid="c-1", name="TV")
         db.query.return_value.filter.return_value.all.return_value = [c1]
 
         with patch(
             "retrovue.cli.commands._ops.source_ingest_service._construct_importer"
         ) as mock_cif, patch(
-            "retrovue.cli.commands._ops.source_ingest_service.CollectionIngestService"
+            "retrovue.cli.commands._ops.source_ingest_service.ContainerIngestService"
         ) as mock_cis_cls:
             mock_cif.return_value = MagicMock()
             mock_cis = MagicMock()
-            mock_cis.ingest_collection.return_value = _FakeCISResult(
+            mock_cis.ingest_container.return_value = _FakeCISResult(
                 collection_name="TV", discovered=10, ingested=5
             )
             mock_cis_cls.return_value = mock_cis

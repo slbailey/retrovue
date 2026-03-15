@@ -13,7 +13,7 @@ manual review; low-confidence assets require human review.
 Applies during ingest (source/collection) when creating new assets or detecting updates.
 This contract defines scoring, thresholds, and the state/approval effects that result.
 
-Status: ACTIVE. `CollectionIngestContract.md` and `SourceIngestContract.md` have been
+Status: ACTIVE. `ContainerIngestContract.md` and `SourceIngestContract.md` have been
 updated to allow auto-ready creation with approval when confidence ≥ threshold.
 
 ---
@@ -121,7 +121,7 @@ Planned tests (activated when ingest contracts are revised to allow auto-approva
 ## See Also
 
 - [Asset Contract](AssetContract.md)
-- [Collection Ingest](CollectionIngestContract.md)
+- [Container Ingest](ContainerIngestContract.md)
 - [Source Ingest](SourceIngestContract.md)
 
 

@@ -26,7 +26,7 @@ def list_assets_needing_attention(
         or_(Asset.state == "enriching", Asset.approved_for_broadcast.is_(False)),
     ]
     if collection_uuid:
-        conditions = (*conditions, Asset.collection_uuid == collection_uuid)
+        conditions = (*conditions, Asset.container_id == collection_uuid)
 
     stmt = select(Asset).where(and_(*conditions)).order_by(Asset.discovered_at.desc())
     if limit and limit > 0:
@@ -36,10 +36,12 @@ def list_assets_needing_attention(
 
     result: list[dict[str, Any]] = []
     for a in rows:
+        cid = str(a.container_id)
         result.append(
             {
                 "uuid": str(a.uuid),
-                "collection_uuid": str(a.collection_uuid),
+                "container_id": cid,
+                "collection_uuid": cid,
                 "uri": a.uri,
                 "state": a.state,
                 "approved_for_broadcast": bool(a.approved_for_broadcast),

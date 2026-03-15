@@ -42,7 +42,7 @@ router = get_router(app)
 router.register(
     "source",
     source.app,
-    help_text="Source and collection management operations",
+    help_text="Source and container management operations",
     doc_path="source.md",
 )
 
@@ -54,10 +54,10 @@ router.register(
 )
 
 router.register(
-    "collection",
-    collection.app,
-    help_text="Collection management operations",
-    doc_path="collection.md",
+    "container",
+    collection.container_app,
+    help_text="Container management operations",
+    doc_path="container.md",
 )
 
 router.register(

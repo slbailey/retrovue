@@ -76,7 +76,7 @@ def _get_last_modified(item: Any) -> float | None:
 
 
 def discover_locators(
-    collection: Any,
+    container: Any,
     importer: Any,
     *,
     title: str | None = None,
@@ -92,7 +92,7 @@ def discover_locators(
     pairs so the caller can drive the ingest loop from this list without a second discover call.
 
     Args:
-        collection: Collection with source_id and uuid (container).
+        container: Container with source_id and uuid.
         importer: Importer with discover() or discover_scoped(); must be stateless.
         title: Optional scope (title).
         season: Optional scope (season).
@@ -105,10 +105,10 @@ def discover_locators(
     Raises:
         IngestError: If canonical key cannot be derived for an item (e.g. missing path_uri).
     """
-    source_id = getattr(collection, "source_id", None)
-    container_id = getattr(collection, "uuid", None)
+    source_id = getattr(container, "source_id", None)
+    container_id = getattr(container, "uuid", None)
     if source_id is None or container_id is None:
-        raise ValueError("collection must have source_id and uuid")
+        raise ValueError("container must have source_id and uuid")
     provider = getattr(importer, "name", None)
 
     if (title is not None or season is not None or episode is not None) and hasattr(
@@ -126,7 +126,7 @@ def discover_locators(
     result: list[tuple[DiscoveredLocator, Any]] = []
     for item in discovered_items or []:
         try:
-            locator = canonical_key_for(item, collection=collection, provider=provider)
+            locator = canonical_key_for(item, container=container, provider=provider)
         except IngestError:
             raise
         size = _get_size(item)

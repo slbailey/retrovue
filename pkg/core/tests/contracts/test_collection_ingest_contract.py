@@ -1,7 +1,7 @@
 """
 Contract tests for Collection Ingest command (Phase 1 - Asset-Independent).
 
-Tests the behavioral contract rules (B-#) defined in CollectionIngestContract.md.
+Tests the behavioral contract rules (B-#) defined in ContainerIngestContract.md.
 Phase 1 covers asset-independent rules that can be tested without the Asset domain.
 
 Phase 1 Coverage:
@@ -55,18 +55,18 @@ class TestCollectionIngestContract:
         """
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection._get_db_context", return_value=self._make_session_cm()), \
-             patch("retrovue.cli.commands._ops.collection_ingest_service.CollectionIngestService"), \
+             patch("retrovue.cli.commands._ops.collection_ingest_service.ContainerIngestService"), \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer:
             
             mock_collection = MagicMock()
-            mock_collection.id = collection_id
+            mock_collection.uuid = collection_id
             mock_collection.name = "TV Shows"
             mock_collection.sync_enabled = True
             mock_collection.ingestible = True
             mock_collection.source_id = str(uuid.uuid4())
             
             # Mock collection resolution
-            with patch("retrovue.cli.commands.collection.resolve_collection_selector", return_value=mock_collection):
+            with patch("retrovue.cli.commands.collection.resolve_container_selector", return_value=mock_collection):
                 # Mock importer
                 mock_importer = MagicMock()
                 mock_importer.validate_ingestible.return_value = True
@@ -80,10 +80,10 @@ class TestCollectionIngestContract:
                 mock_result.stats.assets_ingested = 0
                 mock_result.stats.assets_skipped = 0
                 mock_result.stats.assets_updated = 0
-                mock_service_instance.ingest_collection.return_value = mock_result
+                mock_service_instance.ingest_container.return_value = mock_result
                 
-                with patch("retrovue.cli.commands.collection.CollectionIngestService", return_value=mock_service_instance):
-                    result = self.runner.invoke(app, ["collection", "ingest", collection_id])
+                with patch("retrovue.cli.commands.collection.ContainerIngestService", return_value=mock_service_instance):
+                    result = self.runner.invoke(app, ["container", "ingest", collection_id])
                     
                     assert result.exit_code == 0
 
@@ -94,7 +94,7 @@ class TestCollectionIngestContract:
         external_id = "plex-5063d926-1"
         with patch("retrovue.cli.commands.collection._get_db_context", return_value=self._make_session_cm()), \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer, \
-             patch("retrovue.cli.commands.collection.resolve_collection_selector") as mock_resolve:
+             patch("retrovue.cli.commands.collection.resolve_container_selector") as mock_resolve:
             
             mock_collection = MagicMock()
             mock_collection.id = str(uuid.uuid4())
@@ -118,10 +118,10 @@ class TestCollectionIngestContract:
             mock_result.stats.assets_updated = 0
             # Mock service instance
             mock_service_instance = MagicMock()
-            mock_service_instance.ingest_collection.return_value = mock_result
+            mock_service_instance.ingest_container.return_value = mock_result
             
-            with patch("retrovue.cli.commands.collection.CollectionIngestService", return_value=mock_service_instance):
-                result = self.runner.invoke(app, ["collection", "ingest", external_id])
+            with patch("retrovue.cli.commands.collection.ContainerIngestService", return_value=mock_service_instance):
+                result = self.runner.invoke(app, ["container", "ingest", external_id])
                 
                 assert result.exit_code == 0
 
@@ -131,7 +131,7 @@ class TestCollectionIngestContract:
         """
         with patch("retrovue.cli.commands.collection._get_db_context", return_value=self._make_session_cm()), \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer, \
-             patch("retrovue.cli.commands.collection.resolve_collection_selector") as mock_resolve:
+             patch("retrovue.cli.commands.collection.resolve_container_selector") as mock_resolve:
             
             mock_collection = MagicMock()
             mock_collection.id = str(uuid.uuid4())
@@ -155,14 +155,14 @@ class TestCollectionIngestContract:
             mock_result.stats.assets_skipped = 0
             mock_result.stats.assets_ingested = 0
             mock_result.stats.assets_updated = 0
-            mock_service_instance.ingest_collection.return_value = mock_result
+            mock_service_instance.ingest_container.return_value = mock_result
             
-            with patch("retrovue.cli.commands.collection.CollectionIngestService", return_value=mock_service_instance):
+            with patch("retrovue.cli.commands.collection.ContainerIngestService", return_value=mock_service_instance):
                 # Test with different casing
-                result = self.runner.invoke(app, ["collection", "ingest", "tv shows"])
+                result = self.runner.invoke(app, ["container", "ingest", "tv shows"])
                 
                 assert result.exit_code == 0
-            # Verify resolve_collection_selector was called (case-insensitive matching)
+            # Verify resolve_container_selector was called (case-insensitive matching)
             mock_resolve.assert_called_once()
 
     def test_b1_collection_resolution_ambiguous_name_exits_one(self):
@@ -170,15 +170,15 @@ class TestCollectionIngestContract:
         Contract B-1: If multiple collections match (case-insensitive), exit code 1 with error message.
         """
         with patch("retrovue.cli.commands.collection._get_db_context", return_value=self._make_session_cm()), \
-             patch("retrovue.cli.commands.collection.resolve_collection_selector") as mock_resolve:
+             patch("retrovue.cli.commands.collection.resolve_container_selector") as mock_resolve:
             
             # Mock multiple collections with same name (case-insensitive)
-            # Mock resolve_collection_selector to raise ValueError with ambiguous message
+            # Mock resolve_container_selector to raise ValueError with ambiguous message
             mock_resolve.side_effect = ValueError(
                 "Multiple collections named 'Movies' exist. Please specify the UUID."
             )
             
-            result = self.runner.invoke(app, ["collection", "ingest", "Movies"])
+            result = self.runner.invoke(app, ["container", "ingest", "Movies"])
             
             assert result.exit_code == 1
             assert "Multiple collections named 'Movies' exist. Please specify the UUID." in result.stdout or "Multiple collections named 'Movies' exist. Please specify the UUID." in result.stderr
@@ -188,15 +188,15 @@ class TestCollectionIngestContract:
         Contract B-1: Resolution MUST NOT prefer one collection over another, even if one has exact casing match.
         """
         with patch("retrovue.cli.commands.collection._get_db_context", return_value=self._make_session_cm()), \
-             patch("retrovue.cli.commands.collection.resolve_collection_selector") as mock_resolve:
+             patch("retrovue.cli.commands.collection.resolve_container_selector") as mock_resolve:
             
-            # Mock resolve_collection_selector to raise ValueError with ambiguous message
+            # Mock resolve_container_selector to raise ValueError with ambiguous message
             # (even though one might match exact casing, we should not prefer it)
             mock_resolve.side_effect = ValueError(
                 "Multiple collections named 'Movies' exist. Please specify the UUID."
             )
             
-            result = self.runner.invoke(app, ["collection", "ingest", "Movies"])
+            result = self.runner.invoke(app, ["container", "ingest", "Movies"])
             
             assert result.exit_code == 1
             assert "Multiple collections named 'Movies' exist. Please specify the UUID." in result.stdout or "Multiple collections named 'Movies' exist. Please specify the UUID." in result.stderr
@@ -207,12 +207,12 @@ class TestCollectionIngestContract:
         Contract B-1: If collection not found, exit code 1.
         """
         with patch("retrovue.cli.commands.collection._get_db_context", return_value=self._make_session_cm()), \
-             patch("retrovue.cli.commands.collection.resolve_collection_selector") as mock_resolve:
+             patch("retrovue.cli.commands.collection.resolve_container_selector") as mock_resolve:
             
-            # Mock resolve_collection_selector to raise ValueError for not found
+            # Mock resolve_container_selector to raise ValueError for not found
             mock_resolve.side_effect = ValueError("Collection 'NonExistent' not found")
             
-            result = self.runner.invoke(app, ["collection", "ingest", "NonExistent"])
+            result = self.runner.invoke(app, ["container", "ingest", "NonExistent"])
             
             assert result.exit_code == 1
             assert "not found" in result.stdout.lower() or "not found" in result.stderr.lower()
@@ -227,10 +227,10 @@ class TestCollectionIngestContract:
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection._get_db_context", return_value=self._make_session_cm()), \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer, \
-             patch("retrovue.cli.commands.collection.resolve_collection_selector") as mock_resolve:
+             patch("retrovue.cli.commands.collection.resolve_container_selector") as mock_resolve:
             
             mock_collection = MagicMock()
-            mock_collection.id = collection_id
+            mock_collection.uuid = collection_id
             mock_collection.name = "TV Shows"
             mock_collection.sync_enabled = True
             mock_collection.ingestible = True
@@ -242,7 +242,7 @@ class TestCollectionIngestContract:
             mock_importer.validate_ingestible.return_value = True
             mock_get_importer.return_value = mock_importer
             
-            # Mock service instance and its ingest_collection method
+            # Mock service instance and its ingest_container method
             mock_service_instance = MagicMock()
             mock_result = MagicMock()
             mock_result.stats = MagicMock()
@@ -250,14 +250,14 @@ class TestCollectionIngestContract:
             mock_result.stats.assets_ingested = 5
             mock_result.stats.assets_skipped = 5
             mock_result.stats.assets_updated = 0
-            mock_result.scope = "collection"
+            mock_result.scope = "container"
             mock_result.collection_id = collection_id
             mock_result.collection_name = "TV Shows"
             mock_result.to_dict.return_value = {
                 "status": "success",
-                "scope": "collection",
-                "collection_id": collection_id,
-                "collection_name": "TV Shows",
+                "scope": "container",
+                "container_id": collection_id,
+                "container_name": "TV Shows",
                 "stats": {
                     "assets_discovered": 10,
                     "assets_ingested": 5,
@@ -267,16 +267,16 @@ class TestCollectionIngestContract:
                     "errors": []
                 }
             }
-            mock_service_instance.ingest_collection.return_value = mock_result
+            mock_service_instance.ingest_container.return_value = mock_result
             
             # Patch the class so that when instantiated, it returns our mock instance
-            with patch("retrovue.cli.commands.collection.CollectionIngestService", return_value=mock_service_instance):
-                result = self.runner.invoke(app, ["collection", "ingest", collection_id])
+            with patch("retrovue.cli.commands.collection.ContainerIngestService", return_value=mock_service_instance):
+                result = self.runner.invoke(app, ["container", "ingest", collection_id])
                 
                 assert result.exit_code == 0
-                # Verify ingest_collection was called with no filters (full ingest)
-                mock_service_instance.ingest_collection.assert_called_once()
-                call_args = mock_service_instance.ingest_collection.call_args
+                # Verify ingest_container was called with no filters (full ingest)
+                mock_service_instance.ingest_container.assert_called_once()
+                call_args = mock_service_instance.ingest_container.call_args
                 assert call_args[1]["title"] is None  # filters should be None for full ingest
                 assert call_args[1]["season"] is None
                 assert call_args[1]["episode"] is None
@@ -287,7 +287,7 @@ class TestCollectionIngestContract:
         Contract B-3: --season MUST NOT be provided unless --title is also provided.
         """
         collection_id = str(uuid.uuid4())
-        result = self.runner.invoke(app, ["collection", "ingest", collection_id, "--season", "1"])
+        result = self.runner.invoke(app, ["container", "ingest", collection_id, "--season", "1"])
         
         assert result.exit_code == 1
         assert "--season requires --title" in result.stdout or "--season requires --title" in result.stderr
@@ -299,7 +299,7 @@ class TestCollectionIngestContract:
         """
         collection_id = str(uuid.uuid4())
         result = self.runner.invoke(app, [
-            "collection", "ingest", collection_id,
+            "container", "ingest", collection_id,
             "--title", "The Big Bang Theory",
             "--episode", "6"
         ])
@@ -314,18 +314,18 @@ class TestCollectionIngestContract:
         """
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection._get_db_context", return_value=self._make_session_cm()), \
-             patch("retrovue.cli.commands._ops.collection_ingest_service.CollectionIngestService"):
+             patch("retrovue.cli.commands._ops.collection_ingest_service.ContainerIngestService"):
             
             mock_collection = MagicMock()
-            mock_collection.id = collection_id
+            mock_collection.uuid = collection_id
             mock_collection.name = "TV Shows"
             mock_collection.sync_enabled = True
             mock_collection.ingestible = True
             
             mock_collection.source_id = str(uuid.uuid4())
             
-            # Mock collection resolution via resolve_collection_selector
-            with patch("retrovue.cli.commands.collection.resolve_collection_selector") as mock_resolve:
+            # Mock collection resolution via resolve_container_selector
+            with patch("retrovue.cli.commands.collection.resolve_container_selector") as mock_resolve:
                 mock_resolve.return_value = mock_collection
                 
                 # Mock importer
@@ -342,15 +342,15 @@ class TestCollectionIngestContract:
                     mock_result.stats.assets_ingested = 5
                     mock_result.stats.assets_skipped = 5
                     mock_result.stats.assets_updated = 0
-                    mock_result.scope = "collection"
+                    mock_result.scope = "container"
                     mock_result.last_ingest_time = "2024-01-15T10:30:00Z"
                     mock_result.collection_id = collection_id
                     mock_result.collection_name = "TV Shows"
                     mock_result.to_dict.return_value = {
                         "status": "success",
-                        "scope": "collection",
-                        "collection_id": collection_id,
-                        "collection_name": "TV Shows",
+                        "scope": "container",
+                        "container_id": collection_id,
+                        "container_name": "TV Shows",
                         "stats": {
                             "assets_discovered": 10,
                             "assets_ingested": 5,
@@ -361,11 +361,11 @@ class TestCollectionIngestContract:
                         },
                         "last_ingest_time": "2024-01-15T10:30:00Z"
                     }
-                    mock_service_instance.ingest_collection.return_value = mock_result
+                    mock_service_instance.ingest_container.return_value = mock_result
                     
-                    with patch("retrovue.cli.commands.collection.CollectionIngestService", return_value=mock_service_instance):
+                    with patch("retrovue.cli.commands.collection.ContainerIngestService", return_value=mock_service_instance):
                         result = self.runner.invoke(app, [
-                            "collection", "ingest", collection_id, "--json"
+                            "container", "ingest", collection_id, "--json"
                         ])
                     
                     assert result.exit_code == 0
@@ -384,8 +384,10 @@ class TestCollectionIngestContract:
                     # Verify required fields
                     assert "status" in json_output
                     assert "scope" in json_output
-                    assert json_output["scope"] == "collection"
-                    assert "collection_id" in json_output
+                    assert json_output["scope"] == "container"
+                    assert "container_id" in json_output
+                    assert json_output["container_id"] == collection_id
+                    assert "container_id" in json_output
                     assert "stats" in json_output
                     assert "assets_discovered" in json_output["stats"]
                     assert "assets_ingested" in json_output["stats"]
@@ -402,10 +404,10 @@ class TestCollectionIngestContract:
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection._get_db_context", return_value=self._make_session_cm()), \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer, \
-             patch("retrovue.cli.commands.collection.resolve_collection_selector") as mock_resolve:
+             patch("retrovue.cli.commands.collection.resolve_container_selector") as mock_resolve:
             
             mock_collection = MagicMock()
-            mock_collection.id = collection_id
+            mock_collection.uuid = collection_id
             mock_collection.name = "TV Shows"
             mock_collection.sync_enabled = True
             mock_collection.ingestible = True
@@ -425,12 +427,12 @@ class TestCollectionIngestContract:
             mock_result.stats.assets_ingested = 5
             mock_result.stats.assets_skipped = 5
             mock_result.stats.assets_updated = 0
-            mock_result.scope = "collection"
+            mock_result.scope = "container"
             mock_result.collection_name = "TV Shows"
-            mock_service_instance.ingest_collection.return_value = mock_result
+            mock_service_instance.ingest_container.return_value = mock_result
             
-            with patch("retrovue.cli.commands.collection.CollectionIngestService", return_value=mock_service_instance):
-                result = self.runner.invoke(app, ["collection", "ingest", collection_id])
+            with patch("retrovue.cli.commands.collection.ContainerIngestService", return_value=mock_service_instance):
+                result = self.runner.invoke(app, ["container", "ingest", collection_id])
                 
                 assert result.exit_code == 0
                 assert "TV Shows" in result.stdout or "collection" in result.stdout.lower()
@@ -443,10 +445,10 @@ class TestCollectionIngestContract:
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection._get_db_context", return_value=self._make_session_cm()), \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer, \
-             patch("retrovue.cli.commands.collection.resolve_collection_selector") as mock_resolve:
+             patch("retrovue.cli.commands.collection.resolve_container_selector") as mock_resolve:
             
             mock_collection = MagicMock()
-            mock_collection.id = collection_id
+            mock_collection.uuid = collection_id
             mock_collection.name = "TV Shows"
             mock_collection.sync_enabled = True
             mock_collection.ingestible = True
@@ -466,21 +468,21 @@ class TestCollectionIngestContract:
             mock_result.stats.assets_ingested = 5
             mock_result.stats.assets_skipped = 5
             mock_result.stats.assets_updated = 0
-            mock_result.scope = "collection"
+            mock_result.scope = "container"
             mock_result.collection_name = "TV Shows"
-            mock_service_instance.ingest_collection.return_value = mock_result
+            mock_service_instance.ingest_container.return_value = mock_result
             
-            with patch("retrovue.cli.commands.collection.CollectionIngestService", return_value=mock_service_instance):
+            with patch("retrovue.cli.commands.collection.ContainerIngestService", return_value=mock_service_instance):
                 result = self.runner.invoke(app, [
-                    "collection", "ingest", collection_id, "--dry-run"
+                    "container", "ingest", collection_id, "--dry-run"
                 ])
                 
                 assert result.exit_code == 0
                 assert "[DRY RUN]" in result.stdout or "dry run" in result.stdout.lower()
                 
-                # Verify ingest_collection was called with dry_run=True
-                mock_service_instance.ingest_collection.assert_called_once()
-                call_args = mock_service_instance.ingest_collection.call_args
+                # Verify ingest_container was called with dry_run=True
+                mock_service_instance.ingest_container.assert_called_once()
+                call_args = mock_service_instance.ingest_container.call_args
                 assert call_args[1]["dry_run"] is True
 
     # B-8: Scope Resolution Failure
@@ -491,10 +493,10 @@ class TestCollectionIngestContract:
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection._get_db_context", return_value=self._make_session_cm()), \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer, \
-             patch("retrovue.cli.commands.collection.resolve_collection_selector") as mock_resolve:
+             patch("retrovue.cli.commands.collection.resolve_container_selector") as mock_resolve:
             
             mock_collection = MagicMock()
-            mock_collection.id = collection_id
+            mock_collection.uuid = collection_id
             mock_collection.name = "TV Shows"
             mock_collection.sync_enabled = True
             mock_collection.ingestible = True
@@ -508,13 +510,13 @@ class TestCollectionIngestContract:
             
             # Mock service instance with scope resolution failure
             mock_service_instance = MagicMock()
-            mock_service_instance.ingest_collection.side_effect = IngestError(
+            mock_service_instance.ingest_container.side_effect = IngestError(
                 "Title 'Non-existent Show' not found in collection 'TV Shows'"
             )
             
-            with patch("retrovue.cli.commands.collection.CollectionIngestService", return_value=mock_service_instance):
+            with patch("retrovue.cli.commands.collection.ContainerIngestService", return_value=mock_service_instance):
                 result = self.runner.invoke(app, [
-                    "collection", "ingest", collection_id,
+                    "container", "ingest", collection_id,
                     "--title", "Non-existent Show"
                 ])
                 
@@ -528,10 +530,10 @@ class TestCollectionIngestContract:
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection._get_db_context", return_value=self._make_session_cm()), \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer, \
-             patch("retrovue.cli.commands.collection.resolve_collection_selector") as mock_resolve:
+             patch("retrovue.cli.commands.collection.resolve_container_selector") as mock_resolve:
             
             mock_collection = MagicMock()
-            mock_collection.id = collection_id
+            mock_collection.uuid = collection_id
             mock_collection.name = "TV Shows"
             mock_collection.sync_enabled = True
             mock_collection.ingestible = True
@@ -545,13 +547,13 @@ class TestCollectionIngestContract:
             
             # Mock service instance with scope resolution failure
             mock_service_instance = MagicMock()
-            mock_service_instance.ingest_collection.side_effect = IngestError(
+            mock_service_instance.ingest_container.side_effect = IngestError(
                 "Title 'Non-existent Show' not found"
             )
             
-            with patch("retrovue.cli.commands.collection.CollectionIngestService", return_value=mock_service_instance):
+            with patch("retrovue.cli.commands.collection.ContainerIngestService", return_value=mock_service_instance):
                 result = self.runner.invoke(app, [
-                    "collection", "ingest", collection_id,
+                    "container", "ingest", collection_id,
                     "--title", "Non-existent Show",
                     "--json"
                 ])
@@ -579,7 +581,7 @@ class TestCollectionIngestContract:
         """
         collection_id = str(uuid.uuid4())
         result = self.runner.invoke(app, [
-            "collection", "ingest", collection_id,
+            "container", "ingest", collection_id,
             "--title", "The Big Bang Theory",
             "--season", "1",
             "--episode", "invalid"
@@ -596,7 +598,7 @@ class TestCollectionIngestContract:
         """
         collection_id = str(uuid.uuid4())
         result = self.runner.invoke(app, [
-            "collection", "ingest", collection_id,
+            "container", "ingest", collection_id,
             "--title", "The Big Bang Theory",
             "--season", "-1"
         ])
@@ -609,7 +611,7 @@ class TestCollectionIngestContract:
         """
         collection_id = str(uuid.uuid4())
         result = self.runner.invoke(app, [
-            "collection", "ingest", collection_id,
+            "container", "ingest", collection_id,
             "--title", "The Big Bang Theory",
             "--season", "1",
             "--episode", "-1"
@@ -625,12 +627,12 @@ class TestCollectionIngestContract:
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection._get_db_context", return_value=self._make_session_cm()), \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer, \
-             patch("retrovue.cli.commands.collection.resolve_collection_selector") as mock_resolve:
+             patch("retrovue.cli.commands.collection.resolve_container_selector") as mock_resolve:
             
             # DB context handled via _get_db_context; no direct session mocking here
             
             mock_collection = MagicMock()
-            mock_collection.id = collection_id
+            mock_collection.uuid = collection_id
             mock_collection.name = "TV Shows"
             mock_collection.sync_enabled = True
             mock_collection.ingestible = True
@@ -650,17 +652,17 @@ class TestCollectionIngestContract:
             mock_result.stats.assets_ingested = 0
             mock_result.stats.assets_skipped = 0
             mock_result.stats.assets_updated = 0
-            mock_service_instance.ingest_collection.return_value = mock_result
+            mock_service_instance.ingest_container.return_value = mock_result
             
-            with patch("retrovue.cli.commands.collection.CollectionIngestService", return_value=mock_service_instance):
+            with patch("retrovue.cli.commands.collection.ContainerIngestService", return_value=mock_service_instance):
                 result = self.runner.invoke(app, [
-                    "collection", "ingest", collection_id, "--test-db"
+                    "container", "ingest", collection_id, "--test-db"
                 ])
                 
                 assert result.exit_code == 0
                 # Verify test-db context was used
-                mock_service_instance.ingest_collection.assert_called_once()
-                call_args = mock_service_instance.ingest_collection.call_args
+                mock_service_instance.ingest_container.assert_called_once()
+                call_args = mock_service_instance.ingest_container.call_args
                 assert call_args[1]["test_db"] is True
 
     # B-10a: Dry-Run + Test-DB Precedence
@@ -671,10 +673,10 @@ class TestCollectionIngestContract:
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection._get_db_context", return_value=self._make_session_cm()), \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer, \
-             patch("retrovue.cli.commands.collection.resolve_collection_selector") as mock_resolve:
+             patch("retrovue.cli.commands.collection.resolve_container_selector") as mock_resolve:
             
             mock_collection = MagicMock()
-            mock_collection.id = collection_id
+            mock_collection.uuid = collection_id
             mock_collection.name = "TV Shows"
             mock_collection.sync_enabled = True
             mock_collection.ingestible = True
@@ -694,13 +696,13 @@ class TestCollectionIngestContract:
             mock_result.stats.assets_ingested = 5
             mock_result.stats.assets_skipped = 5
             mock_result.stats.assets_updated = 0
-            mock_result.scope = "collection"
+            mock_result.scope = "container"
             mock_result.collection_name = "TV Shows"
-            mock_service_instance.ingest_collection.return_value = mock_result
+            mock_service_instance.ingest_container.return_value = mock_result
             
-            with patch("retrovue.cli.commands.collection.CollectionIngestService", return_value=mock_service_instance):
+            with patch("retrovue.cli.commands.collection.ContainerIngestService", return_value=mock_service_instance):
                 result = self.runner.invoke(app, [
-                    "collection", "ingest", collection_id,
+                    "container", "ingest", collection_id,
                     "--dry-run", "--test-db"
                 ])
                 
@@ -708,8 +710,8 @@ class TestCollectionIngestContract:
                 assert "[DRY RUN]" in result.stdout or "dry run" in result.stdout.lower()
                 
                 # Verify dry_run=True was passed (dry-run takes precedence)
-                mock_service_instance.ingest_collection.assert_called_once()
-                call_args = mock_service_instance.ingest_collection.call_args
+                mock_service_instance.ingest_container.assert_called_once()
+                call_args = mock_service_instance.ingest_container.call_args
                 assert call_args[1]["dry_run"] is True
                 
                 # Verify output is well-formed
@@ -722,10 +724,10 @@ class TestCollectionIngestContract:
         """
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection._get_db_context", return_value=self._make_session_cm()), \
-             patch("retrovue.cli.commands.collection.resolve_collection_selector") as mock_resolve:
+             patch("retrovue.cli.commands.collection.resolve_container_selector") as mock_resolve:
             
             mock_collection = MagicMock()
-            mock_collection.id = collection_id
+            mock_collection.uuid = collection_id
             mock_collection.name = "TV Shows"
             mock_collection.sync_enabled = False  # Sync disabled
             mock_collection.ingestible = True
@@ -733,20 +735,20 @@ class TestCollectionIngestContract:
             mock_resolve.return_value = mock_collection
             
             # Mock service to raise ValueError for prerequisite failure
-            with patch("retrovue.cli.commands._ops.collection_ingest_service.CollectionIngestService") as mock_service, \
+            with patch("retrovue.cli.commands._ops.collection_ingest_service.ContainerIngestService") as mock_service, \
                  patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer:
                 
                 mock_importer = MagicMock()
                 mock_importer.validate_ingestible.return_value = True
                 mock_get_importer.return_value = mock_importer
                 
-                mock_service.return_value.ingest_collection.side_effect = ValueError(
+                mock_service.return_value.ingest_container.side_effect = ValueError(
                     "Collection 'TV Shows' is not sync-enabled. "
                     "Use targeted ingest (--title/--season/--episode) for surgical operations, "
                     f"or enable sync with 'retrovue collection update {collection_id} --sync-enable'."
                 )
                 
-                result = self.runner.invoke(app, ["collection", "ingest", collection_id])
+                result = self.runner.invoke(app, ["container", "ingest", collection_id])
                 
                 assert result.exit_code == 1
                 assert "not sync-enabled" in result.stdout or "not sync-enabled" in result.stderr
@@ -758,10 +760,10 @@ class TestCollectionIngestContract:
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection._get_db_context", return_value=self._make_session_cm()), \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer, \
-             patch("retrovue.cli.commands.collection.resolve_collection_selector") as mock_resolve:
+             patch("retrovue.cli.commands.collection.resolve_container_selector") as mock_resolve:
             
             mock_collection = MagicMock()
-            mock_collection.id = collection_id
+            mock_collection.uuid = collection_id
             mock_collection.name = "TV Shows"
             mock_collection.sync_enabled = False
             mock_collection.ingestible = True
@@ -781,12 +783,12 @@ class TestCollectionIngestContract:
             mock_result.stats.assets_ingested = 5
             mock_result.stats.assets_skipped = 5
             mock_result.stats.assets_updated = 0
-            mock_result.scope = "collection"
-            mock_service_instance.ingest_collection.return_value = mock_result
+            mock_result.scope = "container"
+            mock_service_instance.ingest_container.return_value = mock_result
             
-            with patch("retrovue.cli.commands.collection.CollectionIngestService", return_value=mock_service_instance):
+            with patch("retrovue.cli.commands.collection.ContainerIngestService", return_value=mock_service_instance):
                 result = self.runner.invoke(app, [
-                    "collection", "ingest", collection_id, "--dry-run"
+                    "container", "ingest", collection_id, "--dry-run"
                 ])
                 
                 # Dry-run should succeed even with sync_enabled=false
@@ -799,14 +801,14 @@ class TestCollectionIngestContract:
         """
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection.session") as mock_session, \
-             patch("retrovue.cli.commands.collection.resolve_collection_selector") as mock_resolve, \
+             patch("retrovue.cli.commands.collection.resolve_container_selector") as mock_resolve, \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer:
             
             mock_db = MagicMock()
             mock_session.return_value.__enter__.return_value = mock_db
             
             mock_collection = MagicMock()
-            mock_collection.id = collection_id
+            mock_collection.uuid = collection_id
             mock_collection.name = "TV Shows"
             mock_collection.sync_enabled = True
             mock_collection.ingestible = False  # Not ingestible
@@ -820,13 +822,13 @@ class TestCollectionIngestContract:
             
             # Mock service instance with prerequisite failure
             mock_service_instance = MagicMock()
-            mock_service_instance.ingest_collection.side_effect = ValueError(
+            mock_service_instance.ingest_container.side_effect = ValueError(
                 f"Collection 'TV Shows' is not ingestible. "
-                f"Check path mappings and prerequisites with 'retrovue collection show {collection_id}'."
+                f"Check path mappings and prerequisites with 'retrovue container show {collection_id}'."
             )
             
-            with patch("retrovue.cli.commands.collection.CollectionIngestService", return_value=mock_service_instance):
-                result = self.runner.invoke(app, ["collection", "ingest", collection_id])
+            with patch("retrovue.cli.commands.collection.ContainerIngestService", return_value=mock_service_instance):
+                result = self.runner.invoke(app, ["container", "ingest", collection_id])
                 
                 assert result.exit_code == 1
                 assert "not ingestible" in result.stdout or "not ingestible" in result.stderr
@@ -838,10 +840,10 @@ class TestCollectionIngestContract:
         """
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection._get_db_context", return_value=self._make_session_cm()), \
-             patch("retrovue.cli.commands.collection.resolve_collection_selector") as mock_resolve:
+             patch("retrovue.cli.commands.collection.resolve_container_selector") as mock_resolve:
             
             mock_collection = MagicMock()
-            mock_collection.id = collection_id
+            mock_collection.uuid = collection_id
             mock_collection.name = "TV Shows"
             mock_collection.sync_enabled = False  # Can be false for targeted
             mock_collection.ingestible = False  # But must be ingestible
@@ -856,14 +858,14 @@ class TestCollectionIngestContract:
                 
                 # Mock service instance with prerequisite failure
                 mock_service_instance = MagicMock()
-                mock_service_instance.ingest_collection.side_effect = ValueError(
+                mock_service_instance.ingest_container.side_effect = ValueError(
                     f"Collection 'TV Shows' is not ingestible. "
-                    f"Check path mappings and prerequisites with 'retrovue collection show {collection_id}'."
+                    f"Check path mappings and prerequisites with 'retrovue container show {collection_id}'."
                 )
                 
-                with patch("retrovue.cli.commands.collection.CollectionIngestService", return_value=mock_service_instance):
+                with patch("retrovue.cli.commands.collection.ContainerIngestService", return_value=mock_service_instance):
                     result = self.runner.invoke(app, [
-                        "collection", "ingest", collection_id,
+                        "container", "ingest", collection_id,
                         "--title", "The Big Bang Theory"
                     ])
                     
@@ -877,10 +879,10 @@ class TestCollectionIngestContract:
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection._get_db_context", return_value=self._make_session_cm()), \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer, \
-             patch("retrovue.cli.commands.collection.resolve_collection_selector") as mock_resolve:
+             patch("retrovue.cli.commands.collection.resolve_container_selector") as mock_resolve:
             
             mock_collection = MagicMock()
-            mock_collection.id = collection_id
+            mock_collection.uuid = collection_id
             mock_collection.name = "TV Shows"
             mock_collection.sync_enabled = False  # Sync disabled
             mock_collection.ingestible = True  # But ingestible
@@ -901,11 +903,11 @@ class TestCollectionIngestContract:
             mock_result.stats.assets_skipped = 0
             mock_result.stats.assets_updated = 0
             mock_result.scope = "title"
-            mock_service_instance.ingest_collection.return_value = mock_result
+            mock_service_instance.ingest_container.return_value = mock_result
             
-            with patch("retrovue.cli.commands.collection.CollectionIngestService", return_value=mock_service_instance):
+            with patch("retrovue.cli.commands.collection.ContainerIngestService", return_value=mock_service_instance):
                 result = self.runner.invoke(app, [
-                    "collection", "ingest", collection_id,
+                    "container", "ingest", collection_id,
                     "--title", "The Big Bang Theory"
                 ])
                 
@@ -922,13 +924,13 @@ class TestCollectionIngestContract:
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection.session") as mock_session, \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer, \
-             patch("retrovue.cli.commands.collection.resolve_collection_selector") as mock_resolve:
+             patch("retrovue.cli.commands.collection.resolve_container_selector") as mock_resolve:
             
             mock_db = MagicMock()
             mock_session.return_value.__enter__.return_value = mock_db
             
             mock_collection = MagicMock()
-            mock_collection.id = collection_id
+            mock_collection.uuid = collection_id
             mock_collection.name = "TV Shows"
             mock_collection.sync_enabled = True
             mock_collection.ingestible = True
@@ -948,14 +950,14 @@ class TestCollectionIngestContract:
             mock_result.stats.assets_ingested = 5
             mock_result.stats.assets_skipped = 5
             mock_result.stats.assets_updated = 0
-            mock_service_instance.ingest_collection.return_value = mock_result
+            mock_service_instance.ingest_container.return_value = mock_result
             
-            with patch("retrovue.cli.commands.collection.CollectionIngestService", return_value=mock_service_instance):
-                result = self.runner.invoke(app, ["collection", "ingest", collection_id])
+            with patch("retrovue.cli.commands.collection.ContainerIngestService", return_value=mock_service_instance):
+                result = self.runner.invoke(app, ["container", "ingest", collection_id])
                 
                 assert result.exit_code == 0
                 # Verify service was called (importer enumeration happens inside service)
-                mock_service_instance.ingest_collection.assert_called_once()
+                mock_service_instance.ingest_container.assert_called_once()
 
     # B-14a: Validation Before Enumeration
     def test_b14a_validate_ingestible_called_before_enumerate_assets(self):
@@ -966,10 +968,10 @@ class TestCollectionIngestContract:
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection._get_db_context", return_value=self._make_session_cm()), \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer, \
-             patch("retrovue.cli.commands.collection.resolve_collection_selector") as mock_resolve:
+             patch("retrovue.cli.commands.collection.resolve_container_selector") as mock_resolve:
             
             mock_collection = MagicMock()
-            mock_collection.id = collection_id
+            mock_collection.uuid = collection_id
             mock_collection.name = "TV Shows"
             mock_collection.sync_enabled = True
             mock_collection.ingestible = False  # Not ingestible
@@ -984,23 +986,23 @@ class TestCollectionIngestContract:
             
             # Mock service instance with validation failure
             mock_service_instance = MagicMock()
-            mock_service_instance.ingest_collection.side_effect = ValueError(
+            mock_service_instance.ingest_container.side_effect = ValueError(
                 f"Collection 'TV Shows' is not ingestible according to importer. "
-                f"Check path mappings and prerequisites with 'retrovue collection show {collection_id}'."
+                f"Check path mappings and prerequisites with 'retrovue container show {collection_id}'."
             )
             
-            with patch("retrovue.cli.commands.collection.CollectionIngestService", return_value=mock_service_instance):
-                result = self.runner.invoke(app, ["collection", "ingest", collection_id])
+            with patch("retrovue.cli.commands.collection.ContainerIngestService", return_value=mock_service_instance):
+                result = self.runner.invoke(app, ["container", "ingest", collection_id])
                 
                 assert result.exit_code == 1
                 assert "not ingestible" in result.stdout or "not ingestible" in result.stderr
                 
                 # Verify validate_ingestible was called
                 # Note: This happens inside the service, so we verify via the service call
-                mock_service_instance.ingest_collection.assert_called_once()
+                mock_service_instance.ingest_container.assert_called_once()
             
             # Verify enumerate_assets was NOT called (since validation failed)
-            # This is verified by ensuring ingest_collection was not called successfully
+            # This is verified by ensuring ingest_container was not called successfully
             # or by checking that enumerate_assets was never called on the importer
             if hasattr(mock_importer, 'enumerate_assets'):
                 # If enumerate_assets exists, it should not have been called
@@ -1014,10 +1016,10 @@ class TestCollectionIngestContract:
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection._get_db_context", return_value=self._make_session_cm()), \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer, \
-             patch("retrovue.cli.commands.collection.resolve_collection_selector") as mock_resolve:
+             patch("retrovue.cli.commands.collection.resolve_container_selector") as mock_resolve:
             
             mock_collection = MagicMock()
-            mock_collection.id = collection_id
+            mock_collection.uuid = collection_id
             mock_collection.name = "TV Shows"
             mock_collection.sync_enabled = True
             mock_collection.ingestible = True
@@ -1038,21 +1040,21 @@ class TestCollectionIngestContract:
             mock_result.stats.assets_ingested = 5
             mock_result.stats.assets_skipped = 5
             mock_result.stats.assets_updated = 0
-            mock_service_instance.ingest_collection.return_value = mock_result
+            mock_service_instance.ingest_container.return_value = mock_result
             
-            with patch("retrovue.cli.commands.collection.CollectionIngestService", return_value=mock_service_instance):
-                result = self.runner.invoke(app, ["collection", "ingest", collection_id])
+            with patch("retrovue.cli.commands.collection.ContainerIngestService", return_value=mock_service_instance):
+                result = self.runner.invoke(app, ["container", "ingest", collection_id])
                 
                 assert result.exit_code == 0
                 
                 # Verify validate_ingestible was called
                 # Note: This happens inside the service, so we verify via the service call
-                mock_service_instance.ingest_collection.assert_called_once()
+                mock_service_instance.ingest_container.assert_called_once()
                 
-                # Verify ingest_collection was called (which internally calls enumerate_assets)
+                # Verify ingest_container was called (which internally calls enumerate_assets)
                 # The service is responsible for calling validate_ingestible before enumerate_assets
-                call_args = mock_service_instance.ingest_collection.call_args
-                assert call_args[1]["collection"] == mock_collection  # collection is a keyword arg
+                call_args = mock_service_instance.ingest_container.call_args
+                assert call_args[1]["container"] == mock_collection
                 assert call_args[1]["importer"] == mock_importer  # importer is a keyword arg
 
     # B-15: Validation Order
@@ -1063,16 +1065,16 @@ class TestCollectionIngestContract:
         """
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection._get_db_context", return_value=self._make_session_cm()), \
-             patch("retrovue.cli.commands.collection.resolve_collection_selector") as mock_resolve, \
+             patch("retrovue.cli.commands.collection.resolve_container_selector") as mock_resolve, \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer:
             
-            # Mock resolve_collection_selector to raise ValueError (collection not found)
+            # Mock resolve_container_selector to raise ValueError (collection not found)
             mock_resolve.side_effect = ValueError(f"Collection '{collection_id}' not found")
             
             mock_importer = MagicMock()
             mock_get_importer.return_value = mock_importer
             
-            result = self.runner.invoke(app, ["collection", "ingest", collection_id])
+            result = self.runner.invoke(app, ["container", "ingest", collection_id])
             
             assert result.exit_code == 1
             # Verify validate_ingestible was NOT called (collection resolution failed first)
@@ -1086,11 +1088,11 @@ class TestCollectionIngestContract:
         """
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection._get_db_context", return_value=self._make_session_cm()), \
-             patch("retrovue.cli.commands.collection.resolve_collection_selector") as mock_resolve, \
+             patch("retrovue.cli.commands.collection.resolve_container_selector") as mock_resolve, \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer:
             
             mock_collection = MagicMock()
-            mock_collection.id = collection_id
+            mock_collection.uuid = collection_id
             mock_collection.name = "TV Shows"
             mock_collection.sync_enabled = True
             mock_collection.ingestible = False  # Prerequisites fail
@@ -1102,24 +1104,24 @@ class TestCollectionIngestContract:
             
             # Mock service instance with prerequisite failure
             mock_service_instance = MagicMock()
-            mock_service_instance.ingest_collection.side_effect = ValueError(
+            mock_service_instance.ingest_container.side_effect = ValueError(
                 f"Collection 'TV Shows' is not ingestible. "
-                f"Check path mappings and prerequisites with 'retrovue collection show {collection_id}'."
+                f"Check path mappings and prerequisites with 'retrovue container show {collection_id}'."
             )
             
-            with patch("retrovue.cli.commands.collection.CollectionIngestService", return_value=mock_service_instance):
+            with patch("retrovue.cli.commands.collection.ContainerIngestService", return_value=mock_service_instance):
                 result = self.runner.invoke(app, [
-                    "collection", "ingest", collection_id,
+                    "container", "ingest", collection_id,
                     "--title", "The Big Bang Theory"
                 ])
                 
                 assert result.exit_code == 1
                 assert "not ingestible" in result.stdout or "not ingestible" in result.stderr
                 
-                # Verify scope resolution (ingest_collection) was NOT called successfully
+                # Verify scope resolution (ingest_container) was NOT called successfully
                 # (prerequisites failed before scope resolution)
                 # The service should have been called, but it raised ValueError before scope resolution
-                mock_service_instance.ingest_collection.assert_called_once()
+                mock_service_instance.ingest_container.assert_called_once()
 
     def test_b15_validation_order_scope_resolution_after_prerequisites(self):
         """
@@ -1128,10 +1130,10 @@ class TestCollectionIngestContract:
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection._get_db_context", return_value=self._make_session_cm()), \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer, \
-             patch("retrovue.cli.commands.collection.resolve_collection_selector") as mock_resolve:
+             patch("retrovue.cli.commands.collection.resolve_container_selector") as mock_resolve:
             
             mock_collection = MagicMock()
-            mock_collection.id = collection_id
+            mock_collection.uuid = collection_id
             mock_collection.name = "TV Shows"
             mock_collection.sync_enabled = True
             mock_collection.ingestible = True  # Prerequisites pass
@@ -1144,13 +1146,13 @@ class TestCollectionIngestContract:
             
             # Mock service instance with scope resolution failure (title not found)
             mock_service_instance = MagicMock()
-            mock_service_instance.ingest_collection.side_effect = IngestError(
+            mock_service_instance.ingest_container.side_effect = IngestError(
                 "Title 'Non-existent Show' not found in collection 'TV Shows'"
             )
             
-            with patch("retrovue.cli.commands.collection.CollectionIngestService", return_value=mock_service_instance):
+            with patch("retrovue.cli.commands.collection.ContainerIngestService", return_value=mock_service_instance):
                 result = self.runner.invoke(app, [
-                    "collection", "ingest", collection_id,
+                    "container", "ingest", collection_id,
                     "--title", "Non-existent Show"
                 ])
                 
@@ -1170,7 +1172,7 @@ class TestCollectionIngestDuplicateHandling:
         # Mock collection data
         self.collection = MagicMock()
         self.collection.id = self.collection_id
-        self.collection.name = "Test Collection"
+        self.collection.name = "Test Container"
         self.collection.sync_enabled = True
         self.collection.ingestible = True
         self.collection.source_id = self.source_id
@@ -1201,12 +1203,12 @@ class TestCollectionIngestDuplicateHandling:
     
     @patch('retrovue.cli.commands.collection.session')
     @patch('retrovue.cli.commands.collection.get_importer')
-    @patch('retrovue.cli.commands.collection.resolve_collection_selector')
-    @patch('retrovue.cli.commands.collection.CollectionIngestService')
+    @patch('retrovue.cli.commands.collection.resolve_container_selector')
+    @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_b16_duplicate_detection_prevents_second_asset_record(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """B-16: Duplicate detection MUST prevent creating a second Asset record for the same canonical identity."""
         from retrovue.cli.commands._ops.collection_ingest_service import (
-            CollectionIngestResult,
+            ContainerIngestResult,
             IngestStats,
         )
         
@@ -1220,9 +1222,9 @@ class TestCollectionIngestDuplicateHandling:
         mock_service_class.return_value = mock_service
         
         # Simulate finding existing asset with same canonical identity
-        mock_result = CollectionIngestResult(
-            collection_id=self.collection_id,
-            collection_name=self.collection.name,
+        mock_result = ContainerIngestResult(
+            container_id=self.collection_id,
+            container_name=self.collection.name,
             scope="episode",
             stats=IngestStats(
                 assets_discovered=1,
@@ -1232,11 +1234,11 @@ class TestCollectionIngestDuplicateHandling:
                 duplicates_prevented=1  # Duplicate prevented
             )
         )
-        mock_service.ingest_collection.return_value = mock_result
+        mock_service.ingest_container.return_value = mock_result
         
         # Run command
         result = self.runner.invoke(app, [
-            "collection", "ingest", self.collection_id,
+            "container", "ingest", self.collection_id,
             "--title", "Test Show",
             "--season", "1",
             "--episode", "1"
@@ -1250,22 +1252,22 @@ class TestCollectionIngestDuplicateHandling:
         # Note: duplicates_prevented is only shown in JSON output, not human-readable
         
         # Verify service was called with correct parameters
-        mock_service.ingest_collection.assert_called_once()
-        call_args = mock_service.ingest_collection.call_args
+        mock_service.ingest_container.assert_called_once()
+        call_args = mock_service.ingest_container.call_args
         # The service is called with collection object, not collection_id
-        assert call_args[1]["collection"] == self.collection
+        assert call_args[1]["container"] == self.collection
         assert call_args[1]["title"] == "Test Show"
         assert call_args[1]["season"] == 1
         assert call_args[1]["episode"] == 1
     
     @patch('retrovue.cli.commands.collection.session')
     @patch('retrovue.cli.commands.collection.get_importer')
-    @patch('retrovue.cli.commands.collection.resolve_collection_selector')
-    @patch('retrovue.cli.commands.collection.CollectionIngestService')
+    @patch('retrovue.cli.commands.collection.resolve_container_selector')
+    @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_b16_duplicate_detection_silent_operation(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """B-16: Duplicate encounters MUST NOT be treated as operator-visible errors."""
         from retrovue.cli.commands._ops.collection_ingest_service import (
-            CollectionIngestResult,
+            ContainerIngestResult,
             IngestStats,
         )
         
@@ -1279,9 +1281,9 @@ class TestCollectionIngestDuplicateHandling:
         mock_service_class.return_value = mock_service
         
         # Simulate duplicate detection - should not be an error
-        mock_result = CollectionIngestResult(
-            collection_id=self.collection_id,
-            collection_name=self.collection.name,
+        mock_result = ContainerIngestResult(
+            container_id=self.collection_id,
+            container_name=self.collection.name,
             scope="episode",
             stats=IngestStats(
                 assets_discovered=1,
@@ -1291,11 +1293,11 @@ class TestCollectionIngestDuplicateHandling:
                 duplicates_prevented=1
             )
         )
-        mock_service.ingest_collection.return_value = mock_result
+        mock_service.ingest_container.return_value = mock_result
         
         # Run command
         result = self.runner.invoke(app, [
-            "collection", "ingest", self.collection_id,
+            "container", "ingest", self.collection_id,
             "--title", "Test Show",
             "--season", "1",
             "--episode", "1"
@@ -1308,12 +1310,12 @@ class TestCollectionIngestDuplicateHandling:
     
     @patch('retrovue.cli.commands.collection.session')
     @patch('retrovue.cli.commands.collection.get_importer')
-    @patch('retrovue.cli.commands.collection.resolve_collection_selector')
-    @patch('retrovue.cli.commands.collection.CollectionIngestService')
+    @patch('retrovue.cli.commands.collection.resolve_container_selector')
+    @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_b17_skip_unchanged_assets(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """B-17: Assets with unchanged content AND unchanged enrichers MUST be skipped."""
         from retrovue.cli.commands._ops.collection_ingest_service import (
-            CollectionIngestResult,
+            ContainerIngestResult,
             IngestStats,
         )
         
@@ -1325,9 +1327,9 @@ class TestCollectionIngestDuplicateHandling:
         mock_service = MagicMock()
         mock_service_class.return_value = mock_service
         
-        mock_result = CollectionIngestResult(
-            collection_id=self.collection_id,
-            collection_name=self.collection.name,
+        mock_result = ContainerIngestResult(
+            container_id=self.collection_id,
+            container_name=self.collection.name,
             scope="collection",
             stats=IngestStats(
                 assets_discovered=100,
@@ -1337,11 +1339,11 @@ class TestCollectionIngestDuplicateHandling:
                 duplicates_prevented=0
             )
         )
-        mock_service.ingest_collection.return_value = mock_result
+        mock_service.ingest_container.return_value = mock_result
         
         # Run command
         result = self.runner.invoke(app, [
-            "collection", "ingest", self.collection_id
+            "container", "ingest", self.collection_id
         ])
         
         # Verify success
@@ -1353,12 +1355,12 @@ class TestCollectionIngestDuplicateHandling:
     
     @patch('retrovue.cli.commands.collection.session')
     @patch('retrovue.cli.commands.collection.get_importer')
-    @patch('retrovue.cli.commands.collection.resolve_collection_selector')
-    @patch('retrovue.cli.commands.collection.CollectionIngestService')
+    @patch('retrovue.cli.commands.collection.resolve_container_selector')
+    @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_b17_skip_unchanged_assets_json_output(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """B-17: JSON output MUST include correct assets_skipped count."""
         from retrovue.cli.commands._ops.collection_ingest_service import (
-            CollectionIngestResult,
+            ContainerIngestResult,
             IngestStats,
         )
         
@@ -1370,9 +1372,9 @@ class TestCollectionIngestDuplicateHandling:
         mock_service = MagicMock()
         mock_service_class.return_value = mock_service
         
-        mock_result = CollectionIngestResult(
-            collection_id=self.collection_id,
-            collection_name=self.collection.name,
+        mock_result = ContainerIngestResult(
+            container_id=self.collection_id,
+            container_name=self.collection.name,
             scope="collection",
             stats=IngestStats(
                 assets_discovered=50,
@@ -1382,11 +1384,11 @@ class TestCollectionIngestDuplicateHandling:
                 duplicates_prevented=0
             )
         )
-        mock_service.ingest_collection.return_value = mock_result
+        mock_service.ingest_container.return_value = mock_result
         
         # Run command with JSON output
         result = self.runner.invoke(app, [
-            "collection", "ingest", self.collection_id,
+            "container", "ingest", self.collection_id,
             "--json"
         ])
         
@@ -1403,12 +1405,12 @@ class TestCollectionIngestDuplicateHandling:
     
     @patch('retrovue.cli.commands.collection.session')
     @patch('retrovue.cli.commands.collection.get_importer')
-    @patch('retrovue.cli.commands.collection.resolve_collection_selector')
-    @patch('retrovue.cli.commands.collection.CollectionIngestService')
+    @patch('retrovue.cli.commands.collection.resolve_container_selector')
+    @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_b18_update_changed_content(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """B-18: Assets with changed content MUST be updated."""
         from retrovue.cli.commands._ops.collection_ingest_service import (
-            CollectionIngestResult,
+            ContainerIngestResult,
             IngestStats,
         )
         
@@ -1420,9 +1422,9 @@ class TestCollectionIngestDuplicateHandling:
         mock_service = MagicMock()
         mock_service_class.return_value = mock_service
         
-        mock_result = CollectionIngestResult(
-            collection_id=self.collection_id,
-            collection_name=self.collection.name,
+        mock_result = ContainerIngestResult(
+            container_id=self.collection_id,
+            container_name=self.collection.name,
             scope="collection",
             stats=IngestStats(
                 assets_discovered=25,
@@ -1432,11 +1434,11 @@ class TestCollectionIngestDuplicateHandling:
                 duplicates_prevented=0
             )
         )
-        mock_service.ingest_collection.return_value = mock_result
+        mock_service.ingest_container.return_value = mock_result
         
         # Run command
         result = self.runner.invoke(app, [
-            "collection", "ingest", self.collection_id
+            "container", "ingest", self.collection_id
         ])
         
         # Verify success
@@ -1448,12 +1450,12 @@ class TestCollectionIngestDuplicateHandling:
     
     @patch('retrovue.cli.commands.collection.session')
     @patch('retrovue.cli.commands.collection.get_importer')
-    @patch('retrovue.cli.commands.collection.resolve_collection_selector')
-    @patch('retrovue.cli.commands.collection.CollectionIngestService')
+    @patch('retrovue.cli.commands.collection.resolve_container_selector')
+    @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_b18_update_changed_enrichers(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """B-18: Assets with unchanged content but changed enrichers MUST be updated."""
         from retrovue.cli.commands._ops.collection_ingest_service import (
-            CollectionIngestResult,
+            ContainerIngestResult,
             IngestStats,
         )
         
@@ -1465,9 +1467,9 @@ class TestCollectionIngestDuplicateHandling:
         mock_service = MagicMock()
         mock_service_class.return_value = mock_service
         
-        mock_result = CollectionIngestResult(
-            collection_id=self.collection_id,
-            collection_name=self.collection.name,
+        mock_result = ContainerIngestResult(
+            container_id=self.collection_id,
+            container_name=self.collection.name,
             scope="collection",
             stats=IngestStats(
                 assets_discovered=30,
@@ -1477,11 +1479,11 @@ class TestCollectionIngestDuplicateHandling:
                 duplicates_prevented=0
             )
         )
-        mock_service.ingest_collection.return_value = mock_result
+        mock_service.ingest_container.return_value = mock_result
         
         # Run command
         result = self.runner.invoke(app, [
-            "collection", "ingest", self.collection_id
+            "container", "ingest", self.collection_id
         ])
         
         # Verify success
@@ -1493,12 +1495,12 @@ class TestCollectionIngestDuplicateHandling:
     
     @patch('retrovue.cli.commands.collection.session')
     @patch('retrovue.cli.commands.collection.get_importer')
-    @patch('retrovue.cli.commands.collection.resolve_collection_selector')
-    @patch('retrovue.cli.commands.collection.CollectionIngestService')
+    @patch('retrovue.cli.commands.collection.resolve_container_selector')
+    @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_b18_update_changed_content_and_enrichers(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """B-18: Assets with both changed content and enrichers MUST be updated."""
         from retrovue.cli.commands._ops.collection_ingest_service import (
-            CollectionIngestResult,
+            ContainerIngestResult,
             IngestStats,
         )
         
@@ -1510,9 +1512,9 @@ class TestCollectionIngestDuplicateHandling:
         mock_service = MagicMock()
         mock_service_class.return_value = mock_service
         
-        mock_result = CollectionIngestResult(
-            collection_id=self.collection_id,
-            collection_name=self.collection.name,
+        mock_result = ContainerIngestResult(
+            container_id=self.collection_id,
+            container_name=self.collection.name,
             scope="collection",
             stats=IngestStats(
                 assets_discovered=40,
@@ -1522,11 +1524,11 @@ class TestCollectionIngestDuplicateHandling:
                 duplicates_prevented=0
             )
         )
-        mock_service.ingest_collection.return_value = mock_result
+        mock_service.ingest_container.return_value = mock_result
         
         # Run command
         result = self.runner.invoke(app, [
-            "collection", "ingest", self.collection_id
+            "container", "ingest", self.collection_id
         ])
         
         # Verify success
@@ -1548,7 +1550,7 @@ class TestCollectionIngestTimeTrackingAndStatistics:
         # Mock collection data
         self.collection = MagicMock()
         self.collection.id = self.collection_id
-        self.collection.name = "Test Collection"
+        self.collection.name = "Test Container"
         self.collection.sync_enabled = True
         self.collection.ingestible = True
         self.collection.source_id = self.source_id
@@ -1570,14 +1572,14 @@ class TestCollectionIngestTimeTrackingAndStatistics:
     
     @patch('retrovue.cli.commands.collection.session')
     @patch('retrovue.cli.commands.collection.get_importer')
-    @patch('retrovue.cli.commands.collection.resolve_collection_selector')
-    @patch('retrovue.cli.commands.collection.CollectionIngestService')
+    @patch('retrovue.cli.commands.collection.resolve_container_selector')
+    @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_b19_last_ingest_time_updated_on_successful_completion(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """B-19: Upon successful completion, last_ingest_time MUST be updated to current timestamp."""
         from datetime import datetime
 
         from retrovue.cli.commands._ops.collection_ingest_service import (
-            CollectionIngestResult,
+            ContainerIngestResult,
             IngestStats,
         )
         
@@ -1592,9 +1594,9 @@ class TestCollectionIngestTimeTrackingAndStatistics:
         
         # Simulate successful completion with last_ingest_time
         test_time = datetime(2024, 1, 15, 10, 30, 0)
-        mock_result = CollectionIngestResult(
-            collection_id=self.collection_id,
-            collection_name=self.collection.name,
+        mock_result = ContainerIngestResult(
+            container_id=self.collection_id,
+            container_name=self.collection.name,
             scope="collection",
             stats=IngestStats(
                 assets_discovered=100,
@@ -1605,11 +1607,11 @@ class TestCollectionIngestTimeTrackingAndStatistics:
             ),
             last_ingest_time=test_time
         )
-        mock_service.ingest_collection.return_value = mock_result
+        mock_service.ingest_container.return_value = mock_result
         
         # Run command
         result = self.runner.invoke(app, [
-            "collection", "ingest", self.collection_id
+            "container", "ingest", self.collection_id
         ])
         
         # Verify success
@@ -1617,18 +1619,18 @@ class TestCollectionIngestTimeTrackingAndStatistics:
         assert "Last ingest: 2024-01-15 10:30:00" in result.stdout
         
         # Verify service was called
-        mock_service.ingest_collection.assert_called_once()
+        mock_service.ingest_container.assert_called_once()
     
     @patch('retrovue.cli.commands.collection.session')
     @patch('retrovue.cli.commands.collection.get_importer')
-    @patch('retrovue.cli.commands.collection.resolve_collection_selector')
-    @patch('retrovue.cli.commands.collection.CollectionIngestService')
+    @patch('retrovue.cli.commands.collection.resolve_container_selector')
+    @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_b19_last_ingest_time_updated_even_if_all_skipped(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """B-19: last_ingest_time MUST be updated even if all assets were skipped."""
         from datetime import datetime
 
         from retrovue.cli.commands._ops.collection_ingest_service import (
-            CollectionIngestResult,
+            ContainerIngestResult,
             IngestStats,
         )
         
@@ -1642,9 +1644,9 @@ class TestCollectionIngestTimeTrackingAndStatistics:
         mock_service_class.return_value = mock_service
         
         test_time = datetime(2024, 1, 15, 14, 45, 30)
-        mock_result = CollectionIngestResult(
-            collection_id=self.collection_id,
-            collection_name=self.collection.name,
+        mock_result = ContainerIngestResult(
+            container_id=self.collection_id,
+            container_name=self.collection.name,
             scope="collection",
             stats=IngestStats(
                 assets_discovered=50,
@@ -1655,11 +1657,11 @@ class TestCollectionIngestTimeTrackingAndStatistics:
             ),
             last_ingest_time=test_time
         )
-        mock_service.ingest_collection.return_value = mock_result
+        mock_service.ingest_container.return_value = mock_result
         
         # Run command
         result = self.runner.invoke(app, [
-            "collection", "ingest", self.collection_id
+            "container", "ingest", self.collection_id
         ])
         
         # Verify success
@@ -1670,16 +1672,16 @@ class TestCollectionIngestTimeTrackingAndStatistics:
         assert "Last ingest: 2024-01-15 14:45:30" in result.stdout
         
         # Verify service was called
-        mock_service.ingest_collection.assert_called_once()
+        mock_service.ingest_container.assert_called_once()
     
     @patch('retrovue.cli.commands.collection.session')
     @patch('retrovue.cli.commands.collection.get_importer')
-    @patch('retrovue.cli.commands.collection.resolve_collection_selector')
-    @patch('retrovue.cli.commands.collection.CollectionIngestService')
+    @patch('retrovue.cli.commands.collection.resolve_container_selector')
+    @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_b20_output_includes_statistics_distinguishing_asset_types(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """B-20: Output MUST include statistics distinguishing between new, skipped, and updated assets."""
         from retrovue.cli.commands._ops.collection_ingest_service import (
-            CollectionIngestResult,
+            ContainerIngestResult,
             IngestStats,
         )
         
@@ -1692,9 +1694,9 @@ class TestCollectionIngestTimeTrackingAndStatistics:
         mock_service = MagicMock()
         mock_service_class.return_value = mock_service
         
-        mock_result = CollectionIngestResult(
-            collection_id=self.collection_id,
-            collection_name=self.collection.name,
+        mock_result = ContainerIngestResult(
+            container_id=self.collection_id,
+            container_name=self.collection.name,
             scope="collection",
             stats=IngestStats(
                 assets_discovered=200,
@@ -1704,11 +1706,11 @@ class TestCollectionIngestTimeTrackingAndStatistics:
                 duplicates_prevented=0
             )
         )
-        mock_service.ingest_collection.return_value = mock_result
+        mock_service.ingest_container.return_value = mock_result
         
         # Run command
         result = self.runner.invoke(app, [
-            "collection", "ingest", self.collection_id
+            "container", "ingest", self.collection_id
         ])
         
         # Verify success
@@ -1719,18 +1721,18 @@ class TestCollectionIngestTimeTrackingAndStatistics:
         assert "Assets updated: 50" in result.stdout   # Updated assets
         
         # Verify service was called
-        mock_service.ingest_collection.assert_called_once()
+        mock_service.ingest_container.assert_called_once()
     
     @patch('retrovue.cli.commands.collection.session')
     @patch('retrovue.cli.commands.collection.get_importer')
-    @patch('retrovue.cli.commands.collection.resolve_collection_selector')
-    @patch('retrovue.cli.commands.collection.CollectionIngestService')
+    @patch('retrovue.cli.commands.collection.resolve_container_selector')
+    @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_b21_json_output_includes_last_ingest_time(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """B-21: JSON output MUST include last_ingest_time field."""
         from datetime import datetime
 
         from retrovue.cli.commands._ops.collection_ingest_service import (
-            CollectionIngestResult,
+            ContainerIngestResult,
             IngestStats,
         )
         
@@ -1744,9 +1746,9 @@ class TestCollectionIngestTimeTrackingAndStatistics:
         mock_service_class.return_value = mock_service
         
         test_time = datetime(2024, 1, 15, 16, 20, 45)
-        mock_result = CollectionIngestResult(
-            collection_id=self.collection_id,
-            collection_name=self.collection.name,
+        mock_result = ContainerIngestResult(
+            container_id=self.collection_id,
+            container_name=self.collection.name,
             scope="collection",
             stats=IngestStats(
                 assets_discovered=75,
@@ -1757,11 +1759,11 @@ class TestCollectionIngestTimeTrackingAndStatistics:
             ),
             last_ingest_time=test_time
         )
-        mock_service.ingest_collection.return_value = mock_result
+        mock_service.ingest_container.return_value = mock_result
         
         # Run command with JSON output
         result = self.runner.invoke(app, [
-            "collection", "ingest", self.collection_id,
+            "container", "ingest", self.collection_id,
             "--json"
         ])
         
@@ -1771,9 +1773,9 @@ class TestCollectionIngestTimeTrackingAndStatistics:
         # Parse JSON output
         json_output = json.loads(result.stdout)
         assert json_output["status"] == "success"
-        assert json_output["scope"] == "collection"
-        assert json_output["collection_id"] == self.collection_id
-        assert json_output["collection_name"] == self.collection.name
+        assert json_output["scope"] == "container"
+        assert json_output["container_id"] == self.collection_id
+        assert json_output["container_name"] == self.collection.name
         assert json_output["stats"]["assets_discovered"] == 75
         assert json_output["stats"]["assets_ingested"] == 15
         assert json_output["stats"]["assets_skipped"] == 40
@@ -1782,7 +1784,7 @@ class TestCollectionIngestTimeTrackingAndStatistics:
         assert json_output["last_ingest_time"] == "2024-01-15T16:20:45Z"
         
         # Verify service was called
-        mock_service.ingest_collection.assert_called_once()
+        mock_service.ingest_container.assert_called_once()
 
 
 class TestCollectionIngestCanonicalKey:
@@ -1797,7 +1799,7 @@ class TestCollectionIngestCanonicalKey:
         self.collection = MagicMock()
         self.collection.id = self.collection_id
         self.collection.uuid = self.collection_id
-        self.collection.name = "Test Collection"
+        self.collection.name = "Test Container"
         self.collection.sync_enabled = True
         self.collection.ingestible = True
         self.collection.source_id = self.source_id
@@ -1820,8 +1822,8 @@ class TestCollectionIngestCanonicalKey:
     
     @patch('retrovue.cli.commands.collection.session')
     @patch('retrovue.cli.commands.collection.get_importer')
-    @patch('retrovue.cli.commands.collection.resolve_collection_selector')
-    @patch('retrovue.cli.commands.collection.CollectionIngestService')
+    @patch('retrovue.cli.commands.collection.resolve_container_selector')
+    @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_canonical_key_windows_path_normalization(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """Verify that Windows paths are normalized correctly."""
         from retrovue.infra.canonical import canonical_key_for
@@ -1841,8 +1843,8 @@ class TestCollectionIngestCanonicalKey:
     
     @patch('retrovue.cli.commands.collection.session')
     @patch('retrovue.cli.commands.collection.get_importer')
-    @patch('retrovue.cli.commands.collection.resolve_collection_selector')
-    @patch('retrovue.cli.commands.collection.CollectionIngestService')
+    @patch('retrovue.cli.commands.collection.resolve_container_selector')
+    @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_canonical_key_posix_path_normalization(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """Verify that POSIX paths are normalized correctly."""
         from retrovue.infra.canonical import canonical_key_for
@@ -1859,8 +1861,8 @@ class TestCollectionIngestCanonicalKey:
     
     @patch('retrovue.cli.commands.collection.session')
     @patch('retrovue.cli.commands.collection.get_importer')
-    @patch('retrovue.cli.commands.collection.resolve_collection_selector')
-    @patch('retrovue.cli.commands.collection.CollectionIngestService')
+    @patch('retrovue.cli.commands.collection.resolve_container_selector')
+    @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_canonical_key_smb_path_normalization(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """Verify that SMB paths are normalized correctly."""
         from retrovue.infra.canonical import canonical_key_for
@@ -1878,8 +1880,8 @@ class TestCollectionIngestCanonicalKey:
     
     @patch('retrovue.cli.commands.collection.session')
     @patch('retrovue.cli.commands.collection.get_importer')
-    @patch('retrovue.cli.commands.collection.resolve_collection_selector')
-    @patch('retrovue.cli.commands.collection.CollectionIngestService')
+    @patch('retrovue.cli.commands.collection.resolve_container_selector')
+    @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_canonical_key_duplicate_path_equivalence(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """Verify that normalized equivalent paths map to the same hash."""
         from retrovue.infra.canonical import canonical_hash, canonical_key_for
@@ -1909,8 +1911,8 @@ class TestCollectionIngestCanonicalKey:
     
     @patch('retrovue.cli.commands.collection.session')
     @patch('retrovue.cli.commands.collection.get_importer')
-    @patch('retrovue.cli.commands.collection.resolve_collection_selector')
-    @patch('retrovue.cli.commands.collection.CollectionIngestService')
+    @patch('retrovue.cli.commands.collection.resolve_container_selector')
+    @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_canonical_key_missing_fields_raises_error(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """Verify that missing fields raise IngestError."""
         from retrovue.infra.canonical import canonical_key_for
@@ -1926,8 +1928,8 @@ class TestCollectionIngestCanonicalKey:
     
     @patch('retrovue.cli.commands.collection.session')
     @patch('retrovue.cli.commands.collection.get_importer')
-    @patch('retrovue.cli.commands.collection.resolve_collection_selector')
-    @patch('retrovue.cli.commands.collection.CollectionIngestService')
+    @patch('retrovue.cli.commands.collection.resolve_container_selector')
+    @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_canonical_key_mixed_path_formats(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """Verify canonicalization of mixed paths."""
         from retrovue.infra.canonical import canonical_key_for
@@ -1970,7 +1972,7 @@ class TestMilestone2CAssetPersistence:
 
     @patch("retrovue.cli.commands.collection.session")
     def test_persist_new_assets_when_missing(self, mock_session):
-        from retrovue.cli.commands._ops.collection_ingest_service import CollectionIngestService
+        from retrovue.cli.commands._ops.collection_ingest_service import ContainerIngestService
 
         mock_db = MagicMock()
         # No existing assets found
@@ -1983,8 +1985,8 @@ class TestMilestone2CAssetPersistence:
             {"path_uri": "/media/TV/The Show/S01E02.mkv", "size": 234567},
         ])
 
-        service = CollectionIngestService(mock_db)
-        result = service.ingest_collection(collection=collection, importer=importer)
+        service = ContainerIngestService(mock_db)
+        result = service.ingest_container(container=collection, importer=importer)
 
         # Stats: 2 discovered, 2 ingested, 0 skipped, no errors
         assert result.stats.assets_discovered == 2
@@ -1997,7 +1999,7 @@ class TestMilestone2CAssetPersistence:
 
     @patch("retrovue.cli.commands.collection.session")
     def test_skip_duplicates_by_canonical_hash(self, mock_session):
-        from retrovue.cli.commands._ops.collection_ingest_service import CollectionIngestService
+        from retrovue.cli.commands._ops.collection_ingest_service import ContainerIngestService
         from retrovue.domain.entities import Asset
 
         mock_db = MagicMock()
@@ -2012,8 +2014,8 @@ class TestMilestone2CAssetPersistence:
             {"path_uri": "/media/TV/The Show/S01E02.mkv", "size": 234567},  # new
         ])
 
-        service = CollectionIngestService(mock_db)
-        result = service.ingest_collection(collection=collection, importer=importer)
+        service = ContainerIngestService(mock_db)
+        result = service.ingest_container(container=collection, importer=importer)
 
         # Stats: 2 discovered, 1 ingested, 1 skipped
         assert result.stats.assets_discovered == 2
@@ -2056,9 +2058,9 @@ class TestMilestone2DAssetChangeDetection:
         collection = self._make_collection()
 
         # Patch resolution in CLI to avoid DB lookups for collection
-        with patch("retrovue.cli.commands.collection.resolve_collection_selector", return_value=collection), \
+        with patch("retrovue.cli.commands.collection.resolve_container_selector", return_value=collection), \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer, \
-             patch.object(svc._AssetRepository, "get_by_collection_and_canonical_hash") as mock_repo_get, \
+             patch.object(svc._AssetRepository, "get_by_container_and_canonical_hash") as mock_repo_get, \
              patch.object(svc, "canonical_key_for", return_value="canon-key"), \
              patch.object(svc, "canonical_hash", return_value="abc123"):
 
@@ -2072,7 +2074,7 @@ class TestMilestone2DAssetChangeDetection:
             mock_get_importer.return_value = importer
 
             result = runner.invoke(app, [
-                "collection", "ingest", str(collection.uuid), "--json"
+                "container", "ingest", str(collection.uuid), "--json"
             ])
 
             assert result.exit_code == 0
@@ -2096,9 +2098,9 @@ class TestMilestone2DAssetChangeDetection:
 
         collection = self._make_collection()
 
-        with patch("retrovue.cli.commands.collection.resolve_collection_selector", return_value=collection), \
+        with patch("retrovue.cli.commands.collection.resolve_container_selector", return_value=collection), \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer, \
-             patch.object(svc._AssetRepository, "get_by_collection_and_canonical_hash") as mock_repo_get, \
+             patch.object(svc._AssetRepository, "get_by_container_and_canonical_hash") as mock_repo_get, \
              patch.object(svc, "canonical_key_for", return_value="canon-key"), \
              patch.object(svc, "canonical_hash", return_value="abc123"):
 
@@ -2112,7 +2114,7 @@ class TestMilestone2DAssetChangeDetection:
             mock_get_importer.return_value = importer
 
             result = runner.invoke(app, [
-                "collection", "ingest", str(collection.uuid), "--json"
+                "container", "ingest", str(collection.uuid), "--json"
             ])
 
             assert result.exit_code == 0
@@ -2136,9 +2138,9 @@ class TestMilestone2DAssetChangeDetection:
 
         collection = self._make_collection()
 
-        with patch("retrovue.cli.commands.collection.resolve_collection_selector", return_value=collection), \
+        with patch("retrovue.cli.commands.collection.resolve_container_selector", return_value=collection), \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer, \
-             patch.object(svc._AssetRepository, "get_by_collection_and_canonical_hash") as mock_repo_get, \
+             patch.object(svc._AssetRepository, "get_by_container_and_canonical_hash") as mock_repo_get, \
              patch.object(svc, "canonical_key_for", return_value="canon-key"), \
              patch.object(svc, "canonical_hash", return_value="abc123"):
 
@@ -2152,7 +2154,7 @@ class TestMilestone2DAssetChangeDetection:
             mock_get_importer.return_value = importer
 
             result = runner.invoke(app, [
-                "collection", "ingest", str(collection.uuid), "--json"
+                "container", "ingest", str(collection.uuid), "--json"
             ])
 
             assert result.exit_code == 0
@@ -2195,9 +2197,9 @@ class TestMilestone3AAssetStateUpdate:
 
         collection = self._make_collection()
 
-        with patch("retrovue.cli.commands.collection.resolve_collection_selector", return_value=collection), \
+        with patch("retrovue.cli.commands.collection.resolve_container_selector", return_value=collection), \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer, \
-             patch.object(svc._AssetRepository, "get_by_collection_and_canonical_hash") as mock_repo_get, \
+             patch.object(svc._AssetRepository, "get_by_container_and_canonical_hash") as mock_repo_get, \
              patch.object(svc, "canonical_key_for", return_value="canon-key"), \
              patch.object(svc, "canonical_hash", return_value="abc123"):
 
@@ -2213,7 +2215,7 @@ class TestMilestone3AAssetStateUpdate:
             mock_get_importer.return_value = importer
 
             result = runner.invoke(app, [
-                "collection", "ingest", str(collection.uuid), "--json"
+                "container", "ingest", str(collection.uuid), "--json"
             ])
 
             assert result.exit_code == 0
@@ -2242,9 +2244,9 @@ class TestMilestone3AAssetStateUpdate:
 
         collection = self._make_collection()
 
-        with patch("retrovue.cli.commands.collection.resolve_collection_selector", return_value=collection), \
+        with patch("retrovue.cli.commands.collection.resolve_container_selector", return_value=collection), \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer, \
-             patch.object(svc._AssetRepository, "get_by_collection_and_canonical_hash") as mock_repo_get, \
+             patch.object(svc._AssetRepository, "get_by_container_and_canonical_hash") as mock_repo_get, \
              patch.object(svc, "canonical_key_for", return_value="canon-key"), \
              patch.object(svc, "canonical_hash", return_value="abc123"):
 
@@ -2260,7 +2262,7 @@ class TestMilestone3AAssetStateUpdate:
             mock_get_importer.return_value = importer
 
             result = runner.invoke(app, [
-                "collection", "ingest", str(collection.uuid), "--json"
+                "container", "ingest", str(collection.uuid), "--json"
             ])
 
             assert result.exit_code == 0
@@ -2289,9 +2291,9 @@ class TestMilestone3AAssetStateUpdate:
 
         collection = self._make_collection()
 
-        with patch("retrovue.cli.commands.collection.resolve_collection_selector", return_value=collection), \
+        with patch("retrovue.cli.commands.collection.resolve_container_selector", return_value=collection), \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer, \
-             patch.object(svc._AssetRepository, "get_by_collection_and_canonical_hash") as mock_repo_get, \
+             patch.object(svc._AssetRepository, "get_by_container_and_canonical_hash") as mock_repo_get, \
              patch.object(svc, "canonical_key_for", return_value="canon-key"), \
              patch.object(svc, "canonical_hash", return_value="abc123"):
 
@@ -2307,7 +2309,7 @@ class TestMilestone3AAssetStateUpdate:
             mock_get_importer.return_value = importer
 
             result = runner.invoke(app, [
-                "collection", "ingest", str(collection.uuid), "--json"
+                "container", "ingest", str(collection.uuid), "--json"
             ])
 
             assert result.exit_code == 0

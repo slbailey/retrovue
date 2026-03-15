@@ -93,6 +93,6 @@ Each Source contract must have exactly two test files:
 ## See Also
 
 - [Source Domain Documentation](../../domain/Source.md) - Core domain model and operations
-- [Collection Wipe](CollectionWipeContract.md) - Reference implementation pattern
+- [Container Wipe](ContainerWipeContract.md) - Reference implementation pattern
 - [CLI Contract](README.md) - General CLI command standards
 - [Unit of Work](../_ops/UnitOfWorkContract.md) - Transaction management requirements

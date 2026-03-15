@@ -98,20 +98,22 @@ def _make_source(db) -> Source:
     return src
 
 
-def _make_collection(db, source: Source) -> Collection:
+def _make_container(db, source: Source) -> Collection:
+    """Create a test container (Collection entity) for the given source."""
     coll = Collection(
         source_id=source.id,
         external_id=f"test-coll-{_uid().hex[:8]}",
-        name="Test Collection",
+        name="Test Container",
     )
     db.add(coll)
     db.flush()
     return coll
 
 
-def _make_asset(db, collection: Collection) -> Asset:
+def _make_asset(db, container: Collection) -> Asset:
     asset = Asset(
-        collection_uuid=collection.uuid,
+        container_id=container.uuid,
+        source_id=container.source_id,
         canonical_key=f"test/{_uid().hex[:8]}.mp4",
         canonical_key_hash=_uid().hex[:64],
         uri=f"/media/test/{_uid().hex[:8]}.mp4",
@@ -301,7 +303,7 @@ class TestChannelReconcileDelete:
                 sp = db.begin_nested()
 
                 source = _make_source(db)
-                coll = _make_collection(db, source)
+                coll = _make_container(db, source)
                 asset = _make_asset(db, coll)
 
                 ch = _make_channel(db, slug="to-remove")
@@ -335,7 +337,7 @@ class TestChannelReconcileDelete:
                 sp = db.begin_nested()
 
                 source = _make_source(db)
-                coll = _make_collection(db, source)
+                coll = _make_container(db, source)
                 asset = _make_asset(db, coll)
 
                 keep = _make_channel(db, slug="survivor")
@@ -379,7 +381,7 @@ class TestChannelReconcileDelete:
                 sp = db.begin_nested()
 
                 source = _make_source(db)
-                coll = _make_collection(db, source)
+                coll = _make_container(db, source)
                 asset = _make_asset(db, coll)
 
                 sources_before = _count(db, "sources")
@@ -409,7 +411,7 @@ class TestChannelReconcileDelete:
                 sp = db.begin_nested()
 
                 source = _make_source(db)
-                coll = _make_collection(db, source)
+                coll = _make_container(db, source)
                 asset = _make_asset(db, coll)
 
                 ch = _make_channel(db, slug="non-fk-test")
@@ -472,7 +474,7 @@ class TestChannelReconcileIdempotent:
                 sp = db.begin_nested()
 
                 source = _make_source(db)
-                coll = _make_collection(db, source)
+                coll = _make_container(db, source)
                 asset = _make_asset(db, coll)
 
                 ch = _make_channel(db, slug="steady")

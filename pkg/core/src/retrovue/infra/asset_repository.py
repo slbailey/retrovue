@@ -32,19 +32,19 @@ class AssetRepository:
         """
         self.db = db
 
-    def get_by_collection_and_canonical_hash(
-        self, collection_uuid: UUID, canonical_key_hash: str
+    def get_by_container_and_canonical_hash(
+        self, container_id: UUID, canonical_key_hash: str
     ) -> Asset | None:
         """
-        Find an asset by collection UUID and canonical key hash.
+        Find an asset by container UUID and canonical key hash.
 
         Uses scalar_one_or_none() to enforce the uniqueness constraint invariant.
-        If more than one asset exists with the same canonical key hash in a collection
+        If more than one asset exists with the same canonical key hash in a container
         (which should never happen due to the unique constraint), this will raise an
         exception during testing, helping surface data integrity issues.
 
         Args:
-            collection_uuid: UUID of the collection
+            container_id: UUID of the container
             canonical_key_hash: SHA256 hash of the canonical key
 
         Returns:
@@ -54,21 +54,21 @@ class AssetRepository:
             MultipleResultsFound: If more than one asset matches (data integrity issue)
         """
         stmt = select(Asset).where(
-            Asset.collection_uuid == collection_uuid, Asset.canonical_key_hash == canonical_key_hash
+            Asset.container_id == container_id, Asset.canonical_key_hash == canonical_key_hash
         )
         return self.db.scalar_one_or_none(stmt)
 
-    def exists_by_collection_and_canonical_hash(
-        self, collection_uuid: UUID, canonical_key_hash: str
+    def exists_by_container_and_canonical_hash(
+        self, container_id: UUID, canonical_key_hash: str
     ) -> bool:
         """
-        Check if an asset exists by collection UUID and canonical key hash.
+        Check if an asset exists by container UUID and canonical key hash.
 
         Fast existence check that avoids loading the full row when only
         a boolean result is needed (e.g., for create vs update branching).
 
         Args:
-            collection_uuid: UUID of the collection
+            container_id: UUID of the container
             canonical_key_hash: SHA256 hash of the canonical key
 
         Returns:
@@ -77,12 +77,18 @@ class AssetRepository:
         stmt = (
             select(1)
             .where(
-                Asset.collection_uuid == collection_uuid,
+                Asset.container_id == container_id,
                 Asset.canonical_key_hash == canonical_key_hash,
             )
             .limit(1)
         )
         return self.db.scalar(stmt) is not None
+
+    def exists_by_collection_and_canonical_hash(
+        self, collection_uuid: UUID, canonical_key_hash: str
+    ) -> bool:
+        """Compatibility: prefer exists_by_container_and_canonical_hash."""
+        return self.exists_by_container_and_canonical_hash(collection_uuid, canonical_key_hash)
 
     def get_by_uuid(self, uuid: UUID) -> Asset | None:
         """

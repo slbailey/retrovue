@@ -16,7 +16,7 @@ This defines what RetroVue is responsible for and what it is not.
 ## RetroVue is not responsible for
 
 - Permanent 24/7 transcoding. ffmpeg exists only while someone is actually watching.
-- Scraping / mounting arbitrary storage paths. The operator must provide valid `local_path` mappings per Collection.
+- Scraping / mounting arbitrary storage paths. The operator must provide valid `local_path` mappings per container.
 - Automatically ingesting content without operator intent.
 - Hardcoding metadata rules. Metadata is handled by ingest enrichers, which are pluggable.
 - Directly embedding external live feeds unless implemented as a Producer plugin.

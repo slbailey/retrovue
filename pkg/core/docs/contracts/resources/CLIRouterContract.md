@@ -59,7 +59,7 @@ All CLI command syntax and usage documentation MUST be in `docs/cli/`. Each comm
 
 - `docs/cli/source.md` - Source commands
 - `docs/cli/channel.md` - Channel commands
-- `docs/cli/collection.md` - Collection commands
+- `docs/cli/container.md` - Collection commands
 - etc.
 
 ### R-8: Contract Documentation Location

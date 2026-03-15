@@ -1,4 +1,4 @@
-> **⚠️ Historical document.** Superseded by: [CollectionWipeContract](../../contracts/resources/CollectionWipeContract.md).
+> **⚠️ Historical document.** Superseded by: [ContainerWipeContract](../../contracts/resources/ContainerWipeContract.md).
 
 New command (resource contract)
 

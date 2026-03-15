@@ -34,7 +34,7 @@ def _mk_item(rev_id, slot=0, start=None):
         start_time=st,
         duration_sec=1800,
         asset_id=None,
-        collection_id=None,
+        container_id=None,
         content_type="episode",
         window_uuid=None,
         slot_index=slot,

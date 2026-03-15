@@ -13,7 +13,7 @@ class TestAssetConfidenceDataContract:
         fake_result = MagicMock()
         fake_result.to_dict.return_value = {
             "status": "success",
-            "scope": "collection",
+            "scope": "container",
             "collection_id": "col-1",
             "collection_name": "Movies",
             "stats": {
@@ -33,10 +33,10 @@ class TestAssetConfidenceDataContract:
         }
 
         with patch("retrovue.cli.commands.collection.session") as mock_session, \
-             patch("retrovue.cli.commands.collection.CollectionIngestService") as mock_service, \
+             patch("retrovue.cli.commands.collection.ContainerIngestService") as mock_service, \
              patch("retrovue.cli.commands.collection.resolve_collection_selector") as mock_resolve:
             mock_session.return_value.__enter__.return_value = MagicMock()
-            mock_service.return_value.ingest_collection.return_value = fake_result
+            mock_service.return_value.ingest_container.return_value = fake_result
             mock_resolve.return_value = MagicMock(uuid="col-1", name="Movies", sync_enabled=True, ingestible=True)
 
             result = runner.invoke(app, ["collection", "ingest", "Movies", "--json"]) 

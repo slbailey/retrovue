@@ -10,7 +10,7 @@ import re
 from urllib.parse import urlparse
 
 
-def canonical_key_for(item, collection=None, provider: str | None = None) -> str:
+def canonical_key_for(item, container=None, provider: str | None = None) -> str:
     """
     Build a canonical key string for an ingest item.
 
@@ -18,12 +18,12 @@ def canonical_key_for(item, collection=None, provider: str | None = None) -> str
       • Prefer external_id (provider_key) if present.
       • Else build from path_uri/uri/path with provider prefix.
       • Normalize slashes, lowercase host/path, remove drive letters.
-      • Include collection.uuid or external_id if provided.
+      • Include container.uuid or external_id if provided.
       • Handle various path formats: filesystem (/, C:\\), smb://, etc.
 
     Args:
         item: DiscoveredItem, dict, or object with path_uri, provider_key, uri, path, external_id attributes
-        collection: Optional Collection object with uuid or external_id
+        container: Optional Container object (source subdivision) with uuid or external_id
         provider: Optional provider name (e.g., 'plex', 'filesystem') for prefixing
 
     Returns:
@@ -69,14 +69,14 @@ def canonical_key_for(item, collection=None, provider: str | None = None) -> str
     if provider:
         parts.append(provider.lower())
 
-    # Add collection identifier if provided
-    if collection:
-        if hasattr(collection, "uuid"):
-            parts.append(f"collection:{collection.uuid}")
-        elif hasattr(collection, "external_id") and collection.external_id:
-            parts.append(f"collection:{collection.external_id}")
-        elif hasattr(collection, "name") and collection.name:
-            parts.append(f"collection:{collection.name.lower()}")
+    # Add container identifier if provided (key prefix "collection:" kept for canonical key stability)
+    if container:
+        if hasattr(container, "uuid"):
+            parts.append(f"collection:{container.uuid}")
+        elif hasattr(container, "external_id") and container.external_id:
+            parts.append(f"collection:{container.external_id}")
+        elif hasattr(container, "name") and container.name:
+            parts.append(f"collection:{container.name.lower()}")
 
     # Normalize identifier based on its format
     normalized_id = _normalize_identifier(identifier)

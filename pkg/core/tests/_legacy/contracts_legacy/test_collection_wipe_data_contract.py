@@ -8,7 +8,7 @@ These tests guarantee that destructive wipes:
 - clean up dependent rows (ProviderRef, ReviewQueue),
 - and do not leave dangling references.
 
-See docs/contracts/resources/CollectionWipeContract.md for the source of truth.
+See docs/contracts/resources/ContainerWipeContract.md for the source of truth.
 Behavior MUST NOT change without updating that contract first.
 """
 

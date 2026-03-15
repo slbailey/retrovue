@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Define the behavioral contract for discovering collections from content sources. This contract ensures safe collection discovery with proper validation, persistence handling, and importer interface compliance verification.
+Define the behavioral contract for discovering **containers** from content sources (contract entity: Container). This contract ensures safe container discovery with proper validation, persistence handling, and importer interface compliance verification.
 
 ---
 
@@ -28,19 +28,19 @@ retrovue source discover <source_id> [--json] [--test-db] [--dry-run]
 
 ### Discovery Model
 
-- **Non-destructive operation**: Only discovers and persists collections
+- **Non-destructive operation**: Only discovers and persists containers
 - **Idempotent**: Safe to run multiple times
 - **Dry-run support**: Preview discovery without database changes
 - **Test isolation**: `--test-db` prevents external API calls
 
-### Collection Handling
+### Container Handling
 
-- Newly discovered collections start with `enabled=False`
-- Existing collections are updated with current metadata
-- Duplicate collections are skipped with notification
-- No PathMapping records are created during discovery. The external path (e.g., plex path) is persisted in the collection's config for display purposes. PathMapping rows are only created via `retrovue collection update --path-mapping` and removed via `--path-mapping DELETE`.
+- Newly discovered containers start with `enabled=False`
+- Existing containers are updated with current metadata
+- Duplicate containers are skipped with notification
+- No PathMapping records are created during discovery. The external path (e.g., plex path) is persisted in the container's config for display purposes. PathMapping rows are only created via `retrovue container update --path-mapping` and removed via `--path-mapping DELETE` (during rollout, `retrovue collection update` may be accepted as deprecated).
 - Source type MUST be valid and support the discovery operation. Unsupported source types MUST cause the command to fail with exit code 1.
-- Collection discovery retrieves available collections from the source
+- Container discovery retrieves available containers from the source
 
 ---
 
@@ -51,18 +51,18 @@ retrovue source discover <source_id> [--json] [--test-db] [--dry-run]
 **Discovery Results:**
 
 ```
-Successfully added 3 collections from 'My Plex Server':
+Successfully added 3 containers from 'My Plex Server':
   • Movies (ID: 1) - Disabled by default
   • TV Shows (ID: 2) - Disabled by default
   • Music (ID: 3) - Disabled by default
 
-Use 'retrovue collection update <name> --sync-enable' to enable collections for sync
+Use 'retrovue container update <name> --sync-enable' to enable containers for sync
 ```
 
 **Dry-run Output:**
 
 ```
-Would discover 3 collections from 'My Plex Server':
+Would discover 3 containers from 'My Plex Server':
   • Movies (ID: 1) - Would be created
   • TV Shows (ID: 2) - Would be created
   • Music (ID: 3) - Would be created
@@ -71,10 +71,10 @@ Would discover 3 collections from 'My Plex Server':
 **Dry-run Output with Existing Collections:**
 
 ```
-Discovered collections from 'My Plex Server' (dry-run):
+Discovered containers from 'My Plex Server' (dry-run):
   • Movies (ID: 1) - Would skip (already exists)
   • TV Shows (ID: 2) - Would skip (already exists)
-  • New Collection (ID: 10) - Would be created
+  • New Container (ID: 10) - Would be created
 ```
 
 ### JSON Output

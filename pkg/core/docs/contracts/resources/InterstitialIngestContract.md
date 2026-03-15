@@ -213,6 +213,6 @@ traffic policy enforcement at playout time.
 ## See Also
 
 - `adapters/importers/filesystem_importer.py` — FilesystemImporter, DEFAULT_INFERENCE_RULES
-- `docs/contracts/resources/CollectionIngestContract.md` — general ingest contract
+- `docs/contracts/resources/ContainerIngestContract.md` — general ingest contract
 - `docs/contracts/resources/TrafficManagementContract.md` — how inferred types drive traffic policy
 - `docs/contracts/runtime/INV-BREAK-PAD-EXACT-001.md` — break-level pad invariant

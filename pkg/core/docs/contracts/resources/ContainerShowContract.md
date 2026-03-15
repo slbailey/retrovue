@@ -204,10 +204,10 @@ retrovue collection show 4b2b05e7-d7d2-414a-a587-3f5df9b53f44
 
 ```bash
 # Test collection show in isolated environment
-retrovue collection show "Test Collection" --test-db
+retrovue container show "Test Container" --test-db
 
 # Test with JSON output
-retrovue collection show "Test Collection" --test-db --json
+retrovue container show "Test Container" --test-db --json
 ```
 
 ---
@@ -225,6 +225,6 @@ The `collection show` command is a prerequisite operation for `collection ingest
 
 ## See Also
 
-- [Collection Ingest](CollectionIngestContract.md) - Ingest operations that depend on collection identification
-- [Collection Contract](CollectionContract.md) - Overview of all collection operations
+- [Collection Ingest](ContainerIngestContract.md) - Ingest operations that depend on collection identification
+- [Collection Contract](ContainerContract.md) - Overview of all collection operations
 - [Source Discover](SourceDiscoverContract.md) - Collection discovery operations

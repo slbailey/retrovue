@@ -1,12 +1,29 @@
 """
-CLI contract tests for retrovue collection commands.
+CLI contract tests for retrovue container/collection commands.
 
-Tests the collection command group against the documented CLI contract in docs/contracts/README.md.
+Tests the container (canonical) and collection (deprecated) command groups.
 """
 
 import pytest
 
 from .utils import run_cli
+
+
+class TestContainerCLI:
+    """Canonical container command group (Phase 4)."""
+
+    def test_container_list_help(self):
+        """retrovue container list --help shows container wording."""
+        exit_code, stdout, stderr = run_cli(["container", "list", "--help"])
+        assert exit_code == 0
+        assert "container" in stdout.lower() or "container" in stderr.lower()
+        assert "--source" in stdout
+
+    def test_container_show_help(self):
+        """retrovue container show --help works."""
+        exit_code, stdout, stderr = run_cli(["container", "show", "--help"])
+        assert exit_code == 0
+        assert "container" in stdout.lower() or "container" in stderr.lower()
 
 
 class TestCollectionCLI:
@@ -17,7 +34,7 @@ class TestCollectionCLI:
         exit_code, stdout, stderr = run_cli(["collection", "list", "--help"])
         assert exit_code == 0
         assert "--source" in stdout
-        assert "Show Collections for a Source" in stdout or "Show Collections for a Source" in stderr
+        assert "Show containers for a source" in stdout or "Show containers for a source" in stderr
     
     def test_collection_list(self):
         """Test that retrovue collection list command exists."""
@@ -56,7 +73,7 @@ class TestCollectionCLI:
         """Test that retrovue collection detach-enricher --help works."""
         exit_code, stdout, stderr = run_cli(["collection", "detach-enricher", "--help"])
         assert exit_code == 0
-        assert "Remove enricher from collection" in stdout or "Remove enricher from collection" in stderr
+        assert "Remove enricher from container" in stdout or "Remove enricher from container" in stderr
     
     @pytest.mark.skip(reason="destructive; presence-only check")
     def test_collection_detach_enricher_presence(self):
@@ -69,7 +86,7 @@ class TestCollectionCLI:
         exit_code, stdout, stderr = run_cli(["collection", "delete", "--help"])
         assert exit_code == 0
         assert "--force" in stdout
-        assert "Delete a collection and all its associated data" in stdout or "Delete a collection and all its associated data" in stderr
+        assert "Delete a container" in stdout or "Delete a container" in stderr
     
     def test_collection_wipe_help(self):
         """Test that retrovue collection wipe --help works."""
@@ -79,7 +96,7 @@ class TestCollectionCLI:
         assert "--dry-run" in stdout
         assert "--json" in stdout
         assert "NUCLEAR OPTION" in stdout or "NUCLEAR OPTION" in stderr or "nuclear option" in stdout
-        assert "Completely wipe a collection and ALL its associated data" in stdout or "Completely wipe a collection and ALL its associated data" in stderr
+        assert "Completely wipe a container" in stdout or "Completely wipe a container" in stderr
     
     def test_collection_ingest_help(self):
         """Test that retrovue collection ingest --help works."""

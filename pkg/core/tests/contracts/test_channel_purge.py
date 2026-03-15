@@ -92,22 +92,23 @@ def _make_source(db) -> Source:
     return src
 
 
-def _make_collection(db, source: Source) -> Collection:
-    """Create a minimal Collection (preserved table) and flush."""
+def _make_container(db, source: Source) -> Collection:
+    """Create a minimal container (Collection entity) and flush."""
     coll = Collection(
         source_id=source.id,
         external_id=f"test-coll-{_uid().hex[:8]}",
-        name="Test Collection",
+        name="Test Container",
     )
     db.add(coll)
     db.flush()
     return coll
 
 
-def _make_asset(db, collection: Collection) -> Asset:
+def _make_asset(db, container: Collection) -> Asset:
     """Create a minimal Asset (preserved table) and flush."""
     asset = Asset(
-        collection_uuid=collection.uuid,
+        container_id=container.uuid,
+        source_id=container.source_id,
         canonical_key=f"test/{_uid().hex[:8]}.mp4",
         canonical_key_hash=_uid().hex[:64],
         uri=f"/media/test/{_uid().hex[:8]}.mp4",
@@ -297,7 +298,7 @@ class TestChannelPurge001:
 
                 # Preserved catalog state
                 source = _make_source(db)
-                coll = _make_collection(db, source)
+                coll = _make_container(db, source)
                 asset = _make_asset(db, coll)
 
                 # Channel + full broadcast state
@@ -341,7 +342,7 @@ class TestChannelPurge001:
                 sp = db.begin_nested()
 
                 source = _make_source(db)
-                coll = _make_collection(db, source)
+                coll = _make_container(db, source)
                 asset = _make_asset(db, coll)
 
                 ch1 = _make_channel(db, slug="purge-ch1")
@@ -372,7 +373,7 @@ class TestChannelPurge001:
                 sp = db.begin_nested()
 
                 source = _make_source(db)
-                coll = _make_collection(db, source)
+                coll = _make_container(db, source)
                 asset = _make_asset(db, coll)
 
                 # Snapshot catalog counts before channel creation
@@ -424,7 +425,7 @@ class TestChannelPurge002:
                 sp = db.begin_nested()
 
                 source = _make_source(db)
-                coll = _make_collection(db, source)
+                coll = _make_container(db, source)
                 asset = _make_asset(db, coll)
 
                 channel = _make_channel(db)
@@ -467,7 +468,7 @@ class TestChannelPurge002:
                 sp = db.begin_nested()
 
                 source = _make_source(db)
-                coll = _make_collection(db, source)
+                coll = _make_container(db, source)
                 asset = _make_asset(db, coll)
 
                 assets_before = _count(db, "assets")
@@ -537,7 +538,7 @@ class TestChannelPurge003:
                 sp = db.begin_nested()
 
                 source = _make_source(db)
-                coll = _make_collection(db, source)
+                coll = _make_container(db, source)
                 asset = _make_asset(db, coll)
                 channel = _make_channel(db)
 
@@ -609,7 +610,7 @@ class TestChannelPurge003:
                 sp = db.begin_nested()
 
                 source = _make_source(db)
-                coll = _make_collection(db, source)
+                coll = _make_container(db, source)
                 asset = _make_asset(db, coll)
                 channel = _make_channel(db)
 

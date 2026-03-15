@@ -3,7 +3,7 @@ Internal Metadata API Router
 
 This router exposes developer-facing endpoints for metadata validation and testing.
 It is NOT the production ingest endpoint; real importer traffic enters through
-CollectionIngestService.ingest_collection(), which calls handle_ingest() directly.
+ContainerIngestService.ingest_container(), which calls handle_ingest() directly.
 """
 
 from __future__ import annotations

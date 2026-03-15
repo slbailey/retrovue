@@ -20,7 +20,7 @@ from ...adapters.registry import (
     list_importers,
 )
 from ...content_manager.source_service import SourceService
-from ...domain.entities import Collection
+from ...domain.entities import Container
 from ...infra.uow import session
 
 
@@ -1132,19 +1132,19 @@ def discover_collections(
                     typer.echo(f"No collections found for source '{source.name}'")
                     return
 
-                # Convert to SourceCollectionDTO format and add to database
-                from ...content_manager.source_service import SourceCollectionDTO
+                # Convert to ContainerDTO format and add to database
+                from ...content_manager.source_service import ContainerDTO
 
                 collection_dtos = []
                 added_count = 0
 
                 for collection in collections:
-                    # Check if collection already exists
+                    # Check if container already exists
                     existing = (
-                        db.query(Collection)
+                        db.query(Container)
                         .filter(
-                            Collection.source_id == source.id,
-                            Collection.external_id == collection["external_id"],
+                            Container.source_id == source.id,
+                            Container.external_id == collection["external_id"],
                         )
                         .first()
                     )
@@ -1161,7 +1161,7 @@ def discover_collections(
                         continue
 
                     # Create collection DTO for output
-                    collection_dto = SourceCollectionDTO(
+                    collection_dto = ContainerDTO(
                         external_id=collection["external_id"],
                         name=collection["name"],
                         sync_enabled=False,
@@ -1177,13 +1177,13 @@ def discover_collections(
 
                     # Only persist to database if not in dry-run mode
                     if not dry_run:
-                        # Create new collection
-                        new_collection = Collection(
-                            id=uuid.uuid4(),
+                        # Create new container
+                        new_collection = Container(
+                            uuid=uuid.uuid4(),
                             source_id=source.id,
                             external_id=collection["external_id"],
                             name=collection["name"],
-                            sync_enabled=False,  # Newly discovered collections start disabled
+                            sync_enabled=False,  # Newly discovered containers start disabled
                             config=collection_dto.config,
                         )
                         db.add(new_collection)
@@ -1345,7 +1345,7 @@ def source_attach_enricher(
                 raise typer.Exit(1)
 
             # Get all collections for this source
-            collections = db.query(Collection).filter(Collection.source_id == source.id).all()
+            collections = db.query(Container).filter(Container.source_id == source.id).all()
 
             if not collections:
                 typer.echo(f"No collections found for source '{source.name}'")
@@ -1360,7 +1360,7 @@ def source_attach_enricher(
             typer.echo()
             typer.echo("Collections that will have the enricher attached:")
             for collection in collections:
-                typer.echo(f"  - {collection.name} (ID: {collection.id})")
+                typer.echo(f"  - {collection.name} (ID: {collection.uuid})")
 
             if json_output:
                 import json
@@ -1372,7 +1372,7 @@ def source_attach_enricher(
                     "collections_affected": len(collections),
                     "collections": [
                         {
-                            "id": str(collection.id),
+                            "id": str(collection.uuid),
                             "name": collection.name,
                             "external_id": collection.external_id,
                         }
@@ -1426,7 +1426,7 @@ def source_detach_enricher(
                 raise typer.Exit(1)
 
             # Get all collections for this source
-            collections = db.query(Collection).filter(Collection.source_id == source.id).all()
+            collections = db.query(Container).filter(Container.source_id == source.id).all()
 
             if not collections:
                 typer.echo(f"No collections found for source '{source.name}'")
@@ -1440,7 +1440,7 @@ def source_detach_enricher(
             typer.echo()
             typer.echo("Collections that will have the enricher detached:")
             for collection in collections:
-                typer.echo(f"  - {collection.name} (ID: {collection.id})")
+                typer.echo(f"  - {collection.name} (ID: {collection.uuid})")
 
             if json_output:
                 import json
@@ -1451,7 +1451,7 @@ def source_detach_enricher(
                     "collections_affected": len(collections),
                     "collections": [
                         {
-                            "id": str(collection.id),
+                            "id": str(collection.uuid),
                             "name": collection.name,
                             "external_id": collection.external_id,
                         }

@@ -190,8 +190,8 @@ class Asset(Base):
     uuid: Mapped[uuid_module.UUID] = mapped_column(
         PG_UUID(as_uuid=True), primary_key=True, default=uuid_module.uuid4, nullable=False
     )
-    collection_uuid: Mapped[uuid_module.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("collections.uuid", ondelete="RESTRICT"), nullable=False
+    container_id: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("containers.uuid", ondelete="RESTRICT"), nullable=False
     )
     source_id: Mapped[uuid_module.UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("sources.id", ondelete="CASCADE"), nullable=False
@@ -223,7 +223,7 @@ class Asset(Base):
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     video_codec: Mapped[str | None] = mapped_column(String(50), nullable=True)
     audio_codec: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    container: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    container_format: Mapped[str | None] = mapped_column("container", String(50), nullable=True)
     discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     is_deleted: Mapped[bool] = mapped_column(
         Boolean, server_default=sa.text("false"), nullable=False
@@ -246,7 +246,7 @@ class Asset(Base):
     markers: Mapped[list[Marker]] = relationship(
         "Marker", back_populates="asset", cascade="all, delete-orphan", passive_deletes=True
     )
-    collection: Mapped[Collection | None] = relationship("Collection", passive_deletes=True)
+    container: Mapped[Container | None] = relationship("Container", passive_deletes=True)
     review_queue: Mapped[list[ReviewQueue]] = relationship(
         "ReviewQueue", back_populates="asset", cascade="all, delete-orphan", passive_deletes=True
     )
@@ -277,11 +277,11 @@ class Asset(Base):
     __table_args__ = (
         # Uniques
         UniqueConstraint(
-            "collection_uuid", "canonical_key_hash", name="ix_assets_collection_canonical_unique"
+            "container_id", "canonical_key_hash", name="ix_assets_container_canonical_unique"
         ),
-        UniqueConstraint("collection_uuid", "uri", name="ix_assets_collection_uri_unique"),
+        UniqueConstraint("container_id", "uri", name="ix_assets_container_uri_unique"),
         UniqueConstraint(
-            "source_id", "collection_uuid", "uri", name="uq_assets_source_container_locator"
+            "source_id", "container_id", "uri", name="uq_assets_source_container_locator"
         ),
         # Checks
         CheckConstraint(
@@ -294,17 +294,17 @@ class Asset(Base):
         CheckConstraint("char_length(canonical_key_hash) = 64", name="chk_canon_hash_len"),
         CheckConstraint("canonical_key_hash ~ '^[0-9a-f]{64}$'", name="chk_canon_hash_hex"),
         # Indexes
-        Index("ix_assets_collection_uuid", "collection_uuid"),
+        Index("ix_assets_container_id", "container_id"),
         Index("ix_assets_state", "state"),
         Index("ix_assets_approved", "approved_for_broadcast"),
         Index("ix_assets_operator_verified", "operator_verified"),
         Index("ix_assets_discovered_at", "discovered_at"),
         Index("ix_assets_is_deleted", "is_deleted"),
-        Index("ix_assets_collection_canonical_uri", "collection_uuid", "canonical_uri"),
+        Index("ix_assets_container_canonical_uri", "container_id", "canonical_uri"),
         # Partial schedulable index (hot path)
         Index(
             "ix_assets_schedulable",
-            "collection_uuid",
+            "container_id",
             "discovered_at",
             postgresql_where=sa.text(
                 "state = 'ready' AND approved_for_broadcast = true AND is_deleted = false"
@@ -636,18 +636,18 @@ class Source(Base):
     )
 
     # Relationships
-    collections: Mapped[list[Collection]] = relationship(
-        "Collection", back_populates="source", cascade="all, delete-orphan", passive_deletes=True
+    containers: Mapped[list[Container]] = relationship(
+        "Container", back_populates="source", cascade="all, delete-orphan", passive_deletes=True
     )
 
     def __repr__(self) -> str:
         return f"<Source(id={self.id}, name={self.name}, type={self.type})>"
 
 
-class Collection(Base):
-    """A collection within a content source (e.g., Plex library)."""
+class Container(Base):
+    """Container (ingest/catalog entity). Subdivision of a Source for discovery."""
 
-    __tablename__ = "collections"
+    __tablename__ = "containers"
 
     uuid: Mapped[uuid_module.UUID] = mapped_column(
         PG_UUID(as_uuid=True), primary_key=True, default=uuid_module.uuid4
@@ -673,48 +673,48 @@ class Collection(Base):
 
     # Relationships
     source: Mapped[Source] = relationship(
-        "Source", back_populates="collections", passive_deletes=True
+        "Source", back_populates="containers", passive_deletes=True
     )
     path_mappings: Mapped[list[PathMapping]] = relationship(
-        "PathMapping", back_populates="collection", cascade="all, delete-orphan"
+        "PathMapping", back_populates="container", cascade="all, delete-orphan"
     )
-    assets: Mapped[list[Asset]] = relationship("Asset", passive_deletes=True, overlaps="collection")
+    assets: Mapped[list[Asset]] = relationship("Asset", passive_deletes=True, overlaps="container")
 
     __table_args__ = (
-        Index("ix_collections_source_id", "source_id"),
-        Index("ix_collections_sync_enabled", "sync_enabled"),
-        Index("ix_collections_ingestible", "ingestible"),
-        UniqueConstraint("source_id", "external_id", name="uq_collections_source_external"),
+        Index("ix_containers_source_id", "source_id"),
+        Index("ix_containers_sync_enabled", "sync_enabled"),
+        Index("ix_containers_ingestible", "ingestible"),
+        UniqueConstraint("source_id", "external_id", name="uq_containers_source_external"),
     )
 
     def __repr__(self) -> str:
-        return f"<Collection(uuid={self.uuid}, source_id={self.source_id}, name={self.name}, sync_enabled={self.sync_enabled}, ingestible={self.ingestible})>"
+        return f"<Container(uuid={self.uuid}, source_id={self.source_id}, name={self.name}, sync_enabled={self.sync_enabled}, ingestible={self.ingestible})>"
 
 
 class PathMapping(Base):
-    """A path mapping for a collection (Plex path -> local path)."""
+    """Path mapping for a container (Plex path -> local path)."""
 
     __tablename__ = "path_mappings"
 
     id: Mapped[uuid_module.UUID] = mapped_column(
         PG_UUID(as_uuid=True), primary_key=True, default=uuid_module.uuid4
     )
-    collection_uuid: Mapped[uuid_module.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("collections.uuid", ondelete="CASCADE"), nullable=False
+    container_id: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("containers.uuid", ondelete="CASCADE"), nullable=False
     )
     plex_path: Mapped[str] = mapped_column(String(500), nullable=False)
     local_path: Mapped[str] = mapped_column(String(500), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
-    collection: Mapped[Collection] = relationship(
-        "Collection", back_populates="path_mappings", passive_deletes=True
+    container: Mapped[Container] = relationship(
+        "Container", back_populates="path_mappings", passive_deletes=True
     )
 
-    __table_args__ = (Index("ix_path_mappings_collection_uuid", "collection_uuid"),)
+    __table_args__ = (Index("ix_path_mappings_container_id", "container_id"),)
 
     def __repr__(self) -> str:
-        return f"<PathMapping(id={self.id}, collection_uuid={self.collection_uuid}, plex_path={self.plex_path}, local_path={self.local_path})>"
+        return f"<PathMapping(id={self.id}, container_id={self.container_id}, plex_path={self.plex_path}, local_path={self.local_path})>"
 
 
 class Channel(Base):
@@ -1149,7 +1149,7 @@ class ScheduleItem(Base):
     asset_id: Mapped[uuid_module.UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), nullable=True
     )
-    collection_id: Mapped[uuid_module.UUID | None] = mapped_column(
+    container_id: Mapped[uuid_module.UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), nullable=True
     )
     content_type: Mapped[str] = mapped_column(

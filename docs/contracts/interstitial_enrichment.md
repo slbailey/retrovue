@@ -93,9 +93,9 @@ Directory-name-to-tag mappings applied during file discovery. Two rule sets exis
 
 One or more local directory paths configured as root paths for discovery. Each root path MUST exist and MUST be a directory.
 
-### Collection Structure
+### Container Structure
 
-Immediate subdirectories of each root path. Discovery MUST enumerate only the first level of subdirectories. Files at the top level of a root path are not collections.
+Immediate subdirectories of each root path. Discovery MUST enumerate only the first level of subdirectories. Files at the top level of a root path are not containers.
 
 ### Directory Hierarchy
 
@@ -153,7 +153,7 @@ File matching patterns that determine which files are discovered. Default patter
 
 **T-3.** The enricher MUST preserve all other existing editorial fields. It MUST merge, not replace.
 
-**T-4.** `apply_enrichers_to_collection()` MUST auto-inject `InterstitialTypeEnricher` at priority -1 (before all configured enrichers) for any collection whose name is a key in the Collection Type Map.
+**T-4.** Apply-enrichers-to-container (contract term; code may still use `apply_enrichers_to_collection`) MUST auto-inject `InterstitialTypeEnricher` at priority -1 (before all configured enrichers) for any container whose name is a key in the Collection Type Map.
 
 ### Unknown Collection Handling
 
@@ -234,7 +234,7 @@ TrafficManager, TrafficPolicy, and DatabaseAssetLibrary MUST NOT reference colle
 
 ### INV-INTERSTITIAL-ENRICHER-INJECT-001 — Auto-injection of type enricher
 
-`apply_enrichers_to_collection()` MUST auto-inject `InterstitialTypeEnricher` at priority -1 for collections whose name appears in the Collection Type Map. No manual enricher attachment is required for interstitial collections.
+Apply-enrichers-to-container MUST auto-inject `InterstitialTypeEnricher` at priority -1 for containers whose name appears in the Collection Type Map. No manual enricher attachment is required for interstitial containers.
 
 ### INV-INTERSTITIAL-UNKNOWN-REJECT-001 — Unknown collections MUST be rejected
 

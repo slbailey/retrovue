@@ -7,7 +7,7 @@ These tests guarantee:
 - safe operator prompts / error handling
 - correct collection targeting behavior
 
-See docs/contracts/resources/CollectionWipeContract.md for the source of truth.
+See docs/contracts/resources/ContainerWipeContract.md for the source of truth.
 Behavior MUST NOT change without updating that contract first.
 """
 

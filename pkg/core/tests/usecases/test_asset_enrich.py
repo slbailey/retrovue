@@ -49,7 +49,7 @@ def _make_asset(**overrides) -> MagicMock:
     asset = MagicMock()
     defaults = dict(
         uuid=uuid4(),
-        collection_uuid=uuid4(),
+        container_id=uuid4(),
         uri="/media/test/asset.mp4",
         canonical_uri="/media/test/asset.mp4",
         size=1_000_000,

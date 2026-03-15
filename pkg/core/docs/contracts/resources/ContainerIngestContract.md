@@ -1,8 +1,8 @@
-# Contract — Collection Ingest
+# Contract — Container Ingest (formerly Collection Ingest)
 
 ## Purpose
 
-Defines the behavioral rules for `retrovue collection ingest` including discovery, validation, enrichment, and persistence effects.
+Defines the behavioral rules for container ingest (canonical CLI: `retrovue container ingest`) including discovery, validation, enrichment, and persistence effects. The ingest/catalog entity is **Container** (Source → Container → Locator → Media/Asset). During compatibility rollout, `retrovue collection ingest` is deprecated and accepted temporarily.
 
 This contract explicitly specifies how URIs are persisted during ingest:
 - `source_uri`: Source-native locator provided by the importer (e.g., `plex://12345`).
@@ -11,11 +11,12 @@ This contract explicitly specifies how URIs are persisted during ingest:
 
 ## Commands
 
-- `retrovue collection ingest <selector> [--title <t>] [--season <n>] [--episode <n>] [--dry-run] [--json] [--verbose-assets]`
+- **Canonical:** `retrovue container ingest <selector> [--title <t>] [--season <n>] [--episode <n>] [--dry-run] [--json] [--verbose-assets]`
+- *Compatibility:* `retrovue collection ingest` is deprecated and accepted temporarily during rollout.
 
 ## Preconditions
 
-- Collection exists and is ingestible.
+- Container exists and is ingestible.
 - For full ingest (no title/season/episode filters), `sync_enabled=true`.
 
 ## Behavior
@@ -29,11 +30,11 @@ This contract explicitly specifies how URIs are persisted during ingest:
 - The resolved local URI is used transiently for enrichment only.
 
 3) Persistence
-- Collection ingest MAY ONLY create new `Asset` rows. It MUST NOT mutate existing assets.
+- Container ingest MAY ONLY create new `Asset` rows. It MUST NOT mutate existing assets.
 - New `Asset` rows include:
-  - `source_uri`: persisted verbatim from the importer (unique per `(collection_uuid, source_uri)`).
+  - `source_uri`: persisted verbatim from the importer (unique per container and source_uri; DB column may still be `collection_uuid` until final migration).
   - `canonical_uri`: persisted from the resolved local path (native OS path; not `file://`).
-  - Canonical identity: `canonical_key` and `canonical_key_hash` are derived from canonical path + collection.
+  - Canonical identity: `canonical_key` and `canonical_key_hash` are derived from canonical path + container.
   - `hash_sha256`: computed natively by ingest at create-time when the local file is reachable; otherwise left null.
   - Initial lifecycle state and approval decided by confidence scoring (see 5) Confidence & Auto-State).
 
@@ -45,11 +46,11 @@ This contract explicitly specifies how URIs are persisted during ingest:
 - Enricher dependency errors (e.g., FFprobe not installed) MUST be surfaced as readable messages in `stats.errors`. Ingest continues for other items without crashing.
 
 5) Updates vs Creates
-- If `(collection_uuid, canonical_key_hash)` matches an existing asset: collection ingest MUST SKIP without updating.
+- If (container, canonical_key_hash) matches an existing asset: container ingest MUST SKIP without updating.
 - Asset modifications (content/enricher/approval) are handled by a separate `asset update` command (pending).
 
 6) Failure Modes
-- If importer cannot resolve a local URI for an ingestible collection, ingest fails with a validation error referencing `PathMapping`.
+- If importer cannot resolve a local URI for an ingestible container, ingest fails with a validation error referencing `PathMapping`.
 - Importer/network errors are returned with appropriate exit code and surfaced in `--json` mode.
 
 7) Confidence Scoring & Auto-State

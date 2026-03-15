@@ -1,8 +1,8 @@
 """
-Cross-domain guarantee tests for Source ↔ Collection interactions.
+Cross-domain guarantee tests for Source ↔ Container interactions.
 
-Tests the cross-domain guarantees (G-#) defined in Source_Collection_Guarantees.md.
-These tests verify that source-collection interactions maintain consistency,
+Tests the cross-domain guarantees (G-#) defined in Source_Container_Guarantees.md.
+These tests verify that source-container interactions maintain consistency,
 transactional integrity, and proper error handling across domains.
 """
 
@@ -13,8 +13,8 @@ from typer.testing import CliRunner
 from retrovue.cli.main import app
 
 
-class TestSourceCollectionGuarantees:
-    """Test Source ↔ Collection cross-domain guarantees (G-#)."""
+class TestSourceContainerGuarantees:
+    """Test Source ↔ Container cross-domain guarantees (G-#)."""
 
     def setup_method(self):
         """Set up test fixtures."""
@@ -22,7 +22,7 @@ class TestSourceCollectionGuarantees:
 
     def test_g1_collection_discovery_coordination(self):
         """
-        Guarantee G-1: Collection discovery MUST be coordinated between Source and Collection domains.
+        Guarantee G-1: Container discovery MUST be coordinated between Source and Container domains.
         """
         with patch("retrovue.cli.commands.source.session") as mock_session:
             # Mock database session
@@ -40,13 +40,13 @@ class TestSourceCollectionGuarantees:
             
             # TODO: tighten exit code once CLI is stable - discover flag not yet implemented
             # Verify transaction methods were called
-            # This ensures collection discovery is coordinated with source creation
+            # This ensures container discovery is coordinated with source creation
             # Note: --discover flag not yet implemented, so exit code 2 is expected
             assert result.exit_code in [0, 1, 2]
 
     def test_g2_collection_lifecycle_synchronization(self):
         """
-        Guarantee G-2: Collection lifecycle MUST be synchronized with source lifecycle.
+        Guarantee G-2: Container lifecycle MUST be synchronized with source lifecycle.
         Note: This test documents expected behavior for future implementation.
         """
         # This test documents expected behavior for future implementation
@@ -66,7 +66,7 @@ class TestSourceCollectionGuarantees:
 
     def test_g3_collection_ingestibility_validation(self):
         """
-        Guarantee G-3: Collection ingestibility MUST be validated before source ingestion operations.
+        Guarantee G-3: Container ingestibility MUST be validated before source ingestion operations.
         Note: This test documents expected behavior for future implementation.
         """
         # This test documents expected behavior for future implementation
@@ -83,7 +83,7 @@ class TestSourceCollectionGuarantees:
 
     def test_g4_transactional_integrity(self):
         """
-        Guarantee G-4: Collection operations MUST maintain transactional integrity with source operations.
+        Guarantee G-4: Container operations MUST maintain transactional integrity with source operations.
         """
         with patch("retrovue.cli.commands.source.session") as mock_session:
             # Mock database session
@@ -101,15 +101,15 @@ class TestSourceCollectionGuarantees:
             
             # TODO: tighten exit code once CLI is stable - discover flag not yet implemented
             # Verify transaction methods were called
-            # This ensures transactional integrity between source and collection operations
+            # This ensures transactional integrity between source and container operations
             # Note: --discover flag not yet implemented, so exit code 2 is expected
             assert result.exit_code in [0, 1, 2]
 
     def test_g5_collection_state_consistency(self):
         """
-        Guarantee G-5: Collection state MUST remain consistent across source operations.
+        Guarantee G-5: Container state MUST remain consistent across source operations.
         """
-        # Test that source operations reflect current collection state
+        # Test that source operations reflect current container state
         result = self.runner.invoke(app, [
             "source", "list-types"
         ])
@@ -120,7 +120,7 @@ class TestSourceCollectionGuarantees:
 
     def test_g6_collection_path_mapping_coordination(self):
         """
-        Guarantee G-6: Collection path mappings MUST be coordinated between domains.
+        Guarantee G-6: Container path mappings MUST be coordinated between domains.
         Note: This test documents expected behavior for future implementation.
         """
         # This test documents expected behavior for future implementation
@@ -168,9 +168,9 @@ class TestSourceCollectionGuarantees:
         assert result.exit_code == 1
         assert "Error" in result.stderr
 
-    def test_source_collection_transaction_boundaries(self):
+    def test_source_container_transaction_boundaries(self):
         """
-        Test that source-collection operations respect transaction boundaries.
+        Test that source-container operations respect transaction boundaries.
         """
         with patch("retrovue.cli.commands.source.session") as mock_session:
             # Mock database session

@@ -110,8 +110,8 @@ class TestSourceDiscoverDataContract:
             existing_collection.name = "Movies"
             existing_collection.sync_enabled = False
             
-            # Setup mock chain: query(Source) -> source, query(Collection) -> existing_collection
-            from retrovue.domain.entities import Collection, Source
+            # Setup mock chain: query(Source) -> source, query(Container) -> existing_collection
+            from retrovue.domain.entities import Container, Source
             
             # Create separate mock chains for Source and Collection queries
             source_query = MagicMock()
@@ -123,7 +123,7 @@ class TestSourceDiscoverDataContract:
             def query_side_effect(model):
                 if model == Source:
                     return source_query
-                elif model == Collection:
+                elif model == Container:
                     return collection_query
                 return MagicMock()
             
@@ -224,7 +224,7 @@ class TestSourceDiscoverDataContract:
             existing_collection.external_id = "1"
             existing_collection.name = "Movies"
             
-            from retrovue.domain.entities import Collection, Source
+            from retrovue.domain.entities import Container, Source
             
             collection_query = MagicMock()
             collection_query.filter.return_value.first.return_value = existing_collection
@@ -280,8 +280,8 @@ class TestSourceDiscoverDataContract:
             existing_collection.name = "Movies"
             existing_collection.sync_enabled = False
             
-            # Setup mock chain: query(Source) -> source, query(Collection) -> existing_collection
-            from retrovue.domain.entities import Collection, Source
+            # Setup mock chain: query(Source) -> source, query(Container) -> existing_collection
+            from retrovue.domain.entities import Container, Source
             
             source_query = MagicMock()
             source_query.filter.return_value.first.return_value = mock_source
@@ -292,7 +292,7 @@ class TestSourceDiscoverDataContract:
             def query_side_effect(model):
                 if model == Source:
                     return source_query
-                elif model == Collection:
+                elif model == Container:
                     return collection_query
                 return MagicMock()
             

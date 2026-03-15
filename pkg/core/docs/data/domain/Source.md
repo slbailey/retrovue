@@ -211,7 +211,7 @@ Source is always capitalized in internal docs. external_id uses format "type-has
 ## See also
 
 - [Source Contracts](../contracts/resources/SourceContract.md) - Complete behavioral contracts for all Source operations
-- [Collection](Collection.md) - Content library management
+- [Container](Container.md) - Content library management
 - [Ingest pipeline](IngestPipeline.md) - Content discovery workflow
 - [Asset](Asset.md) - Media file management
-- [Collection Ingest](../contracts/resources/CollectionIngestContract.md) - Collection-level ingest operations
+- [Container Ingest](../contracts/resources/ContainerIngestContract.md) - Collection-level ingest operations

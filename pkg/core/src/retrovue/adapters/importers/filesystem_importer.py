@@ -24,7 +24,7 @@ from .base import (
 )
 
 if TYPE_CHECKING:
-    from ...domain.entities import Collection
+    from ...domain.entities import Container
 
 
 # Default inference rules for interstitial content classification.
@@ -235,7 +235,7 @@ class FilesystemImporter(BaseImporter):
             raise ImporterError(f"Failed to discover files: {str(e)}") from e
 
     # Contract hook used by collection ingest to validate ingestibility before discovery
-    def validate_ingestible(self, collection: Collection) -> bool:
+    def validate_ingestible(self, container: Container) -> bool:
         """
         Return True if at least one configured root path exists and is a directory.
         File reachability and mapping preservation are validated elsewhere.

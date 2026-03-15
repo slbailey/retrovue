@@ -30,14 +30,14 @@ router = APIRouter()
 @router.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request, db: Session = Depends(get_db)):
     """Dashboard with overview tiles."""
-    from ...domain.entities import Asset, Collection, Source
+    from ...domain.entities import Asset, Container, Source
 
     # Get DB-backed counts
     total_assets = db.query(Asset).count()
     canonical_assets = db.query(Asset).filter(Asset.canonical.is_(True)).count()
     pending_assets = db.query(Asset).filter(Asset.canonical.is_(False)).count()
     total_sources = db.query(Source).count()
-    enabled_collections = db.query(Collection).filter(Collection.sync_enabled.is_(True)).count()
+    enabled_collections = db.query(Container).filter(Container.sync_enabled.is_(True)).count()
 
     return templates.TemplateResponse(
         "dashboard.html",
@@ -183,9 +183,9 @@ async def discover_libraries(request: Request, source_id: str, db: Session = Dep
         )
 
 
-@router.get("/sources/{source_id}/collections", response_class=HTMLResponse)
-async def source_collections(request: Request, source_id: str, db: Session = Depends(get_db)):
-    """Collections table for a source."""
+@router.get("/sources/{source_id}/containers", response_class=HTMLResponse)
+async def source_containers(request: Request, source_id: str, db: Session = Depends(get_db)):
+    """Containers table for a source."""
     try:
         # Use source service to get collections
         source_service = SourceService(db)
@@ -227,20 +227,20 @@ async def run_ingest(
     request: Request,
     source: str = Form(...),
     source_id: str = Form(...),
-    library_ids: str = Form("[]"),
+    container_ids: str = Form("[]"),
     db: Session = Depends(get_db),
 ):
     """Run ingest pipeline."""
     import json
 
     try:
-        json.loads(library_ids) if library_ids else []
+        ids = json.loads(container_ids) if container_ids else []
     except json.JSONDecodeError:
-        pass
+        ids = []
 
     # Run ingest using the new orchestrator
     orchestrator = IngestOrchestrator(db)
-    report = orchestrator.run_full_ingest(source_id=source_id)
+    report = orchestrator.run_full_ingest(source_id=source_id, collection_id=ids[0] if len(ids) == 1 else None)
     result = report.to_dict()
 
     return templates.TemplateResponse("ingest_summary.html", {"request": request, "result": result})
@@ -305,8 +305,8 @@ async def play_asset(request: Request, asset_id: str = Form(...), db: Session = 
     )
 
 
-@router.put("/sources/{source_id}/collections/{external_id}")
-async def update_collection(
+@router.put("/sources/{source_id}/containers/{external_id}")
+async def update_container(
     request: Request, source_id: str, external_id: str, db: Session = Depends(get_db)
 ):
     """Update a collection (enable/disable, mapping pairs)."""

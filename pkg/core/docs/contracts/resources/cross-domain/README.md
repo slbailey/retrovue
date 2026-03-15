@@ -108,7 +108,7 @@ To keep docs + tests + CI in sync:
 
 ### Source ↔ Collection Guarantees
 
-- **Document:** `Source_Collection_Guarantees.md`
+- **Document:** `Source_Container_Guarantees.md`
 - **Tests:** `test_source_collection_guarantees.py`
 - **Status:** CROSS-DOMAIN (tests created, G-1 through G-6 enforced)
 

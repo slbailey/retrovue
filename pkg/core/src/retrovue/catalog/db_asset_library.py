@@ -113,9 +113,9 @@ class DatabaseAssetLibrary:
         if self._interstitial_collection_uuid is not None:
             return self._interstitial_collection_uuid
 
-        from retrovue.domain.entities import Collection
-        coll = self._db.query(Collection).filter(
-            Collection.name == self._interstitial_collection_name
+        from retrovue.domain.entities import Container
+        coll = self._db.query(Container).filter(
+            Container.name == self._interstitial_collection_name
         ).first()
         if coll:
             self._interstitial_collection_uuid = str(coll.uuid)

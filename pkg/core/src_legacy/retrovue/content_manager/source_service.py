@@ -12,7 +12,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from ..domain.entities import Collection, PathMapping, Source
+from ..domain.entities import Container, PathMapping, Source
 
 
 @dataclass
@@ -46,7 +46,7 @@ class ContentSourceDTO:
 
 
 @dataclass
-class CollectionUpdateDTO:
+class ContainerUpdateDTO:
     """
     Data Transfer Object for collection updates.
 
@@ -64,22 +64,22 @@ class CollectionUpdateDTO:
 
 
 @dataclass
-class CollectionDTO:
+class ContainerDTO:
     """
-    Data Transfer Object for source collections.
+    Data Transfer Object for source collections (containers).
 
-    Represents a collection (e.g., Plex library, filesystem directory)
-    within a content source.
+    Represents a container (e.g., Plex library, filesystem directory)
+    within a content source. container_id is canonical for API responses.
     """
 
     external_id: str
     """External identifier (e.g., Plex library key)"""
 
     name: str
-    """Human-readable name of the collection"""
+    """Human-readable name of the container"""
 
     sync_enabled: bool
-    """Whether this collection is enabled for ingestion"""
+    """Whether this container is enabled for ingestion"""
 
     mapping_pairs: list[tuple[str, str]]
     """Path mapping pairs [(source_prefix, local_prefix), ...]"""
@@ -88,10 +88,13 @@ class CollectionDTO:
     """Type of source (e.g., 'plex', 'filesystem')"""
 
     config: dict[str, Any] | None = None
-    """Additional configuration for the collection"""
+    """Additional configuration for the container"""
 
     locations: list[str] = field(default_factory=list)
-    """Filesystem locations for this collection (e.g., Plex library paths)"""
+    """Filesystem locations for this container (e.g., Plex library paths)"""
+
+    container_id: str = ""
+    """Container UUID (canonical). Populated when built from ORM."""
 
 
 class SourceService:
@@ -163,7 +166,7 @@ class SourceService:
         Returns:
             List of dictionaries with source data and collection counts
         """
-        from ..domain.entities import Collection, Source
+        from ..domain.entities import Container, Source
 
         # Use a single transaction to ensure consistent read snapshot
         # First, get all sources in one query
@@ -179,8 +182,8 @@ class SourceService:
 
             # Get all collection counts for all sources in one query
             collection_counts = (
-                self.db.query(Collection.source_id, Collection.sync_enabled, Collection.ingestible)
-                .filter(Collection.source_id.in_(source_ids))
+                self.db.query(Container.source_id, Container.sync_enabled, Container.ingestible)
+                .filter(Container.source_id.in_(source_ids))
                 .all()
             )
 
@@ -343,7 +346,7 @@ class SourceService:
         Delete a content source and all related data.
 
         This will cascade delete:
-        - Collections (and their path mappings)
+        - Containers (and their path mappings)
         - PathMappings
         - Any other related data through foreign key constraints
 
@@ -377,13 +380,13 @@ class SourceService:
 
         # Count related data before deletion for logging
         collections_count = (
-            self.db.query(Collection).filter(Collection.source_id == source.id).count()
+            self.db.query(Container).filter(Container.source_id == source.id).count()
         )
         path_mappings_count = 0
-        for collection in self.db.query(Collection).filter(Collection.source_id == source.id).all():
+        for collection in self.db.query(Container).filter(Container.source_id == source.id).all():
             path_mappings_count += (
                 self.db.query(PathMapping)
-                .filter(PathMapping.collection_id == collection.id)
+                .filter(PathMapping.container_id == collection.uuid)
                 .count()
             )
 
@@ -406,7 +409,7 @@ class SourceService:
 
         return True
 
-    def list_enabled_collections(self, source_id: str) -> list[CollectionDTO]:
+    def list_enabled_collections(self, source_id: str) -> list[ContainerDTO]:
         """
         List enabled collections for a specific source.
 
@@ -422,8 +425,8 @@ class SourceService:
             return []
 
         collections = (
-            self.db.query(Collection)
-            .filter(Collection.source_id == source.id, Collection.sync_enabled)
+            self.db.query(Container)
+            .filter(Container.source_id == source.id, Container.sync_enabled)
             .all()
         )
 
@@ -431,25 +434,26 @@ class SourceService:
         for collection in collections:
             # Get path mappings for this collection
             mappings = (
-                self.db.query(PathMapping).filter(PathMapping.collection_id == collection.id).all()
+                self.db.query(PathMapping).filter(PathMapping.container_id == collection.uuid).all()
             )
 
             mapping_pairs = [(m.plex_path, m.local_path) for m in mappings]
 
             result.append(
-                CollectionDTO(
+                ContainerDTO(
                     external_id=collection.external_id,
                     name=collection.name,
                     sync_enabled=collection.sync_enabled,
                     mapping_pairs=mapping_pairs,
                     source_type=source.type,
                     config=collection.config,
+                    container_id=str(collection.uuid),
                 )
             )
 
         return result
 
-    def list_all_collections(self, source_id: str | None = None) -> list[CollectionDTO]:
+    def list_all_collections(self, source_id: str | None = None) -> list[ContainerDTO]:
         """
         List all collections, optionally filtered by source.
 
@@ -459,14 +463,14 @@ class SourceService:
         Returns:
             List of all collections
         """
-        query = self.db.query(Collection)
+        query = self.db.query(Container)
 
         if source_id:
             # Find source by external ID, name, or UUID
             source = self.get_source_by_id(source_id)
             if not source:
                 return []
-            query = query.filter(Collection.source_id == source.id)
+            query = query.filter(Container.source_id == source.id)
 
         collections = query.all()
 
@@ -474,19 +478,20 @@ class SourceService:
         for collection in collections:
             # Get path mappings
             mappings = (
-                self.db.query(PathMapping).filter(PathMapping.collection_id == collection.id).all()
+                self.db.query(PathMapping).filter(PathMapping.container_id == collection.uuid).all()
             )
 
             mapping_pairs = [(m.plex_path, m.local_path) for m in mappings]
 
             result.append(
-                CollectionDTO(
+                ContainerDTO(
                     external_id=collection.external_id,
                     name=collection.name,
                     sync_enabled=collection.sync_enabled,
                     mapping_pairs=mapping_pairs,
                     source_type=collection.source.type,
                     config=collection.config or {},
+                    container_id=str(collection.uuid),
                 )
             )
 
@@ -509,9 +514,9 @@ class SourceService:
         try:
             # Find the collection by external_id across all sources of this type
             collection = (
-                self.db.query(Collection)
+                self.db.query(Container)
                 .join(Source)
-                .filter(Source.type == source_type, Collection.external_id == external_id)
+                .filter(Source.type == source_type, Container.external_id == external_id)
                 .first()
             )
 
@@ -527,7 +532,7 @@ class SourceService:
             print(f"Error updating collection enabled status: {e}")
             return False
 
-    def get_collection(self, source_id: str, external_id: str) -> CollectionDTO | None:
+    def get_collection(self, source_id: str, external_id: str) -> ContainerDTO | None:
         """
         Get a specific collection by source and external ID.
 
@@ -536,7 +541,7 @@ class SourceService:
             external_id: External identifier for the collection
 
         Returns:
-            Collection DTO or None if not found
+            Container DTO or None if not found
         """
         collections = self.list_enabled_collections(source_id)
         for collection in collections:
@@ -602,20 +607,20 @@ class SourceService:
                 return False
 
             collection = (
-                self.db.query(Collection)
-                .filter(Collection.source_id == source.id, Collection.external_id == external_id)
+                self.db.query(Container)
+                .filter(Container.source_id == source.id, Container.external_id == external_id)
                 .first()
             )
             if not collection:
                 return False
 
             # Delete existing mappings
-            self.db.query(PathMapping).filter(PathMapping.collection_id == collection.id).delete()
+            self.db.query(PathMapping).filter(PathMapping.container_id == collection.uuid).delete()
 
             # Add new mappings
             for plex_path, local_path in mapping_pairs:
                 mapping = PathMapping(
-                    collection_id=collection.id, plex_path=plex_path, local_path=local_path
+                    container_id=collection.uuid, plex_path=plex_path, local_path=local_path
                 )
                 self.db.add(mapping)
 
@@ -707,7 +712,7 @@ class SourceService:
             config=source.config,
         )
 
-    def discover_collections(self, source_id: str) -> list[CollectionDTO]:
+    def discover_collections(self, source_id: str) -> list[ContainerDTO]:
         """
         Discover collections from a source without persisting.
 
@@ -751,7 +756,7 @@ class SourceService:
             collections = []
             for lib in libraries:
                 collections.append(
-                    CollectionDTO(
+                    ContainerDTO(
                         external_id=lib.get("key", ""),
                         name=lib.get("title", ""),
                         sync_enabled=False,  # Newly discovered collections start disabled
@@ -769,7 +774,7 @@ class SourceService:
             print(f"Error in discover_collections: {e}")
             return []
 
-    def persist_collections(self, source_id: str, collections: list[CollectionDTO]) -> bool:
+    def persist_collections(self, source_id: str, collections: list[ContainerDTO]) -> bool:
         """
         Persist discovered collections to the database.
 
@@ -792,10 +797,10 @@ class SourceService:
             for collection_dto in collections:
                 # Check if collection already exists
                 existing = (
-                    self.db.query(Collection)
+                    self.db.query(Container)
                     .filter(
-                        Collection.source_id == source.id,
-                        Collection.external_id == collection_dto.external_id,
+                        Container.source_id == source.id,
+                        Container.external_id == collection_dto.external_id,
                     )
                     .first()
                 )
@@ -807,7 +812,7 @@ class SourceService:
                     collection = existing
                 else:
                     # Create new collection
-                    collection = Collection(
+                    collection = Container(
                         source_id=source.id,
                         external_id=collection_dto.external_id,
                         name=collection_dto.name,
@@ -831,7 +836,7 @@ class SourceService:
                     existing_mapping = (
                         self.db.query(PathMapping)
                         .filter(
-                            PathMapping.collection_id == collection.id,
+                            PathMapping.container_id == collection.uuid,
                             PathMapping.plex_path == plex_path,
                         )
                         .first()
@@ -840,7 +845,7 @@ class SourceService:
                     if not existing_mapping:
                         # Create new PathMapping with empty local_path
                         new_mapping = PathMapping(
-                            collection_id=collection.id,
+                            container_id=collection.uuid,
                             plex_path=plex_path,
                             local_path="",  # Initially empty until operator maps it
                         )
@@ -859,7 +864,7 @@ class SourceService:
         Delete a collection and all its associated data.
 
         Args:
-            collection_id: Collection ID, external ID, or UUID to delete
+            collection_id: Container ID, external ID, or UUID to delete
 
         Returns:
             True if successful, False otherwise
@@ -875,7 +880,7 @@ class SourceService:
                 if len(collection_id) == 36 and collection_id.count("-") == 4:
                     collection_uuid = uuid.UUID(collection_id)
                     collection = (
-                        self.db.query(Collection).filter(Collection.id == collection_uuid).first()
+                        self.db.query(Container).filter(Container.uuid == collection_uuid).first()
                     )
             except (ValueError, TypeError):
                 pass
@@ -883,15 +888,15 @@ class SourceService:
             # If not found by UUID, try by external_id
             if not collection:
                 collection = (
-                    self.db.query(Collection)
-                    .filter(Collection.external_id == collection_id)
+                    self.db.query(Container)
+                    .filter(Container.external_id == collection_id)
                     .first()
                 )
 
             # If not found by external_id, try by name (case-insensitive)
             if not collection:
                 name_matches = (
-                    self.db.query(Collection).filter(Collection.name.ilike(collection_id)).all()
+                    self.db.query(Container).filter(Container.name.ilike(collection_id)).all()
                 )
                 if len(name_matches) == 1:
                     collection = name_matches[0]
@@ -912,7 +917,7 @@ class SourceService:
             print(f"Error deleting collection: {e}")
             return False
 
-    def save_collections(self, source_id: str, updates: list[CollectionUpdateDTO]) -> bool:
+    def save_collections(self, source_id: str, updates: list[ContainerUpdateDTO]) -> bool:
         """
         Save collection updates (enabled status and mapping pairs).
 
@@ -932,17 +937,17 @@ class SourceService:
             for update in updates:
                 # Find or create the collection
                 collection = (
-                    self.db.query(Collection)
+                    self.db.query(Container)
                     .filter(
-                        Collection.source_id == source.id,
-                        Collection.external_id == update.external_id,
+                        Container.source_id == source.id,
+                        Container.external_id == update.external_id,
                     )
                     .first()
                 )
 
                 if not collection:
                     # Create new collection
-                    collection = Collection(
+                    collection = Container(
                         source_id=source.id,
                         external_id=update.external_id,
                         name=update.external_id,  # Use external_id as name if not provided
@@ -958,13 +963,13 @@ class SourceService:
                 # Update path mappings
                 # Delete existing mappings
                 self.db.query(PathMapping).filter(
-                    PathMapping.collection_id == collection.id
+                    PathMapping.container_id == collection.uuid
                 ).delete()
 
                 # Add new mappings
                 for plex_path, local_path in update.mapping_pairs:
                     mapping = PathMapping(
-                        collection_id=collection.id, plex_path=plex_path, local_path=local_path
+                        container_id=collection.uuid, plex_path=plex_path, local_path=local_path
                     )
                     self.db.add(mapping)
 

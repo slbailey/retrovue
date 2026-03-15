@@ -28,7 +28,7 @@ def _item(rev_id):
         start_time=NOW + timedelta(hours=1),
         duration_sec=1800,
         asset_id=None,
-        collection_id=None,
+        container_id=None,
         content_type="episode",
         window_uuid=None,
         slot_index=0,

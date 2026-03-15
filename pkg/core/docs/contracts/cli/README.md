@@ -12,7 +12,7 @@ Each command group has its own documentation file:
 
 - [`source.md`](source.md) - Source and collection management
 - [`channel.md`](channel.md) - Broadcast channel operations
-- [`collection.md`](collection.md) - Collection management
+- [`container.md`](container.md) - Container management
 - [`asset.md`](asset.md) - Asset inspection and review
 - [`enricher.md`](enricher.md) - Enricher management
 - [`producer.md`](producer.md) - Producer management
@@ -125,7 +125,7 @@ See [`channel.md`](channel.md) for full documentation.
 - `retrovue collection update` - Update collection configuration
 - `retrovue collection ingest` - Ingest content from a collection
 
-See [`collection.md`](collection.md) for full documentation.
+See [`container.md`](container.md) for full documentation.
 
 ### Asset Operations
 

@@ -1,5 +1,5 @@
 """
-Contract: docs/contracts/resources/CollectionIngestContract.md
+Contract: docs/contracts/resources/ContainerIngestContract.md
 Rules covered:
 - B-20: ingest builds handler payload
 - B-21: ingest calls handler before persisting asset
@@ -15,14 +15,14 @@ from typing import Any
 import pytest
 
 from retrovue.adapters.importers.base import DiscoveredItem
-from retrovue.cli.commands._ops.collection_ingest_service import CollectionIngestService
+from retrovue.cli.commands._ops.collection_ingest_service import ContainerIngestService
 
 
 def _fake_collection() -> Any:
     class _C:
         uuid = uuid.UUID("00000000-0000-0000-0000-000000000001")
         source_id = "00000000-0000-0000-0000-000000000000"  # str avoids shadowing uuid in class body
-        name = "Test Collection"
+        name = "Test Container"
         sync_enabled = True
         ingestible = True
 
@@ -52,7 +52,7 @@ def _fake_importer() -> Any:
 
 
 @pytest.fixture
-def service(monkeypatch: pytest.MonkeyPatch) -> CollectionIngestService:
+def service(monkeypatch: pytest.MonkeyPatch) -> ContainerIngestService:
     # MagicMock Session with add/flush
     class _DB:
         def add(self, _obj: Any) -> None:
@@ -70,10 +70,10 @@ def service(monkeypatch: pytest.MonkeyPatch) -> CollectionIngestService:
     monkeypatch.setattr("retrovue.infra.canonical.canonical_hash", lambda *a, **k: "h" * 64)
     # No enrichers during this test path
     monkeypatch.setattr("retrovue.cli.commands._ops.collection_ingest_service.ENRICHERS", {}, raising=True)
-    return CollectionIngestService(_DB())
+    return ContainerIngestService(_DB())
 
 
-def test_editorial_triggers_persistence(service: CollectionIngestService, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_editorial_triggers_persistence(service: ContainerIngestService, monkeypatch: pytest.MonkeyPatch) -> None:
     """B-20, B-21, B-22: editorial block is persisted via helper."""
 
     calls: dict[str, Any] = {"args": None, "kwargs": None}
@@ -103,13 +103,13 @@ def test_editorial_triggers_persistence(service: CollectionIngestService, monkey
     collection = _fake_collection()
     importer = _fake_importer()
 
-    service.ingest_collection(collection=collection, importer=importer)
+    service.ingest_container(container=collection, importer=importer)
 
     assert calls["kwargs"] is not None
     assert calls["kwargs"]["editorial"] == {"title": "Akira"}
 
 
-def test_probed_triggers_persistence(service: CollectionIngestService, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_probed_triggers_persistence(service: ContainerIngestService, monkeypatch: pytest.MonkeyPatch) -> None:
     """B-20, B-22: probed block is persisted via helper from handler resolved_fields."""
 
     calls: dict[str, Any] = {"kwargs": None}
@@ -139,13 +139,13 @@ def test_probed_triggers_persistence(service: CollectionIngestService, monkeypat
     collection = _fake_collection()
     importer = _fake_importer()
 
-    service.ingest_collection(collection=collection, importer=importer)
+    service.ingest_container(container=collection, importer=importer)
 
     assert calls["kwargs"] is not None
     assert calls["kwargs"]["probed"] == {"duration_ms": 120000}
 
 
-def test_handler_is_called(service: CollectionIngestService, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_handler_is_called(service: ContainerIngestService, monkeypatch: pytest.MonkeyPatch) -> None:
     """B-21: handler MUST be invoked before persistence."""
 
     called = {"ok": False}
@@ -170,7 +170,7 @@ def test_handler_is_called(service: CollectionIngestService, monkeypatch: pytest
     collection = _fake_collection()
     importer = _fake_importer()
 
-    service.ingest_collection(collection=collection, importer=importer)
+    service.ingest_container(container=collection, importer=importer)
 
     assert called["ok"] is True
 
@@ -194,7 +194,7 @@ def test_child_tables_have_cascade_fk() -> None:
         assert getattr(fk, "ondelete", None) == "CASCADE", f"{model.__name__} FK must be ON DELETE CASCADE"
 
 
-def test_dry_run_does_not_persist(service: CollectionIngestService, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_dry_run_does_not_persist(service: ContainerIngestService, monkeypatch: pytest.MonkeyPatch) -> None:
     """B-24: --dry-run executes but does not persist child tables."""
 
     called = {"persist": False}
@@ -218,12 +218,12 @@ def test_dry_run_does_not_persist(service: CollectionIngestService, monkeypatch:
     collection = _fake_collection()
     importer = _fake_importer()
 
-    service.ingest_collection(collection=collection, importer=importer, dry_run=True)
+    service.ingest_container(container=collection, importer=importer, dry_run=True)
 
     assert called["persist"] is False
 
 
-def test_station_ops_triggers_persistence(service: CollectionIngestService, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_station_ops_triggers_persistence(service: ContainerIngestService, monkeypatch: pytest.MonkeyPatch) -> None:
     """B-22: station_ops block is persisted via helper from handler resolved_fields."""
 
     calls: dict[str, Any] = {"kwargs": None}
@@ -252,13 +252,13 @@ def test_station_ops_triggers_persistence(service: CollectionIngestService, monk
     collection = _fake_collection()
     importer = _fake_importer()
 
-    service.ingest_collection(collection=collection, importer=importer)
+    service.ingest_container(container=collection, importer=importer)
 
     assert calls["kwargs"] is not None
     assert calls["kwargs"]["station_ops"] == {"content_class": "cartoon"}
 
 
-def test_relationships_triggers_persistence(service: CollectionIngestService, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_relationships_triggers_persistence(service: ContainerIngestService, monkeypatch: pytest.MonkeyPatch) -> None:
     """B-22: relationships block is persisted via helper from handler resolved_fields."""
 
     calls: dict[str, Any] = {"kwargs": None}
@@ -287,13 +287,13 @@ def test_relationships_triggers_persistence(service: CollectionIngestService, mo
     collection = _fake_collection()
     importer = _fake_importer()
 
-    service.ingest_collection(collection=collection, importer=importer)
+    service.ingest_container(container=collection, importer=importer)
 
     assert calls["kwargs"] is not None
     assert calls["kwargs"]["relationships"] == {"series_id": "s-1"}
 
 
-def test_sidecar_triggers_persistence(service: CollectionIngestService, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sidecar_triggers_persistence(service: ContainerIngestService, monkeypatch: pytest.MonkeyPatch) -> None:
     """B-22: sidecar block is persisted via helper from handler resolved_fields."""
 
     calls: dict[str, Any] = {"kwargs": None}
@@ -322,7 +322,7 @@ def test_sidecar_triggers_persistence(service: CollectionIngestService, monkeypa
     collection = _fake_collection()
     importer = _fake_importer()
 
-    service.ingest_collection(collection=collection, importer=importer)
+    service.ingest_container(container=collection, importer=importer)
 
     assert calls["kwargs"] is not None
     assert calls["kwargs"]["sidecar"] == {"asset_type": "movie"}

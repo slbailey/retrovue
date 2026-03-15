@@ -21,7 +21,8 @@ from .discovery import DiscoveredLocator
 
 __all__ = [
     "ReconciliationOutcome",
-    "load_catalog_state_for_collection",
+    "load_catalog_state_for_container",
+    "load_catalog_state_for_collection",  # deprecated alias
     "determine_reconciliation_outcomes",
 ]
 
@@ -35,12 +36,12 @@ class ReconciliationOutcome(str, Enum):
     mark_unavailable = "mark_unavailable"
 
 
-def load_catalog_state_for_collection(
+def load_catalog_state_for_container(
     db: Session,
-    collection_uuid: Any,
+    container_uuid: Any,
 ) -> dict[str, Asset]:
     """
-    Load current catalog state for a collection: canonical_key_hash -> Asset.
+    Load current catalog state for a container: canonical_key_hash -> Asset.
 
     Includes only non-deleted assets (is_deleted=False). Used in the compare step.
     Uses query API; if db has no .query (e.g. minimal test mocks), returns {}.
@@ -54,7 +55,7 @@ def load_catalog_state_for_collection(
         rows = (
             db.query(Asset)
             .filter(
-                Asset.collection_uuid == collection_uuid,
+                Asset.container_id == container_uuid,
                 Asset.is_deleted == False,  # noqa: E712
             )
             .all()
@@ -62,6 +63,14 @@ def load_catalog_state_for_collection(
         return {row.canonical_key_hash: row for row in rows}
     except AttributeError:
         return {}
+
+
+def load_catalog_state_for_collection(
+    db: Session,
+    collection_uuid: Any,
+) -> dict[str, Asset]:
+    """Deprecated: use load_catalog_state_for_container."""
+    return load_catalog_state_for_container(db, collection_uuid)
 
 
 def _fingerprint_matches(discovered: DiscoveredLocator, asset: Asset) -> bool:
@@ -79,17 +88,19 @@ def determine_reconciliation_outcomes(
     discovered_locators: list[DiscoveredLocator],
     catalog_state: dict[str, Asset],
     *,
-    collection: Any = None,
-    full_collection_scope: bool = True,
+    full_container_scope: bool = True,
+    full_collection_scope: bool | None = None,  # deprecated: use full_container_scope
 ) -> list[tuple[DiscoveredLocator | None, ReconciliationOutcome, Asset | None]]:
     """
     Determine outcome per discovered locator; add mark_unavailable for catalog-only.
 
     For each discovered locator: hash locator -> if not in catalog_state -> create;
     if in catalog_state and fingerprint matches -> no_action; if fingerprint differs -> update.
-    When full_collection_scope is True, for each asset in catalog_state not seen in
+    When full_container_scope is True, for each asset in catalog_state not seen in
     discovered set, add (None, mark_unavailable, asset).
     """
+    if full_collection_scope is not None:
+        full_container_scope = full_collection_scope
     result: list[tuple[DiscoveredLocator | None, ReconciliationOutcome, Asset | None]] = []
     seen_hashes: set[str] = set()
 
@@ -105,7 +116,7 @@ def determine_reconciliation_outcomes(
         else:
             result.append((loc, ReconciliationOutcome.update, existing))
 
-    if full_collection_scope:
+    if full_container_scope:
         for key_hash, asset in catalog_state.items():
             if key_hash not in seen_hashes:
                 result.append((None, ReconciliationOutcome.mark_unavailable, asset))

@@ -1,13 +1,13 @@
 """
-Collection ingest operations module.
+Container ingest operations module.
 
 This module encapsulates all non-IO logic needed to satisfy
-docs/contracts/resources/CollectionIngestContract.md, specifically rules B-1 through B-21,
+docs/contracts/resources/ContainerIngestContract.md, specifically rules B-1 through B-21,
 and D-1 through D-18.
 
 The module provides:
-- Collection selector resolution (UUID, external ID, case-insensitive name)
-- Validation ordering (collection resolution → prerequisites → scope resolution)
+- Container selector resolution (UUID, external ID, case-insensitive name)
+- Validation ordering (container resolution → prerequisites → scope resolution)
 - Importer interaction boundary (validate_ingestible before enumerate_assets)
 - Unit of Work wrapping for atomic ingest operations
 - Result shape matching contract output format
@@ -34,9 +34,9 @@ from ....catalog.processor_jobs import enqueue_processor_jobs
 from ....catalog.reconciliation import (
     ReconciliationOutcome,
     determine_reconciliation_outcomes,
-    load_catalog_state_for_collection,
+    load_catalog_state_for_container,
 )
-from ....domain.entities import Asset, Collection
+from ....domain.entities import Asset, Container
 from ....infra.canonical import canonical_hash, canonical_key_for
 from ....infra.exceptions import IngestError
 from ....infra.settings import settings
@@ -52,9 +52,9 @@ class _AssetRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def get_by_collection_and_canonical_hash(self, collection_uuid, canonical_key_hash):
+    def get_by_container_and_canonical_hash(self, container_id, canonical_key_hash):
         stmt = select(Asset).where(
-            Asset.collection_uuid == collection_uuid,
+            Asset.container_id == container_id,
             Asset.canonical_key_hash == canonical_key_hash,
         )
         # Session.scalar returns the first column of the first row or None
@@ -88,12 +88,12 @@ class IngestStats:
 
 
 @dataclass
-class CollectionIngestResult:
-    """Result of a collection ingest operation."""
+class ContainerIngestResult:
+    """Result of a container ingest operation."""
 
-    collection_id: str
-    collection_name: str
-    scope: str  # "collection", "title", "season", "episode"
+    container_id: str
+    container_name: str
+    scope: str  # "container", "title", "season", "episode"
     stats: IngestStats
     last_ingest_time: str | None = None
     title: str | None = None
@@ -107,12 +107,12 @@ class CollectionIngestResult:
     enqueued_processors: list[str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert result to dictionary matching contract JSON output format."""
+        """Convert result to dictionary."""
         result = {
             "status": "success",
             "scope": self.scope,
-            "collection_id": self.collection_id,
-            "collection_name": self.collection_name,
+            "container_id": self.container_id,
+            "container_name": self.container_name,
             "stats": {
                 "assets_discovered": self.stats.assets_discovered,
                 "assets_ingested": self.stats.assets_ingested,
@@ -152,66 +152,71 @@ class CollectionIngestResult:
         return result
 
 
-def resolve_collection_selector(db: Session, collection_selector: str) -> Collection:
-    """
-    Resolve collection selector to a concrete Collection.
+def get_container_by_id(db: Session, container_id: uuid.UUID) -> Container | None:
+    """Return the container with the given UUID, or None if not found."""
+    return db.get(Container, container_id)
 
-    Implements B-1 collection resolution logic:
+
+def resolve_container_selector(db: Session, container_selector: str) -> Container:
+    """
+    Resolve container selector to a concrete Container.
+
+    Implements B-1 resolution logic:
     - UUID (exact match)
     - External ID (exact match)
     - Case-insensitive name (single match required, multiple matches raise error)
 
     Args:
         db: Database session
-        collection_selector: The selector string (UUID, external ID, or name)
+        container_selector: The selector string (UUID, external ID, or name)
 
     Returns:
-        Collection entity
+        Container entity
 
     Raises:
-        ValueError: If collection not found or ambiguous
+        ValueError: If container not found or ambiguous
     """
-    collection = None
+    container = None
 
     # Try UUID first (B-1: UUID resolution)
     try:
-        if len(collection_selector) == 36 and collection_selector.count("-") == 4:
-            collection_uuid = uuid.UUID(collection_selector)
-            collection = db.query(Collection).filter(Collection.uuid == collection_uuid).one()
+        if len(container_selector) == 36 and container_selector.count("-") == 4:
+            container_uuid = uuid.UUID(container_selector)
+            container = db.query(Container).filter(Container.uuid == container_uuid).one()
     except (ValueError, TypeError):
         pass
 
     # If not found by UUID, try external_id (B-1: external ID resolution)
-    if not collection:
-        collection = (
-            db.query(Collection).filter(Collection.external_id == collection_selector).first()
+    if not container:
+        container = (
+            db.query(Container).filter(Container.external_id == container_selector).first()
         )
 
     # If not found by external_id, try name (case-insensitive) (B-1: name resolution)
-    if not collection:
-        name_matches = db.query(Collection).filter(Collection.name.ilike(collection_selector)).all()
+    if not container:
+        name_matches = db.query(Container).filter(Container.name.ilike(container_selector)).all()
 
         if len(name_matches) == 0:
-            raise ValueError(f"Collection '{collection_selector}' not found")
+            raise ValueError(f"Container '{container_selector}' not found")
         elif len(name_matches) == 1:
-            collection = name_matches[0]
+            container = name_matches[0]
         else:
             # Multiple matches - must fail with specific error message (B-1)
             raise ValueError(
-                f"Multiple collections named '{collection_selector}' exist. Please specify the UUID."
+                f"Multiple containers named '{container_selector}' exist. Please specify the UUID."
             )
 
-    if not collection:
-        raise ValueError(f"Collection '{collection_selector}' not found")
+    if not container:
+        raise ValueError(f"Container '{container_selector}' not found")
 
-    return collection
+    return container
 
 
 def validate_prerequisites(
-    collection: Collection, is_full_ingest: bool, dry_run: bool = False
+    container: Container, is_full_ingest: bool, dry_run: bool = False
 ) -> None:
     """
-    Validate collection prerequisites for ingest.
+    Validate container prerequisites for ingest.
 
     Implements B-11, B-12, B-13 validation logic:
     - Full ingest requires sync_enabled=true AND ingestible=true
@@ -219,8 +224,8 @@ def validate_prerequisites(
     - Dry-run bypasses prerequisite checks
 
     Args:
-        collection: The Collection to validate
-        is_full_ingest: Whether this is a full collection ingest (no scope filters)
+        container: The Container to validate
+        is_full_ingest: Whether this is a full container ingest (no scope filters)
         dry_run: Whether this is a dry-run (allows bypass of prerequisites)
 
     Raises:
@@ -231,26 +236,26 @@ def validate_prerequisites(
         # Dry-run allows preview even if prerequisites fail
         return
 
-    # Full collection ingest requires sync_enabled AND ingestible (B-11, B-12)
+    # Full container ingest requires sync_enabled AND ingestible (B-11, B-12)
     if is_full_ingest:
-        if not collection.sync_enabled:
+        if not container.sync_enabled:
             raise ValueError(
-                f"Collection '{collection.name}' is not sync-enabled. "
+                f"Container '{container.name}' is not sync-enabled. "
                 "Use targeted ingest (--title/--season/--episode) for surgical operations, "
-                f"or enable sync with 'retrovue collection update {collection.uuid} --sync-enable'."
+                f"or enable sync with 'retrovue container update {container.uuid} --sync-enable'."
             )
 
     # All ingest requires ingestible (B-12, B-13)
-    if not collection.ingestible:
+    if not container.ingestible:
         raise ValueError(
-            f"Collection '{collection.name}' is not ingestible. "
-            f"Check path mappings and prerequisites with 'retrovue collection show {collection.uuid}'."
+            f"Container '{container.name}' is not ingestible. "
+            f"Check path mappings and prerequisites with 'retrovue container show {container.uuid}'."
         )
 
 
-def validate_ingestible_with_importer(importer: Any, collection: Collection) -> bool:
+def validate_ingestible_with_importer(importer: Any, container: Container) -> bool:
     """
-    Validate collection ingestibility using importer's validate_ingestible method.
+    Validate container ingestibility using importer's validate_ingestible method.
 
     Implements D-5, D-5a, D-5c:
     - Calls importer.validate_ingestible()
@@ -259,21 +264,21 @@ def validate_ingestible_with_importer(importer: Any, collection: Collection) -> 
 
     Args:
         importer: Importer instance (must have validate_ingestible method)
-        collection: The Collection to validate
+        container: The Container to validate
 
     Returns:
-        bool: True if collection is ingestible according to importer, False otherwise
+        bool: True if container is ingestible according to importer, False otherwise
     """
-    return importer.validate_ingestible(collection)
+    return importer.validate_ingestible(container)
 
 
-class CollectionIngestService:
+class ContainerIngestService:
     """
-    Service for performing collection ingest operations.
+    Service for performing container ingest operations (discovery + reconciliation + enqueue).
 
-    This service implements the contract-compliant orchestration layer for collection ingest,
-    handling collection resolution, validation ordering, importer interaction, and Unit of Work
-    boundaries per CollectionIngestContract.md.
+    Implements the contract-compliant orchestration layer for container ingest,
+    handling container resolution, validation ordering, importer interaction, and Unit of Work
+    boundaries per ContainerIngestContract.md.
     """
 
     def __init__(self, db: Session):
@@ -285,9 +290,9 @@ class CollectionIngestService:
         """
         self.db = db
 
-    def ingest_collection(
+    def ingest_container(
         self,
-        collection: Collection | str,
+        container: Container | str,
         importer: Any,
         title: str | None = None,
         season: int | None = None,
@@ -297,19 +302,19 @@ class CollectionIngestService:
         verbose_assets: bool = False,
         max_new: int | None = None,
         max_updates: int | None = None,
-    ) -> CollectionIngestResult:
+    ) -> ContainerIngestResult:
         """
-        Ingest a collection following the contract validation order.
+        Ingest a container following the contract validation order.
 
         Validation order (B-15, D-4a):
-        1. Collection resolution (if collection is a string selector)
+        1. Container resolution (if container is a string selector)
         2. Prerequisite validation (sync_enabled, ingestible)
         3. Importer validate_ingestible() (D-5c)
         4. Scope resolution (title/season/episode)
         5. Actual ingest work
 
         Args:
-            collection: Collection entity or selector string
+            container: Container entity or selector string
             importer: Importer instance (must implement ImporterInterface)
             title: Optional title filter
             season: Optional season filter (requires title)
@@ -318,24 +323,24 @@ class CollectionIngestService:
             test_db: Whether to use test database context
 
         Returns:
-            CollectionIngestResult with ingest statistics and metadata
+            ContainerIngestResult with ingest statistics and metadata
 
         Raises:
             ValueError: If validation fails (exit code 1)
             IngestError: If scope resolution fails (exit code 2)
             RuntimeError: If ingest operation fails
         """
-        # Phase 1: Collection Resolution (B-15 step 1, D-4a)
-        if isinstance(collection, str):
+        # Phase 1: Container Resolution (B-15 step 1, D-4a)
+        if isinstance(container, str):
             try:
-                collection = resolve_collection_selector(self.db, collection)
+                container = resolve_container_selector(self.db, container)
             except ValueError as e:
-                # Collection not found or ambiguous - exit code 1 (B-1)
+                # Container not found or ambiguous - exit code 1 (B-1)
                 raise ValueError(str(e)) from e
 
         # Phase 2: Importer Validation (B-14a, D-5c)
         # MUST call validate_ingestible() BEFORE enumerate_assets(); call early to satisfy contract tests
-        importer_ok = validate_ingestible_with_importer(importer, collection)
+        importer_ok = validate_ingestible_with_importer(importer, container)
         if not importer_ok:
             # Validation failed - exit code 1 (or allow dry-run preview)
             if not dry_run:
@@ -346,7 +351,7 @@ class CollectionIngestService:
         is_full_ingest = title is None and season is None and episode is None
 
         try:
-            validate_prerequisites(collection, is_full_ingest, dry_run=dry_run)
+            validate_prerequisites(container, is_full_ingest, dry_run=dry_run)
         except ValueError as e:
             # Prerequisite validation failed - exit code 1 (B-11, B-12, B-13)
             raise ValueError(str(e)) from e
@@ -354,8 +359,8 @@ class CollectionIngestService:
         # If importer validation failed and not dry-run, raise after prerequisites
         if not importer_ok and not dry_run:
             raise ValueError(
-                f"Collection '{collection.name}' is not ingestible according to importer. "
-                f"Check path mappings and prerequisites with 'retrovue collection show {collection.uuid}'."
+                f"Container '{container.name}' is not ingestible according to importer. "
+                f"Check path mappings and prerequisites with 'retrovue container show {container.uuid}'."
             )
 
         # Phase 4: Scope Resolution (B-15 step 3, D-4a)
@@ -367,7 +372,7 @@ class CollectionIngestService:
         elif title is not None:
             scope = "title"
         else:
-            scope = "collection"
+            scope = "container"
 
         # Phase 5: Execute Ingest Work
         stats = IngestStats()
@@ -375,12 +380,12 @@ class CollectionIngestService:
         created_assets: list[dict[str, str]] | None = [] if verbose_assets else None
         updated_assets: list[dict[str, str]] | None = [] if verbose_assets else None
 
-        # Build enricher pipeline for this collection (ingest scope)
-        # Read from persisted Enricher instances referenced by collection.config['enrichers']
+        # Build enricher pipeline for this container (ingest scope)
+        # Read from persisted Enricher instances referenced by container.config['enrichers']
         pipeline: list[tuple[str, int, Any]] = []  # (enricher_id, priority, instance)
         pipeline_signature: list[dict[str, Any]] = []
         try:
-            cfg = dict(getattr(collection, "config", {}) or {})
+            cfg = dict(getattr(container, "config", {}) or {})
             configured = cfg.get("enrichers", []) if isinstance(cfg.get("enrichers"), list) else []
             # Load DB-backed enricher config for proper instantiation
             from ....domain.entities import Enricher as EnricherRow
@@ -414,15 +419,15 @@ class CollectionIngestService:
             pipeline_signature = []
 
         # INV-INTERSTITIAL-TYPE-STAMP-001: Auto-inject InterstitialTypeEnricher
-        # for filesystem collections whose name appears in the canonical mapping.
+        # for filesystem containers whose name appears in the canonical mapping.
         # This ensures every asset gets interstitial_type stamped from the
-        # collection name, regardless of manually configured enrichers.
+        # container name, regardless of manually configured enrichers.
         try:
             from ....adapters.enrichers.interstitial_type_enricher import (
                 COLLECTION_TYPE_MAP,
                 InterstitialTypeEnricher,
             )
-            coll_name = getattr(collection, "name", "") or ""
+            coll_name = getattr(container, "name", "") or ""
             if coll_name in COLLECTION_TYPE_MAP:
                 it_enricher = InterstitialTypeEnricher(collection_name=coll_name)
                 # Prepend at priority -1 so it runs before any other enrichers
@@ -434,7 +439,7 @@ class CollectionIngestService:
         except Exception as _ite_exc:
             logger.warning(
                 "interstitial_type_enricher_injection_failed",
-                collection=getattr(collection, "name", "?"),
+                container=getattr(container, "name", "?"),
                 error=str(_ite_exc),
             )
 
@@ -452,7 +457,7 @@ class CollectionIngestService:
         # (1) Discover — single source of "what was discovered" (ContainerDiscoveryContract).
         try:
             discovery_result = discover_locators(
-                collection,
+                container,
                 importer,
                 title=title,
                 season=season,
@@ -471,23 +476,23 @@ class CollectionIngestService:
         provider = getattr(importer, "name", None) if importer else None
 
         # (2) Detect sidecars — leave for apply step (no-op here).
-        # (3) Compare — load current catalog state for this collection.
-        catalog_state = load_catalog_state_for_collection(self.db, collection.uuid)
+        # (3) Compare — load current catalog state for this container.
+        catalog_state = load_catalog_state_for_container(self.db, container.uuid)
         # (4) Determine outcome — create | update | no_action | mark_unavailable.
         outcomes = determine_reconciliation_outcomes(
             discovered_locators,
             catalog_state,
-            full_collection_scope=(scope == "collection"),
+            full_container_scope=(scope == "container"),
         )
         processor_ids_for_enqueue = [eid for eid, _, _ in pipeline]
 
-        # Preload path mappings for this collection to resolve local paths before enrichment
+        # Preload path mappings for this container to resolve local paths before enrichment
         path_mappings: list[tuple[str, str]] = []
         try:
             from ....domain.entities import PathMapping as _PathMapping
 
             rows = (
-                self.db.query(_PathMapping).filter(_PathMapping.collection_uuid == collection.uuid).all()
+                self.db.query(_PathMapping).filter(_PathMapping.container_id == container.uuid).all()
             )
             for pm in rows:
                 plex_p = getattr(pm, "plex_path", "") or ""
@@ -601,7 +606,7 @@ class CollectionIngestService:
                     "asset_marked_unavailable",
                     asset_uuid=str(existing_asset.uuid),
                     uri=existing_asset.uri,
-                    collection=collection.name,
+                    container=container.name,
                 )
                 continue
             if outcome == ReconciliationOutcome.no_action and existing_asset is not None:
@@ -632,12 +637,12 @@ class CollectionIngestService:
                 source_uri_val = None
             # Resolve local file URI for enrichment via AssetPathResolver
             try:
-                collection_locations = (collection.config or {}).get("locations", [])
+                container_locations = (container.config or {}).get("locations", [])
                 plex_client = getattr(importer, "client", None)
                 resolver = AssetPathResolver(
                     path_mappings=path_mappings,
                     plex_client=plex_client,
-                    collection_locations=collection_locations,
+                    container_locations=container_locations,
                 )
                 local_path = resolver.resolve(
                     uri=_get_uri(item) or "",
@@ -815,7 +820,7 @@ class CollectionIngestService:
                 # Non-fatal: proceed with legacy path
                 canonical_uri_override = None
             try:
-                canonical_key = canonical_key_for(item, collection=collection, provider=provider)
+                canonical_key = canonical_key_for(item, container=container, provider=provider)
                 canonical_key_hash = canonical_hash(canonical_key)
             except IngestError as e:
                 stats.errors.append(str(e))
@@ -823,8 +828,8 @@ class CollectionIngestService:
 
             # Duplicate check: same canonical_key_hash may appear from multiple items; only create once.
             # If the existing row is soft-deleted (removed from source then re-added), restore it and enqueue.
-            existing = repo.get_by_collection_and_canonical_hash(
-                collection.uuid, canonical_key_hash
+            existing = repo.get_by_container_and_canonical_hash(
+                container.uuid, canonical_key_hash
             )
             if existing is not None:
                 if getattr(existing, "is_deleted", False):
@@ -846,7 +851,7 @@ class CollectionIngestService:
                         "asset_restored",
                         asset_uuid=str(existing.uuid),
                         uri=getattr(existing, "uri", None),
-                        collection=collection.name,
+                        container=container.name,
                     )
                 else:
                     stats.assets_skipped += 1
@@ -888,14 +893,14 @@ class CollectionIngestService:
             else:
                 stats.assets_needs_review += 1
 
-            source_id = getattr(collection, "source_id", None)
+            source_id = getattr(container, "source_id", None)
             if source_id is None:
-                raise ValueError("collection must have source_id for asset creation")
+                raise ValueError("container must have source_id for asset creation")
             file_size = loc.fingerprint.size if loc and loc.fingerprint else size_val
             file_mtime = loc.fingerprint.mtime if loc and loc.fingerprint else None
             asset = Asset(
                 uuid=uuid.uuid4(),
-                collection_uuid=collection.uuid,
+                container_id=container.uuid,
                 source_id=source_id,
                 canonical_key=canonical_key,
                 canonical_key_hash=canonical_key_hash,
@@ -933,7 +938,7 @@ class CollectionIngestService:
                     asset.audio_codec = audio_codec_val
                 container_val = _extract_label_value(labels, "container")
                 if container_val is not None:
-                    asset.container = container_val
+                    asset.container_format = container_val
             except Exception:
                 pass
             # When ffprobe (or other enricher) provides duration in probed but not in labels, set asset.duration_ms
@@ -1028,9 +1033,9 @@ class CollectionIngestService:
                     pass
                 created_assets.append(asset_record)
 
-        result = CollectionIngestResult(
-            collection_id=str(collection.uuid),
-            collection_name=collection.name,
+        result = ContainerIngestResult(
+            container_id=str(container.uuid),
+            container_name=container.name,
             scope=scope,
             stats=stats,
             title=title,
@@ -1043,3 +1048,19 @@ class CollectionIngestService:
         )
 
         return result
+
+def refresh_container(
+    db: Session,
+    container: Container,
+    importer: Any,
+    **kwargs: Any,
+) -> ContainerIngestResult:
+    """
+    Refresh a container: run discovery + reconciliation + enqueue (no persistence of container metadata).
+
+    Pipeline: discover locators → determine_reconciliation_outcomes → apply (create/update/mark_unavailable) → enqueue processor jobs.
+    Use this when the scheduler or a batch worker needs to refresh a single container before horizon expansion.
+    """
+    return ContainerIngestService(db).ingest_container(container=container, importer=importer, **kwargs)
+
+

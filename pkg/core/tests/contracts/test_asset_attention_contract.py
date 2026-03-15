@@ -80,9 +80,9 @@ class TestAssetAttentionContract:
         assert payload.get("total") == len(rows)
         assert payload.get("assets") == rows
 
-    def test_collection_filter(self):
+    def test_container_filter_canonical(self):
         """
-        Contract: The command MUST support filtering by collection UUID via --collection.
+        Contract: The command MUST support filtering by container UUID via --container (canonical).
         """
         rows = [
             {
@@ -94,18 +94,17 @@ class TestAssetAttentionContract:
                 "discovered_at": "2025-10-30T12:00:00Z",
             }
         ]
-        collection_uuid = "22222222-2222-2222-2222-222222222222"
+        container_uuid = "22222222-2222-2222-2222-222222222222"
         with patch(
             "retrovue.usecases.asset_attention.list_assets_needing_attention",
             return_value=rows,
         ) as list_fn:
-            result = self.runner.invoke(app, ["asset", "attention", "--collection", collection_uuid])
+            result = self.runner.invoke(app, ["asset", "attention", "--container", container_uuid])
 
         assert result.exit_code == 0
         list_fn.assert_called_once()
-        # Verify collection_uuid was passed to the usecase
         call_kwargs = list_fn.call_args[1]
-        assert call_kwargs.get("collection_uuid") == collection_uuid
+        assert call_kwargs.get("collection_uuid") == container_uuid
 
     def test_limit_parameter(self):
         """

@@ -10,11 +10,11 @@ This document provides an overview of all Collection domain testing contracts. I
 
 The Collection domain is covered by the following specific contracts:
 
-- **[Collection Ingest](CollectionIngestContract.md)**: Processing assets from a single collection
-- **[Collection Show](CollectionShowContract.md)**: Displaying detailed collection information
-- **[Collection List](CollectionListContract.md)**: Listing collections (optionally filtered by source)
-- **[Collection Update](CollectionUpdateContract.md)**: Updating collection configuration, sync state, and enricher attachments
-- **[Collection Wipe](CollectionWipeContract.md)**: Complete removal of collection data
+- **[Collection Ingest](ContainerIngestContract.md)**: Processing assets from a single collection
+- **[Collection Show](ContainerShowContract.md)**: Displaying detailed collection information
+- **[Collection List](ContainerListContract.md)**: Listing collections (optionally filtered by source)
+- **[Collection Update](ContainerUpdateContract.md)**: Updating collection configuration, sync state, and enricher attachments
+- **[Collection Wipe](ContainerWipeContract.md)**: Complete removal of collection data
 - **Collection Delete** (planned): Deleting collections with cascade cleanup
 
 ---
@@ -136,7 +136,7 @@ Collections follow a specific lifecycle pattern:
 
 ## See Also
 
-- [Collection Domain Documentation](../../domain/Collection.md) - Core domain model and operations
+- [Collection Domain Documentation](../../data/domain/Container.md) - Core domain model and operations
 - [Source Contracts](SourceContract.md) - Source-level operations that manage collections
 - [CLI Contract](README.md) - General CLI command standards
 - [Unit of Work](../_ops/UnitOfWorkContract.md) - Transaction management requirements

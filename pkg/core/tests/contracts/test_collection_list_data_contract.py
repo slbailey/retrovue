@@ -1,7 +1,7 @@
 """
 Data contract tests for Collection List command.
 
-Tests the data contract rules (D-#) defined in CollectionListContract.md.
+Tests the data contract rules (D-#) defined in ContainerListContract.md.
 These tests verify database operations, transaction safety, data integrity, and snapshot consistency.
 """
 
@@ -59,7 +59,7 @@ class TestCollectionListDataContract:
             mock_col = MagicMock()
             mock_col.uuid = "test-id"
             mock_col.external_id = "1"
-            mock_col.name = "Test Collection"
+            mock_col.name = "Test Container"
             mock_col.sync_enabled = False
             mock_col.ingestible = False
             mock_col.config = {}
@@ -101,7 +101,7 @@ class TestCollectionListDataContract:
             mock_col = MagicMock()
             mock_col.uuid = "col-id"
             mock_col.external_id = "1"
-            mock_col.name = "Test Collection"
+            mock_col.name = "Test Container"
             mock_col.sync_enabled = True
             mock_col.ingestible = True
             mock_col.source_id = "source-id"
@@ -131,7 +131,7 @@ class TestCollectionListDataContract:
             mock_col = MagicMock()
             mock_col.uuid = "col-id"
             mock_col.external_id = "1"
-            mock_col.name = "Test Collection"
+            mock_col.name = "Test Container"
             mock_col.sync_enabled = True
             mock_col.ingestible = True
             mock_col.config = {}
@@ -215,7 +215,7 @@ class TestCollectionListDataContract:
             mock_col = MagicMock()
             mock_col.uuid = "col-id"
             mock_col.external_id = "1"
-            mock_col.name = "Test Collection"
+            mock_col.name = "Test Container"
             mock_col.sync_enabled = True
             mock_col.ingestible = True
             mock_col.config = {}

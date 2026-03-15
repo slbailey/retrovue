@@ -175,7 +175,7 @@ class TestPlexArtworkResolve:
         mock_asset = MagicMock()
         mock_asset.uuid = asset_uuid
         mock_asset.uri = "plex://12345"
-        mock_asset.collection_uuid = uuid.uuid4()
+        mock_asset.container_id = uuid.uuid4()
 
         mock_editorial = MagicMock()
         mock_editorial.payload = {"thumb_url": thumb}
@@ -218,7 +218,7 @@ class TestPlexArtworkResolve:
         mock_asset = MagicMock()
         mock_asset.uuid = asset_uuid
         mock_asset.uri = "plex://12345"
-        mock_asset.collection_uuid = uuid.uuid4()
+        mock_asset.container_id = uuid.uuid4()
 
         mock_editorial = MagicMock()
         mock_editorial.payload = {"title": "Some Movie"}  # No thumb_url.

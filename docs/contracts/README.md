@@ -9,6 +9,7 @@ This directory is the **only canonical source of runtime guarantees** for playou
 - **Legacy**: archived docs kept for archaeology only. Not authoritative.
 
 ## Navigation
+- **Terminology (ingest/catalog):** The ingest entity is **Container** (Source → Container → Locator → Media/Asset). See [architecture/TERMINOLOGY_COLLECTION_TO_CONTAINER.md](architecture/TERMINOLOGY_COLLECTION_TO_CONTAINER.md). Only historical migrations and temporary CLI/API compatibility may still use "Collection" for this entity.
 - Laws: `docs/contracts/laws/`
 - Invariants:
   - AIR: `docs/contracts/invariants/air/`

@@ -1,6 +1,6 @@
 ### Content Library Workflow (Beginner’s Guide)
 
-This guide walks operators end-to-end: add a source, discover collections, make a collection ingestible, attach enrichers, ingest content, and review/approve assets for broadcast readiness.
+This guide walks operators end-to-end: add a source, discover containers, make a container ingestible, attach enrichers, ingest content, and review/approve assets for broadcast readiness.
 
 Notes
 - Replace example names/paths with your environment.
@@ -23,9 +23,9 @@ retrovue source add --type filesystem --name "Local Media" --base-path "/media/m
 
 Tip: For Plex, you’ll need a base URL and token.
 
-### 2) Discover collections from the source
+### 2) Discover containers from the source
 
-Discover “libraries” (collections) and persist them.
+Discover “libraries” (containers) and persist them.
 
 ```bash
 retrovue source discover "Local Media" --dry-run
@@ -35,27 +35,27 @@ retrovue source discover "Local Media"
 Check the result:
 
 ```bash
-retrovue collection list --source "Local Media"
+retrovue container list --source "Local Media"
 ```
 
-### 3) Make a collection ingestible and enable sync
+### 3) Make a container ingestible and enable sync
 
-To ingest, a collection must be ingestible (valid local path mapping) and typically sync-enabled. First set a local path mapping; then enable sync.
+To ingest, a container must be ingestible (valid local path mapping) and typically sync-enabled. First set a local path mapping; then enable sync.
 
 ```bash
-# Find your collection's UUID or name
-retrovue collection list --source "Local Media"
+# Find your container's UUID or name
+retrovue container list --source "Local Media"
 
 # Provide a local path mapping (unlocks ingestible=true)
-retrovue collection update "Movies" --path-mapping "/media/movies"
+retrovue container update "Movies" --path-mapping "/media/movies"
 
 # Enable sync (requires ingestible=true or --path-mapping in same command)
-retrovue collection update "Movies" --sync-enable
+retrovue container update "Movies" --sync-enable
 ```
 
-Verification: `retrovue collection list --source "Local Media"` should show Sync=Enabled and Ingestable=Yes for the target collection.
+Verification: `retrovue container list --source "Local Media"` should show Sync=Enabled and Ingestable=Yes for the target container.
 
-### 4) (Optional) Attach ingest enrichers to a collection
+### 4) (Optional) Attach ingest enrichers to a container
 
 Attach an enricher to run during ingest (e.g., ffprobe metadata). **For TV shows, attaching the ffprobe enricher is recommended** so that duration is probed from each media file and stored on the asset; episode id, title, and description are already captured from Plex into the asset’s editorial payload.
 
@@ -66,12 +66,12 @@ retrovue enricher add --type ingest --name "FFprobe" --help   # then add with de
 # List configured enricher instances (and/or add one via `retrovue enricher ...`)
 retrovue enricher list
 
-# Attach to a collection with a priority (lower runs first)
-retrovue collection attach-enricher "Movies" enricher-ffprobe-1 --priority 1
-retrovue collection attach-enricher "TV Shows" enricher-ffprobe-1 --priority 1
+# Attach to a container with a priority (lower runs first)
+retrovue container attach-enricher "Movies" enricher-ffprobe-1 --priority 1
+retrovue container attach-enricher "TV Shows" enricher-ffprobe-1 --priority 1
 
 # Detach when needed
-retrovue collection detach-enricher "Movies" enricher-ffprobe-1
+retrovue container detach-enricher "Movies" enricher-ffprobe-1
 ```
 
 Tip: If you haven’t created any enrichers yet, see `retrovue enricher add --help`.
@@ -81,19 +81,19 @@ Tip: If you haven’t created any enrichers yet, see `retrovue enricher add --he
 Run a dry-run first to preview; then perform the ingest.
 
 ```bash
-# Full collection ingest (dry-run)
-retrovue collection ingest "Movies" --dry-run
+# Full container ingest (dry-run)
+retrovue container ingest "Movies" --dry-run
 
-# Full collection ingest (executes writes)
-retrovue collection ingest "Movies"
+# Full container ingest (executes writes)
+retrovue container ingest "Movies"
 
 # Targeted scopes
-retrovue collection ingest "TV Shows" --title "The Big Bang Theory"
-retrovue collection ingest "TV Shows" --title "The Big Bang Theory" --season 1
-retrovue collection ingest "TV Shows" --title "The Big Bang Theory" --season 1 --episode 1
+retrovue container ingest "TV Shows" --title "The Big Bang Theory"
+retrovue container ingest "TV Shows" --title "The Big Bang Theory" --season 1
+retrovue container ingest "TV Shows" --title "The Big Bang Theory" --season 1 --episode 1
 ```
 
-Output includes counts for discovered/ingested/skipped/updated; use `--json` for machine-readable output and `--verbose-assets` to list created/updated asset IDs and URIs (source vs canonical) per the Collection Ingest contract.
+Output includes counts for discovered/ingested/skipped/updated; use `--json` for machine-readable output and `--verbose-assets` to list created/updated asset IDs and URIs (source vs canonical) per the Container Ingest contract.
 
 ### 6) Review and approve assets (broadcast readiness)
 
@@ -120,9 +120,9 @@ Guidance
 
 ### 7) What’s next (toward broadcast)
 
-- Keep collections synced and ingestible; schedule periodic ingests.
+- Keep containers synced and ingestible; schedule periodic ingests.
 - Build out channel configuration and scheduling (see runtime docs) once a healthy set of assets is in `ready` with `approved_for_broadcast=true`.
-- Use `retrovue collection list-all` to survey ingestible/sync states across sources.
+- Use `retrovue container list-all` to survey ingestible/sync states across sources.
 
 ### Troubleshooting
 

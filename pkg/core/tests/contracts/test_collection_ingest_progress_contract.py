@@ -13,7 +13,7 @@ def test_dry_run_emits_early_feedback():
     with patch("retrovue.cli.commands.collection.session") as mock_session, \
          patch("retrovue.cli.commands.collection.resolve_collection_selector") as mock_resolve, \
          patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer, \
-         patch("retrovue.cli.commands._ops.collection_ingest_service.CollectionIngestService") as mock_service:
+         patch("retrovue.cli.commands._ops.collection_ingest_service.ContainerIngestService") as mock_service:
 
         db = MagicMock()
         mock_session.return_value.__enter__.return_value = db
@@ -38,7 +38,7 @@ def test_dry_run_emits_early_feedback():
         result.stats.assets_updated = 0
         result.collection_name = "Movies"
         result.scope = "collection"
-        mock_service.return_value.ingest_collection.return_value = result
+        mock_service.return_value.ingest_container.return_value = result
 
         res = runner.invoke(app, ["collection", "ingest", collection_id, "--dry-run"])  # no --json
         assert res.exit_code == 0

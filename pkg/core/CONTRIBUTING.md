@@ -207,7 +207,7 @@ We use two styles of contract tests:
 
 **Referenced Contracts:**
 
-- [`collectionwipecontract.md`](docs/contracts/collectionwipecontract.md)
+- [`ContainerWipeContract.md`](docs/contracts/resources/ContainerWipeContract.md)
 - [`syncidempotencycontract.md`](docs/contracts/syncidempotencycontract.md)
 
 These define expected CLI syntax, behavior, and testing obligations.
@@ -236,7 +236,7 @@ When updating functionality:
 
 ### 📘 Contract Documentation Index
 
-- **Collection Wipe Contract** → `docs/contracts/collectionwipecontract.md`
+- **Container Wipe Contract** → `docs/contracts/resources/ContainerWipeContract.md`
 - **Sync Idempotency Contract** → `docs/contracts/syncidempotencycontract.md`
 
 All operator commands must align with their documented contract, including syntax, flags, confirmation prompts,

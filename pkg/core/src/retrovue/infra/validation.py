@@ -10,22 +10,22 @@ from sqlalchemy.orm import Session
 
 from ..domain.entities import (
     Asset,
-    Collection,
+    Container,
     PathMapping,
 )
 from ..infra.exceptions import ValidationError
 
 
-def validate_collection_exists(db: Session, collection_id: str) -> Collection:
+def validate_collection_exists(db: Session, collection_id: str) -> Container:
     """
     Validate collection exists and return it.
 
     Args:
         db: Database session
-        collection_id: Collection identifier (UUID, external_id, or name)
+        collection_id: Container identifier (UUID, external_id, or name)
 
     Returns:
-        Collection: The found collection
+        Container: The found container
 
     Raises:
         ValidationError: If collection not found or ambiguous
@@ -35,63 +35,63 @@ def validate_collection_exists(db: Session, collection_id: str) -> Collection:
         import uuid
 
         uuid.UUID(collection_id)
-        collection = db.query(Collection).filter(Collection.uuid == collection_id).first()
-        if collection:
-            return collection
+        container = db.query(Container).filter(Container.uuid == collection_id).first()
+        if container:
+            return container
     except ValueError:
         pass
 
     # Try external_id
-    collection = db.query(Collection).filter(Collection.external_id == collection_id).first()
-    if collection:
-        return collection
+    container = db.query(Container).filter(Container.external_id == collection_id).first()
+    if container:
+        return container
 
     # Try name (case-insensitive)
-    collections = db.query(Collection).filter(Collection.name.ilike(collection_id)).all()
+    containers = db.query(Container).filter(Container.name.ilike(collection_id)).all()
 
-    if len(collections) == 0:
-        raise ValidationError(f"Collection '{collection_id}' not found")
-    elif len(collections) > 1:
-        names = [c.name for c in collections]
-        raise ValidationError(f"Multiple collections match '{collection_id}': {names}")
+    if len(containers) == 0:
+        raise ValidationError(f"Container '{collection_id}' not found")
+    elif len(containers) > 1:
+        names = [c.name for c in containers]
+        raise ValidationError(f"Multiple containers match '{collection_id}': {names}")
 
-    return collections[0]
+    return containers[0]
 
 
-def validate_collection_enabled(collection: Collection) -> None:
+def validate_collection_enabled(container: Container) -> None:
     """
     Validate collection is enabled for operations.
 
     Args:
-        collection: Collection to validate
+        container: Container to validate
 
     Raises:
         ValidationError: If collection is not enabled
     """
-    if not collection.sync_enabled:
-        raise ValidationError(f"Collection '{collection.name}' is not enabled")
+    if not container.sync_enabled:
+        raise ValidationError(f"Container '{container.name}' is not enabled")
 
 
-def validate_path_mappings(db: Session, collection: Collection) -> None:
+def validate_path_mappings(db: Session, container: Container) -> None:
     """
     Validate collection has valid path mappings.
 
     Args:
         db: Database session
-        collection: Collection to validate
+        collection: Container to validate
 
     Raises:
         ValidationError: If path mappings are invalid
     """
-    mappings = db.query(PathMapping).filter(PathMapping.collection_uuid == collection.uuid).all()
+    mappings = db.query(PathMapping).filter(PathMapping.container_id == container.uuid).all()
 
     if not mappings:
-        raise ValidationError(f"Collection '{collection.name}' has no path mappings")
+        raise ValidationError(f"Container '{container.name}' has no path mappings")
 
     # Check if at least one mapping has a valid local path
     valid_mappings = [m for m in mappings if m.local_path and m.local_path.strip()]
     if not valid_mappings:
-        raise ValidationError(f"Collection '{collection.name}' has no valid local paths")
+        raise ValidationError(f"Container '{container.name}' has no valid local paths")
 
 
 def validate_source_connectivity(db: Session, source_id: str) -> None:
@@ -123,7 +123,7 @@ def validate_no_conflicting_operations(db: Session, collection_id: str) -> None:
 
     Args:
         db: Database session
-        collection_id: Collection identifier
+        collection_id: Container identifier
 
     Raises:
         ValidationError: If conflicting operations exist
@@ -134,19 +134,19 @@ def validate_no_conflicting_operations(db: Session, collection_id: str) -> None:
     pass
 
 
-def validate_wipe_prerequisites(db: Session, collection: Collection) -> None:
+def validate_wipe_prerequisites(db: Session, container: Container) -> None:
     """
     Validate all prerequisites for wipe operation.
 
     Args:
         db: Database session
-        collection: Collection to validate
+        collection: Container to validate
 
     Raises:
         ValidationError: If prerequisites not met
     """
-    # Validate collection is accessible
-    validate_collection_enabled(collection)
+    # Validate container is accessible
+    validate_collection_enabled(container)
 
     # Validate no critical dependencies
     # TODO: Add checks for critical dependencies
@@ -171,35 +171,35 @@ def validate_no_orphaned_records(db: Session) -> None:
     # TODO: Add validation for orphaned assets if needed
 
 
-def validate_collection_preserved(db: Session, collection: Collection) -> None:
+def validate_collection_preserved(db: Session, container: Container) -> None:
     """
     Validate collection is preserved after operation.
 
     Args:
         db: Database session
-        collection: Collection to validate
+        collection: Container to validate
 
     Raises:
         ValidationError: If collection was deleted
     """
-    preserved_collection = db.query(Collection).filter(Collection.uuid == collection.uuid).first()
-    if not preserved_collection:
-        raise ValidationError("Collection was deleted during operation")
+    preserved_container = db.query(Container).filter(Container.uuid == container.uuid).first()
+    if not preserved_container:
+        raise ValidationError("Container was deleted during operation")
 
 
-def validate_path_mappings_preserved(db: Session, collection: Collection) -> None:
+def validate_path_mappings_preserved(db: Session, container: Container) -> None:
     """
     Validate path mappings are preserved after operation.
 
     Args:
         db: Database session
-        collection: Collection to validate
+        collection: Container to validate
 
     Raises:
         ValidationError: If path mappings were deleted
     """
     path_mappings = (
-        db.query(PathMapping).filter(PathMapping.collection_uuid == collection.uuid).count()
+        db.query(PathMapping).filter(PathMapping.container_id == container.uuid).count()
     )
     if path_mappings == 0:
         raise ValidationError("Path mappings were deleted during operation")
@@ -251,28 +251,28 @@ def validate_asset_draft(asset_draft) -> None:
         raise ValidationError("Asset draft missing episode number")
 
 
-def validate_collection_accessible(db: Session, collection: Collection) -> None:
+def validate_collection_accessible(db: Session, container: Container) -> None:
     """
     Validate collection is accessible for operations.
 
     Args:
         db: Database session
-        collection: Collection to validate
+        collection: Container to validate
 
     Raises:
         ValidationError: If collection is not accessible
     """
-    validate_collection_enabled(collection)
-    validate_path_mappings(db, collection)
+    validate_collection_enabled(container)
+    validate_path_mappings(db, container)
 
 
-def validate_enrichers_available(db: Session, collection: Collection) -> None:
+def validate_enrichers_available(db: Session, container: Container) -> None:
     """
     Validate all required enrichers are available.
 
     Args:
         db: Database session
-        collection: Collection to validate
+        collection: Container to validate
 
     Raises:
         ValidationError: If enrichers are not available
@@ -293,14 +293,14 @@ def validate_asset_relationships(db: Session, asset: Asset) -> None:
     Raises:
         ValidationError: If relationships are invalid
     """
-    # Check asset has collection
-    if not asset.collection_id:
-        raise ValidationError("Asset missing collection relationship")
+    # Check asset has container
+    if not asset.container_id:
+        raise ValidationError("Asset missing container relationship")
 
-    # Check collection exists
-    collection = db.query(Collection).filter(Collection.uuid == asset.collection_id).first()
-    if not collection:
-        raise ValidationError("Asset references non-existent collection")
+    # Check container exists
+    container = db.query(Container).filter(Container.uuid == asset.container_id).first()
+    if not container:
+        raise ValidationError("Asset references non-existent container")
 
 
 def validate_hierarchy_integrity(db: Session, result) -> None:

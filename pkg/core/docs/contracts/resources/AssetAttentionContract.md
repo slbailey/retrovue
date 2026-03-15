@@ -12,16 +12,18 @@ This contract applies to the `retrovue asset attention` command, covering the li
 
 - **Clarity**: Output must clearly indicate which assets need attention and why
 - **Safety**: Read-only operation with no state changes
-- **Flexibility**: Support filtering by collection and limiting results
+- **Flexibility**: Support filtering by container and limiting results
 - **Consistency**: JSON output format must be structured and predictable
 
 ## CLI Syntax
 
 The Retrovue CLI MUST expose asset attention listing using the pattern:
 
+**Canonical:**
 ```
-retrovue asset attention [--collection <collection_uuid>] [--limit <number>] [--json]
+retrovue asset attention [--container <container_uuid>] [--limit <number>] [--json]
 ```
+*Compatibility:* `--collection <collection_uuid>` is deprecated and accepted temporarily during rollout.
 
 The noun (asset) MUST come before the verb (attention).
 
@@ -31,9 +33,10 @@ Renaming, reordering, or collapsing this verb into flags is a breaking change an
 
 ### Filtering Options
 
-- **Collection Filter**: 
-  - `--collection <collection_uuid>`: Filter assets by collection UUID
-  - Only assets from the specified collection are returned
+- **Container Filter** (canonical): 
+  - `--container <container_uuid>`: Filter assets by container UUID
+  - Only assets from the specified container are returned
+  - *Compatibility:* `--collection` is deprecated and accepted temporarily.
 
 - **Limit**: 
   - `--limit <number>`: Maximum number of results to return (default: 100)
@@ -47,7 +50,7 @@ Renaming, reordering, or collapsing this verb into flags is a breaking change an
 ## Exit Codes
 
 - `0`: Success - assets listed (even if empty result)
-- `1`: Error (invalid collection UUID, database error, etc.)
+- `1`: Error (invalid container UUID, database error, etc.)
 
 The command MUST NOT partially apply changes and still exit 0.
 
@@ -128,7 +131,7 @@ When `--json` is passed, all output MUST be valid JSON with the following struct
 
 **Asset Object Fields:**
 - `uuid`: Asset UUID (string)
-- `collection_uuid`: Collection UUID (string)
+- `container_uuid` (canonical): Container UUID (string). *Compatibility:* JSON may still emit `collection_uuid` during rollout.
 - `uri`: Asset URI/path (string)
 - `state`: Lifecycle state (`new`, `enriching`, `ready`, `retired`)
 - `approved_for_broadcast`: Boolean approval status
@@ -140,8 +143,8 @@ When `--json` is passed, all output MUST be valid JSON with the following struct
 # List all assets needing attention
 retrovue asset attention
 
-# List assets needing attention in a specific collection
-retrovue asset attention --collection 22222222-2222-2222-2222-222222222222
+# List assets needing attention in a specific container
+retrovue asset attention --container 22222222-2222-2222-2222-222222222222
 
 # Limit results to 50 items
 retrovue asset attention --limit 50
@@ -149,8 +152,8 @@ retrovue asset attention --limit 50
 # Output as JSON
 retrovue asset attention --json
 
-# Filter by collection and output as JSON
-retrovue asset attention --collection 22222222-2222-2222-2222-222222222222 --json
+# Filter by container and output as JSON
+retrovue asset attention --container 22222222-2222-2222-2222-222222222222 --json
 ```
 
 ## Database Side Effects
@@ -169,8 +172,8 @@ retrovue asset attention --collection 22222222-2222-2222-2222-222222222222 --jso
 
 ## Error Conditions
 
-- **Invalid Collection UUID**: Raised if `--collection` value is not a valid UUID format
-- **Collection Not Found**: Raised if specified collection UUID does not exist (should this exit 0 or 1? Current implementation treats missing collection as valid - returns empty list)
+- **Invalid Container UUID**: Raised if `--container` (or deprecated `--collection`) value is not a valid UUID format
+- **Container Not Found**: Raised if specified container UUID does not exist (should this exit 0 or 1? Current implementation may treat missing container as valid — returns empty list)
 - **Database Error**: Raised if database query fails
 
 ## Contract Test Coverage
@@ -180,7 +183,7 @@ The following test methods must enforce this contract:
 - `test_help_flag_exits_zero`: Validates help flag behavior
 - `test_no_assets_needing_attention_prints_message_and_exits_zero`: Validates empty result handling
 - `test_json_output_when_assets_present`: Validates JSON output format
-- `test_collection_filter`: Validates collection filtering (if implemented)
+- `test_container_filter`: Validates container filtering (if implemented)
 - `test_limit_parameter`: Validates limit parameter (if implemented)
 
 ## Implementation Notes

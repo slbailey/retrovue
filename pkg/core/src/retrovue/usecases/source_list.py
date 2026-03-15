@@ -4,7 +4,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from ..domain.entities import Collection, Source
+from ..domain.entities import Container, Source
 
 
 def list_sources(db: Session, *, source_type: str | None = None) -> list[dict[str, Any]]:
@@ -23,16 +23,16 @@ def list_sources(db: Session, *, source_type: str | None = None) -> list[dict[st
             enabled = (
                 db.query(Collection)
                 .filter(
-                    Collection.source_id == src.id,
-                    Collection.sync_enabled.is_(True),
+                    Container.source_id == src.id,
+                    Container.sync_enabled.is_(True),
                 )
                 .count()
             )
             ingestible = (
                 db.query(Collection)
                 .filter(
-                    Collection.source_id == src.id,
-                    Collection.ingestible.is_(True),
+                    Container.source_id == src.id,
+                    Container.ingestible.is_(True),
                 )
                 .count()
             )

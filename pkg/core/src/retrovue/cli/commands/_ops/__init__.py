@@ -10,10 +10,10 @@ Modules:
 """
 
 from .collection_ingest_service import (
-    CollectionIngestResult,
-    CollectionIngestService,
+    ContainerIngestResult,
+    ContainerIngestService,
     IngestStats,
-    resolve_collection_selector,
+    resolve_container_selector,
     validate_ingestible_with_importer,
     validate_prerequisites,
 )
@@ -56,11 +56,11 @@ __all__ = [
     "perform_source_deletions",
     "resolve_source_selector",
     "source_is_protected_for_prod_delete",
-    # Collection ingest service exports
-    "CollectionIngestResult",
-    "CollectionIngestService",
+    # Container ingest service exports
+    "ContainerIngestResult",
+    "ContainerIngestService",
     "IngestStats",
-    "resolve_collection_selector",
+    "resolve_container_selector",
     "validate_ingestible_with_importer",
     "validate_prerequisites",
     # Source ingest service exports

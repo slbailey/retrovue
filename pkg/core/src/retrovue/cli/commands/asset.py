@@ -38,7 +38,7 @@ def resolve_asset_selector(db, asset_id: str) -> Asset:
 
 @app.command("attention")
 def list_attention(
-    collection: str | None = typer.Option(None, "--collection", help="Filter by collection UUID"),
+    container: str | None = typer.Option(None, "--container", help="Filter by container UUID"),
     limit: int = typer.Option(100, "--limit", help="Max rows to return"),
     json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
 ):
@@ -47,7 +47,7 @@ def list_attention(
     """
     with session() as db:
         rows = _uc_asset_attention.list_assets_needing_attention(
-            db, collection_uuid=collection, limit=limit
+            db, collection_uuid=container, limit=limit
         )
 
     if not rows:
@@ -220,31 +220,31 @@ def update_asset(
 @app.command("enrich")
 def enrich_assets(
     stale: bool = typer.Option(False, "--stale", help="Target only stale assets (null/mismatched enricher checksum or state='new')"),
-    source: str | None = typer.Option(None, "--source", help="Scope to all collections under this source"),
-    collection: str | None = typer.Option(None, "--collection", help="Scope to a single collection"),
+    source: str | None = typer.Option(None, "--source", help="Scope to all containers under this source"),
+    container: str | None = typer.Option(None, "--container", help="Scope to a single container"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Count stale assets without enriching"),
-    limit: int | None = typer.Option(None, "--limit", help="Max assets per collection"),
+    limit: int | None = typer.Option(None, "--limit", help="Max assets per container"),
     json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
 ):
     """
-    Bulk enrich assets across a source or collection.
+    Bulk enrich assets across a source or container.
 
     Examples:
         retrovue asset enrich --stale --source Interstitials --dry-run
         retrovue asset enrich --stale --source Interstitials
-        retrovue asset enrich --stale --collection "commercials" --json
+        retrovue asset enrich --stale --container "commercials" --json
         retrovue asset enrich --stale --source Interstitials --limit 50
     """
     if not stale:
         typer.echo("Error: --stale is required (the only supported mode)", err=True)
         raise typer.Exit(1)
 
-    if source and collection:
-        typer.echo("Error: --source and --collection are mutually exclusive", err=True)
+    if source and container:
+        typer.echo("Error: --source and --container are mutually exclusive", err=True)
         raise typer.Exit(1)
 
-    if not source and not collection:
-        typer.echo("Error: provide --source or --collection to scope the operation", err=True)
+    if not source and not container:
+        typer.echo("Error: provide --source or --container to scope the operation", err=True)
         raise typer.Exit(1)
 
     try:
@@ -252,7 +252,7 @@ def enrich_assets(
             result = enrich_stale_assets(
                 db,
                 source_selector=source,
-                collection_selector=collection,
+                collection_selector=container,
                 dry_run=dry_run,
                 max_assets=limit,
             )

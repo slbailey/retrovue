@@ -25,6 +25,8 @@ Key goals:
 
 RetroVue models how *real broadcast stations* operate, not how modern VOD apps behave.
 
+**Canonical conceptual model:** Source → Container → Locator → Asset → Processor Jobs → Processor Runtime. (Container = subdivision of a Source for discovery; do not use “Collection” in code or docs.)
+
 ────────────────────────
 SYSTEM SHAPE
 ────────────────────────

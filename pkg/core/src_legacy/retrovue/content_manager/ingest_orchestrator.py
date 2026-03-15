@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from ..adapters.registry import get_enricher, get_importer
 from ..domain.entities import Asset, Source
 from .library_service import LibraryService
-from .source_service import CollectionDTO, SourceService
+from .source_service import ContainerDTO, SourceService
 
 logger = structlog.get_logger(__name__)
 
@@ -188,7 +188,7 @@ class IngestOrchestrator:
 
     def _get_collections_to_scan(
         self, source_id: str | None = None, collection_id: str | None = None
-    ) -> list[CollectionDTO]:
+    ) -> list[ContainerDTO]:
         """Get collections to scan based on parameters."""
         collections = []
 
@@ -213,7 +213,7 @@ class IngestOrchestrator:
 
     def _process_collection(
         self,
-        collection: CollectionDTO,
+        collection: ContainerDTO,
         dry_run: bool,
         title_filter: str | None = None,
         season_filter: int | None = None,
@@ -247,7 +247,7 @@ class IngestOrchestrator:
     def _discover_from_collection(
         self,
         importer,
-        collection: CollectionDTO,
+        collection: ContainerDTO,
         title_filter: str | None = None,
         season_filter: int | None = None,
         episode_filter: int | None = None,
@@ -274,7 +274,7 @@ class IngestOrchestrator:
             return importer.discover()
 
     def _process_discovered_item(
-        self, item, collection: CollectionDTO, dry_run: bool
+        self, item, collection: ContainerDTO, dry_run: bool
     ) -> IngestReport:
         """Process a single discovered item."""
         report = IngestReport()
@@ -356,7 +356,7 @@ class IngestOrchestrator:
             report.errors = 1
             return report
 
-    def _process_asset_draft_with_hierarchy(self, asset_draft, collection: CollectionDTO):
+    def _process_asset_draft_with_hierarchy(self, asset_draft, collection: ContainerDTO):
         """
         Process an AssetDraft with TV show hierarchy, creating proper database entities.
 
@@ -378,12 +378,12 @@ class IngestOrchestrator:
         session = self.db
 
         try:
-            # Get the actual collection entity from the database
-            from ..domain.entities import Collection
+            # Get the actual container entity from the database
+            from ..domain.entities import Container
 
             collection_entity = (
-                session.query(Collection)
-                .filter(Collection.external_id == collection.external_id)
+                session.query(Container)
+                .filter(Container.external_id == collection.external_id)
                 .first()
             )
 
@@ -474,7 +474,7 @@ class IngestOrchestrator:
                 hash_sha256=None,  # Will be calculated by enrichers
                 canonical=False,  # Start as non-canonical
                 discovered_at=asset_draft.discovered_at,
-                collection_id=collection_entity.id,
+                container_id=collection_entity.uuid,
             )
             session.add(asset)
             session.flush()  # Get the ID
@@ -508,7 +508,7 @@ class IngestOrchestrator:
         else:
             return get_importer(source.type)
 
-    def _get_importer_for_collection(self, collection: CollectionDTO):
+    def _get_importer_for_collection(self, collection: ContainerDTO):
         """Get importer for a collection."""
         if collection.source_type == "plex":
             # Get Plex sources from database
@@ -659,7 +659,7 @@ class IngestOrchestrator:
             # Get the collection from database
             import uuid
 
-            from ..domain.entities import Collection
+            from ..domain.entities import Container
 
             collection = None
 
@@ -668,7 +668,7 @@ class IngestOrchestrator:
                 if len(collection_id) == 36 and collection_id.count("-") == 4:
                     collection_uuid = uuid.UUID(collection_id)
                     collection = (
-                        self.db.query(Collection).filter(Collection.uuid == collection_uuid).first()
+                        self.db.query(Container).filter(Container.uuid == collection_uuid).first()
                     )
             except (ValueError, TypeError):
                 pass
@@ -676,15 +676,15 @@ class IngestOrchestrator:
             # If not found by UUID, try by external_id
             if not collection:
                 collection = (
-                    self.db.query(Collection)
-                    .filter(Collection.external_id == collection_id)
+                    self.db.query(Container)
+                    .filter(Container.external_id == collection_id)
                     .first()
                 )
 
             # If not found by external_id, try by name (case-insensitive)
             if not collection:
                 name_matches = (
-                    self.db.query(Collection).filter(Collection.name.ilike(collection_id)).all()
+                    self.db.query(Container).filter(Container.name.ilike(collection_id)).all()
                 )
                 if len(name_matches) == 1:
                     collection = name_matches[0]
@@ -699,11 +699,11 @@ class IngestOrchestrator:
             # Convert to DTO
             # Get path mappings for this collection
             from ..domain.entities import PathMapping
-            from .source_service import CollectionDTO
+            from .source_service import ContainerDTO
 
             mappings = (
                 self.db.query(PathMapping)
-                .filter(PathMapping.collection_id == collection.uuid)
+                .filter(PathMapping.container_id == collection.uuid)
                 .all()
             )
 
@@ -714,13 +714,14 @@ class IngestOrchestrator:
 
             source = self.db.query(Source).filter(Source.id == collection.source_id).first()
 
-            collection_dto = CollectionDTO(
+            collection_dto = ContainerDTO(
                 external_id=collection.external_id,
                 name=collection.name,
                 sync_enabled=collection.sync_enabled,
                 mapping_pairs=mapping_pairs,
                 source_type=source.type if source else "unknown",
                 config=collection.config,
+                container_id=str(collection.uuid),
             )
 
             # Process the collection
@@ -744,7 +745,7 @@ class IngestOrchestrator:
             logger.error("collection_ingest_failed", collection_id=collection_id, error=str(e))
             raise
 
-    def _get_enabled_enrichers_for_collection(self, collection: CollectionDTO) -> list[str]:
+    def _get_enabled_enrichers_for_collection(self, collection: ContainerDTO) -> list[str]:
         """
         Get list of enabled enrichers for a collection.
 

@@ -9,9 +9,9 @@ from .ingest_orchestrator import IngestOrchestrator, IngestReport
 from .library_service import LibraryService
 from .path_service import PathResolutionError, PathResolverService
 from .source_service import (
-    CollectionUpdateDTO,
+    ContainerDTO,
+    ContainerUpdateDTO,
     ContentSourceDTO,
-    SourceCollectionDTO,
     SourceService,
 )
 
@@ -22,9 +22,9 @@ __all__ = [
     "IngestOrchestrator",
     "PathResolverService",
     # DTOs
-    "SourceCollectionDTO",
+    "ContainerDTO",
     "ContentSourceDTO",
-    "CollectionUpdateDTO",
+    "ContainerUpdateDTO",
     "IngestReport",
     # Exceptions
     "PathResolutionError",

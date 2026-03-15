@@ -179,7 +179,7 @@ determine initial `state` and `approved_for_broadcast`, with importer-stable thr
 ## See Also
 
 - [Asset Domain Documentation](../../domain/Asset.md) - Core domain model and operations
-- [Collection Contracts](CollectionContract.md) - Collection-level operations that manage assets
+- [Container Contracts](ContainerContract.md) - Collection-level operations that manage assets
 - [Source Contracts](SourceContract.md) - Source-level operations that manage collections
 - [CLI Contract](README.md) - General CLI command standards
 - [Unit of Work](../_ops/UnitOfWorkContract.md) - Transaction management requirements

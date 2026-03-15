@@ -6,11 +6,11 @@ Define the operator interface for listing assets in RetroVue. This contract ensu
 
 ## Scope
 
-This contract applies to the `retrovue asset list` command, covering asset listing with filtering by collection, state, and other criteria.
+This contract applies to the `retrovue asset list` command, covering asset listing with filtering by container, state, and other criteria. The ingest/catalog entity is **Container**. During compatibility rollout, `--collection` is deprecated and accepted temporarily.
 
 ## Design Principles
 
-- **Flexibility:** Support multiple filtering options (collection, state, type, etc.)
+- **Flexibility:** Support multiple filtering options (container, state, type, etc.)
 - **Clarity:** Output must be clear and well-organized for operators
 - **Consistency:** JSON output format must be structured and predictable
 - **Safety:** Read-only operation with no state changes
@@ -19,9 +19,11 @@ This contract applies to the `retrovue asset list` command, covering asset listi
 
 The Retrovue CLI MUST expose asset listing using the pattern:
 
+**Canonical:**
 ```
-retrovue asset list [--collection <collection_id>] [--state <state>] [--canonical] [--approved] [--json] [--test-db]
+retrovue asset list [--container <container_id>] [--state <state>] [--canonical] [--approved] [--json] [--test-db]
 ```
+*Compatibility:* `--collection <collection_id>` is deprecated and accepted temporarily during rollout.
 
 The noun (asset) MUST come before the verb (list).
 
@@ -31,11 +33,12 @@ Renaming, reordering, or collapsing this verb into flags is a breaking change an
 
 ### Filtering Options
 
-- **Collection Filter**:
+- **Container Filter** (canonical):
 
-  - `--collection <collection_id>`: Filter assets by collection (UUID, external ID, or name)
-  - Collection name matching MUST be case-insensitive
-  - If multiple collections match the provided name (case-insensitive), the command MUST exit with code 1 and emit: "Multiple collections named '<name>' exist. Please specify the UUID."
+  - `--container <container_id>`: Filter assets by container (UUID, external ID, or name)
+  - Container name matching MUST be case-insensitive
+  - If multiple containers match the provided name (case-insensitive), the command MUST exit with code 1 and emit an error directing the operator to specify the UUID.
+  - *Compatibility:* `--collection` is deprecated and accepted temporarily.
 
 - **State Filter**:
 
@@ -58,7 +61,7 @@ Renaming, reordering, or collapsing this verb into flags is a breaking change an
 
 The command MUST NOT partially apply changes and still exit 0.
 
-If filtering parameters are invalid or collection resolution is ambiguous, the overall exit code MUST be non-zero.
+If filtering parameters are invalid or container resolution is ambiguous, the overall exit code MUST be non-zero.
 
 ## Safety Expectations
 
@@ -68,12 +71,12 @@ If filtering parameters are invalid or collection resolution is ambiguous, the o
 - No database writes occur during asset listing
 - Safe for repeated use without side effects
 
-### Collection Resolution
+### Container Resolution
 
-- Collection can be identified by UUID, external ID, or case-insensitive name
-- Collection name matching MUST be case-insensitive
-- If multiple collections match the provided name (case-insensitive), the command MUST exit with code 1
-- Resolution MUST NOT prefer one collection over another based on casing match
+- Container can be identified by UUID, external ID, or case-insensitive name
+- Container name matching MUST be case-insensitive
+- If multiple containers match the provided name (case-insensitive), the command MUST exit with code 1
+- Resolution MUST NOT prefer one container over another based on casing match
 
 ### Filtering Behavior
 
@@ -136,8 +139,8 @@ When `--json` is passed, all output MUST be valid JSON with the following struct
 # List all assets
 retrovue asset list
 
-# List assets in a specific collection
-retrovue asset list --collection "TV Shows"
+# List assets in a specific container
+retrovue asset list --container "TV Shows"
 
 # List ready assets
 retrovue asset list --state ready
@@ -146,10 +149,10 @@ retrovue asset list --state ready
 retrovue asset list --canonical --approved
 
 # List assets with JSON output
-retrovue asset list --collection "TV Shows" --state ready --json
+retrovue asset list --container "TV Shows" --state ready --json
 
-# List assets in collection by UUID
-retrovue asset list --collection 123e4567-e89b-12d3-a456-426614174000
+# List assets in container by UUID
+retrovue asset list --container 123e4567-e89b-12d3-a456-426614174000
 ```
 
 ## Database Side Effects
@@ -163,7 +166,7 @@ retrovue asset list --collection 123e4567-e89b-12d3-a456-426614174000
 ## Error Conditions
 
 - **Invalid State**: Raised if `--state` value is not one of: `new`, `enriching`, `ready`, `retired`
-- **Collection Not Found**: Raised if collection identifier does not match any collection
+- **Container Not Found**: Raised if container identifier does not match any container
 - **Ambiguous Collection Name**: Raised if multiple collections match the provided name (case-insensitive)
 - **Invalid Collection UUID**: Raised if collection UUID format is invalid
 
@@ -233,5 +236,5 @@ Follow this lifecycle for any change:
 
 - [Asset Contract](AssetContract.md) - Overview of all Asset operations
 - [Asset Domain Documentation](../../domain/Asset.md) - Core domain model
-- [Collection List Contract](CollectionListContract.md) - Collection listing operations
+- [Container List Contract](ContainerListContract.md) - Collection listing operations
 

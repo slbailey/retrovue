@@ -34,7 +34,7 @@ def _make_source_and_collection(db):
     coll = Collection(
         source_id=src.id,
         external_id=f"test-coll-{uuid.uuid4().hex[:12]}",
-        name="Test Collection",
+        name="Test Container",
     )
     db.add(coll)
     db.flush()
@@ -44,7 +44,7 @@ def _make_source_and_collection(db):
 def _make_asset(db, collection, source, *, uri="/nonexistent/path.mp4", approved_for_broadcast=False, duration_ms=None):
     asset = Asset(
         uuid=uuid.uuid4(),
-        collection_uuid=collection.uuid,
+        container_id=collection.uuid,
         source_id=source.id,
         canonical_key="test/asset.mp4",
         canonical_key_hash="a" * 64,

@@ -13,7 +13,7 @@ from retrovue.catalog.discovery import DiscoveredLocator, Fingerprint
 from retrovue.catalog.reconciliation import (
     ReconciliationOutcome,
     determine_reconciliation_outcomes,
-    load_catalog_state_for_collection,
+    load_catalog_state_for_container,
 )
 
 
@@ -47,7 +47,7 @@ class TestCatalogReconciliationContract:
         from retrovue.infra.canonical import canonical_hash, canonical_key_for
 
         from retrovue.cli.commands._ops.collection_ingest_service import (
-            CollectionIngestService,
+            ContainerIngestService,
         )
 
         db = MagicMock()
@@ -63,7 +63,7 @@ class TestCatalogReconciliationContract:
             editorial=None,
             probed=None,
         )
-        key = canonical_key_for(item, collection=collection, provider="test")
+        key = canonical_key_for(item, container=collection, provider="test")
         key_hash = canonical_hash(key)
         existing_asset = _fake_asset(canonical_key_hash=key_hash)
         existing_asset.uri = "/media/a.mp4"
@@ -84,9 +84,9 @@ class TestCatalogReconciliationContract:
         ), patch(
             "retrovue.cli.commands._ops.collection_ingest_service.enqueue_processor_jobs",
         ):
-            svc = CollectionIngestService(db)
-            r1 = svc.ingest_collection(collection=collection, importer=importer)
-            r2 = svc.ingest_collection(collection=collection, importer=importer)
+            svc = ContainerIngestService(db)
+            r1 = svc.ingest_container(container=collection, importer=importer)
+            r2 = svc.ingest_container(container=collection, importer=importer)
         assert r1.stats.assets_ingested == 1
         assert r2.stats.assets_ingested == 0
         assert r2.stats.assets_skipped >= 1
@@ -131,7 +131,7 @@ class TestCatalogReconciliationContract:
     def test_reconciliation_outcome_mark_unavailable_when_absent_from_source(self):
         """Locator was in catalog but absent from discovery → mark_unavailable, do not delete."""
         from retrovue.cli.commands._ops.collection_ingest_service import (
-            CollectionIngestService,
+            ContainerIngestService,
         )
 
         db = MagicMock()
@@ -160,11 +160,11 @@ class TestCatalogReconciliationContract:
         ), patch(
             "retrovue.cli.commands._ops.collection_ingest_service.persist_asset_metadata",
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.load_catalog_state_for_collection",
+            "retrovue.cli.commands._ops.collection_ingest_service.load_catalog_state_for_container",
             return_value={"hash_gone": stale},
         ):
-            svc = CollectionIngestService(db)
-            result = svc.ingest_collection(collection=collection, importer=importer)
+            svc = ContainerIngestService(db)
+            result = svc.ingest_container(container=collection, importer=importer)
         assert result.stats.assets_removed == 1
         assert stale.is_deleted is True
 
@@ -172,12 +172,12 @@ class TestCatalogReconciliationContract:
         """Workflow runs: discover → detect sidecars → compare → determine → apply → enqueue."""
         from retrovue.cli.commands._ops.collection_ingest_service import (
             discover_locators,
-            load_catalog_state_for_collection,
+            load_catalog_state_for_container,
             determine_reconciliation_outcomes,
         )
 
         assert discover_locators is not None
-        assert load_catalog_state_for_collection is not None
+        assert load_catalog_state_for_container is not None
         assert determine_reconciliation_outcomes is not None
         # Contract order is discover → compare → determine → apply → enqueue; code structure does this.
         assert True

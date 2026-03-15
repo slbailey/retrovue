@@ -21,8 +21,8 @@ router = APIRouter(prefix="/ingest", tags=["ingest"])
 class IngestRequest(BaseModel):
     """Request body for ingest operations."""
 
-    library_ids: list[str] | None = Field(
-        None, description="Optional list of library IDs to override enabled collections"
+    container_ids: list[str] | None = Field(
+        None, description="Optional list of container UUIDs to limit ingest"
     )
     enrichers: list[str] | None = Field(
         None, description="Optional list of enricher names to apply"
@@ -60,14 +60,12 @@ async def run_ingest(
         Ingest response with summary counts
     """
     try:
-        # Extract parameters from request body
-
-        if request:
-            pass
+        limit_ids: list[str] | None = request.container_ids if request else None
+        single_id: str | None = (limit_ids[0] if limit_ids and len(limit_ids) == 1 else None)
 
         # Run the ingest using the new orchestrator
         orchestrator = IngestOrchestrator(db)
-        report = orchestrator.run_full_ingest(source_id=source_id)
+        report = orchestrator.run_full_ingest(source_id=source_id, collection_id=single_id)
 
         # Return success response
         return IngestResponse(
@@ -86,47 +84,46 @@ async def run_ingest(
         )
 
 
-@router.get("/sources/{source_id}/collections")
-async def get_source_collections(source_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+def _container_to_item(container: Any) -> dict[str, Any]:  # noqa: ANN401
+    """Build response item with container keys."""
+    return {
+        "container_id": getattr(container, "container_id", "") or str(getattr(container, "uuid", "")),
+        "external_id": container.external_id,
+        "name": container.name,
+        "enabled": container.sync_enabled,
+        "mapping_pairs": container.mapping_pairs,
+        "source_type": container.source_type,
+        "config": container.config,
+    }
+
+
+@router.get("/sources/{source_id}/containers")
+async def get_source_containers(source_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
     """
-    Get collections for a specific source.
+    Get containers for a specific source (canonical).
 
-    Args:
-        source_id: Source identifier
-
-    Returns:
-        Dictionary with collections and mapping configuration
+    Returns container-first response. Use this endpoint in new code.
     """
     try:
         from src_legacy.retrovue.content_manager.source_service import SourceService
 
         source_service = SourceService(db=db)
-        collections = source_service.list_enabled_collections(source_id)
+        containers = source_service.list_enabled_collections(source_id)
 
         return {
             "source_id": source_id,
-            "collections": [
-                {
-                    "external_id": collection.external_id,
-                    "name": collection.name,
-                    "enabled": collection.sync_enabled,
-                    "mapping_pairs": collection.mapping_pairs,
-                    "source_type": collection.source_type,
-                    "config": collection.config,
-                }
-                for collection in collections
-            ],
+            "containers": [_container_to_item(c) for c in containers],
         }
 
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get source collections: {str(e)}",
+            detail=f"Failed to get source containers: {str(e)}",
         )
 
 
-@router.put("/sources/{source_id}/collections/{external_id}")
-async def update_source_collection(
+@router.put("/sources/{source_id}/containers/{external_id}")
+async def update_source_container(
     source_id: str,
     external_id: str,
     sync_enabled: bool | None = None,
@@ -134,17 +131,21 @@ async def update_source_collection(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """
-    Update a source collection configuration.
-
-    Args:
-        source_id: Source identifier
-        external_id: Collection external ID
-        sync_enabled: New sync enabled status
-        mapping_pairs: New mapping pairs
-
-    Returns:
-        Success status
+    Update a source container configuration (canonical).
     """
+    return await _update_source_collection_impl(
+        source_id, external_id, sync_enabled, mapping_pairs, db
+    )
+
+
+async def _update_source_collection_impl(
+    source_id: str,
+    external_id: str,
+    sync_enabled: bool | None,
+    mapping_pairs: list[tuple[str, str]] | None,
+    db: Session,
+) -> dict[str, Any]:
+    """Shared implementation for container/collection update."""
     try:
         from src_legacy.retrovue.content_manager.source_service import SourceService
 
@@ -157,7 +158,7 @@ async def update_source_collection(
             if not success:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Collection {external_id} not found",
+                    detail=f"Container {external_id} not found",
                 )
 
         if mapping_pairs is not None:
@@ -167,15 +168,15 @@ async def update_source_collection(
             if not success:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Collection {external_id} not found",
+                    detail=f"Container {external_id} not found",
                 )
 
-        return {"success": True, "message": "Collection updated successfully"}
+        return {"success": True, "message": "Container updated successfully"}
 
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to update collection: {str(e)}",
+            detail=f"Failed to update container: {str(e)}",
         )

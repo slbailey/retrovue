@@ -154,7 +154,7 @@ function runQuickIngest() {
         headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
         },
-        body: 'source=plex&source_id=plex-1&library_ids=[]'
+        body: 'source=plex&source_id=plex-1&container_ids=[]'
     })
     .then(response => response.text())
     .then(html => {

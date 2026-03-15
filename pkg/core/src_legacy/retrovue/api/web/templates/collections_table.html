@@ -40,7 +40,7 @@
                             <td class="px-6 py-4 whitespace-nowrap">
                                 <input type="checkbox" 
                                     {% if collection.sync_enabled %}checked{% endif %}
-                                    hx-put="/sources/{{ source_id }}/collections/{{ collection.external_id }}"
+                                    hx-put="/sources/{{ source_id }}/containers/{{ collection.external_id }}"
                                     hx-vals='js:{sync_enabled: this.checked, mapping_pairs: JSON.stringify({{ (collection.mapping_pairs or []) | tojson }})}'
                                     hx-target="#row-{{ collection.external_id }}"
                                     hx-swap="outerHTML"
@@ -127,7 +127,7 @@ function saveMapping(externalId) {
     // This would collect the mapping pairs from the form
     
     // Update collection
-    fetch(`/sources/{{ source_id }}/collections/${externalId}`, {
+    fetch(`/sources/{{ source_id }}/containers/${externalId}`, {
         method: 'PUT',
         headers: {
             'Content-Type': 'application/x-www-form-urlencoded',

@@ -1,6 +1,6 @@
 """Contract tests for ``retrovue collection list`` behavior rules (B-#)."""
 
-# CONTRACT: docs/contracts/resources/CollectionListContract.md
+# CONTRACT: docs/contracts/resources/ContainerListContract.md
 # PURPOSE: enforce B-0 through B-12 behavior for the collection list CLI command
 
 from __future__ import annotations

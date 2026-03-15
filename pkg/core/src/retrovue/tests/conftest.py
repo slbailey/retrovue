@@ -116,13 +116,13 @@ def clean_db(db_session: Session):
         # Delete in reverse dependency order to avoid foreign key constraints
         # Note: Broadcast tables (broadcast_*, catalog_asset) have been dropped and are not used
         db_session.execute(text("DELETE FROM path_mappings"))
-        db_session.execute(text("DELETE FROM collections"))
-        db_session.execute(text("DELETE FROM sources"))
         db_session.execute(text("DELETE FROM provider_refs"))  # Delete provider_refs first
         db_session.execute(text("DELETE FROM review_queue"))
         db_session.execute(text("DELETE FROM markers"))
         db_session.execute(text("DELETE FROM episode_assets"))
         db_session.execute(text("DELETE FROM assets"))
+        db_session.execute(text("DELETE FROM containers"))
+        db_session.execute(text("DELETE FROM sources"))
         db_session.execute(text("DELETE FROM episodes"))
         db_session.execute(text("DELETE FROM seasons"))
         db_session.execute(text("DELETE FROM titles"))

@@ -20,7 +20,7 @@ Contracts define _what must be true_ before any code exists, ensuring consistenc
 All contract documents MUST follow the `{Noun}{Verb}Contract.md` naming pattern:
 
 - **Source contracts**: `SourceAddContract.md`, `SourceDiscoverContract.md`, `SourceIngestContract.md`
-- **Collection contracts**: `CollectionIngestContract.md`, `CollectionWipeContract.md`
+- **Container contracts**: `ContainerIngestContract.md`, `ContainerWipeContract.md`
 - **Enricher contracts**: `EnricherAddContract.md`, `EnricherListContract.md`
 - **Asset contracts**: `AssetContract.md` (overview), `AssetShowContract.md`, `AssetListContract.md`, `AssetUpdateContract.md`, `AssetsDeleteContract.md`, `AssetsSelectContract.md`
 
@@ -59,7 +59,7 @@ Contracts fall into two categories based on what they govern:
 - `ChannelUpdateContract.md` - Update channel configuration
 - `ChannelListContract.md` - List channels
 - `SourceAddContract.md` - Register a new source
-- `CollectionIngestContract.md` - Ingest content from a collection
+- `ContainerIngestContract.md` - Ingest content from a collection
 
 **Characteristics**:
 

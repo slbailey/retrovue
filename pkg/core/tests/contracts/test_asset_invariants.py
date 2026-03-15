@@ -30,7 +30,7 @@ def _make_asset(**overrides: object) -> SimpleNamespace:
     """Create a minimal asset stub for contract tests."""
     defaults = dict(
         uuid="00000000-0000-0000-0000-000000000001",
-        collection_uuid="00000000-0000-0000-0000-000000000099",
+        container_id="00000000-0000-0000-0000-000000000099",
         canonical_key="test/asset.mp4",
         canonical_key_hash="a" * 64,
         uri="/media/test/asset.mp4",

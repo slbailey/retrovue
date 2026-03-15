@@ -16,14 +16,14 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from ..adapters.registry import ENRICHERS
-from ..domain.entities import Asset, Collection
+from ..domain.entities import Asset, Container
 from .asset_enrich import EnrichResult, enrich_asset
 
 logger = logging.getLogger(__name__)
 
 
 def _build_pipeline_for_collection(
-    db: Session, collection: Collection
+    db: Session, container: Container
 ) -> list[tuple[int, str, Any]]:
     """Build the enricher pipeline from a collection's config.
 
@@ -80,7 +80,7 @@ def reprobe_asset(
     if asset is None:
         raise ValueError(f"Asset not found: {asset_uuid}")
 
-    collection = asset.collection
+    container = asset.container
     if collection is None:
         raise ValueError(f"Asset {asset_uuid} has no collection")
 
@@ -122,11 +122,11 @@ def reprobe_collection(
     except Exception as exc:
         raise ValueError(f"Invalid collection UUID: {collection_uuid}") from exc
 
-    collection = db.get(Collection, coll_id)
-    if collection is None:
-        raise ValueError(f"Collection not found: {collection_uuid}")
+    container = db.get(Container, coll_id)
+    if container is None:
+        raise ValueError(f"Container not found: {collection_uuid}")
 
-    query = db.query(Asset).filter(Asset.collection_uuid == collection.uuid)
+    query = db.query(Asset).filter(Asset.container_id == container.uuid)
 
     if not include_ready:
         query = query.filter(Asset.state != "ready")
@@ -139,7 +139,7 @@ def reprobe_collection(
     if not assets:
         return {
             "collection_uuid": collection_uuid,
-            "collection_name": collection.name,
+            "collection_name": container.name,
             "total": 0,
             "results": [],
         }
@@ -162,7 +162,7 @@ def reprobe_collection(
 
     return {
         "collection_uuid": collection_uuid,
-        "collection_name": collection.name,
+        "collection_name": container.name,
         "total": len(results),
         "succeeded": succeeded,
         "failed": failed,

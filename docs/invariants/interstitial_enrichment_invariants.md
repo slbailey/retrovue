@@ -67,26 +67,26 @@ Coupling the traffic layer to storage topology would make traffic selection frag
 
 ### INV-INTERSTITIAL-ENRICHER-INJECT-001
 
-`apply_enrichers_to_collection()` MUST auto-inject `InterstitialTypeEnricher` at priority -1 for collections whose name appears in the Collection Type Map. No manual enricher attachment is required for interstitial collections.
+`apply_enrichers_to_container()` (contract term; code may still use `apply_enrichers_to_collection`) MUST auto-inject `InterstitialTypeEnricher` at priority -1 for containers whose name appears in the Collection Type Map. No manual enricher attachment is required for interstitial containers.
 
 ### Rationale
 
-Manual enricher configuration per collection is error-prone. Auto-injection at priority -1 guarantees that canonical type stamping occurs before any user-configured enrichers, preventing type-less assets from reaching the database.
+Manual enricher configuration per container is error-prone. Auto-injection at priority -1 guarantees that canonical type stamping occurs before any user-configured enrichers, preventing type-less assets from reaching the database.
 
 ### Enforcement Surface
 
-- `apply_enrichers_to_collection()` — checks collection name against Collection Type Map keys and prepends `InterstitialTypeEnricher`
+- Apply-enrichers-to-container — checks container name against Collection Type Map keys and prepends `InterstitialTypeEnricher`
 
 ### Test Coverage
 
-- A collection named in the Collection Type Map MUST have `InterstitialTypeEnricher` in its enricher pipeline without explicit attachment.
+- A container named in the Collection Type Map MUST have `InterstitialTypeEnricher` in its enricher pipeline without explicit attachment.
 - The auto-injected enricher MUST execute before all other enrichers (priority -1).
 
 ---
 
 ### INV-INTERSTITIAL-UNKNOWN-REJECT-001
 
-If a collection name is not a key in the Collection Type Map, the `InterstitialTypeEnricher` MUST raise an error. Silent fallback to any default type MUST NOT occur.
+If a container name is not a key in the Collection Type Map, the `InterstitialTypeEnricher` MUST raise an error. Silent fallback to any default type MUST NOT occur.
 
 ### Rationale
 

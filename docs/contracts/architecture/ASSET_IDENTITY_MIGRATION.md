@@ -14,28 +14,28 @@ This document defines how existing Asset rows are migrated from the **current id
 | **Stored on Asset** | collection_uuid, canonical_key_hash, uri | Need: source_id; container_id = collection_uuid; locator = uri |
 | **Uniqueness** | UniqueConstraint(collection_uuid, canonical_key_hash), UniqueConstraint(collection_uuid, uri) | (source_id, container_id, locator) MUST be unique across all Media/Asset records |
 
-Today, Asset has `collection_uuid`, `canonical_key_hash`, and `uri`. Collection has `source_id`. The contract identity is (source_id, container_id, locator). So we map:
+Today, Asset has `collection_uuid` (the container FK), `canonical_key_hash`, and `uri`. The container entity has `source_id`. The contract identity is (source_id, container_id, locator). So we map:
 
 - **locator** = `asset.uri` (already on Asset; the unique address of the media within the container)
-- **container_id** = `asset.collection_uuid` (collection is the container; already on Asset)
-- **source_id** = `collection.source_id` (from the collection referenced by `asset.collection_uuid`; not yet on Asset)
+- **container_id** = `asset.collection_uuid` (contract: container; DB column name unchanged until final phase)
+- **source_id** = from the container row referenced by `asset.collection_uuid`; not yet on Asset
 
-To support the contract and reconciliation “compare by locator” step without joining to Collection every time, and to add a contract-aligned unique constraint, we add **source_id** to Asset and backfill it from Collection.
+To support the contract and reconciliation “compare by locator” step without joining to the container table every time, and to add a contract-aligned unique constraint, we add **source_id** to Asset and backfill it from the container table (DB table name remains `collections` until the final migration).
 
 ---
 
 ## Migration Rule
 
 ```
-locator     = asset.uri
-container_id = asset.collection_uuid
-source_id    = collection.source_id   (where collection.uuid = asset.collection_uuid)
+locator      = asset.uri
+container_id = asset.collection_uuid   (contract: container_id; DB column name unchanged until final phase)
+source_id    = container.source_id     (where container.uuid = asset.collection_uuid; DB table name still "collections")
 ```
 
 Implementation:
 
 1. **Add column:** `assets.source_id` (UUID, nullable initially, FK to `sources.id` or the same type as `collections.source_id`).
-2. **Backfill:** For every Asset, set `source_id` from its collection:
+2. **Backfill:** For every Asset, set `source_id` from its container (DB table name `collections` until final migration):
    ```sql
    UPDATE assets
    SET source_id = collections.source_id
@@ -57,7 +57,7 @@ Execute in this order so Phase 2 does not stall:
 3. **Verify no collisions:** `SELECT source_id, collection_uuid, uri, COUNT(*) FROM assets WHERE is_deleted = false GROUP BY source_id, collection_uuid, uri HAVING COUNT(*) > 1`. If rows returned, fix duplicates (see below) before proceeding.
 4. **Make source_id NOT NULL** (and add FK to sources if applicable).
 5. **Add unique constraint** `UNIQUE (source_id, collection_uuid, uri)` — optionally only for non-deleted assets if the schema uses soft-delete and you allow same locator to reappear after delete; otherwise global uniqueness. Contract says “(source_id, container_id, locator) MUST be unique across all Media records”; for Asset-as-media, that implies unique per (source_id, collection_uuid, uri) for active assets. Document whether the constraint is partial (WHERE is_deleted = false) or total.
-6. **Use in reconciliation:** `load_catalog_state_for_collection` can key by locator (uri) or by (source_id, container_id, locator). New assets created in Phase 2 must set source_id from collection.source_id so they satisfy the constraint.
+6. **Use in reconciliation:** Load catalog state for the container can key by locator (uri) or by (source_id, container_id, locator). New assets created in Phase 2 must set source_id from the container's source_id so they satisfy the constraint.
 
 ---
 
@@ -75,8 +75,8 @@ If the collision check finds duplicate (source_id, collection_uuid, uri):
 
 When creating new assets in the create path (Phase 2 and later), set:
 
-- `source_id` = `collection.source_id` (from the collection being ingested)
-- `collection_uuid` = `collection.uuid` (container_id)
+- `source_id` = container's source_id (from the container being ingested)
+- `collection_uuid` = container.uuid (contract: container_id; DB column name unchanged until final phase)
 - `uri` = the locator string produced by discovery (locator)
 
 So new rows automatically satisfy the contract identity and the unique constraint.

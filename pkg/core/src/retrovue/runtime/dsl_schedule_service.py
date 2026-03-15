@@ -1186,7 +1186,7 @@ class DslScheduleService:
                             "start_at": block_start.isoformat(),
                             "slot_duration_sec": int(it.duration_sec),
                             "asset_id": meta.get("asset_id_raw") or (str(it.asset_id) if it.asset_id else ""),
-                            "collection": meta.get("collection_raw") or (str(it.collection_id) if it.collection_id else None),
+                            "collection": meta.get("collection_raw") or (str(it.container_id) if it.container_id else None),
                             "content_type": it.content_type,
                         })
 
@@ -1552,15 +1552,15 @@ class DslScheduleService:
         Assets store source file paths in canonical_uri (set during ingest).
         PathMappings translate source prefixes to local prefixes.
         """
-        from retrovue.domain.entities import Asset, Collection, PathMapping
+        from retrovue.domain.entities import Asset, Container, PathMapping
 
         with session() as db:
             # Load all path mappings keyed by collection
             path_mappings: dict[str, list[tuple[str, str]]] = {}
-            for col in db.query(Collection).all():
+            for col in db.query(Container).all():
                 col_uuid = str(col.uuid)
                 pms = db.query(PathMapping).filter(
-                    PathMapping.collection_uuid == col.uuid
+                    PathMapping.container_id == col.uuid
                 ).all()
                 if pms:
                     path_mappings[col_uuid] = [(pm.plex_path, pm.local_path) for pm in pms]
@@ -1593,7 +1593,7 @@ class DslScheduleService:
                 asset_obj = db.query(Asset).filter(Asset.uuid == asset_id).first()
                 mapped = False
                 if asset_obj:
-                    col_uuid = str(asset_obj.collection_uuid)
+                    col_uuid = str(asset_obj.container_id)
                     pms = path_mappings.get(col_uuid, [])
                     # Sort by prefix length descending for longest match
                     for plex_prefix, local_prefix in sorted(pms, key=lambda x: len(x[0]), reverse=True):

@@ -47,12 +47,12 @@
 | [resources/ChannelShowContract.md](resources/ChannelShowContract.md) | Channel show command: behavior, output shape. |
 | [resources/ChannelUpdateContract.md](resources/ChannelUpdateContract.md) | Channel update command: behavior, allowed updates. |
 | [resources/ChannelValidateContract.md](resources/ChannelValidateContract.md) | Channel validate command: behavior, validation rules. |
-| [resources/CollectionContract.md](resources/CollectionContract.md) | Collection domain and behavioral contract. |
-| [resources/CollectionIngestContract.md](resources/CollectionIngestContract.md) | Collection ingest command: behavior, scope, data effects. |
-| [resources/CollectionListContract.md](resources/CollectionListContract.md) | Collection list command: behavior, filters, output. |
-| [resources/CollectionShowContract.md](resources/CollectionShowContract.md) | Collection show command: behavior, output shape. |
-| [resources/CollectionUpdateContract.md](resources/CollectionUpdateContract.md) | Collection update command: sync, enrichers, path mapping. |
-| [resources/CollectionWipeContract.md](resources/CollectionWipeContract.md) | Collection wipe command: behavior, confirmation, data effects. |
+| [resources/ContainerContract.md](resources/ContainerContract.md) | Container domain and behavioral contract. |
+| [resources/ContainerIngestContract.md](resources/ContainerIngestContract.md) | Container ingest command: behavior, scope, data effects. |
+| [resources/ContainerListContract.md](resources/ContainerListContract.md) | Container list command: behavior, filters, output. |
+| [resources/ContainerShowContract.md](resources/ContainerShowContract.md) | Container show command: behavior, output shape. |
+| [resources/ContainerUpdateContract.md](resources/ContainerUpdateContract.md) | Container update command: sync, enrichers, path mapping. |
+| [resources/ContainerWipeContract.md](resources/ContainerWipeContract.md) | Container wipe command: behavior, confirmation, data effects. |
 | [resources/EnricherAddContract.md](resources/EnricherAddContract.md) | Enricher add command: behavior, validation, persistence. |
 | [resources/EnricherContract.md](resources/EnricherContract.md) | Enricher domain and behavioral contract. |
 | [resources/EnricherListContract.md](resources/EnricherListContract.md) | Enricher list command: behavior, output shape. |
@@ -89,7 +89,7 @@
 |----------|---------|
 | [resources/cross-domain/README.md](resources/cross-domain/README.md) | Index for cross-domain guarantee documents. |
 | [resources/cross-domain/CLI_Data_Guarantees.md](resources/cross-domain/CLI_Data_Guarantees.md) | Guarantees between CLI behavior and data operations (validation, rollback, partial success). |
-| [resources/cross-domain/Source_Collection_Guarantees.md](resources/cross-domain/Source_Collection_Guarantees.md) | Guarantees between Source and Collection (discovery, ingestibility, partial ingest). |
+| [resources/cross-domain/Source_Container_Guarantees.md](resources/cross-domain/Source_Container_Guarantees.md) | Guarantees between Source and Container (discovery, ingestibility, partial ingest). |
 | [resources/cross-domain/Source_Enricher_Guarantees.md](resources/cross-domain/Source_Enricher_Guarantees.md) | Guarantees between Source and Enricher (compatibility, attachment). |
 | [resources/cross-domain/Source_Importer_Guarantees.md](resources/cross-domain/Source_Importer_Guarantees.md) | Guarantees between Source and Importer (type validation, discovery, interface compliance). |
 
@@ -100,7 +100,7 @@
 | [cli/README.md](cli/README.md) | CLI command reference index: syntax, routing, command groups. |
 | [cli/source.md](cli/source.md) | Source command group: syntax, arguments, usage. |
 | [cli/channel.md](cli/channel.md) | Channel command group: syntax, arguments, usage. |
-| [cli/collection.md](cli/collection.md) | Collection command group: syntax, arguments, usage. |
+| [cli/container.md](cli/container.md) | Container command group: syntax, arguments, usage. |
 | [cli/asset.md](cli/asset.md) | Asset command group: syntax, arguments, usage. |
 | [cli/enricher.md](cli/enricher.md) | Enricher command group: syntax, arguments, usage. |
 | [cli/producer.md](cli/producer.md) | Producer command group: syntax, arguments, usage. |

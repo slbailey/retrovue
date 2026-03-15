@@ -1,5 +1,5 @@
 """
-Contract: docs/contracts/resources/CollectionWipeContract.md
+Contract: docs/contracts/resources/ContainerWipeContract.md
 
 Covers basic behaviors:
 - Dry-run execution path with JSON output (no destructive writes)
@@ -30,7 +30,7 @@ def test_wipe_dry_run_json_success() -> None:
         # Collection exists
         collection = MagicMock()
         collection.id = collection_id
-        collection.name = "Test Collection"
+        collection.name = "Test Container"
         mock_validate_exists.return_value = collection
 
         # Wipe returns summary

@@ -1,4 +1,4 @@
-_Related: [Architecture](../architecture/ArchitectureOverview.md) • [Contracts](../contracts/resources/README.md) • [Source](Source.md) • [Collection](Collection.md)_
+_Related: [Architecture](../architecture/ArchitectureOverview.md) • [Contracts](../contracts/resources/README.md) • [Source](Source.md) • [Container](Container.md)_
 
 # Domain — Importer
 
@@ -290,11 +290,11 @@ The list of valid `--type` values is provided at runtime by the Importer registr
 
 - **Importer registry** – Runtime collection of available importer implementations and their identifiers
 - **[Source Contracts](../contracts/resources/SourceContract.md)** - Source-level operations that use importers
-- **[Collection Contracts](../contracts/resources/CollectionContract.md)** - Collection-level operations that use importers
+- **[Container Contracts](../contracts/resources/ContainerContract.md)** - Collection-level operations that use importers
 - **[Unit of Work](../contracts/_ops/UnitOfWorkContract.md)** - Transaction management for importer operations
 - **[CLI Contract](../contracts/resources/README.md)** - General CLI command standards
 - **[Source Domain](Source.md)** - Source entity model and relationships
-- **[Collection Domain](Collection.md)** - Collection entity model and relationships
+- **[Container Domain](Container.md)** - Collection entity model and relationships
 - **[Developer Guide](../developer/Importer.md)** - Implementation details and development guide
 
 ## Contract Alignment

@@ -1,10 +1,10 @@
 """
-Contract tests for filesystem collection discovery (B-11).
+Contract tests for filesystem container discovery (B-11).
 
 Tests that FilesystemImporter.list_collections() enumerates immediate
-subdirectories of the source base path, returning one collection per
-subdirectory — enforcing the Source (1) → (N) Collections cardinality
-established in Collection.md.
+subdirectories of the source base path, returning one container per
+subdirectory — enforcing the Source (1) → (N) Containers cardinality
+established in Container.md.
 
 Contract: docs/contracts/resources/SourceDiscoverContract.md
 Rule: B-11
@@ -51,14 +51,14 @@ def _importer(base_path: Path) -> FilesystemImporter:
 
 
 # ---------------------------------------------------------------------------
-# B-11: Filesystem collection discovery
+# B-11: Filesystem container discovery
 # ---------------------------------------------------------------------------
 
-class TestFilesystemCollectionDiscovery:
-    """B-11: Filesystem source collection discovery from subdirectories."""
+class TestFilesystemContainerDiscovery:
+    """B-11: Filesystem source container discovery from subdirectories."""
 
-    def test_one_collection_per_subdirectory(self, tmp_path: Path):
-        """Each immediate subdirectory becomes a separate collection."""
+    def test_one_container_per_subdirectory(self, tmp_path: Path):
+        """Each immediate subdirectory becomes a separate container."""
         base = _make_tree(tmp_path, ["bumpers", "commercials", "promos"])
         imp = _importer(base)
 
@@ -68,20 +68,20 @@ class TestFilesystemCollectionDiscovery:
         assert names == {"bumpers", "commercials", "promos"}
         assert len(collections) == 3
 
-    def test_returns_multiple_collections_not_one(self, tmp_path: Path):
-        """Enforces Source (1) → (N) Collections — never collapses to 1."""
+    def test_returns_multiple_containers_not_one(self, tmp_path: Path):
+        """Enforces Source (1) → (N) Containers — never collapses to 1."""
         base = _make_tree(tmp_path, ["a", "b", "c", "d"])
         imp = _importer(base)
 
-        collections = imp.list_collections(source_config={})
+        containers = imp.list_collections(source_config={})
 
-        assert len(collections) > 1, (
-            "FilesystemImporter must return one collection per subdirectory, "
-            "not a single flattened collection"
+        assert len(containers) > 1, (
+            "FilesystemImporter must return one container per subdirectory, "
+            "not a single flattened container"
         )
 
     def test_no_subdirectories_returns_empty(self, tmp_path: Path):
-        """A source with no subdirectories discovers zero collections."""
+        """A source with no subdirectories discovers zero containers."""
         base = _make_tree(tmp_path, [])
         # Put a file at the top level — should be ignored
         (base / "loose_file.mp4").touch()
@@ -92,8 +92,8 @@ class TestFilesystemCollectionDiscovery:
         assert collections == []
 
     def test_files_at_top_level_ignored(self, tmp_path: Path):
-        """Non-directory entries at the top level are not collections."""
-        base = _make_tree(tmp_path, ["real_collection"])
+        """Non-directory entries at the top level are not containers."""
+        base = _make_tree(tmp_path, ["real_container"])
         (base / "readme.txt").touch()
         (base / "playlist.m3u").touch()
         imp = _importer(base)
@@ -101,7 +101,7 @@ class TestFilesystemCollectionDiscovery:
         collections = imp.list_collections(source_config={})
 
         names = {c["name"] for c in collections}
-        assert names == {"real_collection"}
+        assert names == {"real_container"}
 
     def test_does_not_recurse_beyond_first_level(self, tmp_path: Path):
         """Discovery only looks at immediate children, not nested subdirs."""
@@ -117,32 +117,32 @@ class TestFilesystemCollectionDiscovery:
         assert names == {"commercials"}
 
     def test_empty_subdirectory_still_returned(self, tmp_path: Path):
-        """Empty subdirectories are valid collections (B-11)."""
-        base = _make_tree(tmp_path, ["empty_collection"])
+        """Empty subdirectories are valid containers (B-11)."""
+        base = _make_tree(tmp_path, ["empty_container"])
         imp = _importer(base)
 
         collections = imp.list_collections(source_config={})
 
         assert len(collections) == 1
-        assert collections[0]["name"] == "empty_collection"
+        assert collections[0]["name"] == "empty_container"
 
     def test_symlink_directory_included(self, tmp_path: Path):
         """Symlinks resolving to directories are included (B-11)."""
         base = _make_tree(tmp_path, ["real_dir"])
         target = tmp_path / "external_dir"
         target.mkdir()
-        link = base / "linked_collection"
+        link = base / "linked_container"
         link.symlink_to(target)
         imp = _importer(base)
 
         collections = imp.list_collections(source_config={})
 
         names = {c["name"] for c in collections}
-        assert "linked_collection" in names
+        assert "linked_container" in names
         assert "real_dir" in names
 
-    def test_each_collection_has_stable_external_id(self, tmp_path: Path):
-        """Each collection must have a unique, stable external_id."""
+    def test_each_container_has_stable_external_id(self, tmp_path: Path):
+        """Each container must have a unique, stable external_id."""
         base = _make_tree(tmp_path, ["bumpers", "commercials"])
         imp = _importer(base)
 
@@ -156,8 +156,8 @@ class TestFilesystemCollectionDiscovery:
         ids2 = [c["external_id"] for c in collections2]
         assert sorted(ids) == sorted(ids2), "external_ids must be stable across calls"
 
-    def test_collection_has_required_fields(self, tmp_path: Path):
-        """Each collection dict must contain the fields expected by source_discover."""
+    def test_container_has_required_fields(self, tmp_path: Path):
+        """Each container dict must contain the fields expected by source_discover."""
         base = _make_tree(tmp_path, ["promos"])
         imp = _importer(base)
 
@@ -170,8 +170,8 @@ class TestFilesystemCollectionDiscovery:
         assert isinstance(c["external_id"], str)
         assert isinstance(c["name"], str)
 
-    def test_collection_name_matches_directory_name(self, tmp_path: Path):
-        """Collection name must be the directory basename, not a full path."""
+    def test_container_name_matches_directory_name(self, tmp_path: Path):
+        """Container name must be the directory basename, not a full path."""
         base = _make_tree(tmp_path, ["station_ids"])
         imp = _importer(base)
 
@@ -191,7 +191,7 @@ class TestFilesystemCollectionDiscovery:
         assert ".hidden" not in names
 
     def test_interstitials_layout_discovers_all_types(self, tmp_path: Path):
-        """Simulate /mnt/data/Interstitials layout — all subdirs become collections."""
+        """Simulate /mnt/data/Interstitials layout — all subdirs become containers."""
         subdirs = [
             "bumpers", "commercials", "intros", "oddities", "promos",
             "psas", "shortform", "station_ids", "teasers", "trailers",

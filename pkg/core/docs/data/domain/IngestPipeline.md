@@ -42,12 +42,12 @@ Each collection tracks:
 - display_name (e.g. "TV Shows")
 - source_path (path or mount as reported by the Source, e.g. /media/TV)
 - local_path (path RetroVue should actually read, e.g. R:\Media\TV or /mnt/plex/tv)
-- sync_enabled (operator toggle; can only be enabled if collection is ingestible)
+- sync_enabled (operator toggle; can only be enabled if container is ingestible)
 - ingestible (derived from path reachability; if false, sync cannot be enabled)
 
-Operators can selectively ingest only certain collections. This prevents pulling e.g. adult content or personal footage.
+Operators can selectively ingest only certain containers. This prevents pulling e.g. adult content or personal footage.
 
-Operators can map remote paths to local paths. Example: Plex reports /media/TV, but RetroVue must read R:\Media\TV. If no usable mapping is provided, the collection is marked not ingestible.
+Operators can map remote paths to local paths. Example: Plex reports /media/TV, but RetroVue must read R:\Media\TV. If no usable mapping is provided, the container is marked not ingestible.
 
 ## Contract / interface
 

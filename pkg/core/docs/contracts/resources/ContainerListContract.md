@@ -419,9 +419,9 @@ The `collection list` command provides collection discovery and enumeration:
 
 ## See Also
 
-- [Collection Show](CollectionShowContract.md) - Displaying detailed collection information
-- [Collection Update](CollectionUpdateContract.md) - Updating collection configuration and state
-- [Collection Ingest](CollectionIngestContract.md) - Ingest operations
+- [Collection Show](ContainerShowContract.md) - Displaying detailed collection information
+- [Collection Update](ContainerUpdateContract.md) - Updating collection configuration and state
+- [Collection Ingest](ContainerIngestContract.md) - Ingest operations
 - [Source List](SourceListContract.md) - Listing sources
 - [Source Show](SourceContract.md) - Source identification patterns
 - [CLI Data Guarantees](cross-domain/CLI_Data_Guarantees.md) - Cross-domain interaction guarantees

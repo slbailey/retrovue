@@ -65,14 +65,14 @@ Processors may be triggered by:
 
 Processors MUST support batch execution.
 
-Examples:
+Examples (canonical: use `--container`):
 
 ```
-processor run ffprobe --collection commercials
+processor run ffprobe --container commercials
 processor run blackframe --container movies
 ```
 
-Batch operations enqueue individual processor jobs.
+*Compatibility:* `--collection` is deprecated and accepted temporarily during rollout. Batch operations enqueue individual processor jobs.
 
 ---
 

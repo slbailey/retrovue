@@ -10,7 +10,7 @@ from ..adapters.importers.base import DiscoveredItem
 from ..adapters.registry import ENRICHERS
 from .asset_enrich import enrich_asset
 from .asset_path_resolver import AssetPathResolver
-from ..domain.entities import Asset, Collection, Enricher
+from ..domain.entities import Asset, Container, Enricher
 
 
 # ---------------------------------------------------------------------------
@@ -75,8 +75,8 @@ def compute_confidence_from_labels(item: DiscoveredItem) -> float:
     return max(0.0, min(1.0, score))
 
 
-def _resolve_collection(db: Session, selector: str) -> Collection:
-    """Resolve a collection by UUID, external_id, or case-insensitive name.
+def _resolve_collection(db: Session, selector: str) -> Container:
+    """Resolve a container by UUID, external_id, or case-insensitive name.
 
     Raises ValueError when not found or ambiguous by name.
     """
@@ -85,19 +85,19 @@ def _resolve_collection(db: Session, selector: str) -> Collection:
         import uuid as _uuid
 
         _uuid.UUID(selector)
-        col = db.query(Collection).filter(Collection.uuid == selector).first()
+        col = db.query(Container).filter(Container.uuid == selector).first()
         if col:
             return col
     except Exception:
         pass
 
     # Try external_id (exact)
-    col = db.query(Collection).filter(Collection.external_id == selector).first()
+    col = db.query(Container).filter(Container.external_id == selector).first()
     if col:
         return col
 
     # Try name (case-insensitive, single match)
-    matches = db.query(Collection).filter(Collection.name.ilike(selector)).all()
+    matches = db.query(Container).filter(Container.name.ilike(selector)).all()
     if len(matches) == 1:
         return matches[0]
     if len(matches) > 1:
@@ -125,10 +125,10 @@ def attach_enricher_to_collection(
     - Adds or updates entry in collection.config["enrichers"]
     - Does not commit (caller handles UnitOfWork)
     """
-    collection = _resolve_collection(db, collection_selector)
+    container = _resolve_collection(db, collection_selector)
     _validate_enricher_exists(db, enricher_id)
 
-    cfg = dict(collection.config or {})
+    cfg = dict(container.config or {})
     enrichers = list(cfg.get("enrichers", []))
 
     # Normalize entries as dicts {enricher_id, priority}
@@ -148,12 +148,13 @@ def attach_enricher_to_collection(
         pass
 
     cfg["enrichers"] = enrichers
-    collection.config = cfg
-    db.add(collection)
+    container.config = cfg
+    db.add(container)
 
+    cid, cname = str(container.uuid), container.name
     return {
-        "collection_id": str(collection.uuid),
-        "collection_name": collection.name,
+        "container_id": cid,
+        "container_name": cname,
         "enricher_id": enricher_id,
         "priority": int(priority),
         "status": "attached",
@@ -169,9 +170,9 @@ def detach_enricher_from_collection(
     - Removes entry from collection.config["enrichers"] if present
     - Does not commit (caller handles UnitOfWork)
     """
-    collection = _resolve_collection(db, collection_selector)
+    container = _resolve_collection(db, collection_selector)
 
-    cfg = dict(collection.config or {})
+    cfg = dict(container.config or {})
     enrichers = list(cfg.get("enrichers", []))
 
     new_list: list[dict[str, Any]] = []
@@ -182,12 +183,13 @@ def detach_enricher_from_collection(
         new_list.append(entry)
 
     cfg["enrichers"] = new_list
-    collection.config = cfg
-    db.add(collection)
+    container.config = cfg
+    db.add(container)
 
+    cid, cname = str(container.uuid), container.name
     return {
-        "collection_id": str(collection.uuid),
-        "collection_name": collection.name,
+        "container_id": cid,
+        "container_name": cname,
         "enricher_id": enricher_id,
         "status": "detached",
     }
@@ -217,10 +219,10 @@ def apply_enrichers_to_collection(
     - Recomputes confidence and auto-promotes to ready/approved when threshold is met
     - Does not commit; caller must commit/rollback
     """
-    collection = _resolve_collection(db, collection_selector)
+    container = _resolve_collection(db, collection_selector)
 
-    # Load configured enrichers for this collection in priority order
-    cfg = dict(collection.config or {})
+    # Load configured enrichers for this container in priority order
+    cfg = dict(container.config or {})
     configured = cfg.get("enrichers", []) if isinstance(cfg.get("enrichers"), list) else []
 
     from ..domain.entities import Enricher as EnricherRow
@@ -255,7 +257,7 @@ def apply_enrichers_to_collection(
             COLLECTION_TYPE_MAP,
             InterstitialTypeEnricher,
         )
-        coll_name = getattr(collection, "name", "") or ""
+        coll_name = getattr(container, "name", "") or ""
         if coll_name in COLLECTION_TYPE_MAP:
             it_enricher = InterstitialTypeEnricher(collection_name=coll_name)
             pipeline.insert(0, (-1, "interstitial-type", it_enricher))
@@ -265,9 +267,10 @@ def apply_enrichers_to_collection(
 
     # If no pipeline is configured, this is a no-op
     if not pipeline:
+        cid, cname = str(container.uuid), container.name
         return {
-            "collection_id": str(collection.uuid),
-            "collection_name": collection.name,
+            "container_id": cid,
+            "container_name": cname,
             "pipeline_checksum": None,
             "stats": {"assets_considered": 0, "assets_enriched": 0, "assets_auto_ready": 0, "errors": []},
         }
@@ -280,7 +283,7 @@ def apply_enrichers_to_collection(
         pipeline_checksum = None
 
     # Select assets to process
-    q = db.query(Asset).filter(Asset.collection_uuid == collection.uuid, Asset.is_deleted.is_(False))
+    q = db.query(Asset).filter(Asset.container_id == container.uuid, Asset.is_deleted.is_(False))
     q = q.filter(
         (Asset.state == "new") | (Asset.last_enricher_checksum.is_(None)) | (Asset.last_enricher_checksum != pipeline_checksum)
     )
@@ -301,9 +304,10 @@ def apply_enrichers_to_collection(
             {"uuid": str(a.uuid), "uri": a.canonical_uri or a.uri or "", "state": a.state}
             for a in assets
         ]
+        cid, cname = str(container.uuid), container.name
         return {
-            "collection_id": str(collection.uuid),
-            "collection_name": collection.name,
+            "container_id": cid,
+            "container_name": cname,
             "pipeline_checksum": pipeline_checksum,
             "stats": stats,
             "stale_assets": stale_assets,
@@ -320,12 +324,12 @@ def apply_enrichers_to_collection(
                 try:
                     from ..domain.entities import PathMapping as _PM
                     pm_rows = db.query(_PM).filter(
-                        _PM.collection_uuid == collection.uuid
+                        _PM.container_id == container.uuid
                     ).all()
                     pm_list = [(r.plex_path, r.local_path) for r in pm_rows]
-                    coll_locs = (collection.config or {}).get("locations", [])
+                    coll_locs = (container.config or {}).get("locations", [])
                     plex_client = None
-                    src = getattr(collection, "source", None)
+                    src = getattr(container, "source", None)
                     if src and getattr(src, "type", None) == "plex":
                         from ..adapters.registry import get_importer
                         src_cfg = {k: v for k, v in (src.config or {}).items() if k != "enrichers"}
@@ -359,9 +363,10 @@ def apply_enrichers_to_collection(
         except Exception as e:
             stats["errors"].append(str(e))
 
+    cid, cname = str(container.uuid), container.name
     return {
-        "collection_id": str(collection.uuid),
-        "collection_name": collection.name,
+        "container_id": cid,
+        "container_name": cname,
         "pipeline_checksum": pipeline_checksum,
         "stats": stats,
     }

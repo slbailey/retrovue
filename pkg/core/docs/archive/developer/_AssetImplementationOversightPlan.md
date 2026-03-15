@@ -1,4 +1,4 @@
-> **⚠️ Historical document.** Superseded by: [Asset domain](../../data/domain/Asset.md), [Collection ingest contract](../../contracts/resources/CollectionIngestContract.md).
+> **⚠️ Historical document.** Superseded by: [Asset domain](../../data/domain/Asset.md), [Container ingest contract](../../contracts/resources/ContainerIngestContract.md).
 
 # Asset Implementation Oversight Plan
 

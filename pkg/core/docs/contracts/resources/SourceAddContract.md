@@ -314,4 +314,4 @@ retrovue source add --type filesystem --name "Test Media" \
 
 - [Unit of Work](../_ops/UnitOfWorkContract.md) - Transaction management requirements for atomic operations
 - [Source Discover](SourceDiscoverContract.md) - Standalone collection discovery operations
-- [Collection Ingest](CollectionIngestContract.md) - Collection-level ingest operations
+- [Container Ingest](ContainerIngestContract.md) - Collection-level ingest operations

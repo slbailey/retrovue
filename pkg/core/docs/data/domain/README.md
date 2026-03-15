@@ -26,7 +26,7 @@ RetroVue follows Domain-Driven Design (DDD) principles, where the domain model r
 
 - **[Asset](Asset.md)** - The leaf unit of broadcastable content with lifecycle states
 - **[Source](Source.md)** - External content providers (Plex, filesystem, etc.)
-- **[Collection](Collection.md)** - Logical groupings of content within sources
+- **[Container](Container.md)** - Logical groupings of content within sources
 - **[Importer](Importer.md)** - Content discovery and ingestion from external systems
 - **[Registry](../developer/RegistryAPI.md)** - Registry surface and lifecycle management
 - **[IngestPipeline](IngestPipeline.md)** - How external media becomes managed content

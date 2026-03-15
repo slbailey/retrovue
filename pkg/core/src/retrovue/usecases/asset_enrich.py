@@ -83,7 +83,7 @@ def enrich_asset(
     asset.duration_ms = None
     asset.video_codec = None
     asset.audio_codec = None
-    asset.container = None
+    asset.container_format = None
 
     # ── 3. Delete AssetProbed row ─────────────────────────────────────────
     probed_row = db.get(AssetProbed, asset.uuid)

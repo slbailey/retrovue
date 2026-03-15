@@ -27,8 +27,8 @@ from ...infra.validation import (
 )
 
 # Re-export for tests that patch at this module path
-CollectionIngestService = collection_ingest_service.CollectionIngestService
-resolve_collection_selector = collection_ingest_service.resolve_collection_selector
+ContainerIngestService = collection_ingest_service.ContainerIngestService
+resolve_container_selector = collection_ingest_service.resolve_container_selector
 
 
 def _get_db_context(test_db: bool):
@@ -49,12 +49,12 @@ def _get_db_context(test_db: bool):
     return session()
 
 
-def construct_importer_for_collection(collection, db):
-    """Construct an importer for a collection based on its source configuration."""
+def construct_importer_for_container(container, db):
+    """Construct an importer for a container based on its source configuration."""
     from ...domain.entities import Source
 
     importer = None
-    collection_library_key = None
+    container_library_key = None
     source = None
     importer_config = {}
 
@@ -63,7 +63,7 @@ def construct_importer_for_collection(collection, db):
         if hasattr(get_importer, "assert_called"):
             importer = get_importer("mock")
         else:
-            source = db.query(Source).filter(Source.id == collection.source_id).first()
+            source = db.query(Source).filter(Source.id == container.source_id).first()
             if source:
                 # Build importer configuration from source config
                 if source.type == "plex":
@@ -81,14 +81,14 @@ def construct_importer_for_collection(collection, db):
                             f"Plex server configuration incomplete for source '{source.name}'. "
                             "Use: retrovue source update <source> --base-url <url> --token <token>"
                         )
-                    # Capture collection library key for Plex (do not pass to constructor for backward compatibility)
-                    collection_library_key = getattr(collection, "external_id", None)
+                    # Capture container library key for Plex (do not pass to constructor for backward compatibility)
+                    container_library_key = getattr(container, "external_id", None)
                 elif source.type == "filesystem":
                     config = source.config or {}
                     importer_config["source_name"] = source.name
-                    # Use collection-specific locations if available (from discovery),
+                    # Use container-specific locations if available (from discovery),
                     # otherwise fall back to source-level root_paths.
-                    coll_cfg = getattr(collection, "config", None) or {}
+                    coll_cfg = getattr(container, "config", None) or {}
                     coll_locations = coll_cfg.get("locations", []) if isinstance(coll_cfg, dict) else []
                     importer_config["root_paths"] = coll_locations or config.get("root_paths", [])
                     if "tag_from_path_segments" in config:
@@ -102,12 +102,12 @@ def construct_importer_for_collection(collection, db):
                 importer = get_importer(source.type, **_kwargs)
                 # Set library_key attribute post-construction if supported
                 try:
-                    if collection_library_key and hasattr(importer, "library_key"):
-                        importer.library_key = collection_library_key
+                    if container_library_key and hasattr(importer, "library_key"):
+                        importer.library_key = container_library_key
                 except Exception:
                     pass
             else:
-                raise ValueError(f"Source not found for collection '{collection.name}'")
+                raise ValueError(f"Source not found for container '{container.name}'")
     except Exception as e:
         # Emit diagnostic details to help operator understand why importer failed
         try:
@@ -138,23 +138,31 @@ def construct_importer_for_collection(collection, db):
     return importer
 
 
-app = typer.Typer(name="collection", help="Collection management operations")
+def construct_importer_for_collection(collection, db):
+    """Compatibility wrapper: prefer construct_importer_for_container."""
+    return construct_importer_for_container(collection, db)
 
 
-@app.command("show")
+container_app = typer.Typer(
+    name="container",
+    help="Container management operations",
+)
+
+
+@container_app.command("show")
 def show_collection(
-    collection_id: str = typer.Argument(..., help="Collection ID, external ID, or name"),
+    collection_id: str = typer.Argument(..., help="Container ID, external ID, or name"),
     json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
     test_db: bool = typer.Option(False, "--test-db", help="Use test database context"),
 ):
     """
-    Show full configuration for a collection, including attached ingest enrichers
+    Show full configuration for a container, including attached ingest enrichers
     and path mappings.
 
     Examples:
-        retrovue collection show "TV Shows"
-        retrovue collection show 2a3cd8d1-2345-6789-abcd-ef1234567890 --json
-        retrovue collection show Movies --test-db
+        retrovue container show "TV Shows"
+        retrovue container show 2a3cd8d1-2345-6789-abcd-ef1234567890 --json
+        retrovue container show Movies --test-db
     """
     db_cm = _get_db_context(test_db)
 
@@ -168,7 +176,7 @@ def show_collection(
         try:
             # Resolve collection via shared helper
             try:
-                collection = resolve_collection_selector(db, collection_id)
+                collection = resolve_container_selector(db, collection_id)
             except ValueError as e:
                 typer.echo(f"Error: {e}", err=True)
                 raise typer.Exit(1)
@@ -177,7 +185,7 @@ def show_collection(
             try:
                 mappings = (
                     db.query(PathMapping)
-                    .filter(PathMapping.collection_uuid == collection.uuid)
+                    .filter(PathMapping.container_id == collection.uuid)
                     .all()
                 )
             except Exception:
@@ -274,7 +282,7 @@ def show_collection(
             typer.echo(f"Error showing collection: {e}", err=True)
             raise typer.Exit(1)
 
-@app.command("list")
+@container_app.command("list")
 def list_collections(
     source_pos: str = typer.Argument(None, help="Source ID to list collections for (positional)"),
     source_flag: str = typer.Option(
@@ -284,17 +292,17 @@ def list_collections(
     test_db: bool = typer.Option(False, "--test-db", help="Use test database context"),
 ):
     """
-    Show Collections for a Source. For each:
-    - ID (collection UUID, truncated for display)
-    - Name (collection display name)
+    Show containers for a source. For each:
+    - ID (container UUID, truncated for display)
+    - Name (container display name)
     - Sync (enabled/disabled status)
     - Ingestable (yes/no based on sync + path reachability)
     - Path Mappings (plex_path -> local_path mappings)
 
     Examples:
-        retrovue collection list --source "My Plex Server"
-        retrovue collection list "My Plex Server"
-        retrovue collection list --source plex-5063d926 --json
+        retrovue container list --source "My Plex Server"
+        retrovue container list "My Plex Server"
+        retrovue container list --source plex-5063d926 --json
     """
     # Choose appropriate session context (test or default)
     db_cm = _get_db_context(test_db)
@@ -303,7 +311,7 @@ def list_collections(
         if test_db and not json_output:
             typer.echo("Using test database environment", err=True)
 
-        from ...domain.entities import Collection, PathMapping, Source
+        from ...domain.entities import Container, PathMapping, Source
 
         try:
             # Determine source: --source flag takes precedence over positional argument
@@ -311,7 +319,7 @@ def list_collections(
 
             if not source_id:
                 # No source filter provided - list all collections
-                collections = db.query(Collection).all()
+                collections = db.query(Container).all()
                 source_obj = None
             else:
                 # Find the source by UUID, external_id, or name using in-session resolution
@@ -356,7 +364,7 @@ def list_collections(
 
                 # Get collections for this source
                 collections = (
-                    db.query(Collection).filter(Collection.source_id == source_obj.id).all()
+                    db.query(Container).filter(Container.source_id == source_obj.id).all()
                 )
 
             if not collections:
@@ -372,7 +380,7 @@ def list_collections(
                 # Get path mappings for this collection
                 path_mappings = (
                     db.query(PathMapping)
-                    .filter(PathMapping.collection_uuid == collection.uuid)
+                    .filter(PathMapping.container_id == collection.uuid)
                     .all()
                 )
 
@@ -432,7 +440,7 @@ def list_collections(
                 if source_obj:
                     table = Table(title=f"Collections for source '{source_obj.name}'")
                 else:
-                    table = Table(title="All Collections (use Name for: retrovue collection ingest <name>)")
+                    table = Table(title="All containers (use Name for: retrovue container ingest <name>)")
                 table.add_column("Name", style="green")
                 table.add_column("ID", style="cyan", width=8)
                 table.add_column("Sync", style="yellow")
@@ -469,34 +477,34 @@ def list_collections(
             raise typer.Exit(1)
 
 
-@app.command("list-all")
+@container_app.command("list-all")
 def list_all_collections(
     json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
     test_db: bool = typer.Option(False, "--test-db", help="Use test database context"),
 ):
     """
-    List all collections across all sources.
+    List all containers across all sources.
 
     Shows:
     - UUID: Collection identifier
     - Name: Collection display name
     - Source: Source name and type
     - Sync: Whether sync is enabled
-    - Ingestible: Whether the collection is ingestible
+    - Ingestible: Whether the container is ingestible
 
     Examples:
-        retrovue collection list-all
-        retrovue collection list-all --json
+        retrovue container list-all
+        retrovue container list-all --json
     """
     # Choose appropriate session context (test or default)
     db_cm = _get_db_context(test_db)
 
     with db_cm as db:
-        from ...domain.entities import Collection, Source
+        from ...domain.entities import Container, Source
 
         try:
             # Get all collections across all sources
-            collections = db.query(Collection).join(Source).all()
+            collections = db.query(Container).join(Source).all()
 
             collection_data = []
             for collection in collections:
@@ -526,8 +534,8 @@ def list_all_collections(
 
                 console = Console()
 
-                # Create main table (Name first for use with: retrovue collection ingest <name>)
-                table = Table(title="All Collections (use Name for: retrovue collection ingest <name>)")
+                # Create main table (Name first for use with: retrovue container ingest <name>)
+                table = Table(title="All containers (use Name for: retrovue container ingest <name>)")
                 table.add_column("Name", style="green")
                 table.add_column("UUID", style="cyan", width=36)
                 table.add_column("Source", style="blue")
@@ -553,19 +561,19 @@ def list_all_collections(
             raise typer.Exit(1)
 
 
-@app.command("update")
+@container_app.command("update")
 def update_collection(
-    collection_id: str = typer.Argument(..., help="Collection ID, external ID, or name to update"),
+    collection_id: str = typer.Argument(..., help="Container ID, external ID, or name to update"),
     sync_enable: bool = typer.Option(
         False,
         "--sync-enable",
         "--sync-enabled",  # backward-compat alias
-        help="Enable collection sync",
+        help="Enable container sync",
     ),
     sync_disable: bool = typer.Option(
         False,
         "--sync-disable",
-        help="Disable collection sync",
+        help="Disable container sync",
     ),
     path_mapping: str | None = typer.Option(
         None,
@@ -580,20 +588,20 @@ def update_collection(
     test_db: bool = typer.Option(False, "--test-db", help="Use test database context"),
 ):
     """
-    Enable/disable ingest for that Collection. Configure or change the local path mapping for that Collection.
+    Enable/disable ingest for that container. Configure or change the local path mapping for that container.
 
     This operation is atomic (all-or-nothing) and MUST run under a unit-of-work.
 
     Parameters:
-    - collection_id: Collection UUID, external ID, or name (case-insensitive)
-    - --sync-enable / --sync-disable: Enable or disable collection sync
+    - collection_id: Container UUID, external ID, or name (case-insensitive)
+    - --sync-enable / --sync-disable: Enable or disable container sync
     - --path-mapping <local_path|DELETE>: Set local path or delete mapping
 
     Examples:
-        retrovue collection update "TV Shows" --sync-enable
-        retrovue collection update collection-movies-1 --path-mapping /new/path
-        retrovue collection update collection-movies-1 --path-mapping DELETE
-        retrovue collection update 2a3cd8d1-2345-6789-abcd-ef1234567890 --sync-enable
+        retrovue container update "TV Shows" --sync-enable
+        retrovue container update collection-movies-1 --path-mapping /new/path
+        retrovue container update collection-movies-1 --path-mapping DELETE
+        retrovue container update 2a3cd8d1-2345-6789-abcd-ef1234567890 --sync-enable
     """
     # Fast path for contract test: in test-db JSON mode, ensure test sessionmaker is used
     if test_db and json_output and (path_mapping is not None or sync_enable or sync_disable):
@@ -645,7 +653,7 @@ def update_collection(
 
             # Find the collection using thin wrapper
             try:
-                collection = resolve_collection_selector(db, collection_id)
+                collection = resolve_container_selector(db, collection_id)
             except ValueError as e:
                 typer.echo(f"Error: {e}", err=True)
                 raise typer.Exit(1)
@@ -726,7 +734,7 @@ def update_collection(
                 if "local_path" in updates:
                     # Do NOT alter external path here
                     mappings_q = db.query(PathMapping).filter(
-                        PathMapping.collection_uuid == collection.uuid
+                        PathMapping.container_id == collection.uuid
                     )
                     try:
                         existing_mappings = list(mappings_q.all())
@@ -834,26 +842,26 @@ def update_collection(
             raise typer.Exit(1)
 
 
-@app.command("approve")
+@container_app.command("approve")
 def approve_collection(
     collection_id: str = typer.Argument(..., help="Collection ID, external ID, or name"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview without writing"),
     json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
 ):
     """
-    Approve all ready assets in a collection for broadcast.
+    Approve all ready assets in a container for broadcast.
 
     Only assets with state=ready are approved; new/enriching assets are skipped.
 
     Examples:
-        retrovue collection approve "Intros"
-        retrovue collection approve "Intros" --dry-run
+        retrovue container approve "Intros"
+        retrovue container approve "Intros" --dry-run
     """
     from ...domain.entities import Asset
 
     with session() as db:
         try:
-            collection = resolve_collection_selector(db, collection_id)
+            collection = resolve_container_selector(db, collection_id)
         except ValueError as e:
             typer.echo(f"Error: {e}", err=True)
             raise typer.Exit(1)
@@ -861,7 +869,7 @@ def approve_collection(
         assets = (
             db.query(Asset)
             .filter(
-                Asset.collection_uuid == collection.uuid,
+                Asset.container_id == collection.uuid,
                 Asset.state == "ready",
                 Asset.approved_for_broadcast.is_(False),
                 Asset.is_deleted.is_(False),
@@ -872,7 +880,7 @@ def approve_collection(
         skipped = (
             db.query(Asset)
             .filter(
-                Asset.collection_uuid == collection.uuid,
+                Asset.container_id == collection.uuid,
                 Asset.state != "ready",
                 Asset.is_deleted.is_(False),
             )
@@ -906,7 +914,7 @@ def approve_collection(
                 typer.echo(f"  Skipped:  {skipped} asset(s) not yet ready")
 
 
-@app.command("attach-enricher")
+@container_app.command("attach-enricher")
 def attach_enricher(
     collection_id: str = typer.Argument(..., help="Target collection"),
     enricher_id: str = typer.Argument(..., help="Enricher to attach"),
@@ -916,7 +924,7 @@ def attach_enricher(
     json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
 ):
     """
-    Attach an ingest-scope enricher to this Collection.
+    Attach an ingest-scope enricher to this container.
 
     Parameters:
     - collection_id: Target collection
@@ -924,7 +932,7 @@ def attach_enricher(
     - --priority: Priority order (lower numbers run first)
 
     Examples:
-        retrovue collection attach-enricher collection-movies-1 enricher-ffprobe-1 --priority 1
+        retrovue container attach-enricher collection-movies-1 enricher-ffprobe-1 --priority 1
     """
     from ...usecases.collection_enrichers import attach_enricher_to_collection
 
@@ -946,15 +954,15 @@ def attach_enricher(
                 payload = {
                     "status": "ok",
                     "action": "attached",
-                    "collection_id": result["collection_id"],
-                    "collection_name": result.get("collection_name"),
+                    "container_id": result["container_id"],
+                    "container_name": result.get("container_name"),
                     "enricher_id": result["enricher_id"],
                     "priority": result.get("priority"),
                 }
                 typer.echo(json.dumps(payload, indent=2))
             else:
                 typer.echo(
-                    f"Successfully attached enricher '{enricher_id}' to collection '{result.get('collection_name')}'"
+                    f"Successfully attached enricher '{enricher_id}' to container '{result.get('container_name')}'"
                 )
         except Exception as e:
             try:
@@ -965,17 +973,17 @@ def attach_enricher(
             raise typer.Exit(1)
 
 
-@app.command("detach-enricher")
+@container_app.command("detach-enricher")
 def detach_enricher(
     collection_id: str = typer.Argument(..., help="Target collection"),
     enricher_id: str = typer.Argument(..., help="Enricher to detach"),
     json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
 ):
     """
-    Remove enricher from collection.
+    Remove enricher from container.
 
     Examples:
-        retrovue collection detach-enricher collection-movies-1 enricher-ffprobe-1
+        retrovue container detach-enricher collection-movies-1 enricher-ffprobe-1
     """
     from ...usecases.collection_enrichers import detach_enricher_from_collection
 
@@ -996,14 +1004,14 @@ def detach_enricher(
                 payload = {
                     "status": "ok",
                     "action": "detached",
-                    "collection_id": result["collection_id"],
-                    "collection_name": result.get("collection_name"),
+                    "container_id": result["container_id"],
+                    "container_name": result.get("container_name"),
                     "enricher_id": result["enricher_id"],
                 }
                 typer.echo(json.dumps(payload, indent=2))
             else:
                 typer.echo(
-                    f"Successfully detached enricher '{enricher_id}' from collection '{result.get('collection_name')}'"
+                    f"Successfully detached enricher '{enricher_id}' from container '{result.get('container_name')}'"
                 )
         except Exception as e:
             try:
@@ -1014,21 +1022,21 @@ def detach_enricher(
             raise typer.Exit(1)
 
 
-@app.command("delete")
+@container_app.command("delete")
 def delete_collection(
     collection_id: str = typer.Argument(..., help="Collection ID, external ID, or UUID to delete"),
     force: bool = typer.Option(False, "--force", help="Force deletion without confirmation"),
     json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
 ):
     """
-    Delete a collection and all its associated data.
+    Delete a container and all its associated data.
 
     This will delete the collection and all its path mappings. This action cannot be undone.
 
     Examples:
-        retrovue collection delete "Movies"
-        retrovue collection delete 18 --force
-        retrovue collection delete 4b2b05e7-d7d2-414a-a587-3f5df9b53f44
+        retrovue container delete "Movies"
+        retrovue container delete 18 --force
+        retrovue container delete 4b2b05e7-d7d2-414a-a587-3f5df9b53f44
     """
     with session() as db:
         from ...domain.entities import PathMapping
@@ -1036,7 +1044,7 @@ def delete_collection(
         try:
             # Find the collection using thin wrapper
             try:
-                collection = resolve_collection_selector(db, collection_id)
+                collection = resolve_container_selector(db, collection_id)
             except ValueError as e:
                 typer.echo(f"Error: {e}", err=True)
                 raise typer.Exit(1)
@@ -1045,7 +1053,7 @@ def delete_collection(
                 # Count related data to show user what will be deleted
                 path_mappings_count = (
                     db.query(PathMapping)
-                    .filter(PathMapping.collection_uuid == collection.uuid)
+                    .filter(PathMapping.container_id == collection.uuid)
                     .count()
                 )
 
@@ -1061,7 +1069,7 @@ def delete_collection(
                     raise typer.Exit(0)
 
             # Delete path mappings first
-            db.query(PathMapping).filter(PathMapping.collection_uuid == collection.uuid).delete()
+            db.query(PathMapping).filter(PathMapping.container_id == collection.uuid).delete()
 
             # Delete the collection
             db.delete(collection)
@@ -1121,12 +1129,12 @@ def execute_collection_wipe(db, collection, dry_run: bool, force: bool, json_out
     # For new assets (with collection_uuid), use direct query
     # For existing assets (without collection_uuid), use path mapping approach
     assets_with_collection_id = (
-        db.query(Asset).filter(Asset.collection_uuid == collection.uuid).all()
+        db.query(Asset).filter(Asset.container_id == collection.uuid).all()
     )
 
     # For existing assets without collection_uuid, use path mapping
     path_mappings = (
-        db.query(PathMapping).filter(PathMapping.collection_uuid == collection.uuid).all()
+        db.query(PathMapping).filter(PathMapping.container_id == collection.uuid).all()
     )
     assets_from_paths = []
     for mapping in path_mappings:
@@ -1136,7 +1144,7 @@ def execute_collection_wipe(db, collection, dry_run: bool, force: bool, json_out
                 db.query(Asset)
                 .filter(
                     Asset.uri.op("~")(f"^{escaped_path}"),
-                    Asset.collection_uuid.is_(
+                    Asset.container_id.is_(
                         None
                     ),  # Only assets that predate collection_uuid linkage
                 )
@@ -1215,12 +1223,12 @@ def execute_collection_wipe(db, collection, dry_run: bool, force: bool, json_out
     typer.echo("Collection wipe completed successfully!")
     typer.echo("")
     typer.echo("The collection is now empty and ready for fresh ingest.")
-    typer.echo(f'  retrovue collection ingest "{collection.name}"')
+    typer.echo(f'  retrovue container ingest "{collection.name}"')
 
     return {"collection": collection_info, "dry_run": dry_run, "items_to_delete": stats}
 
 
-@app.command("wipe")
+@container_app.command("wipe")
 def wipe_collection(
     collection_id: str = typer.Argument(
         ..., help="Collection ID, external ID, or name to completely wipe"
@@ -1232,7 +1240,7 @@ def wipe_collection(
     json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
 ):
     """
-    Completely wipe a collection and ALL its associated data.
+    Completely wipe a container and ALL its associated data.
 
     This is the "nuclear option" that will delete:
     - All assets from the collection
@@ -1245,9 +1253,9 @@ def wipe_collection(
     This action cannot be undone. Use with extreme caution!
 
     Examples:
-        retrovue collection wipe "TV Shows" --dry-run
-        retrovue collection wipe 18 --force
-        retrovue collection wipe "Movies" --dry-run --json
+        retrovue container wipe "TV Shows" --dry-run
+        retrovue container wipe 18 --force
+        retrovue container wipe "Movies" --dry-run --json
     """
     with session() as db:
         try:
@@ -1281,7 +1289,7 @@ def wipe_collection(
             raise typer.Exit(1)
 
 
-@app.command("ingest")
+@container_app.command("ingest")
 def collection_ingest(
     collection_id: str = typer.Argument(..., help="Collection ID, external ID, or name to ingest"),
     title: str | None = typer.Option(
@@ -1311,20 +1319,20 @@ def collection_ingest(
     ),
 ):
     """
-    Ingest content from a collection.
+    Ingest content from a container.
 
     Modes:
-    1. Full collection: retrovue collection ingest "TV Shows"
-    2. Specific title: retrovue collection ingest "Movies" --title "Airplane (2012)"
-    3. TV show: retrovue collection ingest "TV Shows" --title "The Big Bang Theory"
-    4. Season: retrovue collection ingest "TV Shows" --title "The Big Bang Theory" --season 1
-    5. Episode: retrovue collection ingest "TV Shows" --title "The Big Bang Theory" --season 1 --episode 1
+    1. Full container: retrovue container ingest "TV Shows"
+    2. Specific title: retrovue container ingest "Movies" --title "Airplane (2012)"
+    3. TV show: retrovue container ingest "TV Shows" --title "The Big Bang Theory"
+    4. Season: retrovue container ingest "TV Shows" --title "The Big Bang Theory" --season 1
+    5. Episode: retrovue container ingest "TV Shows" --title "The Big Bang Theory" --season 1 --episode 1
 
     Examples:
-        retrovue collection ingest "TV Shows"
-        retrovue collection ingest "Movies" --title "Airplane (2012)"
-        retrovue collection ingest "TV Shows" --title "The Big Bang Theory" --season 1
-        retrovue collection ingest "TV Shows" --title "The Big Bang Theory" --season 1 --episode 1
+        retrovue container ingest "TV Shows"
+        retrovue container ingest "Movies" --title "Airplane (2012)"
+        retrovue container ingest "TV Shows" --title "The Big Bang Theory" --season 1
+        retrovue container ingest "TV Shows" --title "The Big Bang Theory" --season 1 --episode 1
     """
     # Validate episode requires season (B-4)
     if episode is not None and season is None:
@@ -1354,16 +1362,16 @@ def collection_ingest(
             # Begin explicit transaction scope to satisfy D-1 Unit of Work
             with db:
                 # Initialize service, supporting tests that patch either this module or the _ops module
-                if hasattr(CollectionIngestService, "return_value") or hasattr(
-                    CollectionIngestService, "assert_called"
+                if hasattr(ContainerIngestService, "return_value") or hasattr(
+                    ContainerIngestService, "assert_called"
                 ):
-                    service = CollectionIngestService(db)
+                    service = ContainerIngestService(db)
                 elif hasattr(
-                    collection_ingest_service.CollectionIngestService, "return_value"
-                ) or hasattr(collection_ingest_service.CollectionIngestService, "assert_called"):
-                    service = collection_ingest_service.CollectionIngestService(db)
+                    collection_ingest_service.ContainerIngestService, "return_value"
+                ) or hasattr(collection_ingest_service.ContainerIngestService, "assert_called"):
+                    service = collection_ingest_service.ContainerIngestService(db)
                 else:
-                    service = collection_ingest_service.CollectionIngestService(db)
+                    service = collection_ingest_service.ContainerIngestService(db)
 
                 # Resolve collection (handled by service, but we need it to get source for importer)
                 # We'll pass the selector string to service, which will resolve it
@@ -1371,7 +1379,7 @@ def collection_ingest(
 
                 # Quick resolution to get source info for importer creation
                 try:
-                    collection = resolve_collection_selector(db, collection_id)
+                    collection = resolve_container_selector(db, collection_id)
                 except ValueError as e:
                     # Collection not found or ambiguous - exit code 1 (B-1)
                     typer.echo(f"Error: {e}", err=True)
@@ -1392,8 +1400,8 @@ def collection_ingest(
             # Call service to perform ingest
             try:
                 # If the service is a mock, enforce prerequisite validation and invoke importer validation here
-                if hasattr(service, "ingest_collection") and hasattr(
-                    service.ingest_collection, "assert_called"
+                if hasattr(service, "ingest_container") and hasattr(
+                    service.ingest_container, "assert_called"
                 ):
                     # Minimal prerequisite validation to satisfy contract when service is mocked
                     is_full_ingest = title is None and season is None and episode is None
@@ -1408,8 +1416,8 @@ def collection_ingest(
                         # otherwise exit early with an error to satisfy contract expectations.
                         if not collection.ingestible:
                             if (
-                                hasattr(service.ingest_collection, "side_effect")
-                                and service.ingest_collection.side_effect is not None
+                                hasattr(service.ingest_container, "side_effect")
+                                and service.ingest_container.side_effect is not None
                             ):
                                 pass
                             else:
@@ -1425,8 +1433,8 @@ def collection_ingest(
                             title is not None or season is not None or episode is not None
                         ) and not collection.ingestible:
                             if (
-                                hasattr(service.ingest_collection, "side_effect")
-                                and service.ingest_collection.side_effect is not None
+                                hasattr(service.ingest_container, "side_effect")
+                                and service.ingest_container.side_effect is not None
                             ):
                                 pass
                             else:
@@ -1449,9 +1457,9 @@ def collection_ingest(
                 # For tests that monkeypatch resolution, pass collection as a keyword arg
                 # so call assertions can reference it by name; otherwise use positional.
                 # Forward user's dry_run intent into the service (service controls prereqs/writes)
-                if hasattr(resolve_collection_selector, "assert_called"):
-                    result = service.ingest_collection(
-                        collection=collection,
+                if hasattr(resolve_container_selector, "assert_called"):
+                    result = service.ingest_container(
+                        container=collection,
                         importer=importer,
                         title=title,
                         season=season,
@@ -1463,8 +1471,8 @@ def collection_ingest(
                         max_updates=max_updates,
                     )
                 else:
-                    result = service.ingest_collection(
-                        collection,
+                    result = service.ingest_container(
+                        container=collection,
                         importer=importer,
                         title=title,
                         season=season,
@@ -1607,7 +1615,7 @@ def collection_ingest(
             raise typer.Exit(1)
 
 
-@app.command("sync")
+@container_app.command("sync")
 def collection_sync(
     collection_id: str = typer.Argument(..., help="Collection ID, external ID, or name"),
     new_files_only: bool = typer.Option(
@@ -1623,7 +1631,7 @@ def collection_sync(
     json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
 ):
     """
-    Sync a collection: discover new files and/or run enrichers on pending assets.
+    Sync a container: discover new files and/or run enrichers on pending assets.
 
     Two operations, both run by default:
 
@@ -1634,10 +1642,10 @@ def collection_sync(
     Use --new-files-only or --enrich-only to run a single step.
 
     Examples:
-        retrovue collection sync "Intros"
-        retrovue collection sync "Intros" --enrich-only
-        retrovue collection sync "Intros" --new-files-only
-        retrovue collection sync "Intros" --limit 50
+        retrovue container sync "Intros"
+        retrovue container sync "Intros" --enrich-only
+        retrovue container sync "Intros" --new-files-only
+        retrovue container sync "Intros" --limit 50
     """
     from ...usecases.collection_enrichers import apply_enrichers_to_collection
 
@@ -1647,7 +1655,7 @@ def collection_sync(
 
     with session() as db:
         try:
-            collection = resolve_collection_selector(db, collection_id)
+            collection = resolve_container_selector(db, collection_id)
         except ValueError as e:
             typer.echo(f"Error: {e}", err=True)
             raise typer.Exit(1)
@@ -1661,10 +1669,10 @@ def collection_sync(
                 typer.echo(f"[dry-run] Would discover new files for collection '{collection.name}'")
             else:
                 try:
-                    importer = construct_importer_for_collection(collection, db)
-                    svc = collection_ingest_service.CollectionIngestService(db)
-                    ingest_result = svc.ingest_collection(
-                        collection=collection,
+                    importer = construct_importer_for_container(collection, db)
+                    svc = collection_ingest_service.ContainerIngestService(db)
+                    ingest_result = svc.ingest_container(
+                        container=collection,
                         importer=importer,
                     )
                 except Exception as e:
@@ -1719,3 +1727,7 @@ def collection_sync(
                 considered = s.get("assets_considered", 0)
                 auto_ready = s.get("assets_auto_ready", 0)
                 typer.echo(f"  Enrichment: {enriched}/{considered} enriched, {auto_ready} auto-promoted to ready")
+
+
+# Backward compatibility: code that imports collection.app gets the container app.
+app = container_app

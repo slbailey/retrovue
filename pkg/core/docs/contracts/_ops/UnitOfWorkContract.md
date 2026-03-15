@@ -198,7 +198,7 @@ Tests verifying Unit of Work compliance must check:
 
 ## See Also
 
-- [Collection Wipe Contract](../resources/CollectionWipeContract.md) — applies UOW guarantees
+- [Container Wipe Contract](../resources/ContainerWipeContract.md) — applies UOW guarantees
 - [Source Ingest Contract](../resources/SourceIngestContract.md) — applies UOW guarantees
-- [Collection Ingest Contract](../resources/CollectionIngestContract.md) — applies UOW guarantees
+- [Container Ingest Contract](../resources/ContainerIngestContract.md) — applies UOW guarantees
 - [Contract Hygiene Checklist](../../../standards/contract-hygiene.md) — authoring guidelines

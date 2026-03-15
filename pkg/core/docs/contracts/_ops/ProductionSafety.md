@@ -154,7 +154,7 @@ Each resource type defines its own safety criteria. This contract defines the en
 
 ### Collections
 
-**Contract:** [CollectionWipeContract.md](../resources/CollectionWipeContract.md)
+**Contract:** [ContainerWipeContract.md](../resources/ContainerWipeContract.md)
 
 **Safety rule:** TBD
 

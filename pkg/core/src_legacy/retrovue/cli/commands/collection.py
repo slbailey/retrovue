@@ -22,7 +22,7 @@ from ...infra.validation import (
     validate_path_mappings_preserved,
     validate_wipe_prerequisites,
 )
-from ._ops.collection_ingest_service import CollectionIngestService, resolve_collection_selector
+from ._ops.collection_ingest_service import ContainerIngestService, resolve_container_selector
 
 app = typer.Typer(name="collection", help="Collection management operations")
 
@@ -46,7 +46,7 @@ def list_collections(
     """
     with session() as db:
         from ...content_manager.source_service import SourceService
-        from ...domain.entities import Collection, PathMapping
+        from ...domain.entities import Container, PathMapping
 
         try:
             source_service = SourceService(db)
@@ -58,7 +58,7 @@ def list_collections(
                 raise typer.Exit(1)
 
             # Get collections for this source
-            collections = db.query(Collection).filter(Collection.source_id == source_obj.id).all()
+            collections = db.query(Container).filter(Container.source_id == source_obj.id).all()
 
             if not collections:
                 typer.echo(f"No collections found for source '{source_obj.name}'")
@@ -69,7 +69,7 @@ def list_collections(
             for collection in collections:
                 # Get path mappings for this collection
                 path_mappings = (
-                    db.query(PathMapping).filter(PathMapping.collection_id == collection.uuid).all()
+                    db.query(PathMapping).filter(PathMapping.container_id == collection.uuid).all()
                 )
 
                 # Build mapping pairs
@@ -165,13 +165,13 @@ def list_all_collections(
     """
     with session() as db:
         from ...content_manager.source_service import SourceService
-        from ...domain.entities import Collection, Source
+        from ...domain.entities import Container, Source
 
         try:
             SourceService(db)
 
             # Get all collections across all sources
-            collections = db.query(Collection).join(Source).all()
+            collections = db.query(Container).join(Source).all()
 
             collection_data = []
             for collection in collections:
@@ -257,7 +257,7 @@ def update_collection(
         import os
 
         from ...content_manager.source_service import SourceService
-        from ...domain.entities import Collection, PathMapping
+        from ...domain.entities import Container, PathMapping
 
         try:
             SourceService(db)
@@ -272,7 +272,7 @@ def update_collection(
                 if len(collection_id) == 36 and collection_id.count("-") == 4:
                     collection_uuid = uuid.UUID(collection_id)
                     collection = (
-                        db.query(Collection).filter(Collection.uuid == collection_uuid).first()
+                        db.query(Container).filter(Container.uuid == collection_uuid).first()
                     )
             except (ValueError, TypeError):
                 pass
@@ -280,13 +280,13 @@ def update_collection(
             # If not found by UUID, try by external_id
             if not collection:
                 collection = (
-                    db.query(Collection).filter(Collection.external_id == collection_id).first()
+                    db.query(Container).filter(Container.external_id == collection_id).first()
                 )
 
             # If not found by external_id, try by name (case-insensitive)
             if not collection:
                 name_matches = (
-                    db.query(Collection).filter(Collection.name.ilike(collection_id)).all()
+                    db.query(Container).filter(Container.name.ilike(collection_id)).all()
                 )
                 if len(name_matches) == 1:
                     collection = name_matches[0]
@@ -356,7 +356,7 @@ def update_collection(
                     # Update or create path mapping
                     # Delete existing mappings
                     db.query(PathMapping).filter(
-                        PathMapping.collection_id == collection.uuid
+                        PathMapping.container_id == collection.uuid
                     ).delete()
 
                     # Create new mapping
@@ -492,7 +492,7 @@ def delete_collection(
     """
     with session() as db:
         from ...content_manager.source_service import SourceService
-        from ...domain.entities import Collection, PathMapping
+        from ...domain.entities import Container, PathMapping
 
         try:
             source_service = SourceService(db)
@@ -507,7 +507,7 @@ def delete_collection(
                 if len(collection_id) == 36 and collection_id.count("-") == 4:
                     collection_uuid = uuid.UUID(collection_id)
                     collection = (
-                        db.query(Collection).filter(Collection.uuid == collection_uuid).first()
+                        db.query(Container).filter(Container.uuid == collection_uuid).first()
                     )
             except (ValueError, TypeError):
                 pass
@@ -515,13 +515,13 @@ def delete_collection(
             # If not found by UUID, try by external_id
             if not collection:
                 collection = (
-                    db.query(Collection).filter(Collection.external_id == collection_id).first()
+                    db.query(Container).filter(Container.external_id == collection_id).first()
                 )
 
             # If not found by external_id, try by name (case-insensitive)
             if not collection:
                 name_matches = (
-                    db.query(Collection).filter(Collection.name.ilike(collection_id)).all()
+                    db.query(Container).filter(Container.name.ilike(collection_id)).all()
                 )
                 if len(name_matches) == 1:
                     collection = name_matches[0]
@@ -542,7 +542,7 @@ def delete_collection(
                 # Count related data to show user what will be deleted
                 path_mappings_count = (
                     db.query(PathMapping)
-                    .filter(PathMapping.collection_id == collection.uuid)
+                    .filter(PathMapping.container_id == collection.uuid)
                     .count()
                 )
 
@@ -632,7 +632,7 @@ def execute_collection_wipe(db, collection, dry_run: bool, force: bool, json_out
     assets_with_collection_id = db.query(Asset).filter(Asset.collection_id == collection.uuid).all()
 
     # For existing assets without collection_id, use path mapping
-    path_mappings = db.query(PathMapping).filter(PathMapping.collection_id == collection.uuid).all()
+    path_mappings = db.query(PathMapping).filter(PathMapping.container_id == collection.uuid).all()
     assets_from_paths = []
     for mapping in path_mappings:
         if mapping.local_path:
@@ -928,7 +928,7 @@ def collection_ingest(
 
         try:
             # Initialize service
-            service = CollectionIngestService(db)
+            service = ContainerIngestService(db)
 
             # Resolve collection (handled by service, but we need it to get source for importer)
             # We'll pass the selector string to service, which will resolve it
@@ -936,7 +936,7 @@ def collection_ingest(
 
             # Quick resolution to get source info for importer creation
             try:
-                collection = resolve_collection_selector(db, collection_id)
+                collection = resolve_container_selector(db, collection_id)
             except ValueError as e:
                 # Collection not found or ambiguous - exit code 1 (B-1)
                 typer.echo(f"Error: {e}", err=True)

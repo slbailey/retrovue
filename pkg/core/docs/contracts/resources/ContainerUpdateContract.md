@@ -1,38 +1,40 @@
-# Collection Update
+# Container Update (formerly Collection Update)
 
 ## Purpose
 
-Define the behavioral contract for updating collection configuration and state. This contract ensures safe, consistent collection updates with proper validation, prerequisite checking, and atomic transaction handling.
+Define the behavioral contract for updating container configuration and state. This contract ensures safe, consistent container updates with proper validation, prerequisite checking, and atomic transaction handling. The ingest/catalog entity is **Container**. During compatibility rollout, `retrovue collection update` and `collection_id` are deprecated and accepted temporarily.
 
 ---
 
 ## Command Shape
 
+**Canonical:**
 ```
-retrovue collection update <collection_id> [--sync-enable] [--sync-disable] [--add-enricher <enricher_id>] [--delete-enricher <enricher_id>] [--list-enrichers] [--path-mapping <local_path|DELETE>] [--priority <n>] [--test-db] [--dry-run] [--json]
+retrovue container update <container_id> [--sync-enable] [--sync-disable] [--add-enricher <enricher_id>] [--delete-enricher <enricher_id>] [--list-enrichers] [--path-mapping <local_path|DELETE>] [--priority <n>] [--test-db] [--dry-run] [--json]
 ```
+*Compatibility:* `retrovue collection update <collection_id>` is deprecated and accepted temporarily.
 
 ### Required Parameters
 
-- `<collection_id>`: Collection identifier (UUID, external ID, or display name)
+- `<container_id>` (canonical): Container identifier (UUID, external ID, or display name). *Compatibility:* documented elsewhere as `collection_id` during rollout.
 
 ### Optional Parameters
 
 **Sync Management:**
 
-- `--sync-enable`: Enable sync for the collection (requires `ingestible=true`)
-- `--sync-disable`: Disable sync for the collection (requires `sync_enabled=true`)
+- `--sync-enable`: Enable sync for the container (requires `ingestible=true`)
+- `--sync-disable`: Disable sync for the container (requires `sync_enabled=true`)
 
 **Enricher Management:**
 
-- `--add-enricher <enricher_id>`: Attach an enricher to the collection (requires `--priority` when adding)
-- `--delete-enricher <enricher_id>`: Remove an enricher from the collection
-- `--list-enrichers`: Display all enrichers attached to the collection (read-only operation)
+- `--add-enricher <enricher_id>`: Attach an enricher to the container (requires `--priority` when adding)
+- `--delete-enricher <enricher_id>`: Remove an enricher from the container
+- `--list-enrichers`: Display all enrichers attached to the container (read-only operation)
 - `--priority <n>`: Priority for enricher execution order (required when using `--add-enricher`, ignored otherwise)
 
 **Path Mapping:**
 
-- `--path-mapping <local_path|DELETE>`: Set the local path for the collection's path mapping, or clear it with `DELETE`. Updating sets `local_path` only (does not change the external path). `DELETE` sets the mapping's `local_path` to null (keeps the external path) and sets `ingestible=false`.
+- `--path-mapping <local_path|DELETE>`: Set the local path for the container's path mapping, or clear it with `DELETE`. Updating sets `local_path` only (does not change the external path). `DELETE` sets the mapping's `local_path` to null (keeps the external path) and sets `ingestible=false`.
   
 
 **Common Flags:**
@@ -593,22 +595,22 @@ retrovue collection update "TV Shows" --path-mapping /media/tv-shows
 
 ```bash
 # Test enable sync in isolated environment
-retrovue collection update "Test Collection" --enable-sync --test-db
+retrovue container update "Test Container" --enable-sync --test-db
 
 # Test disable sync with dry-run
-retrovue collection update "Test Collection" --disable-sync --test-db --dry-run
+retrovue container update "Test Container" --disable-sync --test-db --dry-run
 
 # Test add enricher in isolated environment
-retrovue collection update "Test Collection" --add-enricher enricher-ffprobe-test --priority 1 --test-db
+retrovue container update "Test Container" --add-enricher enricher-ffprobe-test --priority 1 --test-db
 
 # Test list enrichers with dry-run
-retrovue collection update "Test Collection" --list-enrichers --test-db --dry-run
+retrovue container update "Test Container" --list-enrichers --test-db --dry-run
 
 # Test path mapping update in isolated environment
-retrovue collection update "Test Collection" --path-mapping /test/media --test-db
+retrovue container update "Test Container" --path-mapping /test/media --test-db
 
 # Test path mapping update with dry-run
-retrovue collection update "Test Collection" --path-mapping /test/media --test-db --dry-run
+retrovue container update "Test Container" --path-mapping /test/media --test-db --dry-run
 ```
 
 ---
@@ -626,7 +628,7 @@ The `collection update` command controls collection eligibility for `collection 
 
 ## See Also
 
-- [Collection Ingest](CollectionIngestContract.md) - Ingest operations that depend on sync_enabled and ingestible status
-- [Collection Show](CollectionShowContract.md) - Displaying collection information including sync_enabled and ingestible status
-- [Collection Contract](CollectionContract.md) - Overview of all collection operations
+- [Collection Ingest](ContainerIngestContract.md) - Ingest operations that depend on sync_enabled and ingestible status
+- [Collection Show](ContainerShowContract.md) - Displaying collection information including sync_enabled and ingestible status
+- [Collection Contract](ContainerContract.md) - Overview of all collection operations
 - [Source Ingest](SourceIngestContract.md) - Source-level orchestration that filters by sync_enabled and ingestible

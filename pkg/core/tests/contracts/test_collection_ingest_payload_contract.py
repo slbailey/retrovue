@@ -1,5 +1,5 @@
 """
-Contract: docs/contracts/resources/CollectionIngestContract.md
+Contract: docs/contracts/resources/ContainerIngestContract.md
 Rules covered:
 - B-20: ingest builds handler payload with importer_name, asset_type, source_uri, editorial, probed, sidecars
 """
@@ -11,14 +11,14 @@ from typing import Any
 import pytest
 
 from retrovue.adapters.importers.base import DiscoveredItem
-from retrovue.cli.commands._ops.collection_ingest_service import CollectionIngestService
+from retrovue.cli.commands._ops.collection_ingest_service import ContainerIngestService
 
 
 def _fake_collection() -> Any:
     class _C:
         uuid = "00000000-0000-0000-0000-000000000002"
         source_id = "00000000-0000-0000-0000-000000000001"
-        name = "Test Collection"
+        name = "Test Container"
         sync_enabled = True
         ingestible = True
 
@@ -49,7 +49,7 @@ def _fake_importer() -> Any:
 
 
 @pytest.fixture
-def service(monkeypatch: pytest.MonkeyPatch) -> CollectionIngestService:
+def service(monkeypatch: pytest.MonkeyPatch) -> ContainerIngestService:
     class _DB:
         def add(self, _obj: Any) -> None:
             return None
@@ -62,10 +62,10 @@ def service(monkeypatch: pytest.MonkeyPatch) -> CollectionIngestService:
 
 
     monkeypatch.setattr("retrovue.cli.commands._ops.collection_ingest_service.ENRICHERS", {}, raising=True)
-    return CollectionIngestService(_DB())
+    return ContainerIngestService(_DB())
 
 
-def test_b20_ingest_builds_handler_payload(service: CollectionIngestService, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_b20_ingest_builds_handler_payload(service: ContainerIngestService, monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, Any] = {"payload": None}
 
     def _handle(payload: dict[str, Any]) -> dict[str, Any]:
@@ -81,7 +81,7 @@ def test_b20_ingest_builds_handler_payload(service: CollectionIngestService, mon
     collection = _fake_collection()
     importer = _fake_importer()
 
-    service.ingest_collection(collection=collection, importer=importer)
+    service.ingest_container(container=collection, importer=importer)
 
     pl = captured["payload"]
     assert pl is not None

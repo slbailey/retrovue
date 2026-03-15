@@ -1,27 +1,27 @@
-# Source ↔ Collection Cross-Domain Guarantees
+# Source ↔ Container Cross-Domain Guarantees (formerly Source–Collection)
 
 ## Overview
 
-This document defines the guarantees and constraints that govern interactions between the Source domain and the Collection domain. These guarantees ensure that source operations, collection discovery, and lifecycle management maintain consistency when sources manage collections.
+This document defines the guarantees and constraints that govern interactions between the Source domain and the **Container** domain (contract entity: Source → Container → Locator → Media/Asset). These guarantees ensure that source operations, container discovery, and lifecycle management maintain consistency when sources manage containers.
 
-The Source-Collection relationship is critical because:
+The Source–Container relationship is critical because:
 
-- Sources define content ingestion pipelines that discover and manage collections
-- Collections represent logical groupings of content within sources
+- Sources define content ingestion pipelines that discover and manage containers
+- Containers represent subdivisions of a source used for discovery (e.g. library section, folder)
 - Both domains must coordinate for successful content discovery and ingestion
-- Collection lifecycle must be synchronized with source lifecycle
+- Container lifecycle must be synchronized with source lifecycle
 
 ### Interaction Summary
 
-The lifecycle of Source-Collection operations follows this pattern:
+The lifecycle of Source–Container operations follows this pattern:
 
 1. **User runs `retrovue source add --discover`** → Command parsing and validation
 2. **Source domain creates Source entity** → Source persistence with transaction boundary
-3. **Source invokes Collection discovery service** → Collection enumeration via importer
-4. **Collection domain persists discovered collections** → Collections created with `enabled=False` by default
-5. **Source commits transaction** → Atomic completion of source and collection creation
+3. **Source invokes container discovery service** → Container enumeration via importer
+4. **Container domain persists discovered containers** → Containers created with `enabled=False` by default
+5. **Source commits transaction** → Atomic completion of source and container creation
 
-This flow ensures that source operations maintain consistency with collection state while providing clear orchestration boundaries between domains.
+This flow ensures that source operations maintain consistency with container state while providing clear orchestration boundaries between domains.
 
 ---
 
@@ -31,23 +31,23 @@ This flow ensures that source operations maintain consistency with collection st
 
 - **Contract:** `docs/contracts/resources/SourceAddContract.md`, `docs/contracts/resources/SourceDiscoverContract.md`, `docs/contracts/resources/SourceIngestContract.md`
 - **Interface:** Source creation, discovery, and ingestion operations
-- **Responsibilities:** Source persistence, collection discovery, external ID generation
+- **Responsibilities:** Source persistence, container discovery, external ID generation
 
-### Collection Domain
+### Container Domain (contract term; code/DB may still use "Collection" until later phases)
 
-- **Contract:** `docs/contracts/resources/CollectionContract.md`, `docs/contracts/resources/CollectionIngestContract.md`
-- **Interface:** Collection management, ingestion, and lifecycle operations
-- **Responsibilities:** Collection persistence, ingestibility validation, sync management
+- **Contract:** `docs/contracts/resources/ContainerContract.md`, Container Ingest (see ContainerIngestContract.md)
+- **Interface:** Container management, ingestion, and lifecycle operations
+- **Responsibilities:** Container persistence, ingestibility validation, sync management
 
 ---
 
 ## Cross-Domain Guarantees
 
-### G-1: Collection Discovery Coordination
+### G-1: Container Discovery Coordination
 
-**Collection discovery MUST be coordinated between Source and Collection domains.**
+**Container discovery MUST be coordinated between Source and Container domains.**
 
-- Source discovery operations MUST create Collection records with proper domain mapping
+- Source discovery operations MUST create Container records with proper domain mapping
 - Collection discovery MUST occur within the same transaction as source operations when using `--discover`
 - Newly discovered collections MUST be persisted with `enabled=False` by default
 - Collection external IDs MUST be unique within the source context
@@ -155,8 +155,8 @@ This flow ensures that source operations maintain consistency with collection st
 - **SourceAddContract**: References this guarantee in "Dependencies" section
 - **SourceDiscoverContract**: References this guarantee in "Dependencies" section
 - **SourceIngestContract**: References this guarantee in "Dependencies" section
-- **CollectionContract**: References this guarantee in "Dependencies" section
-- **CollectionIngestContract**: References this guarantee in "Dependencies" section
+- **ContainerContract**: References this guarantee in "Dependencies" section
+- **ContainerIngestContract**: References this guarantee in "Dependencies" section
 
 ---
 
@@ -241,8 +241,8 @@ retrovue source ingest "My Plex"
 - [SourceAddContract](../SourceAddContract.md) - Source creation contract
 - [SourceDiscoverContract](../SourceDiscoverContract.md) - Source discovery contract
 - [SourceIngestContract](../SourceIngestContract.md) - Source ingestion contract
-- [CollectionContract](../CollectionContract.md) - Collection management contract
-- [CollectionIngestContract](../CollectionIngestContract.md) - Collection ingestion contract
+- [ContainerContract](../ContainerContract.md) - Container management contract
+- [ContainerIngestContract](../ContainerIngestContract.md) - Container ingestion contract
 - [UnitOfWorkContract](../../_ops/UnitOfWorkContract.md) - Transaction management contract
 
 ---
@@ -250,5 +250,5 @@ retrovue source ingest "My Plex"
 ## Traceability
 
 - **Tests:** `tests/contracts/cross-domain/test_source_collection_guarantees.py`
-- **Dependencies:** SourceAddContract, SourceDiscoverContract, SourceIngestContract, CollectionContract, CollectionIngestContract
+- **Dependencies:** SourceAddContract, SourceDiscoverContract, SourceIngestContract, ContainerContract, ContainerIngestContract
 - **Last Audit:** 2025-10-28

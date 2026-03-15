@@ -2,9 +2,9 @@
 
 ## Purpose
 
-Defines the exact behavior, safety, idempotence, and data effects of the ingest operation for an entire source. This is an iterative operation that processes all enabled collections within a source, following the same pattern as Source Discover but for asset ingestion rather than collection discovery. Each collection ingest operates in its own transaction boundary, allowing for partial success when some collections fail.
+Defines the exact behavior, safety, idempotence, and data effects of the ingest operation for an entire source. This is an iterative operation that processes all enabled **containers** within a source (contract entity: Container), following the same pattern as Source Discover but for asset ingestion rather than container discovery. Each container ingest operates in its own transaction boundary, allowing for partial success when some containers fail.
 
-NOTE: This command operates at the source level and iterates across all enabled collections, processing each collection's ingest operation. Each collection ingest follows the exact same process defined in the Collection Ingest, with each collection operating in its own transaction boundary to allow for partial success when some collections fail.
+NOTE: This command operates at the source level and iterates across all enabled containers, processing each container's ingest operation. Each container ingest follows the exact same process defined in the Container Ingest contract, with each container operating in its own transaction boundary to allow for partial success when some containers fail.
 
 ---
 
@@ -31,26 +31,26 @@ retrovue source ingest <source_id>|"<source name>" [--dry-run] [--test-db] [--js
   - `--title`
   - `--season`
   - `--episode`
-- **SURGICAL CONTROL**: For targeted ingest of specific titles/seasons/episodes, use `retrovue collection ingest <collection_id> [--title ... --season ... --episode ...]`
-- **SINGLE TRANSACTION**: The entire source ingest operation MUST be wrapped in a single Unit of Work, ensuring atomicity across all collections
+- **SURGICAL CONTROL**: For targeted ingest of specific titles/seasons/episodes, use `retrovue container ingest <container_id> [--title ... --season ... --episode ...]` (during rollout, `retrovue collection ingest <collection_id>` may be accepted as deprecated).
+- **SINGLE TRANSACTION**: The entire source ingest operation MUST be wrapped in a single Unit of Work, ensuring atomicity across all containers
 
 **Requirements:**
 
 - The command MUST require either a source ID or exact source name
 - Named lookup MUST support both human and machine workflows
-- The command MUST iterate over all collections where `sync_enabled=true` AND `ingestible=true` for the specified source
+- The command MUST iterate over all containers where `sync_enabled=true` AND `ingestible=true` for the specified source
 
 ---
 
 ## Safety Expectations
 
-- The command MUST refuse to run against a source that has no collections where `sync_enabled=true` AND `ingestible=true`
-- The command MUST verify that the source exists and is accessible before attempting collection iteration
-- **COLLECTION-LEVEL NARROWING FORBIDDEN**: If any collection-level narrowing flags (`--title`, `--season`, `--episode`) are provided, the CLI MUST refuse to run, exit with code 1, and emit a human-readable error directing the operator to use `retrovue collection ingest`
-- If `--dry-run` is provided, the command MUST NOT make any database or persistent state changes, but MUST show what _would_ be ingested across all collections
+- The command MUST refuse to run against a source that has no containers where `sync_enabled=true` AND `ingestible=true`
+- The command MUST verify that the source exists and is accessible before attempting container iteration
+- **CONTAINER-LEVEL NARROWING FORBIDDEN**: If any container-level narrowing flags (`--title`, `--season`, `--episode`) are provided, the CLI MUST refuse to run, exit with code 1, and emit a human-readable error directing the operator to use `retrovue container ingest` (or deprecated `retrovue collection ingest` during rollout)
+- If `--dry-run` is provided, the command MUST NOT make any database or persistent state changes, but MUST show what _would_ be ingested across all containers
 - If `--test-db` is provided, the command MUST operate solely on an isolated, non-production database
-- Partial or failed ingest operations across collections MUST NOT result in orphaned or incomplete database records
-- **SINGLE TRANSACTION BOUNDARY**: The entire source ingest operation MUST be wrapped in a single Unit of Work. If any collection ingest fails fatally, the entire source ingest operation MUST be rolled back. Non-fatal collection ingest failures (e.g., individual asset processing errors) MUST be logged but MUST NOT abort the entire operation.
+- Partial or failed ingest operations across containers MUST NOT result in orphaned or incomplete database records
+- **SINGLE TRANSACTION BOUNDARY**: The entire source ingest operation MUST be wrapped in a single Unit of Work. If any container ingest fails fatally, the entire source ingest operation MUST be rolled back. Non-fatal container ingest failures (e.g., individual asset processing errors) MUST be logged but MUST NOT abort the entire operation.
 - Source type MUST be valid and support the ingest operation. Unsupported source types MUST cause the command to fail with exit code 1.
 - Source MUST support asset enumeration for content discovery
 
@@ -61,32 +61,32 @@ retrovue source ingest <source_id>|"<source name>" [--dry-run] [--test-db] [--js
 ### Human-Readable Output
 
 - Source identification and summary
-- Total number of eligible collections found (`sync_enabled=true` AND `ingestible=true`)
-- Per-collection ingest results:
-  - Collection name and status
-  - Assets discovered, ingested, skipped, updated per collection
-  - Last ingest time per collection
-- Overall summary with total counts across all collections:
+- Total number of eligible containers found (`sync_enabled=true` AND `ingestible=true`)
+- Per-container ingest results:
+  - Container name and status
+  - Assets discovered, ingested, skipped, updated per container
+  - Last ingest time per container
+- Overall summary with total counts across all containers:
   - Total assets discovered, ingested, skipped, updated
   - Total duplicates prevented
   - Overall last ingest time
-- Summary line with clear status: `Success`, `Partial Success`, `Error: No eligible collections`, etc.
-- EXAMPLE: Source ingest complete: 4 collections processed, 1,250 assets discovered (800 ingested, 400 skipped, 50 updated)
+- Summary line with clear status: `Success`, `Partial Success`, `Error: No eligible containers`, etc.
+- EXAMPLE: Source ingest complete: 4 containers processed, 1,250 assets discovered (800 ingested, 400 skipped, 50 updated)
 
 ### JSON Output (if `--json` is provided)
 
 - Top-level deterministic keys:
   - `"status"`: `"success"` | `"partial"` | `"error"`
   - `"source"`: Source identification object
-  - `"collections_processed"`: Number of collections processed
+  - `"collections_processed"` (or `containers_processed` when canonical): Number of containers processed. *Compatibility:* key name may remain during rollout.
   - `"stats"`: Aggregated statistics object:
-    - `"assets_discovered"`: Total assets discovered across all collections
-    - `"assets_ingested"`: Total assets ingested across all collections
-    - `"assets_skipped"`: Total assets skipped across all collections
-    - `"assets_updated"`: Total assets updated across all collections
-    - `"duplicates_prevented"`: Total duplicates prevented across all collections
+    - `"assets_discovered"`: Total assets discovered across all containers
+    - `"assets_ingested"`: Total assets ingested across all containers
+    - `"assets_skipped"`: Total assets skipped across all containers
+    - `"assets_updated"`: Total assets updated across all containers
+    - `"duplicates_prevented"`: Total duplicates prevented across all containers
   - `"last_ingest_time"`: Overall last ingest time (ISO format)
-  - `"collection_results"`: [array of per-collection result objects matching CollectionIngest format]
+  - `"collection_results"` (or `container_results` when canonical): [array of per-container result objects matching Container Ingest format]. *Compatibility:* key name may remain during rollout.
   - `"errors"`: [array of error objects/messages]
 - Must include all the information from the human-readable output in a machine-consumable way.
 
@@ -115,9 +115,9 @@ Notes:
 
 ## Exit Codes
 
-- `0` — Success; all collections ingested successfully or (if `--dry-run`) actions listed with no errors.
-- `1` — Validation failure (e.g., source not found, no enabled collections, mapping invalid).
-- `2` — Partial success; some collections succeeded, some failed.
+- `0` — Success; all containers ingested successfully or (if `--dry-run`) actions listed with no errors.
+- `1` — Validation failure (e.g., source not found, no enabled containers, mapping invalid).
+- `2` — Partial success; some containers succeeded, some failed.
 - `3` — External system unreachable (source location cannot be accessed).
 - All non-zero exit codes MUST be accompanied by a clear error message in both human and JSON output.
 
@@ -125,15 +125,15 @@ Notes:
 
 ## Data Effects
 
-- **SINGLE TRANSACTION BOUNDARY**: The entire source ingest operation MUST be wrapped in a single Unit of Work, ensuring atomicity across all collections. If any collection ingest fails fatally, the entire source ingest operation MUST be rolled back.
-- For each eligible collection (`sync_enabled=true` AND `ingestible=true`), the ingest process follows the exact same rules as defined in the [Collection Ingest](CollectionIngestContract.md).
+- **SINGLE TRANSACTION BOUNDARY**: The entire source ingest operation MUST be wrapped in a single Unit of Work, ensuring atomicity across all containers. If any container ingest fails fatally, the entire source ingest operation MUST be rolled back.
+- For each eligible container (`sync_enabled=true` AND `ingestible=true`), the ingest process follows the exact same rules as defined in the [Container Ingest](ContainerIngestContract.md).
 - New Assets follow the canonical lifecycle: all assets are created with `state='new'` and `approved_for_broadcast=False`. Confidence scoring is informational only and MUST NOT drive lifecycle or approval decisions. Promotion to `ready` occurs only through `enrich_asset()` after enrichment completes. Approval requires explicit operator action (INV-ASSET-APPROVAL-OPERATOR-ONLY-001).
 - Duplicate detection logic MUST prevent the creation of duplicate Asset records within each collection, following the Collection Ingest contract rules.
 - Any enrichment hooks MAY run during ingest per collection, following the same per-asset failure handling.
 - Assets created by this operation MUST NOT be marked as approved for broadcast automatically.
 - Individual collection ingest failures (non-fatal, e.g., individual asset processing errors) MUST be logged but MUST NOT abort the entire source ingest operation.
-- The source ingest operation MUST aggregate and report statistics from all collection ingests, including total assets discovered, ingested, skipped, updated, and duplicates prevented.
-- The source ingest operation MUST report the overall last ingest time (the latest `last_ingest_time` across all successfully processed collections).
+- The source ingest operation MUST aggregate and report statistics from all container ingests, including total assets discovered, ingested, skipped, updated, and duplicates prevented.
+- The source ingest operation MUST report the overall last ingest time (the latest `last_ingest_time` across all successfully processed containers).
 
 ---
 
@@ -142,20 +142,20 @@ Notes:
 #### Behavior Contract Rules (B-#)
 
 - **B-1:** The command MUST accept `<source_id>` as any of: full UUID, external ID (e.g. Plex server key), or case-insensitive display name. Source name matching MUST be case-insensitive. If multiple sources match the provided name (case-insensitive), the command MUST exit with code 1 and emit: "Multiple sources named '<name>' exist. Please specify the UUID." Resolution MUST NOT prefer one source over another, even if one has exact casing match.
-- **B-2:** The command MUST iterate ingest across all collections belonging to `<source_id>` that are both `sync_enabled=true` AND `ingestible=true`.
-- **B-3:** The command MUST NOT accept or forward any of the collection-level narrowing flags: `--title`, `--season`, `--episode`.
-- **B-4:** If any collection-level narrowing flags (`--title`, `--season`, `--episode`) are provided, the CLI MUST refuse to run, exit with code 1, and emit the error message: "Per-title/season/episode ingest is only supported at the collection level. Use: retrovue collection ingest <collection_id> [--title ... --season ... --episode ...]"
-- **B-5:** Source ingest MUST clearly summarize, in human-readable output and in `--json` mode, which collections were targeted and which were skipped (and why). Partial failures are allowed and MUST produce exit code 2.
-- **B-6:** When run with `--dry-run`, the command MUST enumerate what would be ingested for each eligible collection but MUST NOT call actual ingest routines that mutate data.
-- **B-7:** Output with `--json` MUST include `"status": "success" | "partial" | "error"` and explicit per-collection results matching CollectionIngest format.
+- **B-2:** The command MUST iterate ingest across all containers belonging to `<source_id>` that are both `sync_enabled=true` AND `ingestible=true`.
+- **B-3:** The command MUST NOT accept or forward any of the container-level narrowing flags: `--title`, `--season`, `--episode`.
+- **B-4:** If any container-level narrowing flags (`--title`, `--season`, `--episode`) are provided, the CLI MUST refuse to run, exit with code 1, and emit the error message: "Per-title/season/episode ingest is only supported at the container level. Use: retrovue container ingest <container_id> [--title ... --season ... --episode ...]" (during rollout, `retrovue collection ingest <collection_id>` may be mentioned as deprecated).
+- **B-5:** Source ingest MUST clearly summarize, in human-readable output and in `--json` mode, which containers were targeted and which were skipped (and why). Partial failures are allowed and MUST produce exit code 2.
+- **B-6:** When run with `--dry-run`, the command MUST enumerate what would be ingested for each eligible container but MUST NOT call actual ingest routines that mutate data.
+- **B-7:** Output with `--json` MUST include `"status": "success" | "partial" | "error"` and explicit per-container results matching Container Ingest format.
 - **B-8:** When run with `--test-db`, no changes may affect production or staging databases.
 - **B-9:** When both `--dry-run` and `--test-db` are provided, `--dry-run` takes precedence. The command MUST NOT write to any database (neither production nor test), but MUST still use the test DB context for resolution and validation.
-- **B-10:** **SINGLE TRANSACTION BOUNDARY**: The entire source ingest operation MUST be wrapped in a single Unit of Work. If any collection ingest fails fatally, the entire source ingest operation MUST be rolled back. Non-fatal collection ingest failures (e.g., individual asset processing errors) MUST be logged but MUST NOT abort the entire operation.
-- **B-11:** For each eligible collection, the system MUST verify the collection is ingestible BEFORE processing. If the collection is not ingestible, it MUST be skipped and logged.
+- **B-10:** **SINGLE TRANSACTION BOUNDARY**: The entire source ingest operation MUST be wrapped in a single Unit of Work. If any container ingest fails fatally, the entire source ingest operation MUST be rolled back. Non-fatal container ingest failures (e.g., individual asset processing errors) MUST be logged but MUST NOT abort the entire operation.
+- **B-11:** For each eligible container, the system MUST verify the container is ingestible BEFORE processing. If the container is not ingestible, it MUST be skipped and logged.
 - **B-12:** Source type MUST be valid and support ingest operations. Unsupported source types MUST cause the command to fail with exit code 1.
-- **B-13:** Source and collection validity MUST be verified before ingest attempt.
-- **B-14:** The command MUST aggregate statistics from all collection ingests and report totals for assets discovered, ingested, skipped, updated, and duplicates prevented.
-- **B-15:** The command MUST report the overall last ingest time (the latest `last_ingest_time` across all successfully processed collections).
+- **B-13:** Source and container validity MUST be verified before ingest attempt.
+- **B-14:** The command MUST aggregate statistics from all container ingests and report totals for assets discovered, ingested, skipped, updated, and duplicates prevented.
+- **B-15:** The command MUST report the overall last ingest time (the latest `last_ingest_time` across all successfully processed containers).
 
 ---
 
@@ -163,23 +163,23 @@ Notes:
 
 #### Data Contract Rules (D-#)
 
-- **D-1:** **SINGLE TRANSACTION BOUNDARY**: The entire source ingest operation MUST be wrapped in a single Unit of Work, following Unit of Work principles. If a fatal error occurs before successful completion, no assets, relationships, or side effects from any collection ingest may persist.
-- **D-2:** Source ingest MUST only process collections where `sync_enabled=true` AND `ingestible=true`. Collections that do not meet both criteria MUST be skipped and logged.
-- **D-3:** For each eligible collection, the system MUST verify the collection is ingestible BEFORE processing. If the collection is not ingestible, it MUST be skipped and logged.
-- **D-4:** Source ingest MUST invoke the same underlying ingestion pipeline that collection ingest uses for "full collection" mode (no `--title`/`--season`/`--episode`), but MUST call it in "full collection" scope only.
-- **D-5:** All ingest operations triggered under source ingest MUST be tracked individually per collection in ingest logs/audit trails, distinguishing between bulk source ingest and manual surgical ingest.
-- **D-6:** Duplicate detection logic MUST prevent the creation of duplicate Asset records within each collection, following the Collection Ingest contract rules.
-- **D-7:** Every new Asset MUST begin in lifecycle state `new` and MUST NOT be in `ready` state at creation time. If enrichers are attached to the collection, assets MAY transition through `enriching` state during active enrichment processing, but MUST NOT remain in `enriching` state after enrichment completes.
+- **D-1:** **SINGLE TRANSACTION BOUNDARY**: The entire source ingest operation MUST be wrapped in a single Unit of Work, following Unit of Work principles. If a fatal error occurs before successful completion, no assets, relationships, or side effects from any container ingest may persist.
+- **D-2:** Source ingest MUST only process containers where `sync_enabled=true` AND `ingestible=true`. Containers that do not meet both criteria MUST be skipped and logged.
+- **D-3:** For each eligible container, the system MUST verify the container is ingestible BEFORE processing. If the container is not ingestible, it MUST be skipped and logged.
+- **D-4:** Source ingest MUST invoke the same underlying ingestion pipeline that container ingest uses for full container scope (no `--title`/`--season`/`--episode`), but MUST call it in full container scope only.
+- **D-5:** All ingest operations triggered under source ingest MUST be tracked individually per container in ingest logs/audit trails, distinguishing between bulk source ingest and manual surgical ingest.
+- **D-6:** Duplicate detection logic MUST prevent the creation of duplicate Asset records within each container, following the Container Ingest contract rules.
+- **D-7:** Every new Asset MUST begin in lifecycle state `new` and MUST NOT be in `ready` state at creation time. If enrichers are attached to the container, assets MAY transition through `enriching` state during active enrichment processing, but MUST NOT remain in `enriching` state after enrichment completes.
 - **D-8:** Source type validity MUST be verified before ingest attempt.
-- **D-9:** Asset discovery MUST retrieve all assets belonging to the collection. Discovery MUST return normalized asset data and MUST NOT perform any database writes.
-- **D-10:** Asset discovery and database persistence are separate operations. All database persistence (Asset creation, updates, collection state updates) MUST occur within Unit of Work transaction boundaries.
-- **D-11:** The `ingestible` field MUST be verified for each collection before ingesting.
-- **D-12:** If `ingestible=false`, the collection MUST NOT be included in bulk ingest operations, even if `sync_enabled=true`.
+- **D-9:** Asset discovery MUST retrieve all assets belonging to the container. Discovery MUST return normalized asset data and MUST NOT perform any database writes.
+- **D-10:** Asset discovery and database persistence are separate operations. All database persistence (Asset creation, updates, container state updates) MUST occur within Unit of Work transaction boundaries.
+- **D-11:** The `ingestible` field MUST be verified for each container before ingesting.
+- **D-12:** If `ingestible=false`, the container MUST NOT be included in bulk ingest operations, even if `sync_enabled=true`.
 - **D-13:** All operations run with `--test-db` MUST be isolated from production database storage, tables, and triggers.
 - **D-14:** When both `--dry-run` and `--test-db` are provided, `--dry-run` takes precedence. The command MUST NOT write to any database (neither production nor test), but MUST still use the test DB context for resolution and validation.
-- **D-15:** Source-level ingest MUST NOT create any source-level database records; all persistence occurs at the collection level.
-- **D-16:** The source ingest operation MUST aggregate and report statistics from all collection ingests, including total assets discovered, ingested, skipped, updated, and duplicates prevented.
-- **D-17:** The source ingest operation MUST report the overall last ingest time (the latest `last_ingest_time` across all successfully processed collections).
+- **D-15:** Source-level ingest MUST NOT create any source-level database records; all persistence occurs at the container level.
+- **D-16:** The source ingest operation MUST aggregate and report statistics from all container ingests, including total assets discovered, ingested, skipped, updated, and duplicates prevented.
+- **D-17:** The source ingest operation MUST report the overall last ingest time (the latest `last_ingest_time` across all successfully processed containers).
 
 ---
 
@@ -217,27 +217,27 @@ retrovue source ingest "My Plex Server" --test-db --dry-run
 ### Forbidden Operations (Will Fail)
 
 ```bash
-# FORBIDDEN: Collection-level narrowing flags
+# FORBIDDEN: Container-level narrowing flags
 retrovue source ingest "My Plex Server" --title "The Big Bang Theory"
-# Error: Per-title/season/episode ingest is only supported at the collection level.
-# Use: retrovue collection ingest <collection_id> [--title ... --season ... --episode ...]
+# Error: Per-title/season/episode ingest is only supported at the container level.
+# Use: retrovue container ingest <container_id> [--title ... --season ... --episode ...]
 
 # FORBIDDEN: Season flag
 retrovue source ingest "My Plex Server" --season 1
-# Error: Per-title/season/episode ingest is only supported at the collection level.
+# Error: Per-title/season/episode ingest is only supported at the container level.
 
 # FORBIDDEN: Episode flag
 retrovue source ingest "My Plex Server" --episode 6
-# Error: Per-title/season/episode ingest is only supported at the collection level.
+# Error: Per-title/season/episode ingest is only supported at the container level.
 ```
 
 ### Correct Surgical Operations
 
 ```bash
 # For targeted ingest, use collection ingest instead
-retrovue collection ingest "TV Shows" --title "The Big Bang Theory"
-retrovue collection ingest "TV Shows" --title "The Big Bang Theory" --season 1
-retrovue collection ingest "TV Shows" --title "The Big Bang Theory" --season 1 --episode 6
+retrovue container ingest "TV Shows" --title "The Big Bang Theory"
+retrovue container ingest "TV Shows" --title "The Big Bang Theory" --season 1
+retrovue container ingest "TV Shows" --title "The Big Bang Theory" --season 1 --episode 6
 ```
 
 ---
@@ -306,4 +306,4 @@ retrovue source ingest "Test Plex Server" --test-db
 
 - [Unit of Work](../_ops/UnitOfWorkContract.md) - Transaction management requirements for atomic operations
 - [Source Discover](SourceDiscoverContract.md) - Iterative collection discovery operations
-- [Collection Ingest](CollectionIngestContract.md) - Individual collection ingest operations
+- [Container Ingest](ContainerIngestContract.md) - Individual collection ingest operations

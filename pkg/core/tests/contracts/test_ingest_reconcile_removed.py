@@ -77,7 +77,7 @@ class TestFullIngestReconciliation:
 
     def test_removed_asset_soft_deleted(self):
         from retrovue.cli.commands._ops.collection_ingest_service import (
-            CollectionIngestService,
+            ContainerIngestService,
         )
 
         db = MagicMock()
@@ -107,7 +107,7 @@ class TestFullIngestReconciliation:
         ), patch(
             "retrovue.cli.commands._ops.collection_ingest_service.persist_asset_metadata",
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.load_catalog_state_for_collection",
+            "retrovue.cli.commands._ops.collection_ingest_service.load_catalog_state_for_container",
             return_value={"hash_gone": stale_asset},
         ), patch(
             "retrovue.cli.commands._ops.collection_ingest_service.enqueue_processor_jobs",
@@ -115,9 +115,9 @@ class TestFullIngestReconciliation:
             # Make scalar return None (no existing asset for the discovered item)
             db.scalar.return_value = None
 
-            svc = CollectionIngestService(db)
-            result = svc.ingest_collection(
-                collection=collection,
+            svc = ContainerIngestService(db)
+            result = svc.ingest_container(
+                container=collection,
                 importer=importer,
             )
 
@@ -135,7 +135,7 @@ class TestScopedIngestNoDelete:
 
     def test_title_scoped_ingest_skips_reconciliation(self):
         from retrovue.cli.commands._ops.collection_ingest_service import (
-            CollectionIngestService,
+            ContainerIngestService,
         )
 
         db = MagicMock()
@@ -164,9 +164,9 @@ class TestScopedIngestNoDelete:
         ):
             db.scalar.return_value = None
 
-            svc = CollectionIngestService(db)
-            result = svc.ingest_collection(
-                collection=collection,
+            svc = ContainerIngestService(db)
+            result = svc.ingest_container(
+                container=collection,
                 importer=importer,
                 title="Some Title",
             )
@@ -184,7 +184,7 @@ class TestDryRunReconciliation:
 
     def test_dry_run_counts_but_does_not_delete(self):
         from retrovue.cli.commands._ops.collection_ingest_service import (
-            CollectionIngestService,
+            ContainerIngestService,
         )
 
         db = MagicMock()
@@ -209,16 +209,16 @@ class TestDryRunReconciliation:
             "retrovue.cli.commands._ops.collection_ingest_service.handle_ingest",
             return_value={"resolved_fields": {}},
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.load_catalog_state_for_collection",
+            "retrovue.cli.commands._ops.collection_ingest_service.load_catalog_state_for_container",
             return_value={"hash_gone": stale_asset},
         ), patch(
             "retrovue.cli.commands._ops.collection_ingest_service.persist_asset_metadata",
         ):
             db.scalar.return_value = None
 
-            svc = CollectionIngestService(db)
-            result = svc.ingest_collection(
-                collection=collection,
+            svc = ContainerIngestService(db)
+            result = svc.ingest_container(
+                container=collection,
                 importer=importer,
                 dry_run=True,
             )
@@ -238,7 +238,7 @@ class TestEmptyDiscoverySafety:
 
     def test_empty_discovery_preserves_all_assets(self):
         from retrovue.cli.commands._ops.collection_ingest_service import (
-            CollectionIngestService,
+            ContainerIngestService,
         )
 
         db = MagicMock()
@@ -250,9 +250,9 @@ class TestEmptyDiscoverySafety:
         importer.discover.return_value = []
         importer.name = "test"
 
-        svc = CollectionIngestService(db)
-        result = svc.ingest_collection(
-            collection=collection,
+        svc = ContainerIngestService(db)
+        result = svc.ingest_container(
+            container=collection,
             importer=importer,
         )
 
@@ -275,7 +275,7 @@ class TestReAddRestoresAsset:
 
     def test_restored_asset_counted_as_ingested(self):
         from retrovue.cli.commands._ops.collection_ingest_service import (
-            CollectionIngestService,
+            ContainerIngestService,
         )
 
         db = MagicMock()
@@ -311,7 +311,7 @@ class TestReAddRestoresAsset:
         ), patch(
             "retrovue.cli.commands._ops.collection_ingest_service.persist_asset_metadata",
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.load_catalog_state_for_collection",
+            "retrovue.cli.commands._ops.collection_ingest_service.load_catalog_state_for_container",
             return_value={},
         ), patch(
             "retrovue.cli.commands._ops.collection_ingest_service.enqueue_processor_jobs",
@@ -319,9 +319,9 @@ class TestReAddRestoresAsset:
             # Repo finds the soft-deleted row when checking duplicate by canonical_key_hash
             db.scalar.return_value = soft_deleted_asset
 
-            svc = CollectionIngestService(db)
-            result = svc.ingest_collection(
-                collection=collection,
+            svc = ContainerIngestService(db)
+            result = svc.ingest_container(
+                container=collection,
                 importer=importer,
             )
 
@@ -339,14 +339,14 @@ class TestStatsAccuracy:
 
     def test_assets_removed_in_to_dict(self):
         from retrovue.cli.commands._ops.collection_ingest_service import (
-            CollectionIngestResult,
+            ContainerIngestResult,
             IngestStats,
         )
 
         stats = IngestStats(assets_discovered=5, assets_ingested=3, assets_removed=2)
-        result = CollectionIngestResult(
-            collection_id="c-1",
-            collection_name="commercials",
+        result = ContainerIngestResult(
+            container_id="c-1",
+            container_name="commercials",
             scope="collection",
             stats=stats,
         )

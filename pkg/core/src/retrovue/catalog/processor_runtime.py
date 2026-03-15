@@ -21,7 +21,7 @@ from ..domain.entities import (
     Asset,
     AssetEditorial,
     AssetProbed,
-    Collection,
+    Container,
     ProcessorOutput,
     ProcessorRun,
 )
@@ -230,7 +230,7 @@ def execute_job(db: Session, job: Any) -> None:
 
     collection_name = ""
     try:
-        coll = db.get(Collection, asset.collection_uuid)
+        coll = db.get(Container, asset.container_id)
         if coll is not None:
             collection_name = getattr(coll, "name", "") or ""
     except Exception:

@@ -12,7 +12,8 @@ from ..domain.entities import Asset
 def _serialize_asset(asset: Asset) -> dict[str, Any]:
     return {
         "uuid": str(asset.uuid),
-        "collection_uuid": str(asset.collection_uuid),
+        "container_id": str(asset.container_id),
+        "collection_uuid": str(asset.container_id),
         "uri": asset.uri,
         "state": asset.state,
         "approved_for_broadcast": bool(asset.approved_for_broadcast),

@@ -36,7 +36,8 @@ def _fake_source(*, source_id="s-1", name="Interstitials"):
     return SimpleNamespace(id=source_id, name=name)
 
 
-def _fake_collection(*, uuid="c-1", name="commercials", source_id="s-1"):
+def _fake_container(*, uuid="c-1", name="commercials", source_id="s-1"):
+    """Fake container (ingest entity) for tests."""
     ns = SimpleNamespace(
         uuid=uuid,
         name=name,
@@ -79,7 +80,7 @@ class TestValidation:
 
     def test_neither_source_nor_collection_raises(self):
         db = MagicMock()
-        with pytest.raises(ValueError, match="--source or --collection"):
+        with pytest.raises(ValueError, match="--source or --container"):
             enrich_stale_assets(db)
 
 
@@ -88,12 +89,12 @@ class TestValidation:
 # ---------------------------------------------------------------------------
 
 class TestSourceScoping:
-    """Source resolution iterates all collections under the source."""
+    """Source resolution iterates all containers under the source."""
 
-    def test_iterates_source_collections(self):
+    def test_iterates_source_containers(self):
         db = MagicMock()
-        c1 = _fake_collection(uuid="c-1", name="commercials")
-        c2 = _fake_collection(uuid="c-2", name="bumpers")
+        c1 = _fake_container(uuid="c-1", name="commercials")
+        c2 = _fake_container(uuid="c-2", name="bumpers")
         db.query.return_value.filter.return_value.all.return_value = [c1, c2]
 
         with patch(
@@ -114,7 +115,7 @@ class TestSourceScoping:
         assert result.total_assets_enriched == 9
         assert mock_apply.call_count == 2
 
-    def test_source_with_no_collections(self):
+    def test_source_with_no_containers(self):
         db = MagicMock()
         db.query.return_value.filter.return_value.all.return_value = []
 
@@ -131,13 +132,13 @@ class TestSourceScoping:
 
 
 # ---------------------------------------------------------------------------
-# Collection scoping
+# Container scoping
 # ---------------------------------------------------------------------------
 
-class TestCollectionScoping:
-    """Collection resolution targets a single collection."""
+class TestContainerScoping:
+    """Container resolution targets a single container."""
 
-    def test_single_collection(self):
+    def test_single_container(self):
         db = MagicMock()
 
         with patch(
@@ -145,7 +146,7 @@ class TestCollectionScoping:
         ) as mock_resolve, patch(
             "retrovue.usecases.asset_enrich_stale.apply_enrichers_to_collection"
         ) as mock_apply:
-            mock_resolve.return_value = _fake_collection()
+            mock_resolve.return_value = _fake_container()
             mock_apply.return_value = _apply_result(considered=10, enriched=5)
 
             result = enrich_stale_assets(db, collection_selector="commercials")
@@ -170,7 +171,7 @@ class TestDryRun:
         ) as mock_resolve, patch(
             "retrovue.usecases.asset_enrich_stale.apply_enrichers_to_collection"
         ) as mock_apply:
-            mock_resolve.return_value = _fake_collection()
+            mock_resolve.return_value = _fake_container()
             mock_apply.return_value = {
                 "collection_id": "c-1",
                 "collection_name": "commercials",
@@ -211,7 +212,7 @@ class TestLimit:
         ) as mock_resolve, patch(
             "retrovue.usecases.asset_enrich_stale.apply_enrichers_to_collection"
         ) as mock_apply:
-            mock_resolve.return_value = _fake_collection()
+            mock_resolve.return_value = _fake_container()
             mock_apply.return_value = _apply_result(considered=5, enriched=5)
 
             enrich_stale_assets(db, collection_selector="commercials", max_assets=50)
@@ -241,8 +242,10 @@ class TestOutputShape:
         assert "status" in d
         assert "source" in d
         assert "dry_run" in d
+        assert "containers_processed" in d
         assert "collections_processed" in d
         assert "stats" in d
+        assert "container_results" in d
         assert "collection_results" in d
 
         assert d["status"] == "success"
@@ -277,7 +280,7 @@ class TestErrorHandling:
         ) as mock_resolve, patch(
             "retrovue.usecases.asset_enrich_stale.apply_enrichers_to_collection"
         ) as mock_apply:
-            mock_resolve.return_value = _fake_collection()
+            mock_resolve.return_value = _fake_container()
             mock_apply.side_effect = RuntimeError("pipeline crashed")
 
             result = enrich_stale_assets(db, collection_selector="commercials")

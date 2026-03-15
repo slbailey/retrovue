@@ -19,10 +19,10 @@ from ...adapters.registry import (
     list_enrichers,
     list_importers,
 )
-from ...domain.entities import Collection, Source
+from ...domain.entities import Container, Source
 from ...infra.uow import session
 from ...usecases.source_add import add_source as usecase_add_source
-from ...usecases.source_discover import discover_collections as usecase_discover_collections
+from ...usecases.source_discover import discover_containers as usecase_discover_containers
 from ...usecases.source_list import list_sources as usecase_list_sources
 
 def _parse_set_value(raw: str):
@@ -68,13 +68,13 @@ def source_list(source_type: str | None = None, test_db: bool = False, db_sessio
             # Get collection counts - handle case where collections table might not exist
             try:
                 enabled_collections = db.query(Collection).filter(
-                    Collection.source_id == source.id,
-                    Collection.sync_enabled.is_(True)
+                    Container.source_id == source.id,
+                    Container.sync_enabled.is_(True)
                 ).count()
                 
                 ingestible_collections = db.query(Collection).filter(
-                    Collection.source_id == source.id,
-                    Collection.ingestible.is_(True)
+                    Container.source_id == source.id,
+                    Container.ingestible.is_(True)
                 ).count()
             except Exception:
                 # If collections table doesn't exist or query fails, default to 0
@@ -549,7 +549,7 @@ def add_source(
     base_path: str | None = typer.Option(None, "--base-path", help="Base filesystem path to scan"),
     enrichers: str | None = typer.Option(None, "--enrichers", help="Comma-separated list of enrichers to use"),
     set_params: list[str] | None = typer.Option(None, "--set", help="Set importer config key: KEY=VALUE (repeatable). Booleans: true/false. JSON: valid JSON."),
-    discover: bool = typer.Option(False, "--discover", help="Automatically discover and persist collections after source creation"),
+    discover: bool = typer.Option(False, "--discover", help="Automatically discover and persist containers after source creation"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be created without executing"),
     test_db: bool = typer.Option(False, "--test-db", help="Direct command to test database environment"),
     json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
@@ -1455,7 +1455,7 @@ def discover_collections(
             
             # Use usecase for collection discovery (handles all source types)
             try:
-                collections = usecase_discover_collections(db, source_id=source_id)
+                collections = usecase_discover_containers(db, source_id=source_id)
             except ValueError as e:
                 # Handle unsupported source types gracefully per contract
                 if "Unsupported source type" in str(e):
@@ -1500,8 +1500,8 @@ def discover_collections(
             for collection in collections:
                 # Check if collection already exists
                 existing = db.query(Collection).filter(
-                    Collection.source_id == source.id,
-                    Collection.external_id == collection["external_id"]
+                    Container.source_id == source.id,
+                    Container.external_id == collection["external_id"]
                 ).first()
                 
                 if existing:
@@ -1561,7 +1561,7 @@ def discover_collections(
                     for summary in collection_summaries:
                         typer.echo(f"  • {summary['name']} (ID: {summary['external_id']}) - Disabled by default")
                     typer.echo()
-                    typer.echo("Use 'retrovue collection update <name> --sync-enable' to enable collections for sync")
+                    typer.echo("Use 'retrovue container update <name> --sync-enable' to enable containers for sync")
                     
         except Exception as e:
             typer.echo(f"Error discovering collections: {e}", err=True)
@@ -1577,7 +1577,7 @@ def source_ingest(
     """
     Ingest all sync-enabled, ingestible collections from a source.
 
-    Delegates each eligible collection to CollectionIngestService, which
+    Delegates each eligible container to ContainerIngestService, which
     handles discovery, enrichment, and metadata persistence per the
     Collection Ingest contract.
 
@@ -1598,13 +1598,13 @@ def source_ingest(
 
             # B-2: Early exit if no eligible collections
             sync_collections = db.query(Collection).filter(
-                Collection.source_id == source.id,
-                Collection.sync_enabled.is_(True),
+                Container.source_id == source.id,
+                Container.sync_enabled.is_(True),
             ).all()
 
             if not sync_collections:
                 typer.echo(f"No sync-enabled collections found for source '{source.name}'")
-                typer.echo("Use 'retrovue collection update <name> --sync-enable' to enable collections")
+                typer.echo("Use 'retrovue container update <name> --sync-enable' to enable containers")
                 return
 
             ingestible = [c for c in sync_collections if c.ingestible]
@@ -1693,7 +1693,7 @@ def source_attach_enricher(
             
             # Get all collections for this source
             collections = db.query(Collection).filter(
-                Collection.source_id == source.id
+                Container.source_id == source.id
             ).all()
             
             if not collections:
@@ -1771,7 +1771,7 @@ def source_detach_enricher(
             
             # Get all collections for this source
             collections = db.query(Collection).filter(
-                Collection.source_id == source.id
+                Container.source_id == source.id
             ).all()
             
             if not collections:

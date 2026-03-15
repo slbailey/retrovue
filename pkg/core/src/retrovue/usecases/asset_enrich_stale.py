@@ -14,7 +14,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from ..domain.entities import Collection
+from ..domain.entities import Container
 from .collection_enrichers import _resolve_collection, apply_enrichers_to_collection
 
 
@@ -49,6 +49,7 @@ class BulkEnrichResult:
             "status": status,
             "source": self.source_name,
             "dry_run": self.dry_run,
+            "containers_processed": self.collections_processed,
             "collections_processed": self.collections_processed,
             "stats": {
                 "assets_considered": self.total_assets_considered,
@@ -56,6 +57,7 @@ class BulkEnrichResult:
                 "assets_auto_ready": self.total_assets_auto_ready,
                 "errors": self.total_errors,
             },
+            "container_results": self.collection_results,
             "collection_results": self.collection_results,
         }
 
@@ -84,25 +86,25 @@ def enrich_stale_assets(
         BulkEnrichResult with aggregated statistics.
     """
     if source_selector and collection_selector:
-        raise ValueError("Provide --source or --collection, not both.")
+        raise ValueError("Provide --source or --container, not both.")
     if not source_selector and not collection_selector:
-        raise ValueError("Provide --source or --collection.")
+        raise ValueError("Provide --source or --container.")
 
     source_name: str | None = None
-    collections: list[Collection] = []
+    containers: list[Container] = []
 
     if source_selector:
         source = _resolve_source(db, source_selector)
         source_name = source.name
-        collections = (
-            db.query(Collection)
-            .filter(Collection.source_id == source.id)
+        containers = (
+            db.query(Container)
+            .filter(Container.source_id == source.id)
             .all()
         )
     else:
         coll = _resolve_collection(db, collection_selector)
         source_name = getattr(getattr(coll, "source", None), "name", None)
-        collections = [coll]
+        containers = [coll]
 
     agg = BulkEnrichResult(
         source_name=source_name,
@@ -113,7 +115,7 @@ def enrich_stale_assets(
         dry_run=dry_run,
     )
 
-    for coll in collections:
+    for coll in containers:
         try:
             result = apply_enrichers_to_collection(
                 db,

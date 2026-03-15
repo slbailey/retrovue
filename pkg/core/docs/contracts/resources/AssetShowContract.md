@@ -229,5 +229,5 @@ Follow this lifecycle for any change:
 
 - [Asset Contract](AssetContract.md) - Overview of all Asset operations
 - [Asset Domain Documentation](../../domain/Asset.md) - Core domain model
-- [Collection Show Contract](CollectionShowContract.md) - Collection display operations
+- [Container Show Contract](ContainerShowContract.md) - Collection display operations
 

@@ -27,7 +27,7 @@ from .base import (
 )
 
 if TYPE_CHECKING:
-    from ...domain.entities import Collection
+    from ...domain.entities import Container
 
 logger = logging.getLogger(__name__)
 
@@ -923,7 +923,7 @@ class PlexImporter(BaseImporter):
             raise ImporterError(f"Failed to discover content from Plex: {str(e)}") from e
 
     # Contract hook used by collection ingest to validate ingestibility before discovery
-    def validate_ingestible(self, collection: Collection) -> bool:
+    def validate_ingestible(self, container: Container) -> bool:
         """
         Return True if this importer can attempt ingest for the given collection.
 

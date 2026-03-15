@@ -42,21 +42,21 @@ Asset
 
 ### MediaSource
 
-A MediaSource is an external content provider (e.g., a Plex library, a filesystem directory). Sources are the ingest boundary. They are discovered, configured, and synced by the operator. Sources own collections.
+A MediaSource is an external content provider (e.g., a Plex library, a filesystem directory). Sources are the ingest boundary. They are discovered, configured, and synced by the operator. Sources own **containers** (contract term: see docs/contracts/architecture/TERMINOLOGY_COLLECTION_TO_CONTAINER.md).
 
-### Collection
+### Container
 
-A Collection is a named grouping of assets within a source. Collections are the organizational unit — they represent a library section, a folder, or a provider category. Collections contain assets. Collections are persistent entities owned by Core.
+A **Container** is a subdivision of a source used for discovery — a named grouping of assets (e.g. a library section, a folder, or a provider category). Containers contain assets. Containers are persistent entities owned by Core.
 
 Example:
 
 ```
 Plex Library (MediaSource)
-   +-- Intros (Collection)
+   +-- Intros (Container)
    |      +-- hbo_intro_1.mpg (Asset)
    |      +-- hbo_intro_2.mpg (Asset)
    |      +-- showtime_intro_1.mpg (Asset)
-   +-- Movies (Collection)
+   +-- Movies (Container)
           +-- blade_runner.mkv (Asset)
           +-- alien.mkv (Asset)
 ```

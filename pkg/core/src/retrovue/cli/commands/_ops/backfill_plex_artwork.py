@@ -29,7 +29,7 @@ def backfill_plex_artwork(*, dry_run: bool = False) -> dict[str, int]:
         Stats dict with keys: total, updated, skipped, already_has, errors.
     """
     from retrovue.adapters.importers.plex_importer import PlexClient
-    from retrovue.domain.entities import Asset, AssetEditorial, Collection, Source
+    from retrovue.domain.entities import Asset, AssetEditorial, Container, Source
     from retrovue.infra.uow import session
 
     stats = {"total": 0, "updated": 0, "skipped": 0, "already_has": 0, "errors": 0}
@@ -71,7 +71,7 @@ def backfill_plex_artwork(*, dry_run: bool = False) -> dict[str, int]:
             # Get all collections for this source.
             collections = (
                 db.query(Collection)
-                .filter(Collection.source_id == source.id)
+                .filter(Container.source_id == source.id)
                 .all()
             )
             collection_uuids = [c.uuid for c in collections]
@@ -81,7 +81,7 @@ def backfill_plex_artwork(*, dry_run: bool = False) -> dict[str, int]:
             # Get all assets from these collections.
             assets = (
                 db.query(Asset)
-                .filter(Asset.collection_uuid.in_(collection_uuids))
+                .filter(Asset.container_id.in_(collection_uuids))
                 .all()
             )
             logger.info("Found %d assets for source %s", len(assets), source.name)

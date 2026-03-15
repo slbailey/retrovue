@@ -2,6 +2,8 @@
 
 This document describes the contract-driven ingestion and metadata pipeline. The system has a single flow: container discovery → catalog reconciliation → job queue → processor runtime → metadata persistence. See `docs/contracts/core/` and `catalog_processing_architecture.md`.
 
+**Terminology:** The ingest/catalog entity is **Container** (Source → Container → Locator → Media/Asset). See [TERMINOLOGY_COLLECTION_TO_CONTAINER.md](TERMINOLOGY_COLLECTION_TO_CONTAINER.md). The only allowed remaining uses of "Collection" for this entity are historical migrations and temporary CLI/API compatibility; architecture docs use Container only.
+
 ---
 
 ## Architecture Overview
@@ -89,13 +91,13 @@ The contracts require that **container refresh run before playout horizon expans
 scheduler_daemon (each evaluation cycle)
        │
        ▼
-  container_refresh   (discovery + reconciliation for configured collections)
+  container_refresh   (discovery + reconciliation for configured containers)
        │
        ▼
   horizon_expansion   (extend Tier 2 / playout horizon using updated catalog)
 ```
 
-CLI ingest (`source ingest`, `collection ingest`) remains a valid trigger; the daemon adds a second trigger so that refresh runs on a schedule or before each horizon extension.
+CLI ingest (`source ingest`, `container ingest`) remains a valid trigger; the daemon adds a second trigger so that refresh runs on a schedule or before each horizon extension. (During compatibility rollout, `collection ingest` may still be accepted as a deprecated alias.)
 
 ---
 
