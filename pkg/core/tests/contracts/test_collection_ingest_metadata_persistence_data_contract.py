@@ -21,6 +21,7 @@ from retrovue.cli.commands._ops.collection_ingest_service import CollectionInges
 def _fake_collection() -> Any:
     class _C:
         uuid = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        source_id = "00000000-0000-0000-0000-000000000000"  # str avoids shadowing uuid in class body
         name = "Test Collection"
         sync_enabled = True
         ingestible = True

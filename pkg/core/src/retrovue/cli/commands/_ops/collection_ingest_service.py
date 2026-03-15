@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 from retrovue.infra.metadata.persistence import persist_asset_metadata
 
 from ....adapters.registry import ENRICHERS
+from ....catalog.discovery import discover_locators
 from ....domain.entities import Asset, Collection
 from ....infra.canonical import canonical_hash, canonical_key_for
 from ....infra.exceptions import IngestError
@@ -437,21 +438,16 @@ class CollectionIngestService:
         except Exception:
             pipeline_checksum = None
 
-        # Discover items from importer (importers must not persist)
+        # Discovery is the single source of "what was discovered" (ContainerDiscoveryContract).
+        # discover_locators returns (DiscoveredLocator, raw_item) pairs; no catalog writes.
         try:
-            # Use scoped discovery when title/season/episode filters are provided and the importer supports it
-            if (title is not None or season is not None or episode is not None) and hasattr(
-                importer, "discover_scoped"
-            ):
-                try:
-                    discovered_items = importer.discover_scoped(
-                        title=title, season=season, episode=episode
-                    )
-                except Exception:
-                    # Fallback to full discovery if scoped path is unavailable
-                    discovered_items = importer.discover()
-            else:
-                discovered_items = importer.discover()
+            discovery_result = discover_locators(
+                collection,
+                importer,
+                title=title,
+                season=season,
+                episode=episode,
+            )
         except Exception as e:
             raise RuntimeError(f"Importer discovery failed: {e}") from e
 
@@ -570,7 +566,7 @@ class CollectionIngestService:
         # Track all canonical_key_hashes seen during discovery for reconciliation
         seen_hashes: set[str] = set()
 
-        for item in discovered_items or []:
+        for _discovered_locator, item in discovery_result or []:
             stats.assets_discovered += 1
             # Capture source_uri before any local resolution
             try:

@@ -28,9 +28,10 @@ import pytest
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _fake_collection(*, uuid="c-1", name="commercials"):
+def _fake_collection(*, uuid="c-1", name="commercials", source_id="s-1"):
     return SimpleNamespace(
         uuid=uuid,
+        source_id=source_id,
         name=name,
         sync_enabled=True,
         ingestible=True,
