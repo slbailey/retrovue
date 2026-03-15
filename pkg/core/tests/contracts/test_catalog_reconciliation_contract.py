@@ -81,6 +81,8 @@ class TestCatalogReconciliationContract:
             return_value={"resolved_fields": {}},
         ), patch(
             "retrovue.cli.commands._ops.collection_ingest_service.persist_asset_metadata",
+        ), patch(
+            "retrovue.cli.commands._ops.collection_ingest_service.enqueue_processor_jobs",
         ):
             svc = CollectionIngestService(db)
             r1 = svc.ingest_collection(collection=collection, importer=importer)
@@ -93,9 +95,7 @@ class TestCatalogReconciliationContract:
         """Present in source, absent in catalog → create."""
         discovered = [_loc(locator="new/loc")]
         catalog_state = {}
-        outcomes = determine_reconciliation_outcomes(
-            discovered, catalog_state, enable_fingerprint_updates=False
-        )
+        outcomes = determine_reconciliation_outcomes(discovered, catalog_state)
         assert len(outcomes) == 1
         assert outcomes[0][1] == ReconciliationOutcome.create
         assert outcomes[0][2] is None
@@ -109,9 +109,7 @@ class TestCatalogReconciliationContract:
         asset = _fake_asset(canonical_key_hash=key_hash, file_size=1000, file_mtime=123.0)
         discovered = [_loc(locator=locator, size=1000, mtime=123.0)]
         catalog_state = {key_hash: asset}
-        outcomes = determine_reconciliation_outcomes(
-            discovered, catalog_state, enable_fingerprint_updates=True
-        )
+        outcomes = determine_reconciliation_outcomes(discovered, catalog_state)
         assert len(outcomes) == 1
         assert outcomes[0][1] == ReconciliationOutcome.no_action
         assert outcomes[0][2] is asset
@@ -125,9 +123,7 @@ class TestCatalogReconciliationContract:
         asset = _fake_asset(canonical_key_hash=key_hash, file_size=1000, file_mtime=123.0)
         discovered = [_loc(locator=locator, size=2000, mtime=456.0)]
         catalog_state = {key_hash: asset}
-        outcomes = determine_reconciliation_outcomes(
-            discovered, catalog_state, enable_fingerprint_updates=True
-        )
+        outcomes = determine_reconciliation_outcomes(discovered, catalog_state)
         assert len(outcomes) == 1
         assert outcomes[0][1] == ReconciliationOutcome.update
         assert outcomes[0][2] is asset

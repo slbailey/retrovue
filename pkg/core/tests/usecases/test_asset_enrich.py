@@ -3,7 +3,8 @@ Unit tests for the unified enrichment lifecycle: usecases/asset_enrich.py
 
 Tests are deterministic (no real DB, no network, no wall-clock sleep).
 Uses mock DB sessions and SimpleNamespace stubs to verify the lifecycle
-contract without requiring Postgres.
+contract without requiring Postgres. enrich_asset now only resets and enqueues;
+processor execution is done by workers (Phase 6).
 
 See: docs/contracts/invariants/core/asset/INV-ASSET-REENRICH-RESETS-STALE-001.md
 """
@@ -20,6 +21,13 @@ from uuid import UUID, uuid4
 import pytest
 
 from retrovue.usecases.asset_enrich import EnrichResult, enrich_asset, _extract_label
+
+
+@pytest.fixture(autouse=True)
+def _patch_enqueue_processor_jobs():
+    """Patch enqueue so tests using mock db do not hit the real job queue."""
+    with patch("retrovue.catalog.processor_jobs.enqueue_processor_jobs"):
+        yield
 
 
 # ---------------------------------------------------------------------------
@@ -121,11 +129,13 @@ class TestEnrichAssetClearsMetadata:
 
         result = enrich_asset(db, asset, pipeline)
 
-        # After enrichment, fields reflect NEW enricher output, not old values
-        assert asset.duration_ms == 900_000
-        assert asset.video_codec == "hevc"
-        assert asset.audio_codec == "opus"
-        assert asset.container == "mkv"
+        # After reset, technical fields are cleared; worker will set them when job runs.
+        assert asset.duration_ms is None
+        assert asset.video_codec is None
+        assert asset.audio_codec is None
+        assert asset.container is None
+        assert asset.state == "enriching"
+        assert result.new_state == "enriching"
 
     def test_clears_fields_even_when_enricher_produces_nothing(self):
         """If enricher produces no labels, technical fields remain None."""
@@ -146,6 +156,8 @@ class TestEnrichAssetClearsMetadata:
         assert asset.video_codec is None
         assert asset.audio_codec is None
         assert asset.container is None
+        assert asset.state == "enriching"
+        assert result.new_state == "enriching"
 
 
 class TestEnrichAssetDeletesProbed:
@@ -200,7 +212,7 @@ class TestEnrichAssetChapterMarkers:
         assert avail not in delete_args
 
     def test_creates_chapter_markers_from_probed(self):
-        """Chapter markers are recreated from probed data when valid."""
+        """Chapter markers are recreated by worker from probed data; enrich_asset only resets and enqueues."""
         db = _make_mock_db()
         db.get = MagicMock(return_value=None)
         asset = _make_asset(state="new")
@@ -218,10 +230,8 @@ class TestEnrichAssetChapterMarkers:
 
         enrich_asset(db, asset, pipeline)
 
-        # Two markers should have been added
-        add_calls = [c[0][0] for c in db.add.call_args_list]
-        marker_adds = [c for c in add_calls if hasattr(c, "kind") and hasattr(c, "start_ms")]
-        assert len(marker_adds) == 2
+        # Worker creates chapter markers when job runs; enrich_asset only resets and enqueues.
+        assert asset.state == "enriching"
 
     def test_skips_invalid_chapter_bounds(self):
         """Out-of-bounds chapters are logged and skipped, not created."""
@@ -241,10 +251,8 @@ class TestEnrichAssetChapterMarkers:
 
         enrich_asset(db, asset, pipeline)
 
-        # No marker should have been added (only asset itself via add)
-        add_calls = [c[0][0] for c in db.add.call_args_list]
-        marker_adds = [c for c in add_calls if hasattr(c, "kind") and hasattr(c, "start_ms")]
-        assert len(marker_adds) == 0
+        # Worker handles chapters; enrich_asset only resets and enqueues.
+        assert asset.state == "enriching"
 
 
 class TestEnrichAssetApprovalReset:
@@ -264,6 +272,7 @@ class TestEnrichAssetApprovalReset:
         result = enrich_asset(db, asset, pipeline)
 
         assert asset.approved_for_broadcast is False
+        assert asset.state == "enriching"
 
     def test_never_sets_approved_true(self):
         """Even with successful enrichment, approved stays False."""
@@ -279,7 +288,7 @@ class TestEnrichAssetApprovalReset:
 
         result = enrich_asset(db, asset, pipeline)
 
-        assert asset.state == "ready"
+        assert asset.state == "enriching"
         assert asset.approved_for_broadcast is False
 
 
@@ -287,7 +296,7 @@ class TestEnrichAssetStateTransitions:
     """Verify state machine transitions are followed."""
 
     def test_transitions_through_enriching_to_ready(self):
-        """Asset goes new → enriching → ready when duration is valid."""
+        """Asset goes new → enriching; worker will transition to ready when duration is set."""
         db = _make_mock_db()
         asset = _make_asset(state="new")
         enricher = _make_enricher(labels_to_add=["duration_ms:1320000"])
@@ -296,11 +305,11 @@ class TestEnrichAssetStateTransitions:
         result = enrich_asset(db, asset, pipeline)
 
         assert result.old_state == "new"
-        assert result.new_state == "ready"
-        assert asset.state == "ready"
+        assert result.new_state == "enriching"
+        assert asset.state == "enriching"
 
     def test_transitions_through_enriching_to_new_on_missing_duration(self):
-        """Asset goes new → enriching → new when duration is missing."""
+        """Asset goes new → enriching; worker sets state to new if duration missing."""
         db = _make_mock_db()
         asset = _make_asset(state="new")
         enricher = _make_enricher()  # no duration
@@ -308,11 +317,11 @@ class TestEnrichAssetStateTransitions:
 
         result = enrich_asset(db, asset, pipeline)
 
-        assert result.new_state == "new"
-        assert asset.state == "new"
+        assert result.new_state == "enriching"
+        assert asset.state == "enriching"
 
     def test_handles_ready_asset_entry_state(self):
-        """Asset starting in 'ready' is properly reset and re-enriched."""
+        """Asset starting in 'ready' is reset and job enqueued; worker will re-enrich."""
         db = _make_mock_db()
         asset = _make_asset(
             state="ready",
@@ -325,50 +334,51 @@ class TestEnrichAssetStateTransitions:
         result = enrich_asset(db, asset, pipeline)
 
         assert result.old_state == "ready"
-        assert result.new_state == "ready"
-        assert asset.duration_ms == 900_000
+        assert result.new_state == "enriching"
+        assert asset.state == "enriching"
         assert asset.approved_for_broadcast is False
+        assert asset.duration_ms is None  # cleared in reset
 
 
 class TestEnrichAssetDurationGate:
     """Verify INV-ASSET-DURATION-REQUIRED-FOR-READY-001."""
 
     def test_promotes_to_ready_when_duration_positive(self):
-        """duration_ms > 0 → state = 'ready'."""
+        """Enqueue leaves state 'enriching'; worker promotes to ready when duration set."""
         db = _make_mock_db()
         asset = _make_asset(state="new")
         enricher = _make_enricher(labels_to_add=["duration_ms:1320000"])
         pipeline = [(0, "ffprobe", enricher)]
 
         result = enrich_asset(db, asset, pipeline)
-        assert asset.state == "ready"
+        assert asset.state == "enriching"
 
     def test_reverts_to_new_when_duration_none(self):
-        """duration_ms = None → state = 'new'."""
+        """Enqueue leaves state 'enriching'; worker sets new if duration missing."""
         db = _make_mock_db()
         asset = _make_asset(state="new")
         enricher = _make_enricher()
         pipeline = [(0, "noop", enricher)]
 
         result = enrich_asset(db, asset, pipeline)
-        assert asset.state == "new"
+        assert asset.state == "enriching"
 
     def test_reverts_to_new_when_duration_zero(self):
-        """duration_ms = 0 → state = 'new'."""
+        """Enqueue leaves state 'enriching'; worker sets new if duration zero."""
         db = _make_mock_db()
         asset = _make_asset(state="new")
         enricher = _make_enricher(labels_to_add=["duration_ms:0"])
         pipeline = [(0, "ffprobe", enricher)]
 
         result = enrich_asset(db, asset, pipeline)
-        assert asset.state == "new"
+        assert asset.state == "enriching"
 
 
 class TestEnrichAssetChecksum:
     """Verify last_enricher_checksum update."""
 
     def test_updates_checksum_when_provided(self):
-        """Checksum is stored on asset when provided."""
+        """Checksum is applied by worker on job completion; enrich_asset only enqueues."""
         db = _make_mock_db()
         asset = _make_asset(state="new")
         enricher = _make_enricher(labels_to_add=["duration_ms:1000"])
@@ -377,8 +387,8 @@ class TestEnrichAssetChecksum:
 
         result = enrich_asset(db, asset, pipeline, pipeline_checksum=checksum)
 
-        assert asset.last_enricher_checksum == checksum
-        assert result.checksum_applied == checksum
+        assert result.checksum_applied is None
+        assert asset.state == "enriching"
 
     def test_no_checksum_when_not_provided(self):
         """Checksum is not modified when not provided."""
@@ -391,13 +401,14 @@ class TestEnrichAssetChecksum:
 
         assert asset.last_enricher_checksum == "old_checksum"
         assert result.checksum_applied is None
+        assert asset.state == "enriching"
 
 
 class TestEnrichAssetPipelineExecution:
     """Verify enricher pipeline execution behavior."""
 
     def test_enricher_error_continues_pipeline(self):
-        """One enricher failure doesn't abort the rest."""
+        """Pipeline runs in worker; enrich_asset only resets and enqueues."""
         db = _make_mock_db()
         asset = _make_asset(state="new")
         failing = _make_enricher(should_fail=True)
@@ -409,19 +420,18 @@ class TestEnrichAssetPipelineExecution:
 
         result = enrich_asset(db, asset, pipeline)
 
-        assert len(result.enricher_errors) == 1
-        assert "failing_enricher" in result.enricher_errors[0]
-        assert asset.duration_ms == 1_320_000
-        assert asset.state == "ready"
+        assert result.new_state == "enriching"
+        assert asset.state == "enriching"
 
     def test_empty_pipeline_no_crash(self):
-        """Empty pipeline produces no enrichment; asset stays new."""
+        """Empty pipeline: no job enqueued; asset left in enriching."""
         db = _make_mock_db()
         asset = _make_asset(state="new")
 
         result = enrich_asset(db, asset, [])
 
-        assert asset.state == "new"
+        assert asset.state == "enriching"
+        assert result.new_state == "enriching"
         assert result.enricher_errors == []
 
 
@@ -429,7 +439,7 @@ class TestEnrichAssetResult:
     """Verify EnrichResult shape."""
 
     def test_returns_enrich_result(self):
-        """Return type is EnrichResult with correct field values."""
+        """Return type is EnrichResult; new_state is enriching (worker completes lifecycle)."""
         db = _make_mock_db()
         asset = _make_asset(state="ready", duration_ms=1_320_000)
         enricher = _make_enricher(labels_to_add=["duration_ms:900000"])
@@ -440,17 +450,17 @@ class TestEnrichAssetResult:
         assert isinstance(result, EnrichResult)
         assert result.asset_uuid == str(asset.uuid)
         assert result.old_state == "ready"
-        assert result.new_state == "ready"
+        assert result.new_state == "enriching"
         assert result.old_duration_ms == 1_320_000
-        assert result.new_duration_ms == 900_000
-        assert result.checksum_applied == "abc123"
+        assert result.new_duration_ms is None
+        assert result.checksum_applied is None
 
 
 class TestEnrichAssetEditorialMerge:
     """Verify editorial metadata is merged, not replaced."""
 
     def test_merges_editorial_into_existing(self):
-        """Enricher editorial is merged into existing AssetEditorial payload."""
+        """Worker merges editorial when job runs; enrich_asset only resets and enqueues."""
         db = _make_mock_db()
         existing_ed = MagicMock()
         existing_ed.payload = {"title": "Original Title", "series_title": "My Show"}
@@ -472,10 +482,10 @@ class TestEnrichAssetEditorialMerge:
 
         enrich_asset(db, asset, pipeline)
 
-        # existing_ed.payload should be merged (original + new)
+        # Worker merges editorial when job runs; enrich_asset does not touch editorial.
         assert existing_ed.payload["title"] == "Original Title"
         assert existing_ed.payload["series_title"] == "My Show"
-        assert existing_ed.payload["interstitial_type"] == "bumper"
+        assert asset.state == "enriching"
 
 
 class TestExtractLabel:

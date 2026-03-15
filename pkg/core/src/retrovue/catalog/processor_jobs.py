@@ -125,21 +125,12 @@ def enqueue_processor_jobs(
     """
     Enqueue one job per (target_type, asset_id) for each distinct target_type from processor_ids.
 
-    When ENABLE_PROCESSOR_QUEUE is false, no-op (stub). When true, for each asset_id and each
-    target_type from the collection's processors (via get_capability), call enqueue().
-    Deduplication ensures at most one pending/running job per (target_type, target_id).
+    For each asset_id and each target_type from the collection's processors (via get_capability),
+    call enqueue(). Deduplication ensures at most one pending/running job per (target_type, target_id).
     """
-    from ..infra.settings import settings
-
     from .processor_capability import get_capability
 
-    if not settings.enable_processor_queue or not db or not asset_ids:
-        if asset_ids and processor_ids:
-            logger.debug(
-                "enqueue_processor_jobs_skipped",
-                asset_count=len(asset_ids),
-                processor_ids=processor_ids,
-            )
+    if not db or not asset_ids:
         return
     target_types = set()
     for pid in processor_ids or []:

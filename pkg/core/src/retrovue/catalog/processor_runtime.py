@@ -375,6 +375,15 @@ def execute_job(db: Session, job: Any) -> None:
         else:
             db.add(AssetEditorial(asset_uuid=asset.uuid, payload=editorial_to_persist))
 
+    if getattr(asset, "state", None) == "enriching":
+        from ..domain.entities import validate_state_transition
+        if asset.duration_ms and asset.duration_ms > 0:
+            validate_state_transition("enriching", "ready")
+            asset.state = "ready"
+        else:
+            validate_state_transition("enriching", "new")
+            asset.state = "new"
+
     for rec in run_records:
         db.add(
             ProcessorRun(

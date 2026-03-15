@@ -473,7 +473,6 @@ class CollectionIngestService:
         outcomes = determine_reconciliation_outcomes(
             discovered_locators,
             catalog_state,
-            enable_fingerprint_updates=settings.enable_fingerprint_updates,
             full_collection_scope=(scope == "collection"),
         )
         processor_ids_for_enqueue = [eid for eid, _, _ in pipeline]
@@ -605,7 +604,7 @@ class CollectionIngestService:
                 stats.assets_skipped += 1
                 continue
             if outcome == ReconciliationOutcome.update and existing_asset is not None and loc is not None:
-                if settings.enable_fingerprint_updates and loc.fingerprint:
+                if loc.fingerprint:
                     existing_asset.file_size = loc.fingerprint.size
                     existing_asset.file_mtime = loc.fingerprint.mtime
                 enqueue_processor_jobs(
@@ -660,33 +659,9 @@ class CollectionIngestService:
             except Exception:
                 importer_editorial = None
 
-            # Apply enricher pipeline (unchanged order) — skip when workers are the single enrichment path (State 3).
-            run_inline_enrichment = not (
-                getattr(settings, "enable_processor_queue", False)
-                and getattr(settings, "enable_runtime_execution", False)
-            )
-            try:
-                if run_inline_enrichment and pipeline:
-                    try:
-                        enriched = item
-                        for _, _, enr in pipeline:
-                            try:
-                                enriched = enr.enrich(enriched)
-                            except Exception as enr_exc:
-                                stats.errors.append(str(enr_exc))
-                        item = enriched
-                    except Exception:
-                        pass
-                # Attach pipeline checksum so ingest can detect enricher changes
-                try:
-                    if pipeline_checksum and run_inline_enrichment:
-                        item.enricher_checksum = pipeline_checksum
-                except Exception:
-                    pass
-            except Exception:
-                pass
+            # Enrichment is performed by workers via processor job queue; no inline pipeline.
 
-            # Build payload for unified metadata handler AFTER pipeline
+            # Build payload for unified metadata handler (importer output only)
             try:
                 asset_type_val = None
                 try:

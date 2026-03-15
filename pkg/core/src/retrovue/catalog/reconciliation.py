@@ -80,17 +80,15 @@ def determine_reconciliation_outcomes(
     catalog_state: dict[str, Asset],
     *,
     collection: Any = None,
-    enable_fingerprint_updates: bool = False,
     full_collection_scope: bool = True,
 ) -> list[tuple[DiscoveredLocator | None, ReconciliationOutcome, Asset | None]]:
     """
     Determine outcome per discovered locator; add mark_unavailable for catalog-only.
 
     For each discovered locator: hash locator -> if not in catalog_state -> create;
-    if in catalog_state and enable_fingerprint_updates is False -> no_action;
-    if in catalog_state and enable_fingerprint_updates is True and fingerprint differs -> update,
-    else no_action. When full_collection_scope is True, for each asset in catalog_state
-    not seen in discovered set, add (None, mark_unavailable, asset).
+    if in catalog_state and fingerprint matches -> no_action; if fingerprint differs -> update.
+    When full_collection_scope is True, for each asset in catalog_state not seen in
+    discovered set, add (None, mark_unavailable, asset).
     """
     result: list[tuple[DiscoveredLocator | None, ReconciliationOutcome, Asset | None]] = []
     seen_hashes: set[str] = set()
@@ -101,9 +99,6 @@ def determine_reconciliation_outcomes(
         existing = catalog_state.get(key_hash)
         if existing is None:
             result.append((loc, ReconciliationOutcome.create, None))
-            continue
-        if not enable_fingerprint_updates:
-            result.append((loc, ReconciliationOutcome.no_action, existing))
             continue
         if _fingerprint_matches(loc, existing):
             result.append((loc, ReconciliationOutcome.no_action, existing))

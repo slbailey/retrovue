@@ -1,26 +1,12 @@
-# Pipeline Migration Architecture
+# Pipeline Architecture
 
-This document defines how the current ingestion and metadata pipeline is migrated to the contract-driven architecture described in `docs/contracts/core/` and `catalog_processing_architecture.md`. Migration is incremental: each phase is independently testable and preserves working behavior.
-
----
-
-## Migration Principles
-
-1. **Avoid breaking the existing pipeline.** No phase may remove or disable the current ingest path until a contract-compliant replacement is in place and verified. The existing CLI (`source ingest`, `collection ingest`), re-enrich (reprobe, apply enrichers), and scheduler/playout flows must continue to work after each phase.
-
-2. **Preserve working behavior during migration.** For each change, the system must remain deployable and testable. Existing contract tests (e.g. `test_source_ingest_*`, `test_collection_ingest_*`, `test_asset_invariants`) and critical paths (discover → create/skip → reconcile) must pass. New behavior (e.g. “update if fingerprint differs,” job enqueue) is additive or behind a parallel path until the cutover is explicit.
-
-3. **Introduce contract layers incrementally.** Align one subsystem at a time: discovery, then reconciliation workflow, then job queue, then processor execution and metadata ownership. Each layer is implemented so that the next phase can depend on it without rework. Contracts are the source of truth; implementation is brought into compliance phase by phase.
-
-4. **Test each phase in isolation.** Every phase has clear acceptance criteria and tests (unit, contract, or integration) that prove the new behavior without requiring later phases. Where possible, new code is covered by contract tests that reference the relevant `docs/contracts/core/*` documents.
-
-5. **Use feature flags to switch behavior.** Migration runs in one of three states: discover → inline enrich; discover → enqueue + inline enrich; discover → enqueue → worker runtime. Flags (`ENABLE_FINGERPRINT_UPDATES`, `ENABLE_PROCESSOR_QUEUE`, `ENABLE_RUNTIME_EXECUTION`) gate these transitions. At most one enrichment path runs per asset (inline XOR worker) to avoid double processing and inconsistent metadata. See **PIPELINE_MIGRATION_FEATURE_FLAGS.md**.
+This document describes the contract-driven ingestion and metadata pipeline. The system operates in a single mode: discover → reconcile → apply → enqueue jobs; processor execution is performed only by workers via the processor runtime. See `docs/contracts/core/` and `catalog_processing_architecture.md`.
 
 ---
 
-## Target Architecture
+## Architecture Overview
 
-After migration, the system conforms to the following contract-driven flow.
+The system conforms to the following contract-driven flow.
 
 ### Pipeline Shape
 
@@ -49,7 +35,7 @@ Processor Execution (runtime: invoke → validate result → apply; isolate from
 Metadata Storage (structured tables + processor_outputs; ownership enforced)
 ```
 
-### Component Responsibilities (Post-Migration)
+### Component Responsibilities
 
 | Layer | Responsibility | Contract |
 |-------|----------------|----------|
@@ -91,7 +77,7 @@ This separation keeps the queue small (jobs), provides audit and staleness suppo
 
 ### Daemon integration
 
-The contracts require that **container refresh run before playout horizon expansion** (ContainerDiscoveryContract, CatalogReconciliationContract). The migration architecture leaves daemon integration intentionally minimal until discovery and reconciliation are in place; once they are, the **scheduler daemon** (e.g. `PlaylistBuilderDaemon` or the process that drives horizon extension) must run catalog refresh before expanding the horizon so that newly discovered media is available for scheduling.
+The contracts require that **container refresh run before playout horizon expansion** (ContainerDiscoveryContract, CatalogReconciliationContract). Daemon integration intentionally minimal until discovery and reconciliation are in place; once they are, the **scheduler daemon** (e.g. `PlaylistBuilderDaemon` or the process that drives horizon extension) must run catalog refresh before expanding the horizon so that newly discovered media is available for scheduling.
 
 **Target daemon flow:**
 
@@ -108,7 +94,7 @@ scheduler_daemon (each evaluation cycle)
   horizon_expansion   (extend Tier 2 / playout horizon using updated catalog)
 ```
 
-Implementation must wire this order: **container_refresh → reconciliation → horizon_expansion**. CLI ingest (`source ingest`, `collection ingest`) remains a valid trigger; the daemon adds a second trigger so that refresh runs on a schedule or before each horizon extension. See Phase 2 task plan for the concrete “wire daemon” task.
+Implementation must wire this order: **container_refresh → reconciliation → horizon_expansion**. CLI ingest (`source ingest`, `collection ingest`) remains a valid trigger; the daemon adds a second trigger so that refresh runs on a schedule or before each horizon extension. See architecture for the concrete “wire daemon” task.
 
 ---
 
@@ -126,7 +112,7 @@ Phases are ordered so that each builds on the previous without breaking the pipe
 
 - Add a **discovery service** (or function) that, for a given Collection (and optional scope: title/season/episode), calls the existing importer and returns a list of **discovered locator records**.
 - A locator record is a value type (e.g. dataclass) with: `source_id`, `container_id` (collection uuid), `locator` (string: current canonical_key or a stable URI form), and optional `fingerprint` (e.g. size, mtime; hash optional). Map from existing importer output (path_uri, provider_key, etc.) to this shape.
-- The existing `CollectionIngestService.ingest_collection()` continues to run; it **calls** the new discovery step first, then uses the returned list to drive the existing “create or skip” and reconciliation logic (still keyed by canonical_key_hash). No removal of inline enrichment in this phase.
+- The existing `CollectionIngestService.ingest_collection()` continues to run; it **calls** the new discovery step first, then uses the returned list to drive the existing “create or skip” and reconciliation logic (still keyed by canonical_key_hash). Ingest now only enqueues; workers run processors.
 
 **Deliverables**
 
@@ -283,38 +269,9 @@ Phases are ordered so that each builds on the previous without breaking the pipe
 
 ---
 
-## Phase 6 — Legacy Pipeline Removal
+## Current Operating Mode
 
-**Execute only after Phases 1–5 are complete.** Phase 6 removes all legacy inline enrichment and feature flags so the system operates solely via the contract-driven pipeline (discover → reconcile → enqueue → worker runtime). Documentation is updated to reflect only the final architecture; temporary migration documents are deleted.
-
-See **PIPELINE_MIGRATION_TASK_PLAN.md** Phase 6 for the full task list and acceptance criteria.
-
----
-
-## Phase Summary and Testability Matrix
-
-| Phase | Name | Main deliverable | Independent test |
-|-------|------|------------------|------------------|
-| 1 | Discovery refactor | `discover_locators()`; ingest unchanged | Discovery unit tests; existing ingest tests pass |
-| 2 | Reconciliation layer | Six-step workflow; fingerprint; outcome types; stub enqueue | Reconciliation outcome + idempotency tests; ingest tests pass |
-| 3 | Processor job queue | Job store; enqueue; workers; lifecycle; priority | Job queue contract tests; reconciliation → enqueue → worker integration |
-| 4 | Processor execution isolation | Processor runtime; context; validate → apply; processor_runs (execution history); failure handling | Runtime tests; job failure and validation tests; run rows written |
-| 5 | Metadata ownership enforcement | processor_outputs; ownership; no overwrite of operator fields | Ownership and processor_outputs contract tests |
-| **6** | **Legacy pipeline removal** | No inline enrichment; feature flags removed; docs reflect final architecture; temp migration docs deleted | All contract tests pass |
-
----
-
-## Feature Flags and Migration States
-
-Behavior during migration is controlled by three feature flags. Without them, switching between inline enrichment and the job queue risks **double processing**, **inconsistent metadata**, and **broken tests**.
-
-| State | Description |
-|-------|-------------|
-| **State 1** | Discover → inline enrich. All flags off. Current behavior; no fingerprint-based update, no real enqueue, no workers. |
-| **State 2** | Discover → enqueue + inline enrich. Fingerprint updates and real enqueue on; workers off or not used for catalog updates. Inline enrichment remains for new assets (or workers run with minimal runtime; see flags doc). |
-| **State 3** | Discover → enqueue → worker runtime. All flags on. Inline enrichment in ingest is off; workers are the only enrichment path. |
-
-**Flags:** `ENABLE_FINGERPRINT_UPDATES` (Phase 2), `ENABLE_PROCESSOR_QUEUE` (Phase 3), `ENABLE_RUNTIME_EXECUTION` (Phase 4). **Invariant:** At most one enrichment path runs per asset (inline XOR worker). Full definition, defaults, and test policy: **PIPELINE_MIGRATION_FEATURE_FLAGS.md**.
+The pipeline runs only in worker-runtime mode: ingest and re-enrich (reprobe, apply enrichers) perform discover → compare → apply → enqueue; processor execution is done solely by workers via the processor runtime. There is no inline enrichment path.
 
 ---
 
@@ -331,10 +288,4 @@ Start simple. Use **size** and **mtime** only. Do not hash file content yet — 
 **Media table timing**  
 Media table creation is correctly postponed. Asset-as-media is sufficient for now; a separate Media table can be introduced later when the contract identity and reconciliation flow are stable.
 
----
-
-## Rollback and Cutover
-
-- **Rollback:** Each phase leaves the previous behavior available behind flags. Rollback = set the corresponding flag(s) back to `false` (or revert code and keep flags off). Do not run with flags that enable both inline enrichment and worker execution for the same ingest path; that causes double processing.
-- **Cutover:** Phase 2: set `ENABLE_FINGERPRINT_UPDATES=true`. Phase 3: set `ENABLE_PROCESSOR_QUEUE=true` (real enqueue); optionally turn off inline for new assets only when moving to State 3. Phase 4: set `ENABLE_RUNTIME_EXECUTION=true` and disable inline enrichment in ingest so workers are the only path. Phase 5: no new flag; ownership enforcement is always on once implemented. **Phase 6:** Remove the three flags and all inline enrichment; system always runs in worker-runtime mode.
 

@@ -29,11 +29,6 @@ class Settings(BaseSettings):
     pool_timeout: int = Field(default=30, alias="DB_POOL_TIMEOUT")
     connect_timeout: int = Field(default=30, alias="DB_CONNECT_TIMEOUT")
 
-    # Pipeline migration feature flags (Phase 2/3/4). See PIPELINE_MIGRATION_FEATURE_FLAGS.md.
-    enable_fingerprint_updates: bool = Field(default=False, alias="ENABLE_FINGERPRINT_UPDATES")
-    enable_processor_queue: bool = Field(default=False, alias="ENABLE_PROCESSOR_QUEUE")
-    enable_runtime_execution: bool = Field(default=False, alias="ENABLE_RUNTIME_EXECUTION")
-
     # New settings
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     media_roots: str = Field(default="", alias="MEDIA_ROOTS")  # Comma-separated paths
