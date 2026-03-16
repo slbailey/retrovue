@@ -1103,6 +1103,7 @@ async def generate_ts_stream_async(client_queue: Queue[bytes]) -> Any:
     _diag_yield_count = 0
     _diag_yield_cumulative_bytes = 0
     _diag_timeout_total = 0
+    _exit_reason = "normal"
 
     while True:
         try:
@@ -1114,11 +1115,12 @@ async def generate_ts_stream_async(client_queue: Queue[bytes]) -> Any:
             t_drain_end = time.monotonic_ns()
             consecutive_timeouts = 0
             if not batch:  # EOF signal (b"") or closed (None)
+                _exit_reason = "eof_or_closed"
                 break
+            _diag_yield_count += 1
+            _diag_yield_cumulative_bytes += len(batch)
             # CORE_TRANSPORT_DIAG: HTTP yield timing
             if _DIAG_ENABLED:
-                _diag_yield_count += 1
-                _diag_yield_cumulative_bytes += len(batch)
                 if (_diag_yield_count <= _DIAG_STARTUP_EVENTS or
                         _diag_yield_count % _DIAG_STEADY_INTERVAL == 0):
                     drain_ms = (t_drain_end - t_drain_start) / 1e6
@@ -1138,16 +1140,25 @@ async def generate_ts_stream_async(client_queue: Queue[bytes]) -> Any:
             consecutive_timeouts += 1
             _diag_timeout_total += 1
             if consecutive_timeouts >= max_consecutive_timeouts:
-                _logger.debug("generate_ts_stream_async exiting due to timeout")
+                _exit_reason = "safety_timeout_10s"
                 break
             await asyncio.sleep(0.01)
             continue
         except GeneratorExit:
+            _exit_reason = "generator_exit"
             break
         except asyncio.CancelledError:
+            _exit_reason = "cancelled"
             break
         except RuntimeError as exc:
             if "cannot schedule new futures after shutdown" in str(exc):
+                _exit_reason = "executor_shutdown"
                 break
             raise
+
+    _logger.info(
+        "[HTTP] GENERATOR_EXIT reason=%s yields=%d bytes=%d timeouts=%d",
+        _exit_reason, _diag_yield_count, _diag_yield_cumulative_bytes,
+        _diag_timeout_total,
+    )
 

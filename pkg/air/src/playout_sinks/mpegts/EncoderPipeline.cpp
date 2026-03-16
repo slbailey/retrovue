@@ -155,15 +155,20 @@ bool EncoderPipeline::open(const MpegTSPlayoutSinkConfig& config,
   // live transport. These settings make FFmpeg behave like a broadcast mux.
   // =========================================================================
 
-  // Format context level: disable all interleave delays (UNCONDITIONAL)
+  // Format context level: disable interleave delays but let the muxer
+  // control packet cadence.  With muxrate>0 the muxer inserts null packets
+  // to maintain constant bitrate; aggressive flush_packets would defeat that.
   format_ctx_->max_delay = 0;                    // No muxer delay
   format_ctx_->max_interleave_delta = 0;         // No waiting for A/V interleave
-  format_ctx_->flags |= AVFMT_FLAG_FLUSH_PACKETS;// Force flush after each packet
-  format_ctx_->flush_packets = 1;                // Redundant but explicit
 
   AVDictionary* muxer_opts = nullptr;
   av_dict_set(&muxer_opts, "max_delay", "0", 0);
-  av_dict_set(&muxer_opts, "muxrate", "0", 0);
+  // CBR mux with null-packet padding for HDHomeRun compatibility.
+  // flush_packets ensures data is pushed immediately (not clock-paced by
+  // the muxer) so Plex's 20 MB probe completes in ~2s instead of ~17s.
+  av_dict_set(&muxer_opts, "muxrate", "10000000", 0);
+  format_ctx_->flags |= AVFMT_FLAG_FLUSH_PACKETS;
+  format_ctx_->flush_packets = 1;
   muxer_opts_ = muxer_opts;
 
   // MPEG-TS specific: immediate packet emission (BEFORE avformat_write_header)
@@ -176,12 +181,25 @@ bool EncoderPipeline::open(const MpegTSPlayoutSinkConfig& config,
     std::cerr << "[EncoderPipeline] Warning: Failed to set pcr_period=20 (FFmpeg version may not support it)" << std::endl;
   }
 
-  // Log confirmation of zero-buffering settings
-  std::cout << "[EncoderPipeline] INV-BOOT-IMMEDIATE-DECODABLE-OUTPUT: Zero-mux-buffering enabled "
-            << "(max_delay=0, max_interleave_delta=0, flush_packets=1)" << std::endl;
+  // Log confirmation of muxer settings
+  std::cout << "[EncoderPipeline] Mux settings: max_delay=0, max_interleave_delta=0, muxrate=10000000, flush_packets=1" << std::endl;
 
   if (!config.persistent_mux) {
     av_dict_set(&muxer_opts_, "mpegts_flags", "resend_headers+pat_pmt_at_frames", 0);
+  }
+
+  // MPEG-TS SDT service metadata — set on format context metadata.
+  // Do NOT use av_new_program() here: it creates a conflicting program
+  // that overwrites stream_type in the PMT, breaking VLC demux.
+  // The mpegts muxer reads service_name/service_provider from the
+  // format context metadata when no program-level metadata exists.
+  if (!config.service_provider.empty()) {
+    av_dict_set(&format_ctx_->metadata, "service_provider",
+                config.service_provider.c_str(), 0);
+  }
+  if (!config.service_name.empty()) {
+    av_dict_set(&format_ctx_->metadata, "service_name",
+                config.service_name.c_str(), 0);
   }
 
   if (avio_write_callback_) {
@@ -242,13 +260,12 @@ bool EncoderPipeline::open(const MpegTSPlayoutSinkConfig& config,
   }
 
   // Set codec parameters
-  // Note: Frame dimensions will be set from first frame
   codec_ctx_->codec_id = AV_CODEC_ID_H264;
   codec_ctx_->codec_type = AVMEDIA_TYPE_VIDEO;
   codec_ctx_->pix_fmt = AV_PIX_FMT_YUV420P;
   codec_ctx_->bit_rate = config.bitrate;
   codec_ctx_->gop_size = config.gop_size;
-  codec_ctx_->max_b_frames = 0;  // No B-frames for low latency
+  codec_ctx_->max_b_frames = 0;
   if (config.fps_num > 0 && config.fps_den > 0) {
     codec_ctx_->time_base.num = static_cast<int>(config.fps_den);
     codec_ctx_->time_base.den = static_cast<int>(config.fps_num);
@@ -430,36 +447,22 @@ skip_audio:
       close();
       return false;
     }
-    // Set low delay flag to minimize encoder buffering
     codec_ctx_->flags |= AV_CODEC_FLAG_LOW_DELAY;
-    // Explicitly set delay to 0 (tells FFmpeg we want immediate output)
     codec_ctx_->delay = 0;
 
-    // VBV-constrained VBR (industry standard for streaming)
-    // This allows variable bitrate but limits spikes to prevent decoder buffer issues.
-    // vbv-maxrate = 1.5x target gives headroom for complex scenes
-    // vbv-bufsize = 1 second of buffer (standard for streaming)
-    codec_ctx_->rc_max_rate = config.bitrate;          // Hard cap at target (no headroom)
+    codec_ctx_->rc_max_rate = config.bitrate;
     codec_ctx_->rc_buffer_size = config.bitrate / 4;   // 0.25 second buffer
 
     AVDictionary* opts = nullptr;
     if (using_nvenc_) {
-      // NVENC settings for low latency
-      av_dict_set(&opts, "preset", "p1", 0);       // Fastest NVENC preset (p1-p7, p1 fastest)
-      av_dict_set(&opts, "tune", "ll", 0);         // Low latency tuning
-      av_dict_set(&opts, "rc", "cbr", 0);          // Constant bitrate for streaming
-      av_dict_set(&opts, "zerolatency", "1", 0);   // Enable zero latency mode
-      av_dict_set(&opts, "delay", "0", 0);         // No frame delay
+      av_dict_set(&opts, "preset", "p1", 0);
+      av_dict_set(&opts, "tune", "ll", 0);
+      av_dict_set(&opts, "rc", "cbr", 0);
+      av_dict_set(&opts, "zerolatency", "1", 0);
+      av_dict_set(&opts, "delay", "0", 0);
     } else {
-      // libx264 settings for low latency
       av_dict_set(&opts, "preset", "ultrafast", 0);
-      // zerolatency tune: disables lookahead, B-frames, and other latency-adding features.
-      // With zerolatency, x264 uses slice-based threading (no frame reordering),
-      // so multi-thread is safe and reduces per-frame encode time.
       av_dict_set(&opts, "tune", "zerolatency", 0);
-      // VBV-constrained VBR with settings to handle startup:
-      // - vbv-init=0.9: Start with buffer nearly full for immediate output
-      // - bframes=0: Already set by zerolatency tune
       av_dict_set(&opts, "x264-params",
           "bframes=0:nal-hrd=vbr:vbv-init=0.9",
           0);
@@ -892,26 +895,20 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
       return false;
     }
 
-    // Set low delay flag to minimize encoder buffering
     codec_ctx_->flags |= AV_CODEC_FLAG_LOW_DELAY;
-    // Explicitly set delay to 0 (tells FFmpeg we want immediate output)
     codec_ctx_->delay = 0;
 
-    // VBV-constrained VBR (industry standard for streaming)
-    codec_ctx_->rc_max_rate = config_.bitrate;          // Hard cap at target
-    codec_ctx_->rc_buffer_size = config_.bitrate / 4;   // 0.25 second buffer
+    codec_ctx_->rc_max_rate = config_.bitrate;
+    codec_ctx_->rc_buffer_size = config_.bitrate / 4;
 
-    // Set encoder options for streaming
     AVDictionary* opts = nullptr;
     if (using_nvenc_) {
-      // NVENC settings for low latency
       av_dict_set(&opts, "preset", "p1", 0);
       av_dict_set(&opts, "tune", "ll", 0);
       av_dict_set(&opts, "rc", "cbr", 0);
       av_dict_set(&opts, "zerolatency", "1", 0);
       av_dict_set(&opts, "delay", "0", 0);
     } else {
-      // libx264 settings for low latency
       av_dict_set(&opts, "preset", "ultrafast", 0);
       av_dict_set(&opts, "tune", "zerolatency", 0);
       av_dict_set(&opts, "x264-params",

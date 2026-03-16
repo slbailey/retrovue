@@ -40,6 +40,10 @@ struct MpegTSPlayoutSinkConfig {
   // Prebuffer settings: buffer encoded data before sending to client.
   // This absorbs bitrate spikes during encoder warmup (fade-ins, etc.)
   double prebuffer_seconds = 2.0;  // Seconds of data to buffer before streaming starts
+
+  // MPEG-TS service metadata (INV-RAW-TS-TRANSPORT-001)
+  std::string service_provider = "RetroVue";
+  std::string service_name;          // Channel name for TS SDT (e.g. "HBO")
 };
 
 }  // namespace retrovue::playout_sinks::mpegts

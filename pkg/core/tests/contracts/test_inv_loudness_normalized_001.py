@@ -164,24 +164,25 @@ class TestAllContentTypesSameTarget:
 class TestEnricherPersistsLoudnessToProbed:
     """Rule 6: LoudnessEnricher writes integrated_lufs and gain_db to probed payload."""
 
-    @patch("retrovue.adapters.enrichers.loudness_enricher.subprocess.run")
+    @patch("retrovue.adapters.enrichers.loudness_enricher.subprocess.Popen")
     # Tier: 1 | Structural invariant
-    def test_enricher_writes_loudness(self, mock_run: MagicMock) -> None:
+    def test_enricher_writes_loudness(self, mock_popen: MagicMock) -> None:
         """After measurement, probed MUST contain loudness.integrated_lufs and loudness.gain_db."""
         # Simulate ffmpeg ebur128 output
-        mock_run.return_value = MagicMock(
-            returncode=0,
-            stderr=(
-                "[Parsed_ebur128_0 @ 0x1234] Summary:\n"
-                "\n"
-                "  Integrated loudness:\n"
-                "    I:         -20.3 LUFS\n"
-                "    Threshold: -30.3 LUFS\n"
-                "\n"
-                "  Loudness range:\n"
-                "    LRA:         8.2 LU\n"
-            ),
+        stderr_text = (
+            "[Parsed_ebur128_0 @ 0x1234] Summary:\n"
+            "\n"
+            "  Integrated loudness:\n"
+            "    I:         -20.3 LUFS\n"
+            "    Threshold: -30.3 LUFS\n"
+            "\n"
+            "  Loudness range:\n"
+            "    LRA:         8.2 LU\n"
         )
+        proc_mock = MagicMock()
+        proc_mock.communicate.return_value = ("", stderr_text)
+        proc_mock.returncode = 0
+        mock_popen.return_value = proc_mock
 
         enricher = LoudnessEnricher()
         item = DiscoveredItem(
@@ -206,20 +207,21 @@ class TestEnricherPersistsLoudnessToProbed:
 class TestBackgroundMeasurementPersistsResult:
     """Rule 6: Background job completion → probed payload updated with loudness data."""
 
-    @patch("retrovue.adapters.enrichers.loudness_enricher.subprocess.run")
+    @patch("retrovue.adapters.enrichers.loudness_enricher.subprocess.Popen")
     # Tier: 1 | Structural invariant
-    def test_measurement_produces_valid_payload(self, mock_run: MagicMock) -> None:
+    def test_measurement_produces_valid_payload(self, mock_popen: MagicMock) -> None:
         """Background measurement produces a dict suitable for merging into probed."""
-        mock_run.return_value = MagicMock(
-            returncode=0,
-            stderr=(
-                "[Parsed_ebur128_0 @ 0x5678] Summary:\n"
-                "\n"
-                "  Integrated loudness:\n"
-                "    I:         -28.1 LUFS\n"
-                "    Threshold: -38.1 LUFS\n"
-            ),
+        stderr_text = (
+            "[Parsed_ebur128_0 @ 0x5678] Summary:\n"
+            "\n"
+            "  Integrated loudness:\n"
+            "    I:         -28.1 LUFS\n"
+            "    Threshold: -38.1 LUFS\n"
         )
+        proc_mock = MagicMock()
+        proc_mock.communicate.return_value = ("", stderr_text)
+        proc_mock.returncode = 0
+        mock_popen.return_value = proc_mock
 
         enricher = LoudnessEnricher()
         result = enricher.measure_loudness("/tmp/quiet_show.mp4")

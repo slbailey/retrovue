@@ -237,14 +237,24 @@ class DslScheduleService:
         self._loudness_pending: set[str] = set()
         self._loudness_lock = threading.Lock()
         self._loudness_executor: ThreadPoolExecutor | None = None
+        self._loudness_proc: subprocess.Popen | None = None  # in-flight ffmpeg
 
     def shutdown(self) -> None:
         """Shut down background resources (loudness executor).
 
         Called by ProgramDirector.stop() to ensure the process can exit
         without waiting for in-flight loudness measurements to complete.
+        Kills any in-flight ffmpeg subprocess so systemd doesn't block
+        waiting for child processes in the cgroup.
         """
         with self._loudness_lock:
+            proc = self._loudness_proc
+            if proc is not None:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+                self._loudness_proc = None
             if self._loudness_executor is not None:
                 self._loudness_executor.shutdown(wait=False, cancel_futures=True)
                 self._loudness_executor = None
@@ -281,8 +291,15 @@ class DslScheduleService:
 
             from retrovue.adapters.enrichers.loudness_enricher import LoudnessEnricher
             enricher = LoudnessEnricher()
+
+            def _track_proc(proc):
+                with self._loudness_lock:
+                    self._loudness_proc = proc
+
             # measure_loudness returns {"integrated_lufs", "gain_db", "target_lufs"}
-            loudness_data = enricher.measure_loudness(file_path)
+            loudness_data = enricher.measure_loudness(file_path, proc_callback=_track_proc)
+            with self._loudness_lock:
+                self._loudness_proc = None
 
             # Persist to AssetProbed
             import uuid as uuid_mod

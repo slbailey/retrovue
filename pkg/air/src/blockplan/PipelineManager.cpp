@@ -670,6 +670,7 @@ void PipelineManager::Run() {
   enc_config.enable_audio = true;
   enc_config.gop_size = 90;      // I-frame every 3 seconds
   enc_config.bitrate = 8000000;  // 8 Mbps
+  enc_config.service_name = "Channel " + std::to_string(ctx_->channel_id);
 
   auto session_encoder =
       std::make_unique<playout_sinks::mpegts::EncoderPipeline>(enc_config);

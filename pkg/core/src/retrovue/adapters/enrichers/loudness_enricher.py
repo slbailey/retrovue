@@ -126,8 +126,18 @@ class LoudnessEnricher(BaseEnricher):
             probed=merged_probed,
         )
 
-    def measure_loudness(self, file_path: str) -> dict[str, Any]:
+    def measure_loudness(
+        self,
+        file_path: str,
+        proc_callback: Any = None,
+    ) -> dict[str, Any]:
         """Run ffmpeg ebur128 measurement and return loudness dict.
+
+        Args:
+            file_path: Path to media file.
+            proc_callback: Optional callable(proc) invoked with the Popen
+                object immediately after spawn.  Allows the caller to track
+                and kill the subprocess on shutdown.
 
         Returns:
             {"integrated_lufs": float, "gain_db": float, "target_lufs": -24.0}
@@ -141,8 +151,19 @@ class LoudnessEnricher(BaseEnricher):
             "-",
         ]
 
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=self.timeout,
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        if proc_callback is not None:
+            proc_callback(proc)
+        try:
+            stdout, stderr = proc.communicate(timeout=self.timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            raise
+        result = subprocess.CompletedProcess(
+            cmd, proc.returncode, stdout, stderr,
         )
 
         # The summary block appears at the end of stderr. Per-moment I: lines

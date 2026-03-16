@@ -175,63 +175,63 @@ class TestPolicyDefaults:
 class TestLraPersistence:
     """LRA MUST be stored in probed payload when ebur128 reports it."""
 
-    @patch("retrovue.adapters.enrichers.loudness_enricher.subprocess.run")
-    def test_lra_stored_in_probed(self, mock_run: MagicMock) -> None:
+    @patch("retrovue.adapters.enrichers.loudness_enricher.subprocess.Popen")
+    def test_lra_stored_in_probed(self, mock_popen: MagicMock) -> None:
         """measure_loudness returns loudness_range_lu when ebur128 reports LRA."""
-        mock_run.return_value = MagicMock(
-            returncode=0,
-            stderr=(
-                "[Parsed_ebur128_0 @ 0x1234] Summary:\n"
-                "\n"
-                "  Integrated loudness:\n"
-                "    I:         -22.1 LUFS\n"
-                "    Threshold: -32.1 LUFS\n"
-                "\n"
-                "  Loudness range:\n"
-                "    LRA:        21.1 LU\n"
-                "    LRA low:   -38.4 LUFS\n"
-                "    LRA high:  -17.3 LUFS\n"
-            ),
-        )
+        proc = MagicMock()
+        proc.communicate.return_value = ("", (
+            "[Parsed_ebur128_0 @ 0x1234] Summary:\n"
+            "\n"
+            "  Integrated loudness:\n"
+            "    I:         -22.1 LUFS\n"
+            "    Threshold: -32.1 LUFS\n"
+            "\n"
+            "  Loudness range:\n"
+            "    LRA:        21.1 LU\n"
+            "    LRA low:   -38.4 LUFS\n"
+            "    LRA high:  -17.3 LUFS\n"
+        ))
+        proc.returncode = 0
+        mock_popen.return_value = proc
         enricher = LoudnessEnricher()
         result = enricher.measure_loudness("/tmp/test.mp4")
         assert result["loudness_range_lu"] == pytest.approx(21.1)
 
-    @patch("retrovue.adapters.enrichers.loudness_enricher.subprocess.run")
-    def test_lra_absent_when_not_reported(self, mock_run: MagicMock) -> None:
+    @patch("retrovue.adapters.enrichers.loudness_enricher.subprocess.Popen")
+    def test_lra_absent_when_not_reported(self, mock_popen: MagicMock) -> None:
         """measure_loudness omits loudness_range_lu when ebur128 doesn't report LRA."""
-        mock_run.return_value = MagicMock(
-            returncode=0,
-            stderr=(
-                "[Parsed_ebur128_0 @ 0x1234] Summary:\n"
-                "\n"
-                "  Integrated loudness:\n"
-                "    I:         -20.3 LUFS\n"
-                "    Threshold: -30.3 LUFS\n"
-            ),
-        )
+        proc = MagicMock()
+        proc.communicate.return_value = ("", (
+            "[Parsed_ebur128_0 @ 0x1234] Summary:\n"
+            "\n"
+            "  Integrated loudness:\n"
+            "    I:         -20.3 LUFS\n"
+            "    Threshold: -30.3 LUFS\n"
+        ))
+        proc.returncode = 0
+        mock_popen.return_value = proc
         enricher = LoudnessEnricher()
         result = enricher.measure_loudness("/tmp/test.mp4")
         assert "loudness_range_lu" not in result
 
-    @patch("retrovue.adapters.enrichers.loudness_enricher.subprocess.run")
-    def test_gain_db_includes_supplement_when_lra_present(self, mock_run: MagicMock) -> None:
+    @patch("retrovue.adapters.enrichers.loudness_enricher.subprocess.Popen")
+    def test_gain_db_includes_supplement_when_lra_present(self, mock_popen: MagicMock) -> None:
         """gain_db in probed reflects supplement when LRA exceeds threshold."""
-        mock_run.return_value = MagicMock(
-            returncode=0,
-            stderr=(
-                "[Parsed_ebur128_0 @ 0x1234] Summary:\n"
-                "\n"
-                "  Integrated loudness:\n"
-                "    I:         -22.1 LUFS\n"
-                "    Threshold: -32.1 LUFS\n"
-                "\n"
-                "  Loudness range:\n"
-                "    LRA:        21.1 LU\n"
-                "    LRA low:   -38.4 LUFS\n"
-                "    LRA high:  -17.3 LUFS\n"
-            ),
-        )
+        proc = MagicMock()
+        proc.communicate.return_value = ("", (
+            "[Parsed_ebur128_0 @ 0x1234] Summary:\n"
+            "\n"
+            "  Integrated loudness:\n"
+            "    I:         -22.1 LUFS\n"
+            "    Threshold: -32.1 LUFS\n"
+            "\n"
+            "  Loudness range:\n"
+            "    LRA:        21.1 LU\n"
+            "    LRA low:   -38.4 LUFS\n"
+            "    LRA high:  -17.3 LUFS\n"
+        ))
+        proc.returncode = 0
+        mock_popen.return_value = proc
         enricher = LoudnessEnricher()
         result = enricher.measure_loudness("/tmp/test.mp4")
         # base_gain = -24.0 - (-22.1) = -1.9
@@ -240,24 +240,24 @@ class TestLraPersistence:
         expected = compute_gain_db(-22.1, lra_lu=21.1)
         assert result["gain_db"] == pytest.approx(expected)
 
-    @patch("retrovue.adapters.enrichers.loudness_enricher.subprocess.run")
-    def test_enricher_probed_has_lra(self, mock_run: MagicMock) -> None:
+    @patch("retrovue.adapters.enrichers.loudness_enricher.subprocess.Popen")
+    def test_enricher_probed_has_lra(self, mock_popen: MagicMock) -> None:
         """LoudnessEnricher.enrich persists loudness_range_lu to probed payload."""
-        mock_run.return_value = MagicMock(
-            returncode=0,
-            stderr=(
-                "[Parsed_ebur128_0 @ 0x1234] Summary:\n"
-                "\n"
-                "  Integrated loudness:\n"
-                "    I:         -22.1 LUFS\n"
-                "    Threshold: -32.1 LUFS\n"
-                "\n"
-                "  Loudness range:\n"
-                "    LRA:        21.1 LU\n"
-                "    LRA low:   -38.4 LUFS\n"
-                "    LRA high:  -17.3 LUFS\n"
-            ),
-        )
+        proc = MagicMock()
+        proc.communicate.return_value = ("", (
+            "[Parsed_ebur128_0 @ 0x1234] Summary:\n"
+            "\n"
+            "  Integrated loudness:\n"
+            "    I:         -22.1 LUFS\n"
+            "    Threshold: -32.1 LUFS\n"
+            "\n"
+            "  Loudness range:\n"
+            "    LRA:        21.1 LU\n"
+            "    LRA low:   -38.4 LUFS\n"
+            "    LRA high:  -17.3 LUFS\n"
+        ))
+        proc.returncode = 0
+        mock_popen.return_value = proc
         enricher = LoudnessEnricher()
         item = DiscoveredItem(path_uri="/tmp/test.mp4", probed={})
         result = enricher.enrich(item)

@@ -452,6 +452,8 @@ class ChannelManager:
         # Channel lifecycle: RUNNING (on-air or idle with viewers) or STOPPED (last viewer left).
         # When STOPPED, health/reconnect logic does nothing; ProgramDirector calls stop_channel on last viewer.
         self._channel_state: str = "RUNNING"  # "RUNNING" | "STOPPED"
+        # Reason for stop_channel; passed to Producer/AIR for accurate StopBlockPlanSession logging.
+        self._stop_reason: str = "channel_stop"
 
         # Linger: grace period before tearing down producer after last viewer leaves.
         self.LINGER_SECONDS: int = 20
@@ -475,15 +477,20 @@ class ChannelManager:
         # Channel configuration (set by daemon when creating manager)
         self.channel_config: ChannelConfig | None = None
 
-    def stop_channel(self) -> None:
+    def stop_channel(self, reason: str = "channel_stop") -> None:
         """
         Enter STOPPED state and stop the producer. No wait for EOF or segment completion.
-        Called by ProgramDirector when the last viewer disconnects (StopChannel(channel_id)).
-        Explicit stop bypasses linger — teardown is immediate.
+        Called by ProgramDirector when the last viewer disconnects (StopChannel(channel_id))
+        or on explicit stop. Explicit stop bypasses linger — teardown is immediate.
+
+        reason: Passed to AIR StopBlockPlanSession for accurate logging. Use
+        "last_viewer_left" only when stopping due to viewer count 1→0; use
+        "channel_stop" for admin/explicit stop.
         """
         self._logger.debug(
-            "[teardown] stopping producer for channel %s (no wait for EOF)", self.channel_id
+            "[teardown] stopping producer for channel %s (reason=%s)", self.channel_id, reason
         )
+        self._stop_reason = reason
         self._cancel_linger()
         # INV-CHANNEL-LIVENESS-RECOVERY-001: Cancel any pending recovery
         self._recovery_attempts = 0
@@ -746,6 +753,11 @@ class ChannelManager:
 
             old_count = self.runtime_state.viewer_count
             self.runtime_state.viewer_count = len(self.viewer_sessions)
+            # Log for debugging "who" was counted as a viewer (e.g. phantom vs real TS client).
+            self._logger.info(
+                "[viewer_join] channel=%s session_id=%s viewer_count=%d",
+                self.channel_id, session_id, self.runtime_state.viewer_count,
+            )
 
             # Cancel linger if a viewer reconnects during the grace period.
             if old_count == 0 and self.runtime_state.viewer_count == 1:
@@ -781,6 +793,11 @@ class ChannelManager:
 
             old_count = self.runtime_state.viewer_count
             self.runtime_state.viewer_count = len(self.viewer_sessions)
+            # Log for debugging "who" was counted as a viewer when they left.
+            self._logger.info(
+                "[viewer_leave] channel=%s session_id=%s viewer_count=%d (was %d)",
+                self.channel_id, session_id, self.runtime_state.viewer_count, old_count,
+            )
 
             # Fanout rule: last viewer stops Producer.
             # INV-VIEWER-LIFECYCLE-002: AIR stops exactly once on 1→0 transition
@@ -857,9 +874,10 @@ class ChannelManager:
                 self.channel_id,
             )
             if hasattr(self.program_director, "stop_channel"):
-                self.program_director.stop_channel(self.channel_id)
+                self.program_director.stop_channel(self.channel_id, reason="last_viewer_left")
             else:
                 self._channel_state = "STOPPED"
+                self._stop_reason = "last_viewer_left"
                 self._stop_producer_if_idle()
 
     def _linger_expire(self) -> None:
@@ -872,10 +890,12 @@ class ChannelManager:
                 self.channel_id,
             )
             # Full teardown: notify ProgramDirector so channel is removed and AIR is stopped.
+            # Pass reason so AIR logs "last_viewer_left" only when stop was due to viewer leave.
             if hasattr(self.program_director, "stop_channel"):
-                self.program_director.stop_channel(self.channel_id)
+                self.program_director.stop_channel(self.channel_id, reason="last_viewer_left")
             else:
                 self._channel_state = "STOPPED"
+                self._stop_reason = "last_viewer_left"
                 self._stop_producer_if_idle()
 
     def _cancel_linger(self) -> None:
@@ -1224,7 +1244,7 @@ class ChannelManager:
         # the reference, regardless of graceful vs timeout completion.
         # Without this, the AIR subprocess is orphaned as a zombie.
         if producer:
-            producer.stop()
+            producer.stop(reason=getattr(self, "_stop_reason", None) or reason or "channel_stop")
 
         self.active_producer = None
         self.runtime_state.producer_status = "stopped"
@@ -1965,12 +1985,14 @@ class BlockPlanProducer(Producer):
                 self.status = ProducerStatus.ERROR
                 return False
 
-    def stop(self) -> bool:
+    def stop(self, reason: str | None = None) -> bool:
         """
         Stop BlockPlan execution.
 
-        Called by ChannelManager.on_last_viewer() when viewer count goes 1→0.
+        Called by ChannelManager when viewer count goes 1→0 or on explicit channel stop.
         Stops PlayoutSession, terminates AIR, cleans up resources.
+        reason is passed to AIR StopBlockPlanSession for accurate logging (e.g. "last_viewer_left"
+        only when stop was due to viewer leave; "channel_stop" for admin/explicit stop).
 
         INV-VIEWER-LIFECYCLE-002: AIR stops exactly once per last-viewer event.
         """
@@ -1983,10 +2005,11 @@ class BlockPlanProducer(Producer):
                 return True  # Idempotent - already stopped
 
             self._stop_count += 1
+            self._stop_reason = reason or getattr(self, "_stop_reason", None) or "channel_stop"
             self._logger.debug(
                 "INV-VIEWER-LIFECYCLE-002: Channel %s stopping BlockPlan execution "
-                "(stop_count=%d)",
-                self.channel_id, self._stop_count
+                "(stop_count=%d reason=%s)",
+                self.channel_id, self._stop_count, self._stop_reason
             )
 
             self._cleanup()
@@ -2006,7 +2029,8 @@ class BlockPlanProducer(Producer):
         """
         if self._session:
             try:
-                self._session.stop(reason="last_viewer_left")
+                session_reason = getattr(self, "_stop_reason", None) or "channel_stop"
+                self._session.stop(reason=session_reason)
             except Exception as e:
                 self._logger.warning(
                     "Channel %s: Session stop error: %s",

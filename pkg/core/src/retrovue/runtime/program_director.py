@@ -65,6 +65,141 @@ except ImportError:  # pragma: no cover - settings optional
     RuntimeSettings = None  # type: ignore
 
 
+class _RawTSResponse(Response):
+    """ASGI response that streams raw MPEG-TS without chunked encoding.
+
+    INV-RAW-TS-TRANSPORT-001: Sends ``Connection: close`` with no
+    ``Content-Length`` and no ``Transfer-Encoding``.  Body length is
+    determined by connection EOF, matching HDHomeRun / Tvheadend behaviour.
+
+    Overrides :meth:`Response.__call__` to write ASGI messages directly.
+    Disables uvicorn's automatic chunked framing by setting
+    ``chunked_encoding = False`` on the protocol's request-response cycle
+    before the first body write.
+    """
+
+    def __init__(
+        self,
+        client_queue,
+        *,
+        cleanup_fn: Callable,
+        disconnect_monitor: Callable,
+        logger: logging.Logger,
+    ) -> None:
+        # Minimal init — avoid Response.__init__ which sets body/Content-Length
+        # that conflicts with raw streaming.  Set attributes that FastAPI
+        # middleware expects.
+        self.status_code = 200
+        self.background = None
+        self.body = b""
+        self.media_type = None
+        self._client_queue = client_queue
+        self._cleanup_fn = cleanup_fn
+        self._disconnect_monitor = disconnect_monitor
+        self._logger = logger
+
+    async def __call__(self, scope, receive, send) -> None:
+        # ── Disable uvicorn's chunked framing ────────────────────────────
+        # Uvicorn's RequestResponseCycle writes headers (including
+        # Transfer-Encoding) during http.response.start.  Setting
+        # chunked_encoding = False BEFORE the start message prevents
+        # uvicorn from injecting Transfer-Encoding: chunked.
+        #
+        # FastAPI middleware wraps ``send`` in closures.  Walk the
+        # closure chain to find the underlying RequestResponseCycle.
+        def _find_cycle(fn, depth=0):
+            if depth > 10:
+                return None
+            # Direct bound method
+            obj = getattr(fn, "__self__", None)
+            if obj is not None and hasattr(obj, "chunked_encoding"):
+                return obj
+            # Walk __wrapped__ chain (functools.wraps)
+            wrapped = getattr(fn, "__wrapped__", None)
+            if wrapped is not None:
+                found = _find_cycle(wrapped, depth + 1)
+                if found is not None:
+                    return found
+            # Starlette/FastAPI middleware closes over ``send``
+            # in the local scope.  Inspect closure cells.
+            closure = getattr(fn, "__closure__", None)
+            if closure:
+                for cell in closure:
+                    try:
+                        val = cell.cell_contents
+                    except ValueError:
+                        continue
+                    if hasattr(val, "chunked_encoding"):
+                        return val
+                    if callable(val) and val is not fn:
+                        found = _find_cycle(val, depth + 1)
+                        if found is not None:
+                            return found
+            return None
+
+        cycle = _find_cycle(send)
+        if cycle is not None:
+            cycle.chunked_encoding = False
+            # Set expected_content_length high so uvicorn's body-length
+            # check (line 85 in httptools_impl.py) doesn't reject our data.
+            # The connection closes on EOF, not when this many bytes are sent.
+            cycle.expected_content_length = 2**63
+        else:
+            self._logger.warning("[HTTP] Could not find RequestResponseCycle — chunked encoding may be active")
+
+        # ── 1. Send response headers (raw ASGI — no Content-Length, no TE) ──
+        await send({
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [
+                (b"content-type", b"video/mp2t"),
+                (b"cache-control", b"no-cache"),
+                (b"connection", b"close"),
+                (b"x-accel-buffering", b"no"),
+            ],
+        })
+
+        cleanup = self._cleanup_fn
+
+        # ── 2. Monitor for client disconnect (Phase 8.7) ──────────────────
+        monitor_task = asyncio.create_task(
+            self._disconnect_monitor(
+                receive,
+                lambda: cleanup(reason="asgi_receive"),
+            )
+        )
+
+        # ── 3. Stream raw TS packets ─────────────────────────────────────
+        try:
+            async for chunk in generate_ts_stream_async(self._client_queue):
+                await send({
+                    "type": "http.response.body",
+                    "body": chunk,
+                    "more_body": True,
+                })
+        except asyncio.CancelledError:
+            cleanup(reason="cancelled")
+        except Exception as exc:
+            self._logger.error("Raw TS send error: %s: %s", type(exc).__name__, exc)
+            cleanup(reason=f"send_error:{type(exc).__name__}")
+        finally:
+            # Send terminal frame so uvicorn knows the response is done.
+            try:
+                await send({
+                    "type": "http.response.body",
+                    "body": b"",
+                    "more_body": False,
+                })
+            except Exception:
+                pass
+            cleanup(reason="generator_finally")
+            monitor_task.cancel()
+            try:
+                await monitor_task
+            except asyncio.CancelledError:
+                pass
+
+
 import re as _re
 
 from retrovue.streaming.hls_writer import HLSManager
@@ -866,12 +1001,17 @@ class ProgramDirector:
             return self._channel_manager_provider.list_channels()
         return self._list_channels_internal()
 
-    def stop_channel(self, channel_id: str) -> None:
-        """Stop channel and remove from registry (provider protocol; when embedded, PD is sole authority)."""
+    def stop_channel(self, channel_id: str, reason: str | None = None) -> None:
+        """Stop channel and remove from registry (provider protocol; when embedded, PD is sole authority).
+
+        reason: When using embedded ChannelManagers, passed to AIR StopBlockPlanSession for accurate
+        logging. Use "last_viewer_left" only when stopping due to viewer count 1→0; omit for admin stop.
+        Provider protocol only receives channel_id (backward compatible).
+        """
         if self._channel_manager_provider is not None:
             self._channel_manager_provider.stop_channel(channel_id)
         else:
-            self._stop_channel_internal(channel_id)
+            self._stop_channel_internal(channel_id, reason=reason)
 
     def has_channel_stream(self, channel_id: str) -> bool:
         """Return True if this channel has an active ChannelStream (for tests)."""
@@ -882,7 +1022,7 @@ class ProgramDirector:
         with self._fanout_lock:
             return channel_id in self._fanout_buffers
 
-    def _stop_channel_internal(self, channel_id: str) -> None:
+    def _stop_channel_internal(self, channel_id: str, reason: str | None = None) -> None:
         """Stop channel producer and fanout (embedded mode). PD is sole authority for teardown.
 
         INV-CHANNEL-STARTUP-NONBLOCKING-001: The ChannelManager is kept alive
@@ -890,6 +1030,7 @@ class ProgramDirector:
         without triggering schedule recompilation. Only the producer and fanout
         are torn down; schedule state persists in the manager.
         """
+        stop_reason = reason or "channel_stop"
         with self._pre_warmed_lock:
             timer = self._pre_warmed_timers.pop(channel_id, None)
         if timer:
@@ -898,7 +1039,7 @@ class ProgramDirector:
             manager = self._managers.get(channel_id)
         if manager is not None:
             self._logger.info("[channel %s] ChannelManager idle (producer stopped)", channel_id)
-            manager.stop_channel()
+            manager.stop_channel(reason=stop_reason)
             # Signal the fanout stop event *before* killing the producer so
             # that when AIR's socket closes and the reader gets EOF it sees
             # _stop_event already set and exits cleanly instead of attempting
@@ -910,7 +1051,7 @@ class ProgramDirector:
             if manager.active_producer:
                 self._logger.info("[channel %s] Force-stopping producer (terminating Air)", channel_id)
                 try:
-                    manager.active_producer.stop()
+                    manager.active_producer.stop(reason=getattr(manager, "_stop_reason", None) or stop_reason)
                     manager.active_producer = None
                 except Exception as e:
                     self._logger.warning(
@@ -1581,26 +1722,53 @@ class ProgramDirector:
             session_id: str,
             manager: Any,
             fanout: Optional[Any],
+            *,
+            reason: str = "unknown",
         ) -> None:
             """
             Unsubscribe viewer and update viewer count. Idempotent.
             Does NOT stop channel or upstream when last subscriber leaves:
             upstream (AIR UDS) stays connected so VLC reconnect does not restart AIR.
             """
+            self._logger.info(
+                "[HTTP] STREAM_CLEANUP id=%s channel=%s trigger=%s",
+                session_id, channel_id, reason,
+            )
             with self._fanout_lock:
                 if fanout:
-                    fanout.unsubscribe(session_id, reason="disconnect")
+                    fanout.unsubscribe(session_id, reason=reason)
             try:
                 manager.tune_out(session_id)
             except Exception as e:
                 self._logger.debug("tune_out on cleanup: %s", e)
 
-        async def _wait_disconnect_then_cleanup(request: Request, cleanup: Callable[[], None]) -> None:
-            """When client disconnects, ASGI receive() returns; run cleanup so viewer_count and teardown run (Phase 8.7)."""
+        async def _wait_disconnect_then_cleanup(receive_or_request, cleanup: Callable[[], None]) -> None:
+            """When client disconnects, ASGI receive() returns; run cleanup so viewer_count and teardown run (Phase 8.7).
+
+            ``receive_or_request`` may be a Starlette Request (has .receive())
+            or a raw ASGI receive callable.
+
+            Drains any ``http.request`` messages (unconsumed request body)
+            and only fires cleanup on ``http.disconnect``.
+            """
+            receive_fn = getattr(receive_or_request, "receive", receive_or_request)
             try:
-                await request.receive()
-            except Exception:
-                pass
+                while True:
+                    msg = await receive_fn()
+                    msg_type = msg.get("type", "unknown") if isinstance(msg, dict) else "non-dict"
+                    if msg_type == "http.disconnect":
+                        self._logger.info(
+                            "[HTTP] ASGI_RECEIVE_RETURNED type=%s", msg_type,
+                        )
+                        break
+                    # http.request with more_body=False means request body is
+                    # fully consumed — keep waiting for http.disconnect.
+                    # http.request with more_body=True — keep draining.
+            except Exception as exc:
+                self._logger.info(
+                    "[HTTP] ASGI_RECEIVE_EXCEPTION %s: %s",
+                    type(exc).__name__, exc,
+                )
             cleanup()
 
         @self.fastapi_app.get("/channel/{channel_id}.m3u")
@@ -1615,13 +1783,16 @@ class ProgramDirector:
             )
 
         @self.fastapi_app.get("/channel/{channel_id}.ts")
-        async def stream_channel(request: Request, channel_id: str) -> StreamingResponse:
+        async def stream_channel(request: Request, channel_id: str) -> Response:
             """
-            Phase 0 contract: Live stream endpoint for a channel.
-            
-            - Joins mid-stream (no restart)
-            - Emits continuous MPEG-TS bytes
-            - Stops playout engine pipeline when last viewer disconnects (Phase 8.7: disconnect triggers teardown)
+            INV-RAW-TS-TRANSPORT-001: Live MPEG-TS stream endpoint.
+
+            Delivers raw continuous bytes with ``Connection: close`` and no
+            ``Content-Length`` or ``Transfer-Encoding``, matching how real
+            tuner devices (HDHomeRun, Tvheadend) behave.  Uses a custom ASGI
+            response (``_RawTSResponse``) so that Starlette/uvicorn never
+            injects ``Transfer-Encoding: chunked``, which caused intermittent
+            HTTP 400 errors from Plex Live TV.
             """
             # INV-CHANNEL-STARTUP-CONCURRENCY-001: Fail fast when at capacity.
             if self._startup_semaphore.locked():
@@ -1663,87 +1834,52 @@ class ProgramDirector:
             fanout = self._get_or_create_fanout_buffer(channel_id, manager)
             if not fanout:
                 # Producer not ready yet, wait for it to start
-                cleaned = []
-
-                def cleanup_placeholder() -> None:
-                    if cleaned:
-                        return
-                    cleaned.append(1)
-                    fanout_buffer = getattr(cleanup_placeholder, "_fanout", None)
-                    _run_stream_cleanup(channel_id, session_id, manager, fanout_buffer)
-
-                # INV-IO-DRAIN-REALTIME: Async placeholder generator
-                async def generate_placeholder():
-                    fanout_buffer = None
-                    try:
-                        for _ in range(10):
-                            await asyncio.sleep(1)
-                            fanout_buffer = self._get_or_create_fanout_buffer(channel_id, manager)
-                            if fanout_buffer:
-                                cleanup_placeholder._fanout = fanout_buffer
-                                break
-                        if not fanout_buffer:
-                            yield b""
-                            return
-                        client_queue = fanout_buffer.subscribe(session_id)
-                        asyncio.create_task(_wait_disconnect_then_cleanup(request, cleanup_placeholder))
-                        async for chunk in generate_ts_stream_async(client_queue):
-                            yield chunk
-                    except GeneratorExit:
-                        pass
-                    except asyncio.CancelledError:
-                        pass
-                    finally:
-                        cleanup_placeholder()
-
-                return StreamingResponse(
-                    generate_placeholder(),
-                    media_type="video/mp2t",
-                    headers={
-                        "Cache-Control": "no-cache, no-store, must-revalidate",
-                        "Pragma": "no-cache",
-                        "Expires": "0",
-                        "X-Accel-Buffering": "no",  # Disable nginx buffering if present
-                    },
-                )
+                for _ in range(10):
+                    await asyncio.sleep(1)
+                    fanout = self._get_or_create_fanout_buffer(channel_id, manager)
+                    if fanout:
+                        break
+                if not fanout:
+                    _run_stream_cleanup(channel_id, session_id, manager, None, reason="fanout_timeout")
+                    return Response(
+                        content="Channel not ready",
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    )
 
             # Subscribe to FanoutBuffer
             client_queue = fanout.subscribe(session_id)
             cleaned = []
 
-            def cleanup_stream() -> None:
+            def cleanup_stream(*, reason: str = "unknown") -> None:
                 if cleaned:
                     return
                 cleaned.append(1)
-                _run_stream_cleanup(channel_id, session_id, manager, fanout)
+                _run_stream_cleanup(channel_id, session_id, manager, fanout, reason=reason)
 
-            # Phase 8.7: When client disconnects, receive() returns; run cleanup so viewer_count→0 triggers teardown.
-            asyncio.create_task(_wait_disconnect_then_cleanup(request, cleanup_stream))
+            # Phase 8.7: disconnect monitor
+            asyncio.create_task(_wait_disconnect_then_cleanup(
+                request, lambda: cleanup_stream(reason="asgi_receive")))
 
-            # INV-IO-DRAIN-REALTIME: Use async generator to yield to event loop
-            # This ensures non-blocking streaming and regular flush opportunities.
             async def generate_stream():
-                _first_chunk_logged = False
                 try:
                     async for chunk in generate_ts_stream_async(client_queue):
-                        if not _first_chunk_logged:
-                            _first_chunk_logged = True
                         yield chunk
                 except GeneratorExit:
-                    pass
+                    cleanup_stream(reason="generator_exit")
+                    return
                 except asyncio.CancelledError:
-                    pass
+                    cleanup_stream(reason="cancelled")
+                    return
                 finally:
-                    cleanup_stream()
+                    cleanup_stream(reason="generator_finally")
 
             return StreamingResponse(
                 generate_stream(),
                 media_type="video/mp2t",
                 headers={
-                    "Cache-Control": "no-cache, no-store, must-revalidate",
-                    "Pragma": "no-cache",
-                    "Expires": "0",
-                    "X-Accel-Buffering": "no",  # Disable nginx buffering if present
+                    "Connection": "close",
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
                 },
             )
 
