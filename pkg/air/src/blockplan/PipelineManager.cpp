@@ -738,7 +738,10 @@ void PipelineManager::Run() {
   // WaitAndConsumeBytes blocks the tick thread until the writer drains.
   // Use 512 KB so deterministic (no-sleep) tick loops don't fill the buffer
   // before the test drain thread can read (encoder may push large chunks early).
-  static constexpr size_t kSinkBufferCapacity = 512 * 1024;
+  // 8MB buffer gives Core ~6 seconds to connect the ChannelStream reader
+  // before SocketSink detaches on overflow. Previous 512KB overflowed in
+  // ~400ms, causing a startup crash-loop.
+  static constexpr size_t kSinkBufferCapacity = 8 * 1024 * 1024;
   auto socket_sink = std::make_unique<output::SocketSink>(
       sink_fd, "pipeline-sink", kSinkBufferCapacity);
 

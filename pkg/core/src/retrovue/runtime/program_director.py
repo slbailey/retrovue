@@ -1660,7 +1660,55 @@ class ProgramDirector:
             mgr = self._resolve_or_create_channel_manager(channel_id)
             if mgr is None:
                 return None
+
+            # tune_in triggers _ensure_producer_running → starts AIR.
+            # AIR immediately writes to the UDS socket. If nobody reads
+            # within ~200ms, AIR's SocketSink overflows → detach → session
+            # ends with reason=stopped → crash-loop.
+            #
+            # Fix: start a pre-drain thread that grabs the accepted socket
+            # from the queue and reads from it immediately, preventing
+            # backpressure. The ChannelStream reader will take over later
+            # via the normal reconnect path.
+            import time as _t
+
             mgr.tune_in(phantom_id, {"channel_id": channel_id, "hls": True})
+
+            # AIR immediately writes to the UDS socket after startup.
+            # If nobody reads within ~200ms, SocketSink overflows → detach
+            # → session ends (reason=stopped) → crash-loop.
+            #
+            # Fix: grab the accepted socket from the queue and construct
+            # the ChannelStream directly with it (via SocketTsSource),
+            # bypassing the slow factory retry loop. This ensures the
+            # reader thread starts draining immediately.
+            import time as _t
+            from retrovue.runtime.channel_stream import SocketTsSource
+
+            producer = getattr(mgr, "active_producer", None)
+            reader_queue = getattr(producer, "reader_socket_queue", None) if producer else None
+
+            if reader_queue is not None:
+                try:
+                    t0 = _t.monotonic()
+                    sock = reader_queue.get(timeout=5.0)
+                    self._logger.info(
+                        "[HLS %s] Socket acquired from queue in %.0fms",
+                        channel_id, (_t.monotonic() - t0) * 1000,
+                    )
+                    _hls_seg = getattr(mgr, "hls_segmenter", None)
+                    fanout = ChannelStream(
+                        channel_id=channel_id,
+                        ts_source_factory=lambda stop_event=None, s=sock: SocketTsSource(s),
+                        hls_manager=self._hls_manager,
+                        hls_segmenter=_hls_seg,
+                    )
+                    self._fanout_buffers[channel_id] = fanout
+                except Exception as exc:
+                    self._logger.warning(
+                        "[HLS %s] direct fanout creation failed: %s", channel_id, exc,
+                    )
+
             return mgr
 
         # INV-CHANNEL-STARTUP-CONCURRENCY-001: Acquire startup semaphore
