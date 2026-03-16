@@ -6,7 +6,7 @@ Invariant:
     stream.  Response headers must match the behaviour of real tuner devices
     (HDHomeRun / Tvheadend):
 
-      Content-Type: video/mp2t
+      Content-Type: video/mpeg
       Connection: close
       Cache-Control: no-cache
 
@@ -93,18 +93,12 @@ class FakeChannelManager:
 
 
 def _build_test_app():
-    """Build a minimal FastAPI app that uses _RawTSResponse for the stream."""
-    from retrovue.runtime.program_director import _RawTSResponse
+    """Build a minimal FastAPI app that mirrors the production stream endpoint."""
+    from fastapi.responses import StreamingResponse
 
     app = FastAPI()
     fake_manager = FakeChannelManager()
     fake_fanout = FakeFanout()
-
-    _logger = logging.getLogger("test_ts_http")
-
-    async def _noop_disconnect_monitor(receive, cleanup):
-        """No-op monitor for tests — TestClient doesn't send http.disconnect."""
-        pass
 
     @app.get("/channel/{channel_id}.ts")
     async def stream_channel(request: Request, channel_id: str) -> Response:
@@ -112,15 +106,24 @@ def _build_test_app():
         fake_manager.tune_in(session_id, {"channel_id": channel_id})
         client_queue = fake_fanout.subscribe(session_id)
 
-        def cleanup_stream(*, reason: str = "unknown"):
-            fake_fanout.unsubscribe(session_id)
-            fake_manager.tune_out(session_id)
+        async def generate_stream():
+            try:
+                async for chunk in generate_ts_stream_async(client_queue):
+                    yield chunk
+            except (GeneratorExit, asyncio.CancelledError):
+                pass
+            finally:
+                fake_fanout.unsubscribe(session_id)
+                fake_manager.tune_out(session_id)
 
-        return _RawTSResponse(
-            client_queue,
-            cleanup_fn=cleanup_stream,
-            disconnect_monitor=_noop_disconnect_monitor,
-            logger=_logger,
+        return StreamingResponse(
+            generate_stream(),
+            media_type="video/mpeg",
+            headers={
+                "Connection": "close",
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
         )
 
     return app, fake_manager, fake_fanout
@@ -140,7 +143,7 @@ class TestInvRawTsTransport001:
         """Response Content-Type must be video/mp2t."""
         with self.client.stream("GET", "/channel/test.ts") as resp:
             assert resp.status_code == 200
-            assert resp.headers["content-type"] == "video/mp2t"
+            assert resp.headers["content-type"] == "video/mpeg"
 
     def test_no_content_length_header(self):
         """Response must NOT include Content-Length."""

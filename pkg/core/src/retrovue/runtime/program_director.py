@@ -152,7 +152,7 @@ class _RawTSResponse(Response):
             "type": "http.response.start",
             "status": 200,
             "headers": [
-                (b"content-type", b"video/mp2t"),
+                (b"content-type", b"video/mpeg"),
                 (b"cache-control", b"no-cache"),
                 (b"connection", b"close"),
                 (b"x-accel-buffering", b"no"),
@@ -1875,7 +1875,7 @@ class ProgramDirector:
 
             return StreamingResponse(
                 generate_stream(),
-                media_type="video/mp2t",
+                media_type="video/mpeg",
                 headers={
                     "Connection": "close",
                     "Cache-Control": "no-cache",
@@ -2365,7 +2365,7 @@ class ProgramDirector:
                 self._hls_last_activity[channel_id] = _time.monotonic()
             return Response(
                 content=seg_data,
-                media_type="video/mp2t",
+                media_type="video/mpeg",
                 headers={
                     "Cache-Control": "public, no-cache",
                     "Access-Control-Allow-Origin": "*",
