@@ -216,7 +216,7 @@ class HLSAccessFilter(logging.Filter):
     Error responses (status >= 400) are still logged.
     """
 
-    _QUIET_PREFIXES = ("/hls/", "/api/epg", "/discover.json", "/lineup_status.json")
+    _QUIET_PREFIXES = ("/hls/", "/channels/", "/api/epg", "/discover.json", "/lineup_status.json")
     _QUIET_SUFFIXES = ("/status",)  # suppress /channel/*/status polling
 
     def filter(self, record: logging.LogRecord) -> bool:
@@ -504,6 +504,41 @@ class ProgramDirector:
             if yaml_dir.is_dir():
                 return YamlChannelConfigProvider(yaml_dir).to_channels_list()
             return []
+
+    def _generate_iptv_m3u(self, request: "Request") -> "Response":
+        """Generate IPTV M3U playlist pointing to canonical HLS manifests.
+
+        This is the primary discovery surface for IPTV/VLC/general HLS clients.
+        Each channel entry points to /channels/{id}/live.m3u8.
+
+        The HDHomeRun /lineup.json endpoint (for Plex HDHomeRun tuner compat)
+        continues to point to /channel/{id}.ts under INV-PLEX-LINEUP-001.
+        """
+        channels = self._load_channels_list()
+        base_url = str(request.base_url).rstrip("/")
+
+        sort_key = lambda ch: ch.get("number", ch.get("channel_id_int", 0))
+        sorted_channels = sorted(channels, key=sort_key)
+
+        guide_url = f"{base_url}/iptv/guide.xml"
+        lines = [f'#EXTM3U url-tvg="{guide_url}"']
+        for ch in sorted_channels:
+            cid = ch["channel_id"]
+            name = ch.get("name", cid)
+            number = ch.get("number", ch.get("channel_id_int", ""))
+            tvg = f'tvg-id="{number}" tvg-chno="{number}" tvg-name="{name}"'
+            lines.append(f'#EXTINF:-1 {tvg},{name}')
+            lines.append(f"{base_url}/channels/{cid}/live.m3u8")
+
+        body = "\n".join(lines) + "\n"
+        return Response(
+            content=body,
+            media_type="audio/x-mpegurl",
+            headers={
+                "Cache-Control": "no-cache, max-age=0",
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
 
     def _reload_config(self) -> dict[str, Any]:
         """Reload channel YAML configs, invalidating all config caches.
@@ -1552,6 +1587,185 @@ class ProgramDirector:
             return None
         return self._channel_config_provider.get_channel_config(channel_id)
 
+    def _resolve_channel_manager(self, channel_id: str) -> "Any | None":
+        """Resolve the ChannelManager for a channel using the existing ownership model.
+
+        Returns None if the channel is unknown.
+        """
+        if self._channel_manager_provider is not None:
+            try:
+                return self._channel_manager_provider.get_channel_manager(channel_id)
+            except Exception:
+                return None
+        with self._managers_lock:
+            return self._managers.get(channel_id)
+
+    def _resolve_or_create_channel_manager(self, channel_id: str) -> "Any | None":
+        """Resolve or create a ChannelManager for a channel.
+
+        INV-HLS-FIRST-VIEWER-ACTIVATES-CHANNEL-001: HLS activation must use
+        the same _get_or_create_manager path as raw TS viewers. This method
+        ensures a ChannelManager exists for the given channel_id.
+
+        Returns None if channel creation fails (unknown channel, startup
+        in progress, etc.).
+        """
+        # Try existing manager first (fast path)
+        mgr = self._resolve_channel_manager(channel_id)
+        if mgr is not None:
+            return mgr
+
+        # Create via the same path as raw TS viewers
+        if self._channel_manager_provider is not None:
+            try:
+                return self._channel_manager_provider.get_channel_manager(channel_id)
+            except Exception:
+                return None
+        try:
+            return self._get_or_create_manager(channel_id)
+        except Exception:
+            return None
+
+    async def _ensure_channel_active_for_hls(self, channel_id: str, session_id: str) -> "Any | None":
+        """Ensure a channel is active by tuning in an HLS phantom viewer.
+
+        INV-HLS-FIRST-VIEWER-ACTIVATES-CHANNEL-001: Uses the same channel
+        activation path as raw TS viewers — _get_or_create_manager + tune_in.
+        Does NOT create a parallel lifecycle.
+
+        INV-HLS-PHANTOM-DRAIN-KEEPS-CHANNEL-ALIVE-001: Subscribes a phantom
+        to the ChannelStream fanout so the byte pipeline stays alive while
+        HLS clients poll. Exactly one phantom per channel. The phantom drain
+        thread disconnects when no HLS client has polled recently.
+
+        Returns the ChannelManager on success, None on failure.
+        """
+        import time as _time
+
+        # INV-HLS-PHANTOM-DRAIN-KEEPS-CHANNEL-ALIVE-001: Exactly one phantom
+        # per channel. Use _hls_activity_lock to serialize check-and-register
+        # so concurrent manifest requests cannot create duplicate phantoms.
+        with self._hls_activity_lock:
+            if channel_id in self._hls_phantom_sessions:
+                # Phantom already active — just refresh activity and return
+                self._hls_last_activity[channel_id] = _time.monotonic()
+                return self._resolve_channel_manager(channel_id)
+            # Reserve the slot immediately so concurrent requests see it
+            phantom_id = f"hls-v2-phantom-{channel_id}-{uuid.uuid4().hex[:8]}"
+            self._hls_phantom_sessions[channel_id] = phantom_id
+            self._hls_last_activity[channel_id] = _time.monotonic()
+        loop = asyncio.get_running_loop()
+
+        def _startup():
+            mgr = self._resolve_or_create_channel_manager(channel_id)
+            if mgr is None:
+                return None
+            mgr.tune_in(phantom_id, {"channel_id": channel_id, "hls": True})
+            return mgr
+
+        # INV-CHANNEL-STARTUP-CONCURRENCY-001: Acquire startup semaphore
+        await self._startup_semaphore.acquire()
+        try:
+            mgr = await loop.run_in_executor(self._startup_executor, _startup)
+        except Exception as exc:
+            self._logger.warning(
+                "HLS activation failed for channel %s: %s", channel_id, exc,
+            )
+            mgr = None
+        finally:
+            self._startup_semaphore.release()
+
+        if mgr is None:
+            # Startup failed — clean up the reserved slot
+            with self._hls_activity_lock:
+                self._hls_phantom_sessions.pop(channel_id, None)
+                self._hls_last_activity.pop(channel_id, None)
+            return None
+
+        # Wait for fanout to establish so bytes start flowing to the segmenter
+        fanout = None
+        for _ in range(10):
+            fanout = self._get_or_create_fanout_buffer(channel_id, mgr)
+            if fanout and fanout.is_running():
+                break
+            await asyncio.sleep(1)
+
+        if fanout is None:
+            # Startup failed — clean up phantom
+            self._logger.warning(
+                "[HLS-v2 %s] activation failed (no fanout), cleaning up phantom %s",
+                channel_id, phantom_id,
+            )
+            try:
+                mgr.tune_out(phantom_id)
+            except Exception:
+                pass
+            with self._hls_activity_lock:
+                self._hls_phantom_sessions.pop(channel_id, None)
+                self._hls_last_activity.pop(channel_id, None)
+            return None
+
+        # Subscribe phantom to fanout and start drain thread.
+        # This keeps the ChannelStream subscriber list non-empty so AIR bytes
+        # continue flowing through the fanout → HlsSegmenter tee path.
+        phantom_queue = fanout.subscribe(phantom_id)
+
+        def _drain_hls_v2_phantom():
+            IDLE_CHECK_INTERVAL = 5.0
+            idle_timeout = getattr(mgr, "LINGER_SECONDS", 20)
+            self._logger.info(
+                "[HLS-v2-phantom %s] started, idle_timeout=%ds", channel_id, idle_timeout,
+            )
+            while True:
+                # Sleep between checks — the BytesBoundedQueue's drop_oldest
+                # policy handles overflow silently. We don't need to drain at
+                # wire rate; we just need to stay subscribed and periodically
+                # confirm the stream is alive.
+                _time.sleep(IDLE_CHECK_INTERVAL)
+
+                # Pull one chunk to confirm stream is alive (non-blocking)
+                try:
+                    chunk = phantom_queue.get(timeout=0.01)
+                    if not chunk:
+                        break  # EOF
+                except Exception:
+                    pass  # queue empty or timeout — stream may be starting
+
+                # Check if any HLS client is still active
+                with self._hls_activity_lock:
+                    last = self._hls_last_activity.get(channel_id, 0)
+                idle_seconds = _time.monotonic() - last
+                if idle_seconds > idle_timeout:
+                    self._logger.info(
+                        "[HLS-v2-phantom %s] no client activity for %.0fs, disconnecting",
+                        channel_id, idle_seconds,
+                    )
+                    break
+
+            # Cleanup
+            self._logger.info(
+                "[HLS-v2-phantom %s] tearing down phantom viewer %s", channel_id, phantom_id,
+            )
+            try:
+                mgr.tune_out(phantom_id)
+            except Exception:
+                pass
+            try:
+                fanout.unsubscribe(phantom_id)
+            except Exception:
+                pass
+            with self._hls_activity_lock:
+                self._hls_phantom_sessions.pop(channel_id, None)
+                self._hls_last_activity.pop(channel_id, None)
+
+        threading.Thread(
+            target=_drain_hls_v2_phantom,
+            daemon=True,
+            name=f"hls-v2-phantom-{channel_id}",
+        ).start()
+
+        return mgr
+
     def _get_or_create_fanout_buffer(self, channel_id: str, manager: Any) -> Optional[ChannelStream]:
         """
         Phase 0 contract: Get or create FanoutBuffer (ChannelStream) for a channel.
@@ -1669,7 +1883,9 @@ class ProgramDirector:
                         % channel_id
                     )
 
-                fanout = ChannelStream(channel_id=channel_id, ts_source_factory=ts_source_factory, hls_manager=self._hls_manager)
+                # Wire HLS segmenter from ChannelManager if available
+                _hls_seg = getattr(manager, "hls_segmenter", None)
+                fanout = ChannelStream(channel_id=channel_id, ts_source_factory=ts_source_factory, hls_manager=self._hls_manager, hls_segmenter=_hls_seg)
                 self._fanout_buffers[channel_id] = fanout
                 return fanout
 
@@ -1680,7 +1896,8 @@ class ProgramDirector:
             if self._channel_stream_factory:
                 fanout = self._channel_stream_factory(channel_id, str(socket_path))
             else:
-                fanout = ChannelStream(channel_id=channel_id, socket_path=socket_path, hls_manager=self._hls_manager)
+                _hls_seg = getattr(manager, "hls_segmenter", None)
+                fanout = ChannelStream(channel_id=channel_id, socket_path=socket_path, hls_manager=self._hls_manager, hls_segmenter=_hls_seg)
             self._fanout_buffers[channel_id] = fanout
             return fanout
 
@@ -1773,9 +1990,9 @@ class ProgramDirector:
 
         @self.fastapi_app.get("/channel/{channel_id}.m3u")
         async def channel_m3u(request: Request, channel_id: str) -> Response:
-            """Return an M3U playlist pointing to the channel TS stream, for VLC."""
+            """Return an M3U playlist pointing to the channel's live HLS manifest."""
             base_url = str(request.base_url).rstrip("/")
-            body = f"#EXTM3U\n#EXTINF:-1,{channel_id}\n{base_url}/channel/{channel_id}.ts\n"
+            body = f"#EXTM3U\n#EXTINF:-1,{channel_id}\n{base_url}/channels/{channel_id}/live.m3u8\n"
             return Response(
                 content=body,
                 media_type="audio/x-mpegurl",
@@ -2384,6 +2601,129 @@ class ProgramDirector:
                     self._logger.info("[HLS %s] tune_out received, forcing phantom idle", channel_id)
             return Response(status_code=204)
 
+        # ---------------------------------------------------------------
+        # New canonical HLS endpoints (Phase 6 — backed by SegmentRing)
+        # ---------------------------------------------------------------
+
+        @self.fastapi_app.get("/channels/{channel_id}/live.m3u8")
+        async def channels_hls_manifest(
+            channel_id: str,
+            request: Request,
+            session: str | None = None,
+        ) -> Response:
+            """Serve live HLS manifest from the new canonical SegmentRing.
+
+            INV-HLS-MANIFEST-LIVE-001: No EXT-X-ENDLIST.
+            INV-HLS-MANIFEST-CHANNEL-SCOPED-001: Same content for all clients.
+            INV-HLS-LIFECYCLE-SEGMENT-READY-001: 503 + Retry-After until ready.
+            INV-HLS-ENDPOINT-SESSION-TOUCH-001: Touch only on 200.
+            INV-HLS-QUIET-POLLING-001: No INFO logging per request.
+            INV-HLS-FIRST-VIEWER-ACTIVATES-CHANNEL-001: Activates inactive channel.
+
+            Any request to this endpoint counts as a viewer. The first
+            request activates the channel through the normal ChannelManager
+            lifecycle (same as raw TS). The endpoint blocks until segments
+            are available, then returns a valid manifest.
+            """
+            sid = session or f"hls-anon-{uuid.uuid4().hex[:8]}"
+
+            mgr = self._resolve_channel_manager(channel_id)
+
+            # Determine whether the channel is active
+            is_active = False
+            if mgr is not None:
+                rs = getattr(mgr, "runtime_state", None)
+                has_viewers = rs is not None and rs.viewer_count > 0
+                has_producer = mgr.active_producer is not None
+                is_active = has_viewers or has_producer
+
+            if not is_active:
+                # Activate channel in background — don't block the response.
+                asyncio.ensure_future(
+                    self._ensure_channel_active_for_hls(channel_id, sid)
+                )
+
+            ring = getattr(mgr, "hls_segment_ring", None) if mgr else None
+            gen = getattr(mgr, "hls_manifest_generator", None) if mgr else None
+
+            # Try to generate a manifest with real segments
+            playlist = gen.generate(ring) if (gen and ring) else None
+
+            if playlist is None:
+                # No segments yet — return a valid empty live manifest.
+                # HLS clients will re-poll after TARGETDURATION seconds.
+                # Using a 1-second target duration so clients retry quickly.
+                playlist = (
+                    "#EXTM3U\n"
+                    "#EXT-X-VERSION:3\n"
+                    "#EXT-X-TARGETDURATION:1\n"
+                    "#EXT-X-MEDIA-SEQUENCE:0\n"
+                )
+
+            # INV-HLS-ENDPOINT-SESSION-TOUCH-001: Touch on success only
+            session_mgr = getattr(mgr, "hls_session_manager", None)
+            if session_mgr is not None:
+                session_mgr.set_clock(int(__import__("time").monotonic() * 1000))
+                session_mgr.touch(sid)
+
+            # Refresh phantom activity so drain thread keeps channel alive
+            with self._hls_activity_lock:
+                self._hls_last_activity[channel_id] = __import__("time").monotonic()
+
+            return Response(
+                content=playlist,
+                media_type="application/vnd.apple.mpegurl",
+                headers={
+                    "Cache-Control": "no-cache, max-age=0",
+                    "Access-Control-Allow-Origin": "*",
+                },
+            )
+
+        @self.fastapi_app.get("/channels/{channel_id}/seg_{index}.ts")
+        async def channels_hls_segment(
+            channel_id: str,
+            index: int,
+            session: str | None = None,
+        ) -> Response:
+            """Serve an HLS segment from the canonical SegmentRing.
+
+            INV-HLS-SERVE-BYTE-IDENTITY-001: Exact bytes from ring, no transformation.
+            INV-HLS-ENDPOINT-SESSION-TOUCH-001: Touch on success only.
+            INV-HLS-QUIET-POLLING-001: No INFO logging per request.
+            """
+            mgr = self._resolve_channel_manager(channel_id)
+            if mgr is None:
+                return Response(content="Channel not found", status_code=404)
+
+            ring = getattr(mgr, "hls_segment_ring", None)
+            if ring is None:
+                return Response(content="Not found", status_code=404)
+
+            segment = ring.get(index)
+            if segment is None:
+                return Response(content="Not found", status_code=404)
+
+            # INV-HLS-ENDPOINT-SESSION-TOUCH-001: Touch on success only
+            session_mgr = getattr(mgr, "hls_session_manager", None)
+            if session_mgr is not None:
+                sid = session or f"hls-anon-{uuid.uuid4().hex[:8]}"
+                session_mgr.set_clock(int(__import__("time").monotonic() * 1000))
+                session_mgr.touch(sid)
+
+            # Refresh phantom activity so drain thread keeps channel alive
+            with self._hls_activity_lock:
+                self._hls_last_activity[channel_id] = __import__("time").monotonic()
+
+            return Response(
+                content=segment.data,
+                media_type="video/mp2t",
+                headers={
+                    "Content-Length": str(segment.byte_count),
+                    "Cache-Control": "public, max-age=60",
+                    "Access-Control-Allow-Origin": "*",
+                },
+            )
+
         @self.fastapi_app.get("/watch/{channel_id}", response_class=HTMLResponse)
         async def watch_channel(channel_id: str) -> HTMLResponse:
             """Serve the HLS web player page."""
@@ -2523,6 +2863,11 @@ class ProgramDirector:
         def _block_channels_m3u() -> Response:
             return Response(status_code=status.HTTP_404_NOT_FOUND)
 
+        @self.fastapi_app.get("/playlist.m3u")
+        def playlist_m3u(request: Request) -> Response:
+            """IPTV channel list pointing to canonical HLS manifests."""
+            return self._generate_iptv_m3u(request)
+
         # --- Plex HDHomeRun Virtual Tuner Endpoints ---
         # INV-PLEX-DISCOVERY-001, INV-PLEX-LINEUP-001,
         # INV-PLEX-TUNER-STATUS-001, INV-PLEX-XMLTV-001
@@ -2534,11 +2879,9 @@ class ProgramDirector:
             """HDHomeRun device discovery — INV-PLEX-DISCOVERY-001."""
             from retrovue.integrations.plex.models import make_discover_payload
 
-            channels = self._load_channels_list()
             base_url = str(request.base_url).rstrip("/")
             return make_discover_payload(
                 base_url=base_url,
-                tuner_count=len(channels),
             )
 
         @self.fastapi_app.get("/lineup.json")

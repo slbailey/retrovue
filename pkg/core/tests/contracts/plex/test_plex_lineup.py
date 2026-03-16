@@ -97,7 +97,7 @@ class TestPlexLineup:
         )
 
     def test_url_points_to_channel_ts_endpoint(self):
-        """URL MUST resolve to /channel/{id}.ts."""
+        """URL MUST resolve to /channel/{id}.ts (raw TS for HDHomeRun compat)."""
         channels = _make_channels("HBO")
         adapter = _make_adapter(channels, base_url="http://10.0.0.1:8000")
         lineup = adapter.lineup()
@@ -138,7 +138,7 @@ class TestPlexLineup:
 
         registry_ids = {ch["channel_id"] for ch in channels}
         for entry in lineup:
-            # Extract channel_id from URL
+            # Extract channel_id from URL: /channels/{id}/live.m3u8
             url = entry["URL"]
             url_channel = url.rsplit("/channel/", 1)[-1].replace(".ts", "")
             assert url_channel in registry_ids, (

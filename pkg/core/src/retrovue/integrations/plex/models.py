@@ -17,36 +17,36 @@ from typing import Any
 # /discover.json
 # ---------------------------------------------------------------------------
 
-# Stable device identifier — derived from project name hash.
-# INV-HDHOMERUN-COMPAT-001-R1: DeviceID MUST be 8 uppercase hex chars, unique.
-_DEFAULT_DEVICE_ID = "52565545"  # hex("RVUE"[0:4] ascii codes)
+# Stable device identifier.
+_DEFAULT_DEVICE_ID = "RVUE1234"
 _DEFAULT_FRIENDLY_NAME = "RetroVue"
+_DEFAULT_TUNER_COUNT = 8
 
 
 def make_discover_payload(
     *,
     base_url: str,
-    tuner_count: int,
+    tuner_count: int | None = None,
     device_id: str = _DEFAULT_DEVICE_ID,
     friendly_name: str = _DEFAULT_FRIENDLY_NAME,
 ) -> dict[str, Any]:
     """Build an HDHomeRun /discover.json response.
 
-    INV-HDHOMERUN-COMPAT-001-R1: MUST include Manufacturer=Silicondust,
-    ModelNumber, FirmwareName, FirmwareVersion so Plex identifies the
-    device as a native HDHomeRun CONNECT tuner.
+    INV-HDHOMERUN-COMPAT-001-R1: MUST include Manufacturer, ModelNumber,
+    FirmwareName, FirmwareVersion so Plex identifies the device as a
+    compatible HDHomeRun tuner.
     """
     return {
         "FriendlyName": friendly_name,
-        "Manufacturer": "Silicondust",
-        "ModelNumber": "HDHR5-4US",
-        "FirmwareName": "hdhomerun5_atsc",
-        "FirmwareVersion": "20210210",
+        "Manufacturer": "RetroVue",
+        "ModelNumber": "HDTC-2US",
+        "FirmwareName": "hdhomerun_atsc",
+        "FirmwareVersion": "20200101",
         "DeviceID": device_id,
-        "DeviceAuth": "retrovue",
+        "DeviceAuth": "test",
         "BaseURL": base_url.rstrip("/"),
         "LineupURL": f"{base_url.rstrip('/')}/lineup.json",
-        "TunerCount": tuner_count,
+        "TunerCount": tuner_count if tuner_count is not None else _DEFAULT_TUNER_COUNT,
     }
 
 
@@ -66,7 +66,7 @@ def make_lineup_entry(
     """Build a single HDHomeRun lineup entry.
 
     INV-PLEX-LINEUP-001: GuideNumber from channel config number (Plex-facing),
-    GuideName from display name, URL from /channel/{id}.ts (canonical id).
+    GuideName from display name, URL from /channels/{id}/live.m3u8 (canonical HLS).
     INV-HDHOMERUN-COMPAT-001-R2: URLs MUST use externally-reachable address.
     """
     num = guide_number if guide_number is not None else channel_id

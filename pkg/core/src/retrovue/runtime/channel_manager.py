@@ -470,12 +470,93 @@ class ChannelManager:
         self._blockplan_mode: bool = True
         self._pending_fatal: BaseException | None = None
 
+        # --- HLS delivery state (Phase 5 integration) ---
+        self._hls_segment_ring: "SegmentRing | None" = None
+        self._hls_segmenter: "HlsSegmenter | None" = None
+        self._hls_manifest_generator: "ManifestGenerator | None" = None
+        self._hls_session_manager: "HlsSessionManager | None" = None
+        self._hls_segment_counter: int = 0  # persists across producer restarts
+        self._init_hls_state()
+
         # INV-CHANNEL-LIVENESS-RECOVERY-001: Recovery state
         self._recovery_attempts: int = 0
         self._recovery_timer: threading.Timer | None = None
 
         # Channel configuration (set by daemon when creating manager)
         self.channel_config: ChannelConfig | None = None
+
+    def _init_hls_state(self) -> None:
+        """Initialize per-channel HLS delivery state.
+
+        Creates SegmentRing, HlsSegmenter, ManifestGenerator, and
+        HlsSessionManager for this channel. Called once at construction.
+        """
+        try:
+            from retrovue.runtime.hls import (
+                SegmentRing,
+                HlsSegmenter,
+                ManifestGenerator,
+                HlsSessionManager,
+            )
+            self._hls_segment_ring = SegmentRing(capacity=7, manifest_window=3)
+            self._hls_segmenter = HlsSegmenter(
+                channel_id=self.channel_id,
+                segment_ring=self._hls_segment_ring,
+                target_duration_ms=6000,
+                max_gop_ms=1000,
+                starting_index=self._hls_segment_counter,
+            )
+            self._hls_manifest_generator = ManifestGenerator(self.channel_id)
+            self._hls_session_manager = HlsSessionManager(
+                channel_id=self.channel_id,
+                session_timeout_ms=30_000,
+                reap_interval_ms=10_000,
+            )
+            self._logger.debug(
+                "HLS delivery state initialized for channel %s", self.channel_id,
+            )
+        except Exception as exc:
+            self._logger.warning(
+                "HLS delivery state init failed for channel %s: %s — "
+                "HLS will be unavailable for this channel",
+                self.channel_id, exc,
+            )
+
+    @property
+    def hls_segment_ring(self) -> "SegmentRing | None":
+        """Per-channel segment ring (for HLS endpoint access)."""
+        return self._hls_segment_ring
+
+    @property
+    def hls_segmenter(self) -> "HlsSegmenter | None":
+        """Per-channel HLS segmenter (for ChannelStream byte feed)."""
+        return self._hls_segmenter
+
+    @property
+    def hls_manifest_generator(self) -> "ManifestGenerator | None":
+        """Per-channel manifest generator (for HLS playlist endpoint)."""
+        return self._hls_manifest_generator
+
+    @property
+    def hls_session_manager(self) -> "HlsSessionManager | None":
+        """Per-channel HLS session manager (for viewer presence tracking)."""
+        return self._hls_session_manager
+
+    def _reset_hls_segmenter_for_restart(self) -> None:
+        """Reset the HLS segmenter for a producer restart.
+
+        INV-HLS-RESTART-DISCONTINUITY-001: The next segment carries discontinuity.
+        INV-HLS-SEGMENT-IDENTITY-001: Index continues from counter.
+        """
+        if self._hls_segmenter is not None:
+            self._hls_segmenter.reset_for_restart(self._hls_segment_counter)
+
+    def _update_hls_segment_counter(self) -> None:
+        """Sync the segment counter from the segmenter's state."""
+        if self._hls_segmenter is not None:
+            last = self._hls_segmenter.last_completed_index()
+            if last is not None:
+                self._hls_segment_counter = last + 1
 
     def stop_channel(self, reason: str = "channel_stop") -> None:
         """
@@ -956,6 +1037,10 @@ class ChannelManager:
             self._recovery_attempts = 0
             return  # Viewers left during backoff
 
+        # INV-HLS-RESTART-DISCONTINUITY-001: Reset segmenter before producer restart
+        self._update_hls_segment_counter()
+        self._reset_hls_segmenter_for_restart()
+
         try:
             self._ensure_producer_running()
         except Exception as e:
@@ -1267,7 +1352,7 @@ class ChannelManager:
             "Channel %s: Building BlockPlanProducer (mode=%s)",
             self.channel_id, mode,
         )
-        return BlockPlanProducer(
+        producer = BlockPlanProducer(
             channel_id=self.channel_id,
             configuration={},
             channel_config=self._get_channel_config(),
@@ -1276,6 +1361,9 @@ class ChannelManager:
             evidence_endpoint=self._evidence_endpoint,
             on_producer_failure=self._on_producer_session_end,
         )
+        # Wire HLS segmenter for BlockPlan timebase updates
+        producer._hls_segmenter_ref = self._hls_segmenter
+        return producer
 
     def _get_channel_config(self) -> ChannelConfig:
         """Get or create ChannelConfig for this channel."""
@@ -1714,6 +1802,9 @@ class BlockPlanProducer(Producer):
         # PlayoutSession instance (created on start, destroyed on stop)
         self._session: "PlayoutSession | None" = None
 
+        # HLS segmenter reference (set by ChannelManager._build_producer)
+        self._hls_segmenter_ref: Any | None = None
+
         # Thread-safety lock for all state mutations
         self._lock = threading.RLock()
 
@@ -1938,6 +2029,20 @@ class BlockPlanProducer(Producer):
                 # INV-WALLCLOCK-FENCE-002: Track seeded blocks as active
                 self._in_flight_block_ids.add(block_a.block_id)
                 self._in_flight_block_ids.add(block_b.block_id)
+
+                # INV-HLS-SEGMENT-WALLCLOCK-001: Supply editorial timebase to HLS segmenter
+                if self._hls_segmenter_ref is not None:
+                    try:
+                        self._hls_segmenter_ref.set_blockplan_timebase(
+                            start_utc_ms=block_a.start_utc_ms,
+                            active_block_start_utc_ms=block_a.start_utc_ms,
+                            active_block_end_utc_ms=block_b.end_utc_ms,
+                        )
+                    except Exception as exc:
+                        self._logger.warning(
+                            "HLS timebase init failed for channel %s: %s",
+                            self.channel_id, exc,
+                        )
 
                 # Feed-ahead controller: enter SEEDED state.
                 # After seed, 2 blocks are in AIR's queue. If queue_depth > 2,
@@ -2268,6 +2373,16 @@ class BlockPlanProducer(Producer):
             prepopulate_block_segment_cache(block.block_id, fed_segments)
             # INV-WALLCLOCK-FENCE-002: Track fed block as active
             self._in_flight_block_ids.add(block.block_id)
+            # INV-HLS-SEGMENT-WALLCLOCK-001: Update HLS segmenter timebase on block feed
+            if self._hls_segmenter_ref is not None:
+                try:
+                    self._hls_segmenter_ref.set_blockplan_timebase(
+                        start_utc_ms=block.start_utc_ms,
+                        active_block_start_utc_ms=block.start_utc_ms,
+                        active_block_end_utc_ms=block.end_utc_ms,
+                    )
+                except Exception:
+                    pass
             # Success clears error state
             self._consecutive_feed_errors = 0
             self._error_backoff_remaining = 0

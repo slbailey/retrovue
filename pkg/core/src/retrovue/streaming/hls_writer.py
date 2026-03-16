@@ -44,6 +44,7 @@ class HLSSegment:
     duration: float  # seconds
     data: bytes      # raw TS payload
     discontinuity: bool = False  # INV-HLS-DISCONTINUITY-MARKER-001 Rule 3
+    pcr_start: float = 0.0  # PCR time at segment start (seconds since PCR epoch)
 
 
 def _is_keyframe_packet(packet: bytes) -> bool:
@@ -282,9 +283,11 @@ class HLSSegmenter:
         if len(self._segments) == self._segments.maxlen:
             self._media_sequence += 1
         # INV-HLS-DISCONTINUITY-MARKER-001 Rule 1: carry pending discontinuity flag
+        pcr_start = self._seg_start_pcr if self._seg_start_pcr is not None else 0.0
         self._segments.append(HLSSegment(
             name=seg_name, duration=duration, data=seg_data,
             discontinuity=self._pending_discontinuity,
+            pcr_start=pcr_start,
         ))
         self._pending_discontinuity = False
         self._seg_index += 1
@@ -304,7 +307,14 @@ class HLSSegmenter:
         self._seg_start_pcr = self._last_pcr
 
     def _generate_playlist(self) -> str:
-        """Generate m3u8 string from in-memory segments. MUST be called with _lock held."""
+        """Generate m3u8 string from in-memory segments. MUST be called with _lock held.
+
+        INV-HLS-MANIFEST-PDT-001: Emits EXT-X-PROGRAM-DATE-TIME before the
+        first segment, derived from the segment's PCR start time (not system clock).
+        INV-HLS-MANIFEST-PDT-CLOCK-SOURCE-001: No datetime.now() or time.time() calls.
+        """
+        from datetime import datetime, timezone
+
         max_dur = max(seg.duration for seg in self._segments)
         lines = [
             "#EXTM3U",
@@ -312,10 +322,15 @@ class HLSSegmenter:
             f"#EXT-X-TARGETDURATION:{int(max_dur) + 1}",
             f"#EXT-X-MEDIA-SEQUENCE:{self._media_sequence}",
         ]
-        for seg in self._segments:
+        for i, seg in enumerate(self._segments):
             # INV-HLS-DISCONTINUITY-MARKER-001 Rule 2: emit discontinuity tag
             if seg.discontinuity:
                 lines.append("#EXT-X-DISCONTINUITY")
+            # INV-HLS-MANIFEST-PDT-001: PDT before first segment entry
+            if i == 0:
+                dt = datetime.fromtimestamp(seg.pcr_start, tz=timezone.utc)
+                pdt = dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+                lines.append(f"#EXT-X-PROGRAM-DATE-TIME:{pdt}")
             lines.append(f"#EXTINF:{seg.duration:.3f},")
             lines.append(seg.name)
         return "\n".join(lines) + "\n"

@@ -463,6 +463,9 @@ class PlayoutSession:
                             # INV-FEED-NO-FEED-AFTER-END: Mark session as ended
                             self._state.session_ended = True
                             self._state.session_end_reason = ended.reason
+                        # Terminate AIR subprocess BEFORE firing the callback,
+                        # so recovery doesn't orphan the old process.
+                        self._terminate_air_process()
                         if self.on_session_end:
                             try:
                                 self.on_session_end(ended.reason)
@@ -685,6 +688,34 @@ class PlayoutSession:
                 self.on_session_end(reason)
 
             return True
+
+    def _terminate_air_process(self):
+        """Terminate the AIR subprocess only (no gRPC/thread cleanup).
+
+        Called from the event thread when SessionEnded is received, to
+        ensure the old AIR process is dead before recovery spawns a new one.
+        """
+        proc = self._state.air_process
+        if proc is None:
+            return
+        try:
+            logger.debug(
+                "[PlayoutSession:%s] Terminating AIR subprocess (pid=%d) on SessionEnded",
+                self.channel_id, proc.pid,
+            )
+            proc.terminate()
+            proc.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "[PlayoutSession:%s] AIR did not exit gracefully, killing (pid=%d)",
+                self.channel_id, proc.pid,
+            )
+            proc.kill()
+        except Exception as e:
+            logger.warning(
+                "[PlayoutSession:%s] AIR termination error: %s", self.channel_id, e,
+            )
+        self._state.air_process = None
 
     def _cleanup(self):
         """Clean up resources."""
