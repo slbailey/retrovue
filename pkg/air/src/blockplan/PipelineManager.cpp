@@ -1133,6 +1133,17 @@ void PipelineManager::Run() {
     live_parent_block_ = live_tp()->GetBlock();
     last_seam_invariant_violation_block_id_.clear();  // Allow one violation log per block after swap.
     live_boundaries_ = AsTickProducer(live_.get())->GetBoundaries();
+    // INV-SEAM-BOUNDARY-COUNT-MATCH-001: boundaries must match segment count.
+    if (live_boundaries_.size() != live_parent_block_.segments.size()) {
+      std::ostringstream oss;
+      oss << "[PipelineManager] INV-SEAM-BOUNDARY-COUNT-MATCH-001 VIOLATION"
+          << " path=session_first"
+          << " block=" << live_parent_block_.block_id
+          << " parent_segments=" << live_parent_block_.segments.size()
+          << " live_boundaries=" << live_boundaries_.size()
+          << " tick=" << session_frame_index;
+      Logger::Error(oss.str());
+    }
     ComputeSegmentSeamFrames();
     EnforceNextSeamInvariant(session_frame_index, "block_activation_session_first");
     ArmSegmentPrep(session_frame_index);
@@ -2864,6 +2875,17 @@ void PipelineManager::Run() {
         live_parent_block_ = live_tp()->GetBlock();
         last_seam_invariant_violation_block_id_.clear();  // Allow one violation log per block after swap.
         live_boundaries_ = AsTickProducer(live_.get())->GetBoundaries();
+        // INV-SEAM-BOUNDARY-COUNT-MATCH-001: boundaries must match segment count.
+        if (live_boundaries_.size() != live_parent_block_.segments.size()) {
+          std::ostringstream oss;
+          oss << "[PipelineManager] INV-SEAM-BOUNDARY-COUNT-MATCH-001 VIOLATION"
+              << " path=fence_take"
+              << " block=" << live_parent_block_.block_id
+              << " parent_segments=" << live_parent_block_.segments.size()
+              << " live_boundaries=" << live_boundaries_.size()
+              << " tick=" << session_frame_index;
+          Logger::Error(oss.str());
+        }
         ComputeSegmentSeamFrames();
         EnforceNextSeamInvariant(session_frame_index, "block_activation_fence_take");
         ArmSegmentPrep(session_frame_index);
@@ -4152,6 +4174,17 @@ void PipelineManager::Run() {
         live_parent_block_ = live_tp()->GetBlock();
         last_seam_invariant_violation_block_id_.clear();  // Allow one violation log per block after swap.
         live_boundaries_ = AsTickProducer(live_.get())->GetBoundaries();
+        // INV-SEAM-BOUNDARY-COUNT-MATCH-001: boundaries must match segment count.
+        if (live_boundaries_.size() != live_parent_block_.segments.size()) {
+          std::ostringstream oss;
+          oss << "[PipelineManager] INV-SEAM-BOUNDARY-COUNT-MATCH-001 VIOLATION"
+              << " path=padded_gap_exit"
+              << " block=" << live_parent_block_.block_id
+              << " parent_segments=" << live_parent_block_.segments.size()
+              << " live_boundaries=" << live_boundaries_.size()
+              << " tick=" << session_frame_index;
+          Logger::Error(oss.str());
+        }
         ComputeSegmentSeamFrames();
         EnforceNextSeamInvariant(session_frame_index, "block_activation_padded_gap_exit");
         ArmSegmentPrep(session_frame_index);

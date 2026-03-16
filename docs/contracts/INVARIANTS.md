@@ -442,6 +442,7 @@ Canonical contract: [delivery_hls.md](delivery_hls.md)
 | INV-CADENCE-SOURCE-SYNC-002 | [CadenceSourceSyncContract.md](../../pkg/air/docs/contracts/semantics/CadenceSourceSyncContract.md) | Semantic — producer transition must reinitialize cadence (all paths) |
 | INV-CADENCE-SOURCE-SYNC-003 | [CadenceSourceSyncContract.md](../../pkg/air/docs/contracts/semantics/CadenceSourceSyncContract.md) | Semantic — segment swap must refresh cadence |
 | INV-CADENCE-SOURCE-SYNC-004 | [CadenceSourceSyncContract.md](../../pkg/air/docs/contracts/semantics/CadenceSourceSyncContract.md) | Semantic — stale cadence causes observable speed error (always a defect) |
+| INV-SEAM-BOUNDARY-COUNT-MATCH-001 | [invariants/air/INV-SEAM-BOUNDARY-COUNT-MATCH-001.md](invariants/air/INV-SEAM-BOUNDARY-COUNT-MATCH-001.md) | Primary — boundary count must match segment count at block activation |
 
 ---
 
