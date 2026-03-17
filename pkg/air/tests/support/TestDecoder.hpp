@@ -57,28 +57,16 @@ class TestDecoder : public producers::IProducer,
     std::lock_guard<std::mutex> lock(mutex_);
     block_ = block;
 
-    // Simulate decoder failure for unresolvable URIs (matches production behavior).
-    bool all_unresolvable = true;
-    for (const auto& seg : block.segments) {
-      if (seg.asset_uri.find("/nonexistent/") == std::string::npos &&
-          seg.segment_type != SegmentType::kPad) {
-        all_unresolvable = false;
-        break;
-      }
-    }
-    if (all_unresolvable && !block.segments.empty()) {
-      has_decoder_ = false;
-      state_ = State::kReady;
-      return;
-    }
-
     has_decoder_ = true;
     state_ = State::kReady;
     frame_index_ = 0;
     segment_index_ = 0;
     segment_frame_offset_ = 0;
 
-    // Compute total frames from segment durations
+    // Always compute boundaries and frame counts from the block structure,
+    // even for unresolvable assets. The seam transition logic depends on
+    // boundaries being present. INV-SEAM-CONTINUITY-GUARANTEED-001 requires
+    // every segment to be reachable by transition.
     frames_per_block_ = 0;
     boundaries_.clear();
     int64_t cumulative_ms = 0;
@@ -88,12 +76,12 @@ class TestDecoder : public producers::IProducer,
       cumulative_ms += seg.segment_duration_ms;
       frames_per_block_ += seg_frames;
 
-      if (i < block.segments.size() - 1) {
-        SegmentBoundary sb;
-        sb.end_ct_ms = cumulative_ms;
-        sb.segment_index = static_cast<int32_t>(i);
-        boundaries_.push_back(sb);
-      }
+      // One boundary per segment (matches production BlockPlanValidator)
+      SegmentBoundary sb;
+      sb.start_ct_ms = cumulative_ms - seg.segment_duration_ms;
+      sb.end_ct_ms = cumulative_ms;
+      sb.segment_index = static_cast<int32_t>(i);
+      boundaries_.push_back(sb);
     }
 
     // Handle seek offset on first segment
