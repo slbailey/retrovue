@@ -443,6 +443,8 @@ Canonical contract: [delivery_hls.md](delivery_hls.md)
 | INV-CADENCE-SOURCE-SYNC-003 | [CadenceSourceSyncContract.md](../../pkg/air/docs/contracts/semantics/CadenceSourceSyncContract.md) | Semantic — segment swap must refresh cadence |
 | INV-CADENCE-SOURCE-SYNC-004 | [CadenceSourceSyncContract.md](../../pkg/air/docs/contracts/semantics/CadenceSourceSyncContract.md) | Semantic — stale cadence causes observable speed error (always a defect) |
 | INV-SEAM-BOUNDARY-COUNT-MATCH-001 | [invariants/air/INV-SEAM-BOUNDARY-COUNT-MATCH-001.md](invariants/air/INV-SEAM-BOUNDARY-COUNT-MATCH-001.md) | Primary — boundary count must match segment count at block activation |
+| INV-PRODUCER-DEMAND-DRIVEN-001 | [invariants/air/INV-PRODUCER-DEMAND-DRIVEN-001.md](invariants/air/INV-PRODUCER-DEMAND-DRIVEN-001.md) | Primary — decode must not advance without tick consumption |
+| INV-SEAM-CONTINUITY-GUARANTEED-001 | [invariants/air/INV-SEAM-CONTINUITY-GUARANTEED-001.md](invariants/air/INV-SEAM-CONTINUITY-GUARANTEED-001.md) | Primary — scheduled segment transitions must succeed with valid A/V |
 
 ---
 
