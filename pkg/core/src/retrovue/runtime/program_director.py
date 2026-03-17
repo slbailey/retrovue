@@ -2959,6 +2959,77 @@ class ProgramDirector:
 
             return dict(LINEUP_STATUS)
 
+
+        @self.fastapi_app.get("/test/block/{block_id}.ts")
+        async def test_block_stream(request: Request, block_id: str) -> Response:
+            from retrovue.runtime.test_playout_endpoint import (
+                EphemeralTestSession, _make_test_channel_config,
+            )
+            from retrovue.runtime.channel_stream import generate_ts_stream_async
+            session_id = str(uuid.uuid4())
+            channel_config = None
+            try:
+                managers = list(self._channel_managers.values())
+                if managers:
+                    cc = getattr(managers[0], "channel_config", None)
+                    if cc:
+                        channel_config = cc
+            except Exception:
+                pass
+            channel_config = _make_test_channel_config(channel_config)
+            test_session = EphemeralTestSession(block_id=block_id, session_id=session_id)
+            try:
+                test_session.start(channel_config)
+            except RuntimeError as e:
+                return Response(
+                    content=str(e),
+                    status_code=(
+                        status.HTTP_404_NOT_FOUND
+                        if "not found" in str(e).lower()
+                        else status.HTTP_503_SERVICE_UNAVAILABLE
+                    ),
+                )
+            client_queue = test_session.subscribe(session_id)
+            cleaned = []
+            def cleanup(*, reason: str = "unknown") -> None:
+                if cleaned:
+                    return
+                cleaned.append(1)
+                test_session.unsubscribe(session_id)
+                test_session.stop()
+            asyncio.create_task(_wait_disconnect_then_cleanup(
+                request, lambda: cleanup(reason="asgi_receive")))
+            async def generate_stream():
+                try:
+                    async for chunk in generate_ts_stream_async(client_queue):
+                        yield chunk
+                except GeneratorExit:
+                    cleanup(reason="generator_exit")
+                    return
+                except asyncio.CancelledError:
+                    cleanup(reason="cancelled")
+                    return
+                finally:
+                    cleanup(reason="generator_finally")
+            return StreamingResponse(
+                generate_stream(),
+                media_type="video/mpeg",
+                headers={"Connection": "close", "Cache-Control": "no-cache",
+                         "X-Accel-Buffering": "no"},
+            )
+
+        @self.fastapi_app.get("/test/segment/{asset_id}.ts")
+        async def test_segment_stream(request: Request, asset_id: str) -> Response:
+            return Response(content="not yet implemented",
+                            status_code=status.HTTP_501_NOT_IMPLEMENTED)
+
+        @self.fastapi_app.get("/test/channel/{channel_id}.ts")
+        async def test_channel_stream_at(
+            request: Request, channel_id: str, t: Optional[int] = None
+        ) -> Response:
+            return Response(content="not yet implemented",
+                            status_code=status.HTTP_501_NOT_IMPLEMENTED)
+
         @self.fastapi_app.post("/lineup.post")
         def plex_lineup_post():
             """Plex channel scan trigger (POST) — no-op for virtual tuner."""
