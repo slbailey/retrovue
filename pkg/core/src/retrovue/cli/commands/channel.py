@@ -1525,3 +1525,96 @@ def delete_program(
             else:
                 typer.echo(f"Error deleting program: {e}", err=True)
             raise typer.Exit(1)
+
+
+@app.command("now-playing")
+def now_playing(
+    channel_id: str = typer.Argument(..., help="Channel slug (e.g. 'hbo')"),
+    json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
+    test_db: bool = typer.Option(False, "--test-db", help="Use test database context"),
+    next_block: bool = typer.Option(False, "--next", help="Also show the next block"),
+):
+    """Show the currently playing block and its segments for a channel."""
+    import time
+    from ...domain.entities import PlaylistEvent
+
+    now_utc_ms = int(time.time() * 1000)
+    db_cm = _get_db_context(test_db)
+    with db_cm as db:
+        try:
+            # Current block: start <= now < end
+            current = db.query(PlaylistEvent).filter(
+                PlaylistEvent.channel_slug == channel_id,
+                PlaylistEvent.start_utc_ms <= now_utc_ms,
+                PlaylistEvent.end_utc_ms > now_utc_ms,
+            ).first()
+
+            if not current:
+                if json_output:
+                    typer.echo(json.dumps({"status": "ok", "block": None}, indent=2))
+                else:
+                    typer.echo(f"No block currently playing on '{channel_id}'")
+                return
+
+            def _format_block(pe: PlaylistEvent, label: str = "now") -> dict:
+                elapsed_ms = now_utc_ms - pe.start_utc_ms
+                total_ms = pe.end_utc_ms - pe.start_utc_ms
+                progress_pct = round(elapsed_ms / total_ms * 100, 1) if total_ms > 0 else 0
+                segs = []
+                for i, s in enumerate(pe.segments):
+                    seg_type = s.get("segment_type", "content")
+                    if seg_type == "pad":
+                        continue
+                    dur_ms = int(s.get("segment_duration_ms", 0))
+                    asset = s.get("asset_uri", "")
+                    # Show just the filename for readability
+                    filename = asset.rsplit("/", 1)[-1] if "/" in asset else asset
+                    segs.append({
+                        "index": i,
+                        "type": seg_type,
+                        "duration_s": round(dur_ms / 1000, 1),
+                        "asset": filename,
+                        "asset_uri": asset,
+                    })
+                return {
+                    "label": label,
+                    "block_id": pe.block_id,
+                    "channel": pe.channel_slug,
+                    "broadcast_day": pe.broadcast_day.isoformat(),
+                    "duration_s": round(total_ms / 1000),
+                    "progress_pct": progress_pct,
+                    "segments": segs,
+                }
+
+            blocks = [_format_block(current, "now")]
+
+            # Optionally fetch next block
+            if next_block:
+                nxt = db.query(PlaylistEvent).filter(
+                    PlaylistEvent.channel_slug == channel_id,
+                    PlaylistEvent.start_utc_ms >= current.end_utc_ms,
+                ).order_by(PlaylistEvent.start_utc_ms.asc()).first()
+                if nxt:
+                    blocks.append(_format_block(nxt, "next"))
+
+            if json_output:
+                typer.echo(json.dumps({"status": "ok", "blocks": blocks}, indent=2))
+            else:
+                for blk in blocks:
+                    label = blk["label"].upper()
+                    typer.echo(f"{label}: {blk['block_id']}  ({blk['duration_s']}s, {blk['progress_pct']}%)")
+                    for s in blk["segments"]:
+                        dur = s["duration_s"]
+                        mins = int(dur // 60)
+                        secs = int(dur % 60)
+                        dur_str = f"{mins}m{secs:02d}s" if mins > 0 else f"{secs}s"
+                        typer.echo(f"  [{s['index']}] {s['type']:14s} {dur_str:>8s}  {s['asset']}")
+                    typer.echo("")
+        except typer.Exit:
+            raise
+        except Exception as e:
+            if json_output:
+                typer.echo(json.dumps({"status": "error", "error": str(e)}, indent=2))
+            else:
+                typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(1)
