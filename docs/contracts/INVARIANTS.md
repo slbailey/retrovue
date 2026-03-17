@@ -445,6 +445,9 @@ Canonical contract: [delivery_hls.md](delivery_hls.md)
 | INV-SEAM-BOUNDARY-COUNT-MATCH-001 | [invariants/air/INV-SEAM-BOUNDARY-COUNT-MATCH-001.md](invariants/air/INV-SEAM-BOUNDARY-COUNT-MATCH-001.md) | Primary — boundary count must match segment count at block activation |
 | INV-PRODUCER-DEMAND-DRIVEN-001 | [invariants/air/INV-PRODUCER-DEMAND-DRIVEN-001.md](invariants/air/INV-PRODUCER-DEMAND-DRIVEN-001.md) | Primary — decode must not advance without tick consumption |
 | INV-SEAM-CONTINUITY-GUARANTEED-001 | [invariants/air/INV-SEAM-CONTINUITY-GUARANTEED-001.md](invariants/air/INV-SEAM-CONTINUITY-GUARANTEED-001.md) | Primary — scheduled segment transitions must succeed with valid A/V |
+| INV-SEAM-ELIGIBILITY-BOUNDED-BY-SEGMENT-001 | [invariants/air/INV-SEAM-ELIGIBILITY-BOUNDED-BY-SEGMENT-001.md](invariants/air/INV-SEAM-ELIGIBILITY-BOUNDED-BY-SEGMENT-001.md) | Derived — eligibility threshold capped by segment capacity |
+| INV-SEAM-TAKEOVER-COMMITMENT-001 | [invariants/air/INV-SEAM-TAKEOVER-COMMITMENT-001.md](invariants/air/INV-SEAM-TAKEOVER-COMMITMENT-001.md) | Primary — post-swap commit, no re-evaluation of eligibility |
+| INV-SEAM-PREP-DEADLINE-SAFE-001 | [invariants/air/INV-SEAM-PREP-DEADLINE-SAFE-001.md](invariants/air/INV-SEAM-PREP-DEADLINE-SAFE-001.md) | Derived — async prep must complete before seam consumption |
 
 ---
 

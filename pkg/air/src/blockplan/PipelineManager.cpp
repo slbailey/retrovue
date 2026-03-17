@@ -5386,17 +5386,27 @@ bool PipelineManager::IsIncomingSegmentEligibleForSwap(
   // A fully-decoded short segment will never grow deeper. Requiring more
   // frames than the segment can produce is an impossible condition that
   // blocks the transition forever.
-  bool video_ready;
+  // INV-SEAM-ELIGIBILITY-BOUNDED-BY-SEGMENT-001:
+  // A segment is eligible when available frames meet the bounded threshold
+  // derived from segment capacity: min(target_depth, segment_total_frames).
+  //
+  // For short segments (total_frames < target_depth), the segment cannot
+  // produce more frames than it contains. Once frames exist in the buffer,
+  // the segment is at or near its maximum possible readiness. Requiring
+  // the full target_depth is an impossible condition.
+  //
+  // We require > 0 (not >= total_frames) because between the VSRC gate
+  // evaluation and the POST-TAKE gate, the tick loop may consume a frame,
+  // reducing depth below total_frames. The segment is still valid for
+  // emission — it was fully decoded, one frame was consumed, and the
+  // remaining frames are sufficient for continuous output.
   if (incoming.segment_total_frames > 0 &&
       incoming.segment_total_frames <= required_video_frames) {
-    // Short segment: eligible once any frames are available (fully decoded
-    // or fill loop has produced what it can). The segment cannot produce
-    // more than segment_total_frames, so waiting longer is pointless.
-    video_ready = incoming.incoming_video_frames > 0;
-  } else {
-    video_ready = incoming.incoming_video_frames >= required_video_frames;
+    return incoming.incoming_audio_ms >= kMinSegmentSwapAudioMs &&
+           incoming.incoming_video_frames > 0;
   }
-  return incoming.incoming_audio_ms >= kMinSegmentSwapAudioMs && video_ready;
+  return incoming.incoming_audio_ms >= kMinSegmentSwapAudioMs &&
+         incoming.incoming_video_frames >= required_video_frames;
 }
 
 // =============================================================================
