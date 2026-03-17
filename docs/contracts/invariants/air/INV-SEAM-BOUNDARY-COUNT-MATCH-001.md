@@ -1,30 +1,32 @@
 # INV-SEAM-BOUNDARY-COUNT-MATCH-001
 
+**Classification:** Derived enforcement invariant (diagnostic guardrail)
+
 ## Behavioral Guarantee
 
-When a multi-segment block activates, the playout engine MUST recognize and prepare transitions for every segment in the block. If the engine believes the block has fewer segments than it actually contains, segment transitions will not fire — the engine remains stuck on the first segment, eventually emitting black frames or corrupted output after that segment's content is exhausted.
+When a multi-segment block activates, the playout engine MUST discover sufficient segment-boundary metadata to make every segment in the block reachable by scheduled transition. Missing boundary discovery for any segment is a contract failure because the engine can strand playout on an earlier segment and fail continuity once that segment is exhausted.
 
 ## Authority Model
 
-The playout engine owns segment boundary discovery at block activation. The block plan (from Core) defines the segment count. The engine's boundary computation MUST produce one boundary per segment.
+Core defines the block plan and its ordered segment sequence. AIR owns activation-time boundary discovery and transition preparation. AIR's discovered seam/boundary state MUST fully cover the segment sequence defined by the block plan.
 
 ## Boundary / Constraint
 
-- At block activation, the number of discovered segment boundaries MUST equal the number of segments in the block plan.
-- If a boundary count mismatch is detected, the engine MUST log an ERROR identifying the block, expected count, and actual count.
-- A multi-segment block with only one discovered boundary will never transition past its first segment.
+- At block activation, discovered boundary/transition metadata MUST cover the full ordered segment sequence in the block plan.
+- AIR MUST reject or error-log any activation state that leaves one or more planned segments unreachable.
+- The error log MUST identify the block, expected segment count, and discovered reachable transition/boundary count.
 
 ## Violation
 
-Block activation produces fewer boundaries than segments; segment transition never fires for a multi-segment block; output remains on segment 0 after its EOF; black frames or invalid H.264 output (missing PPS) after first segment exhaustion.
+A multi-segment block activates with incomplete discovered seam/transition state. Playout remains on an earlier segment, later segment transitions never fire, and output eventually degrades to black, corrupt, or undecodable frames after the active segment is exhausted.
 
 ## Derives From
 
-`LAW-LIVENESS`, `LAW-DECODABILITY`
+`INV-SEAM-CONTINUITY-GUARANTEED-001`, `LAW-LIVENESS`, `LAW-DECODABILITY`
 
 ## Required Tests
 
-- `pkg/air/tests/contracts/BlockPlan/BoundaryCountMatchTests.cpp`
+- `pkg/air/tests/contracts/BlockPlan/SeamContinuityGuaranteedTests.cpp`
 
 ## Enforcement Evidence
 
