@@ -2964,16 +2964,18 @@ class ProgramDirector:
         async def test_block_stream(request: Request, block_id: str) -> Response:
             from retrovue.runtime.test_playout_endpoint import (
                 EphemeralTestSession, _make_test_channel_config,
+                load_channel_slug_for_block,
             )
             from retrovue.runtime.channel_stream import generate_ts_stream_async
             session_id = str(uuid.uuid4())
+
+            # INV-TEST-BLOCK-008: Derive channel config from the block's owning channel.
+            # PlaylistEvent.channel_slug is the authoritative link — no guessing.
             channel_config = None
             try:
-                managers = list(self._channel_managers.values())
-                if managers:
-                    cc = getattr(managers[0], "channel_config", None)
-                    if cc:
-                        channel_config = cc
+                slug = load_channel_slug_for_block(block_id)
+                if slug and self._channel_config_provider is not None:
+                    channel_config = self._channel_config_provider.get_channel_config(slug)
             except Exception:
                 pass
             channel_config = _make_test_channel_config(channel_config)

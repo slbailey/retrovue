@@ -245,6 +245,26 @@ class EphemeralTestSession:
 
 # ── DB lookup ──────────────────────────────────────────────────────────────────
 
+def load_channel_slug_for_block(block_id: str) -> "Optional[str]":
+    """Return the channel_slug for the given block_id, or None if not found.
+
+    PlaylistEvent.channel_slug is the direct join key back to the channel
+    that owns this block — no need to walk ScheduleRevision.
+    """
+    try:
+        from retrovue.infra.uow import session as db_session_factory
+        from retrovue.domain.entities import PlaylistEvent
+
+        with db_session_factory() as db:
+            row = db.query(PlaylistEvent.channel_slug).filter(
+                PlaylistEvent.block_id == block_id,
+            ).first()
+            return row.channel_slug if row else None
+    except Exception as e:
+        logger.error("channel_slug lookup failed for block %s: %s", block_id, e)
+        return None
+
+
 def _load_block_from_db(block_id: str) -> "Optional[ScheduledBlock]":
     """Load a ScheduledBlock from PlaylistEvent by block_id.
 
