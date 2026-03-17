@@ -50,6 +50,23 @@ SeamPreparer::~SeamPreparer() {
 void SeamPreparer::Submit(SeamRequest request) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    // INV-BLOCK-PREROLL-1IN-FLIGHT-001: callee-side enforcement.
+    // A kBlock request must not be submitted while one is already in the pipeline
+    // (queued, being processed, or result not yet consumed by TakeBlockResult).
+    // This is defense-in-depth independent of TryKickoffBlockPreload Guard 2:
+    // even if caller logic changes, the invariant is enforced here unconditionally.
+    if (request.type == SeamRequestType::kBlock) {
+      if (block_in_pipeline_) {
+        std::ostringstream oss;
+        oss << "[SeamPreparer] INV-BLOCK-PREROLL-1IN-FLIGHT-001 FATAL: "
+            << "kBlock submitted while block_in_pipeline_=true"
+            << " — incoming=" << request.block.block_id
+            << " — caller violated 1-in-flight invariant, aborting";
+        Logger::Error(oss.str());
+        std::abort();
+      }
+      block_in_pipeline_ = true;
+    }
     // Insert sorted by seam_frame ascending (earliest first).
     auto it = std::lower_bound(
         queue_.begin(), queue_.end(), request.seam_frame,
@@ -68,7 +85,7 @@ bool SeamPreparer::HasSegmentResult() const {
 
 bool SeamPreparer::HasBlockResult() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  return block_result_ != nullptr;
+  return !block_results_.empty();
 }
 
 std::optional<SeamResultIdentity> SeamPreparer::PeekSegmentResult() const {
@@ -102,7 +119,14 @@ std::unique_ptr<SeamResult> SeamPreparer::TakeSegmentResult() {
 
 std::unique_ptr<SeamResult> SeamPreparer::TakeBlockResult() {
   std::lock_guard<std::mutex> lock(mutex_);
-  return std::move(block_result_);
+  if (block_results_.empty()) return nullptr;
+  auto result = std::move(block_results_.front());
+  block_results_.pop_front();
+  // INV-BLOCK-PREROLL-1IN-FLIGHT-001: pipeline is clear once result is consumed.
+  if (block_results_.empty()) {
+    block_in_pipeline_ = false;
+  }
+  return result;
 }
 
 void SeamPreparer::Cancel() {
@@ -123,7 +147,18 @@ void SeamPreparer::Cancel() {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     segment_result_.reset();
-    block_result_.reset();
+    // INV-BLOCK-PREROLL-AUDIT-001: every block that entered the pipeline must
+    // have its fate explicitly logged. Log each dropped completed result.
+    for (auto& dropped : block_results_) {
+      if (dropped) {
+        std::ostringstream oss;
+        oss << "[SeamPreparer] PREROLL_DROPPED block_id=" << dropped->block_id
+            << " reason=cancel_with_unconsumed_result";
+        Logger::Warn(oss.str());
+      }
+    }
+    block_results_.clear();
+    block_in_pipeline_ = false;  // INV-BLOCK-PREROLL-1IN-FLIGHT-001: pipeline reset on cancel.
     cancel_requested_.store(false, std::memory_order_release);
   }
 }
@@ -205,8 +240,16 @@ void SeamPreparer::WorkerLoop() {
 // =============================================================================
 
 void SeamPreparer::ProcessRequest(const SeamRequest& req) {
-  // Checkpoint 1
-  if (cancel_requested_.load(std::memory_order_acquire)) return;
+  // Checkpoint 1 — block may be cancelled before worker starts
+  if (cancel_requested_.load(std::memory_order_acquire)) {
+    if (req.type == SeamRequestType::kBlock) {
+      std::ostringstream oss;
+      oss << "[SeamPreparer] PREROLL_CANCELLED block_id=" << req.block.block_id
+          << " checkpoint=1 reason=cancel_before_start";
+      Logger::Warn(oss.str());
+    }
+    return;
+  }
 
   if (req.type == SeamRequestType::kBlock) {
     std::ostringstream oss;
@@ -225,8 +268,16 @@ void SeamPreparer::ProcessRequest(const SeamRequest& req) {
     if (hook) hook(cancel_requested_);
   }
 
-  // Checkpoint 2
-  if (cancel_requested_.load(std::memory_order_acquire)) return;
+  // Checkpoint 2 — cancelled after test hook, before AssignBlock
+  if (cancel_requested_.load(std::memory_order_acquire)) {
+    if (req.type == SeamRequestType::kBlock) {
+      std::ostringstream oss;
+      oss << "[SeamPreparer] PREROLL_CANCELLED block_id=" << req.block.block_id
+          << " checkpoint=2 reason=cancel_after_hook";
+      Logger::Warn(oss.str());
+    }
+    return;
+  }
 
   // INV-SEAM-SEG-PRIME-001: For segment requests, the block must be single-segment.
   if (req.type == SeamRequestType::kSegment) {
@@ -244,8 +295,16 @@ void SeamPreparer::ProcessRequest(const SeamRequest& req) {
   assert(source_tp && "Factory must produce ITickProducer");
   source_tp->AssignBlock(req.block);
 
-  // Checkpoint 3
-  if (cancel_requested_.load(std::memory_order_acquire)) return;
+  // Checkpoint 3 — cancelled after AssignBlock, before audio prime
+  if (cancel_requested_.load(std::memory_order_acquire)) {
+    if (req.type == SeamRequestType::kBlock) {
+      std::ostringstream oss;
+      oss << "[SeamPreparer] PREROLL_CANCELLED block_id=" << req.block.block_id
+          << " checkpoint=3 reason=cancel_after_assign";
+      Logger::Warn(oss.str());
+    }
+    return;
+  }
 
   // Extract segment type from the (single-segment) block for logging and result.
   SegmentType seg_type = SegmentType::kContent;
@@ -264,8 +323,19 @@ void SeamPreparer::ProcessRequest(const SeamRequest& req) {
     prime_result.actual_depth_ms = prime_result.met_threshold ? req.min_audio_prime_ms : 0;
   }
 
-  // Checkpoint 4
-  if (cancel_requested_.load(std::memory_order_acquire)) return;
+  // Checkpoint 4 — cancelled after audio prime; decoder was opened and primed
+  // This is the most expensive cancel: full decode work was done and discarded.
+  if (cancel_requested_.load(std::memory_order_acquire)) {
+    if (req.type == SeamRequestType::kBlock) {
+      std::ostringstream oss;
+      oss << "[SeamPreparer] PREROLL_CANCELLED block_id=" << req.block.block_id
+          << " checkpoint=4 reason=cancel_after_prime"
+          << " audio_depth_ms=" << prime_result.actual_depth_ms
+          << " decoder_ok=" << (source_tp->HasDecoder() ? "Y" : "N");
+      Logger::Warn(oss.str());
+    }
+    return;
+  }
 
   if (req.type == SeamRequestType::kBlock && !is_pad) {
     std::ostringstream oss;
@@ -337,7 +407,10 @@ void SeamPreparer::ProcessRequest(const SeamRequest& req) {
     if (req.type == SeamRequestType::kSegment) {
       segment_result_ = std::move(result);
     } else {
-      block_result_ = std::move(result);
+      // INV-BLOCK-RESULT-SINGLE-OWNER-001: push to queue so concurrent prerolls
+      // with the same fence_tick cannot silently overwrite each other.
+      // TakeBlockResult() drains FIFO — oldest result consumed first.
+      block_results_.push_back(std::move(result));
     }
   }
   work_cv_.notify_all();

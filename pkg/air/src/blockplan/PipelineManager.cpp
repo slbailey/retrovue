@@ -490,15 +490,22 @@ void PipelineManager::TryKickoffBlockPreload(int64_t tick) {
   // the dedicated PADDED_GAP exit path instead).
   if (AsTickProducer(live_.get())->GetState() != ITickProducer::State::kReady) return;
 
-  // Guard 2: SeamPreparer already has a block result — wait for PRE-TAKE to consume it.
-  // Job ownership: single block_result_ slot; we never submit the next block until we take,
-  // so the result we take is always for the block we last submitted (no overwrite by a later block).
-  if (seam_preparer_->HasBlockResult()) return;
-
-  // INV-SEAM-SUBMIT-SAFE: Callers must NOT gate Submit() on IsRunning().
-  // The queue is sorted by seam_frame — priority is structural, not temporal.
-  // Gating on IsRunning() starves segment prep when block prep is in-flight,
-  // causing segment MISS at seam time.  See: FIX-seam-prep-starvation.md
+  // Guard 2: INV-BLOCK-PREROLL-1IN-FLIGHT-001 — at most ONE block occupies the
+  // preroll pipeline (SeamPreparer worker → block_results_ → preview_) at any instant.
+  //
+  // Three conditions must ALL be clear before starting a new block preroll:
+  //   (a) HasBlockResult()    — no completed result waiting to be taken into preview_
+  //   (b) IsRunning()         — worker is not actively prerolling a block
+  //   (c) preview_ != nullptr — no prerolled block waiting to be activated as live_
+  //
+  // Without all three: rapid startup or same-fence_tick submissions can place two
+  // blocks into block_results_ in completion order rather than schedule order.
+  // FIFO consumption (TakeBlockResult → preview_) then promotes the wrong block,
+  // causing a block to be skipped at fence time (proven: The Hobbit, 2026-03-17).
+  //
+  // Note: this guard covers BLOCK preroll only. ArmSegmentPrep submits kSegment
+  // requests independently and is unaffected — no segment starvation risk here.
+  if (seam_preparer_->HasBlockResult() || seam_preparer_->IsRunning() || preview_ != nullptr) return;
 
   bool has_next = false;
   FedBlock block;
@@ -4500,6 +4507,17 @@ void PipelineManager::Run() {
 
   // Cancel seam preparer and reset sources before closing encoder
   seam_preparer_->Cancel();
+  // INV-BLOCK-PREROLL-AUDIT-001: log any prerolled-but-unactivated block.
+  // preview_ holds a block that completed preroll but never reached live_.
+  // This is expected on session teardown; log it so every block fate is traceable.
+  if (preview_) {
+    auto* ptp = AsTickProducer(preview_.get());
+    const std::string dropped_id = ptp ? ptp->GetBlock().block_id : "unknown";
+    { std::ostringstream oss;
+      oss << "[PipelineManager] PREROLL_DROPPED block_id=" << dropped_id
+          << " reason=session_teardown_preview_unactivated";
+      Logger::Info(oss.str()); }
+  }
   preview_.reset();
   live_tp()->Reset();
   block_fence_frame_ = INT64_MAX;
@@ -5611,17 +5629,23 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
       computed = session_frame_index + seg_frames;
     }
     // INV-LAST-SEGMENT-BLOCK-BOUNDARY-001: When the newly active segment is
-    // the last in the block, the next seam MUST be kBlock — regardless of
-    // whether `computed` falls before `block_fence_frame_`.  Without this
-    // guard, the segment swap handler at the next seam tick would try to swap
-    // to a non-existent segment (to_seg >= segments.size()), returning nullopt
-    // from GetIncomingSegmentState and deferring forever.
+    // the last in the block, next_seam_frame_ MUST equal block_fence_frame_,
+    // regardless of `computed`.  Without this guard two failure modes occur:
+    //   (1) Swap handler tries to swap to a non-existent segment, returning
+    //       nullopt from GetIncomingSegmentState and deferring forever.
+    //   (2) If schedule drift places the block early, the filler compiled
+    //       duration ends before block_fence_frame_, setting next_seam_frame_
+    //       to filler EOF instead of the UTC fence and producing an early
+    //       block transition (proven: HBO 2026-03-17, Bug A, Ghostbusters
+    //       started 3h early after Ferris filler escaped the fence).
     const bool is_last_segment =
         (current_segment_index_ + 1 >=
          static_cast<int32_t>(live_parent_block_.segments.size()));
-    next_seam_frame_ = (computed != INT64_MAX && computed < block_fence_frame_)
-        ? computed
-        : block_fence_frame_;
+    next_seam_frame_ = is_last_segment
+        ? block_fence_frame_
+        : (computed != INT64_MAX && computed < block_fence_frame_)
+            ? computed
+            : block_fence_frame_;
     next_seam_type_ = (next_seam_frame_ >= block_fence_frame_ || is_last_segment)
         ? SeamType::kBlock
         : SeamType::kSegment;

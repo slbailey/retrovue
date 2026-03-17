@@ -18,6 +18,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <deque>
 #include <vector>
 
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
@@ -134,13 +135,20 @@ class SeamPreparer {
 
   // Two result slots.
   std::unique_ptr<SeamResult> segment_result_;
-  std::unique_ptr<SeamResult> block_result_;
+  // INV-BLOCK-RESULT-SINGLE-OWNER-001: queue (not single slot) so concurrent
+  // prerolls with the same fence_tick cannot silently overwrite each other.
+  std::deque<std::unique_ptr<SeamResult>> block_results_;
 
   // Worker state.
   std::thread worker_thread_;
   std::atomic<bool> cancel_requested_{false};
   std::atomic<bool> shutdown_{false};
   bool worker_active_ = false;  // Guarded by mutex_
+
+  // INV-BLOCK-PREROLL-1IN-FLIGHT-001: true from Submit(kBlock) until TakeBlockResult().
+  // Enforces that at most one kBlock request traverses the pipeline at any instant,
+  // independent of caller logic. Submit() hard-aborts if violated.
+  bool block_in_pipeline_ = false;  // Guarded by mutex_
 
   DelayHookFn delay_hook_;  // Test-only
   std::shared_ptr<IProducerFactory> producer_factory_;
