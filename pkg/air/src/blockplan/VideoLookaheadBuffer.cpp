@@ -1021,12 +1021,17 @@ bool VideoLookaheadBuffer::TryPopFrame(VideoBufferFrame& out) {
   frames_.pop_front();
   total_popped_++;
 
-  // FIVS consistency: evict popped frame from indexed store so DepthFrames()
-  // (which uses frame_store_.Size()) stays consistent with the deque.
-  // EvictBelow(index + 1) removes the frame we just consumed.
-  if (out.source_frame_index >= 0) {
-    frame_store_.EvictBelow(out.source_frame_index + 1);
-  }
+  // INV-FIVS-TRYPOP-EVICTION-SAFE-001: Do NOT call frame_store_.EvictBelow()
+  // here.  EvictBelow(popped_index + 1) assumes the deque front always has
+  // the lowest source_frame_index.  When the fill thread pushes duplicate
+  // frames after EOF, the deque's hard-cap eviction drops low-index entries
+  // while the FIVS retains them — the deque front can have a high index,
+  // causing EvictBelow to wipe the entire FIVS.
+  //
+  // FIVS cleanup is the consumer's responsibility:
+  //   - Live A buffer: tick loop calls EvictBelow via UpdateConsumerPosition
+  //   - Segment B buffer: destroyed at PerformSegmentSwap
+  //   - Capacity management: AutoEvictIfNeeded on each insert
 
   // Signal fill thread that space is available.
   space_cv_.notify_one();

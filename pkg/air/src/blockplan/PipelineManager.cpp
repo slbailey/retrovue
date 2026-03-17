@@ -2504,6 +2504,20 @@ void PipelineManager::Run() {
     }
     }  // else (!pad_seam_this_tick)
 
+    // INV-SEAM-VSRC-COMMIT-001: When the SEAM_VSRC_GATE selected the incoming
+    // segment buffer and the frame selection cascade emitted a frame from it,
+    // POST-TAKE MUST force the swap.  This prevents the eligibility re-check
+    // from revoking the gate commitment after the B-origin frame was already
+    // emitted (e.g., when FIVS depth changed between the two evaluations).
+    const bool force_swap_for_vsrc_commit =
+        take_segment &&
+        !pad_seam_this_tick &&
+        !content_seam_override_this_tick &&
+        v_src == segment_b_video_buffer_.get() &&
+        decision == TakeDecision::kContentA &&
+        frame_origin_segment_id >= 0 &&
+        frame_origin_segment_id == current_segment_index_ + 1;
+
     // INV-PAD-PRODUCER-007: Content-before-pad gate (decision phase only).
     // If we would emit pad and decoder might produce content soon, skip this tick.
     // Decision stays kPad; we do not re-check readiness elsewhere.
@@ -3231,7 +3245,7 @@ void PipelineManager::Run() {
             Logger::Info(oss.str()); }
         }
         // Keep current live; do not call PerformSegmentSwap.
-      } else if (!IsIncomingSegmentEligibleForSwap(*incoming, swap_required_video) && !force_swap_for_frame_authority && !force_swap_for_pad_seam && !force_swap_for_content_seam) {
+      } else if (!IsIncomingSegmentEligibleForSwap(*incoming, swap_required_video) && !force_swap_for_frame_authority && !force_swap_for_pad_seam && !force_swap_for_content_seam && !force_swap_for_vsrc_commit) {
         // Incoming exists but not eligible, and no force-swap applicable.
         if (last_logged_defer_seam_frame_ != next_seam_frame_) {
           last_logged_defer_seam_frame_ = next_seam_frame_;
@@ -3266,7 +3280,8 @@ void PipelineManager::Run() {
                  frame_origin_segment_id == current_segment_index_ &&
                  !force_swap_for_frame_authority &&
                  !force_swap_for_pad_seam &&
-                 !force_swap_for_content_seam) {
+                 !force_swap_for_content_seam &&
+                 !force_swap_for_vsrc_commit) {
         // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: Frame-origin consistency gate.
         // The emitted frame originates from the outgoing (active) segment.
         // Committing the swap would advance current_segment_index_, causing
@@ -3305,6 +3320,15 @@ void PipelineManager::Run() {
                 << " successor_video_depth=" << incoming->incoming_video_frames
                 << " successor_seam_ready=true";
             Logger::Error(oss.str()); }
+        }
+        if (force_swap_for_vsrc_commit && !force_swap_for_frame_authority && !force_swap_for_pad_seam && !force_swap_for_content_seam) {
+          { std::ostringstream oss;
+            oss << "[PipelineManager] FORCE_SWAP_FOR_VSRC_COMMIT"
+                << " tick=" << session_frame_index
+                << " active_segment_id=" << current_segment_index_
+                << " successor_segment_id=" << to_seg
+                << " frame_origin_segment_id=" << frame_origin_segment_id;
+            Logger::Info(oss.str()); }
         }
         if (force_swap_for_pad_seam && !force_swap_for_frame_authority) {
           { std::ostringstream oss;
@@ -4688,7 +4712,9 @@ void PipelineManager::InitFrameSelectionCadenceForLiveBlock() {
   RationalFps input_fps = raw_fps.IsValid() ? SnapToStandardRationalFps(raw_fps) : raw_fps;
   RationalFps output_fps = ctx_->fps;
 
-  // Sanitize: invalid/unknown (1/1, <=0, absurd range) or PAD/no-decoder → use output_fps so mode=DISABLED.
+  // Sanitize: invalid/unknown (1/1, <=0, absurd range) or PAD → use output_fps so mode=DISABLED.
+  // INV-SEAM-VSRC-COMMIT-001: no_decoder alone MUST NOT trigger sanitization
+  // when the TickProducer reports a valid fps (from probe/decode before EOF).
   const bool live_segment_is_pad =
       (current_segment_index_ >= 0 &&
        current_segment_index_ < static_cast<int32_t>(live_parent_block_.segments.size()) &&
@@ -4699,7 +4725,7 @@ void PipelineManager::InitFrameSelectionCadenceForLiveBlock() {
   const bool out_of_range = (input_fps.IsValid() &&
                              (input_fps.num * kCadenceSourceFpsMinDen < kCadenceSourceFpsMinNum * input_fps.den ||
                               input_fps.num * kCadenceSourceFpsMaxDen > kCadenceSourceFpsMaxNum * input_fps.den));
-  if (invalid_fps || out_of_range || live_segment_is_pad || no_decoder) {
+  if (invalid_fps || out_of_range || live_segment_is_pad || (no_decoder && invalid_fps)) {
     const char* sanitize_reason = invalid_fps ? "invalid"
         : out_of_range ? "out_of_range"
         : live_segment_is_pad ? "pad_segment" : "no_decoder";
@@ -4808,7 +4834,13 @@ void PipelineManager::RefreshFrameSelectionCadenceFromLiveSource(const char* rea
       ? SnapToStandardRationalFps(raw_fps) : raw_fps;
   RationalFps output_fps = ctx_->fps;
 
-  // Sanitize: invalid/unknown (1/1, <=0, absurd range) or PAD/no-decoder → use output_fps so mode=DISABLED.
+  // Sanitize: invalid/unknown (1/1, <=0, absurd range) or PAD → use output_fps so mode=DISABLED.
+  // INV-SEAM-VSRC-COMMIT-001: no_decoder alone MUST NOT trigger sanitization.
+  // After a fully-decoded prefill (segment B), the decoder closes at EOF but the
+  // TickProducer still reports the valid fps from probe/decode.  Sanitizing on
+  // no_decoder forces cadence DISABLED → TryPopFrame (deque) → hold frames
+  // (fill thread EOF looping) → black video.  The FIVS has all real frames and
+  // should be used via the cadence (GetByIndex) path.
   const bool live_segment_is_pad =
       (current_segment_index_ >= 0 &&
        current_segment_index_ < static_cast<int32_t>(live_parent_block_.segments.size()) &&
@@ -4820,7 +4852,9 @@ void PipelineManager::RefreshFrameSelectionCadenceFromLiveSource(const char* rea
                              (new_fps.num * kCadenceSourceFpsMinDen < kCadenceSourceFpsMinNum * new_fps.den ||
                               new_fps.num * kCadenceSourceFpsMaxDen > kCadenceSourceFpsMaxNum * new_fps.den));
   bool did_sanitize = false;
-  if (invalid_fps || out_of_range || live_segment_is_pad || no_decoder) {
+  // Only sanitize on no_decoder when fps is ALSO invalid — a closed decoder
+  // with valid fps means the segment was fully decoded during prefill.
+  if (invalid_fps || out_of_range || live_segment_is_pad || (no_decoder && invalid_fps)) {
     const char* sanitize_reason = invalid_fps ? "invalid"
         : out_of_range ? "out_of_range"
         : live_segment_is_pad ? "pad_segment" : "no_decoder";

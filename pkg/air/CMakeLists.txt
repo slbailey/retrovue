@@ -511,6 +511,8 @@ add_executable(blockplan_contract_tests
   tests/contracts/BlockPlan/AudioDrainContractTests.cpp
   tests/contracts/BlockPlan/DemandDrivenProducerTests.cpp
   tests/contracts/BlockPlan/SeamContinuityGuaranteedTests.cpp
+  tests/contracts/BlockPlan/FIVSTryPopEvictionSafetyContractTests.cpp
+  tests/contracts/BlockPlan/SeamVsrcCommitContractTests.cpp
 )
 
 target_link_libraries(blockplan_contract_tests
