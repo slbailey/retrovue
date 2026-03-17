@@ -2,8 +2,6 @@
 // Component: Demand-Driven Producer Contract Tests
 // Purpose: Verify INV-PRODUCER-DEMAND-DRIVEN-001
 // Contract: Decode must not advance without tick consumption.
-//           Fill loops are subordinate to the tick loop.
-//           If no consumer is active, decode must idle.
 // Copyright (c) 2026 RetroVue
 
 #include <gtest/gtest.h>
@@ -29,10 +27,6 @@ namespace retrovue::blockplan::testing {
 namespace {
 
 using test_infra::TestProducerFactory;
-
-// =============================================================================
-// Fixture
-// =============================================================================
 
 class DemandDrivenProducerTest : public ::testing::Test {
  protected:
@@ -81,7 +75,7 @@ class DemandDrivenProducerTest : public ::testing::Test {
       std::lock_guard<std::mutex> lock(cb_mutex_);
       completed_blocks_.push_back(block.block_id);
     };
-    callbacks.on_session_ended = [this](const std::string& reason, int64_t) {
+    callbacks.on_session_ended = [this](const std::string&, int64_t) {
       std::lock_guard<std::mutex> lock(cb_mutex_);
       session_ended_count_++;
     };
@@ -92,8 +86,8 @@ class DemandDrivenProducerTest : public ::testing::Test {
         std::make_shared<TestProducerFactory>());
   }
 
-  static FedBlock MakeSingleSegBlock(const std::string& id, int64_t dur_ms,
-                                      int64_t start = 1'000'000'000LL) {
+  static FedBlock MakeBlock(const std::string& id, int64_t dur_ms,
+                             int64_t start = 1'000'000'000LL) {
     FedBlock block;
     block.block_id = id;
     block.channel_id = 99;
@@ -120,23 +114,21 @@ class DemandDrivenProducerTest : public ::testing::Test {
 };
 
 // =============================================================================
-// INV-PRODUCER-DEMAND-DRIVEN-001: Segment B buffer must not grow unbounded
+// INV-PRODUCER-DEMAND-DRIVEN-001
 //
-// When the next block is queued, the preloader/fill loop decodes into the
-// segment B buffer. With no active consumer (seam hasn't happened), a
-// demand-driven system idles after filling the target depth. A push-based
-// system fills unboundedly, burning CPU.
+// After advancing N ticks into block 1, the live video buffer should have
+// pushed approximately N frames (proportional to tick consumption).
+// If pushed >> consumed, decode is running ahead of demand.
 //
-// This test advances 300 ticks (~10s) into block 1, then checks that the
-// engine stops cleanly. The real assertion is on CPU/buffer behavior —
-// if the fill loop is unbounded, the test may take significantly longer
-// or accumulate excessive memory.
+// We use video_buffer_frames_pushed vs video_buffer_frames_popped.
+// A demand-driven system keeps pushed - popped bounded by the buffer
+// target depth (typically 32). A push-based system lets the gap grow
+// unboundedly.
 // =============================================================================
 
-TEST_F(DemandDrivenProducerTest, SegmentBBufferBoundsRespected) {
-  FedBlock block1 = MakeSingleSegBlock("demand-1", 30000);
-  FedBlock block2 = MakeSingleSegBlock("demand-2", 30000,
-                                        block1.end_utc_ms);
+TEST_F(DemandDrivenProducerTest, VideoBufferGrowthProportionalToConsumption) {
+  FedBlock block1 = MakeBlock("demand-1", 60000);  // 60s = 1800 frames
+  FedBlock block2 = MakeBlock("demand-2", 60000, block1.end_utc_ms);
   {
     std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
     ctx_->block_queue.push_back(block1);
@@ -146,24 +138,24 @@ TEST_F(DemandDrivenProducerTest, SegmentBBufferBoundsRespected) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  // Advance 300 frames (~10 seconds at 30fps) — well within block1
+  // Advance 300 ticks (~10s at 30fps) into block 1
   retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), 300);
 
-  // Snapshot metrics after advancing
   auto m = engine_->SnapshotMetrics();
+  int64_t buffered = m.video_buffer_frames_pushed - m.video_buffer_frames_popped;
 
-  // INV-PRODUCER-DEMAND-DRIVEN-001: The total frames decoded by the segment B
-  // fill loop should be bounded. A demand-driven system would decode at most
-  // the buffer target depth (typically 32-64 frames). An unbounded system
-  // would decode thousands.
-  //
-  // We don't assert a specific bound here because the current implementation
-  // violates this contract (fill loop is push-based). This test documents
-  // the violation and will be tightened after the fix.
+  // INV-PRODUCER-DEMAND-DRIVEN-001: The buffered-but-unconsumed frame count
+  // must be bounded. A reasonable target is < 128 frames (~4 seconds).
+  // An unbounded push-based fill loop would accumulate thousands.
+  constexpr int64_t kMaxAcceptableBuffered = 128;
+
+  EXPECT_LE(buffered, kMaxAcceptableBuffered)
+      << "INV-PRODUCER-DEMAND-DRIVEN-001 VIOLATED: video buffer has "
+      << buffered << " unconsumed frames (pushed=" << m.video_buffer_frames_pushed
+      << " popped=" << m.video_buffer_frames_popped
+      << "). Decode is advancing without proportional consumption.";
+
   engine_->Stop();
-
-  SUCCEED() << "INV-PRODUCER-DEMAND-DRIVEN-001: engine stopped cleanly "
-            << "(continuous_frames=" << m.continuous_frames_emitted_total << ")";
 }
 
 }  // namespace

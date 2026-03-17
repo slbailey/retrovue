@@ -13,6 +13,7 @@
 #include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
+#include <vector>
 
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
@@ -27,10 +28,6 @@ namespace retrovue::blockplan::testing {
 namespace {
 
 using test_infra::TestProducerFactory;
-
-// =============================================================================
-// Fixture
-// =============================================================================
 
 class SeamContinuityGuaranteedTest : public ::testing::Test {
  protected:
@@ -91,8 +88,6 @@ class SeamContinuityGuaranteedTest : public ::testing::Test {
         std::make_shared<TestProducerFactory>());
   }
 
-  // Build a multi-segment block with N content segments + optional filler.
-  // Mimics the HBO pattern: intro + ratings card + movie + filler
   static FedBlock MakeMultiSegmentBlock(const std::string& id,
                                          std::vector<int64_t> seg_durations_ms,
                                          int64_t start_utc_ms = 1'000'000'000LL) {
@@ -110,6 +105,7 @@ class SeamContinuityGuaranteedTest : public ::testing::Test {
       s.asset_uri = "/nonexistent/seg" + std::to_string(i) + ".mp4";
       s.asset_start_offset_ms = 0;
       s.segment_duration_ms = seg_durations_ms[i];
+      // Last segment is filler, rest are content
       s.segment_type = (i == seg_durations_ms.size() - 1)
           ? SegmentType::kFiller : SegmentType::kContent;
       block.segments.push_back(s);
@@ -130,14 +126,16 @@ class SeamContinuityGuaranteedTest : public ::testing::Test {
 };
 
 // =============================================================================
-// INV-SEAM-CONTINUITY-GUARANTEED-001: Multi-segment block completes
+// INV-SEAM-CONTINUITY-GUARANTEED-001: Four-segment block
 //
-// A block with 4 segments (intro + ratings + movie + filler) must
-// transition through all segments. If any transition fails, the block
-// never completes — AdvanceUntilFence will stall and the test times out.
+// A block with 4 segments (intro + ratings + movie + filler) MUST:
+// 1. Complete (reach block fence)
+// 2. Fire all 3 segment transitions (segment_seam_count >= 3)
+// 3. Arm segment prep for each transition (segment_prep_armed_count >= 1)
+// 4. Have zero seam misses (segment_seam_miss_count == 0)
 // =============================================================================
 
-TEST_F(SeamContinuityGuaranteedTest, FourSegmentBlockCompletesAllTransitions) {
+TEST_F(SeamContinuityGuaranteedTest, FourSegmentBlockAllTransitionsFire) {
   // intro(2s/60f) + ratings(1s/30f) + movie(5s/150f) + filler(2s/60f) = 10s/300f
   FedBlock block = MakeMultiSegmentBlock("seam-4seg", {2000, 1000, 5000, 2000});
   {
@@ -148,24 +146,35 @@ TEST_F(SeamContinuityGuaranteedTest, FourSegmentBlockCompletesAllTransitions) {
   engine_ = MakeEngine();
   engine_->Start();
 
-  // Advance past the entire block. AdvanceUntilFenceOrFail will GTEST_FAIL
-  // if the engine stalls (seam transitions not firing).
+  // Advance past entire block
   retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), 350);
 
-  engine_->Stop();
+  auto m = engine_->SnapshotMetrics();
 
-  // If we reach here, all 3 segment transitions (0→1, 1→2, 2→3) succeeded.
-  SUCCEED() << "INV-SEAM-CONTINUITY-GUARANTEED-001: 4-segment block completed";
+  // INV-SEAM-CONTINUITY-GUARANTEED-001: All segment transitions must fire.
+  // 4 segments = 3 transitions (0→1, 1→2, 2→3).
+  EXPECT_GE(m.segment_seam_count, 3)
+      << "INV-SEAM-CONTINUITY-GUARANTEED-001 VIOLATED: expected >= 3 segment "
+      << "transitions for a 4-segment block, got " << m.segment_seam_count;
+
+  // Segment prep must have been armed at least once (for non-PAD transitions).
+  EXPECT_GE(m.segment_prep_armed_count, 1)
+      << "INV-SEAM-CONTINUITY-GUARANTEED-001 VIOLATED: segment prep was never "
+      << "armed — ArmSegmentPrep likely returned early";
+
+  // Zero seam misses — every transition must have been ready.
+  EXPECT_EQ(m.segment_seam_miss_count, 0)
+      << "INV-SEAM-CONTINUITY-GUARANTEED-001 VIOLATED: " << m.segment_seam_miss_count
+      << " segment transition(s) were not ready at seam frame";
+
+  engine_->Stop();
 }
 
 // =============================================================================
-// INV-SEAM-CONTINUITY-GUARANTEED-001: Two-segment block transitions
-//
-// Content→filler is the simplest multi-segment case. This is the JIP
-// pattern after presentation segments are skipped.
+// INV-SEAM-CONTINUITY-GUARANTEED-001: Two-segment block (JIP pattern)
 // =============================================================================
 
-TEST_F(SeamContinuityGuaranteedTest, TwoSegmentBlockTransitionsCleanly) {
+TEST_F(SeamContinuityGuaranteedTest, TwoSegmentBlockTransitionFires) {
   // content(5s/150f) + filler(5s/150f) = 10s/300f
   FedBlock block = MakeMultiSegmentBlock("seam-2seg", {5000, 5000});
   {
@@ -178,18 +187,27 @@ TEST_F(SeamContinuityGuaranteedTest, TwoSegmentBlockTransitionsCleanly) {
 
   retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), 350);
 
+  auto m = engine_->SnapshotMetrics();
+
+  // 2 segments = 1 transition
+  EXPECT_GE(m.segment_seam_count, 1)
+      << "INV-SEAM-CONTINUITY-GUARANTEED-001 VIOLATED: expected >= 1 segment "
+      << "transition for a 2-segment block, got " << m.segment_seam_count;
+
+  EXPECT_EQ(m.segment_seam_miss_count, 0)
+      << "INV-SEAM-CONTINUITY-GUARANTEED-001 VIOLATED: seam miss on 2-segment block";
+
   engine_->Stop();
-  SUCCEED() << "INV-SEAM-CONTINUITY-GUARANTEED-001: 2-segment block completed";
 }
 
 // =============================================================================
 // INV-SEAM-CONTINUITY-GUARANTEED-001: Short presentation segments
 //
-// Short segments (< 1 second) have minimal seam-prep headroom. The seam
-// preparer must handle tight windows.
+// Segments < 1 second have minimal headroom for seam prep. The engine
+// must still arm and complete prep before the seam frame.
 // =============================================================================
 
-TEST_F(SeamContinuityGuaranteedTest, ShortPresentationSegmentsTransition) {
+TEST_F(SeamContinuityGuaranteedTest, ShortSegmentsAllTransitionsFire) {
   // intro(500ms/15f) + ratings(200ms/6f) + content(8300ms/249f) + filler(1000ms/30f) = 10s
   FedBlock block = MakeMultiSegmentBlock("seam-short", {500, 200, 8300, 1000});
   {
@@ -202,8 +220,17 @@ TEST_F(SeamContinuityGuaranteedTest, ShortPresentationSegmentsTransition) {
 
   retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), 350);
 
+  auto m = engine_->SnapshotMetrics();
+
+  // 4 segments = 3 transitions
+  EXPECT_GE(m.segment_seam_count, 3)
+      << "INV-SEAM-CONTINUITY-GUARANTEED-001 VIOLATED: short-segment block "
+      << "expected >= 3 transitions, got " << m.segment_seam_count;
+
+  EXPECT_EQ(m.segment_seam_miss_count, 0)
+      << "INV-SEAM-CONTINUITY-GUARANTEED-001 VIOLATED: seam miss with short segments";
+
   engine_->Stop();
-  SUCCEED() << "INV-SEAM-CONTINUITY-GUARANTEED-001: short segments completed";
 }
 
 }  // namespace
