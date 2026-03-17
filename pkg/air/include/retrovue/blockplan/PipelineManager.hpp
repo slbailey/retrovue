@@ -52,6 +52,7 @@ namespace retrovue::blockplan {
 struct IncomingState {
   int incoming_audio_ms = 0;
   int incoming_video_frames = 0;
+  int64_t segment_total_frames = 0;  // Total frames in the segment (for short-segment eligibility)
   bool is_pad = false;
   SegmentType segment_type = SegmentType::kContent;
 };

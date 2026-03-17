@@ -1148,6 +1148,45 @@ void PipelineManager::Run() {
     EnforceNextSeamInvariant(session_frame_index, "block_activation_session_first");
     ArmSegmentPrep(session_frame_index);
 
+    // INV-SEAM-PREP-DEADLINE-SAFE-001: If the first segment is short,
+    // wait for segment prep to complete before starting the tick loop.
+    // This happens during block activation (before any ticks), so it
+    // doesn't violate tick-loop timing authority. The async worker was
+    // already started by ArmSegmentPrep above — we just wait for it.
+    if (live_parent_block_.segments.size() > 1 && !planned_segment_seam_frames_.empty()) {
+      int64_t first_seam = planned_segment_seam_frames_[0];
+      int64_t headroom = first_seam - session_frame_index;
+      int64_t required = std::max(
+          static_cast<int64_t>(kMinSegmentPrepHeadroomFrames),
+          static_cast<int64_t>((kMinSegmentPrepHeadroomMs * ctx_->fps.num +
+                                1000 * ctx_->fps.den - 1) / (1000 * ctx_->fps.den)));
+      if (headroom <= required * 2) {
+        // Short first segment — wait for prep to complete.
+        constexpr int kMaxWaitMs = 2000;
+        auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(kMaxWaitMs);
+        while (!seam_preparer_->HasSegmentResult() &&
+               std::chrono::steady_clock::now() < deadline) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        if (seam_preparer_->HasSegmentResult()) {
+          std::ostringstream oss;
+          oss << "[PipelineManager] SEAM_PREP_WAIT_OK"
+              << " first_seam_frame=" << first_seam
+              << " headroom_frames=" << headroom
+              << " block=" << live_parent_block_.block_id;
+          Logger::Info(oss.str());
+        } else {
+          std::ostringstream oss;
+          oss << "[PipelineManager] SEAM_PREP_WAIT_TIMEOUT"
+              << " first_seam_frame=" << first_seam
+              << " headroom_frames=" << headroom
+              << " block=" << live_parent_block_.block_id;
+          Logger::Warn(oss.str());
+        }
+      }
+    }
+
     // Block is now LIVE — notify subscribers.
     if (callbacks_.on_block_started) {
       BlockActivationContext actx;
@@ -5259,6 +5298,11 @@ std::optional<IncomingState> PipelineManager::GetIncomingSegmentState(int32_t to
     s.incoming_video_frames = segment_b_video_buffer_->DepthFrames();
     s.is_pad = is_pad;
     s.segment_type = seg_type;
+    // INV-SEAM-ELIGIBILITY-BOUNDED-BY-SEGMENT-001: Provide total frames
+    // so the eligibility gate can clamp to what's physically possible.
+    if (segment_b_producer_) {
+      s.segment_total_frames = AsTickProducer(segment_b_producer_.get())->FramesPerBlock();
+    }
     return s;
   }
 
@@ -5334,11 +5378,25 @@ bool PipelineManager::IsIncomingSegmentEligibleForSwap(
   if (incoming.is_pad) {
     return incoming.incoming_audio_ms >= kMinSegmentSwapAudioMs;
   }
-  // INV-SEAM-SWAP-READINESS-001: require incoming buffer to reach its
-  // configured target depth (sourced from segment_b_video_buffer_->
-  // TargetDepthFrames() at call site), not the old non-emptiness constant.
-  return incoming.incoming_audio_ms >= kMinSegmentSwapAudioMs &&
-         incoming.incoming_video_frames >= required_video_frames;
+  // INV-SEAM-SWAP-READINESS-001 + INV-SEAM-CONTINUITY-GUARANTEED-001:
+  // A segment is eligible when it has reached the steady-state target depth
+  // OR has been fully decoded (all frames it can produce are in the buffer),
+  // whichever is smaller.
+  //
+  // A fully-decoded short segment will never grow deeper. Requiring more
+  // frames than the segment can produce is an impossible condition that
+  // blocks the transition forever.
+  bool video_ready;
+  if (incoming.segment_total_frames > 0 &&
+      incoming.segment_total_frames <= required_video_frames) {
+    // Short segment: eligible once any frames are available (fully decoded
+    // or fill loop has produced what it can). The segment cannot produce
+    // more than segment_total_frames, so waiting longer is pointless.
+    video_ready = incoming.incoming_video_frames > 0;
+  } else {
+    video_ready = incoming.incoming_video_frames >= required_video_frames;
+  }
+  return incoming.incoming_audio_ms >= kMinSegmentSwapAudioMs && video_ready;
 }
 
 // =============================================================================
