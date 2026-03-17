@@ -2140,6 +2140,15 @@ void PipelineManager::Run() {
         }
       } else if (v_src->TryPopFrame(vbf)) {
         // Legacy deque path: non-resample or non-live-buffer (segment-B, preview, PAD).
+        // INV-FIVS-TRYPOP-EVICTION-SAFE-001: When cadence is disabled (resample_enabled_
+        // false) and TryPopFrame is used on the live buffer, communicate the popped
+        // frame's source_frame_index as the consumer position.  Without this, the fill
+        // thread's lookahead stays at kLookaheadConsumerUnknown, it falls back to
+        // size-based parking (store_size >= target), and parks permanently once FIVS
+        // reaches target depth — throttling audio production to starvation.
+        if (!resample_enabled_ && v_src == video_buffer_.get() && vbf.source_frame_index >= 0) {
+          video_buffer_->UpdateConsumerPosition(vbf.source_frame_index);
+        }
         if (v_src == video_buffer_.get() && !first_live_pop_logged_) {
           std::ostringstream oss;
           oss << "[PipelineManager] STARTUP_TRACE first_pop_LIVE_VIDEO_BUFFER"
