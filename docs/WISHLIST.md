@@ -280,3 +280,44 @@ This phase should not alter current single-node behavior and must remain an addi
 - **Per-Channel Encoding Bitrate.** Allow each channel to specify its own video encoding bitrate instead of the hardcoded 5 Mbps. A movie channel with 8 Mbps source material should encode at 8 Mbps; a TV channel with 3 Mbps content should encode at 3 Mbps. Requires a `bitrate` field in channel YAML format config, propagation through the Core playout plan to AIR, and AIR using the per-channel value instead of the hardcoded `config.bitrate = 5000000` in `playout_service.cpp` and `MpegTSPlayoutSinkConfig.hpp`.
 
 ---
+
+- **Deterministic Playout Test Endpoint.** Enable on-demand, deterministic playback of any scheduled block (and later program/segment/channel) via HTTP, using the exact same playout pipeline as live AIR.
+
+  **Problem this solves:** Current debugging of seams and playout behavior is time-dependent, non-deterministic, and slow to iterate (must wait for the timeline to reach the relevant block). This makes contract validation (seam continuity, cadence, short segments, etc.) inefficient and unreliable.
+
+  **Desired capability:** A URL-triggered endpoint that accepts a block ID, launches a real playout session, and streams MPEG-TS output immediately.
+
+  Example:
+  ```
+  http://<host>:8000/test/block/{block_id}.ts
+  ```
+
+  **Behavioral requirements:**
+  - MUST use the same PipelineManager / TickProducer / Producer stack as live AIR.
+  - MUST NOT bypass or simulate playout logic.
+  - MUST produce identical behavior to live playout for the same block.
+  - MUST start at block start (offset = 0) for initial version.
+  - MUST stream in real time (no offline rendering).
+
+  **Architecture constraints:**
+  - Treat as a one-off ephemeral channel/session.
+  - Reuse schedule/block resolution, playout pipeline, and producer (ffmpeg).
+  - Maintain MasterClock alignment model (no alternate timing system).
+
+  **Future extensions (not required for v1):**
+  - `/test/program/{program_id}`
+  - `/test/segment/{asset_id}`
+  - `/test/channel/{channel_id}?t=<timestamp>`
+  - Offset-based playback (mid-block testing)
+
+  **Why this matters:**
+  - Enables instant seam testing (no waiting for schedule).
+  - Allows rapid validation of short segments, transitions, and buffer behavior.
+  - Becomes a core QA and debugging tool.
+  - Aligns with broadcast principle: "Any scheduled unit should be playable on demand."
+
+  **Non-goals (v1):** No UI required. No persistence of sessions. No historical playback tracking.
+
+  **Success criteria:** Hitting the endpoint immediately begins playback of the specified block. Seam behavior matches live channel behavior exactly. Engineers can reproduce seam bugs in seconds instead of minutes.
+
+---
