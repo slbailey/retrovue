@@ -158,7 +158,7 @@ Define the observable guarantees for **metrics and timing** in the Playout Engin
 
 | Rule | Guarantee | Phase |
 |------|-----------|--------|
-| MT-001 | MasterClock is sole time source; Air enforces deadlines | 6A+ |
+| MT-001 | MasterClock is sole CT/scheduling time source; OutputTiming uses process-local monotonic clock for delivery pacing | 6A+ |
 | MT-002 | Segment/time alignment (hard_stop respected); full component alignment when pipeline exists | 6A / 7+ |
 | MT-003 | Frame cadence with ±2ms tolerance | 7+ |
 | MT-004 | Bounded end-to-end latency | 7+ |

@@ -485,3 +485,36 @@ Canonical contract: [delivery_hls.md](delivery_hls.md)
 | INV-PLEX-STREAM-DISCONNECT-001 | [plex/INV-PLEX-STREAM-DISCONNECT-001.md](plex/INV-PLEX-STREAM-DISCONNECT-001.md) | LAW-LIVENESS, LAW-RUNTIME-AUTHORITY |
 | INV-PLEX-FANOUT-001 | [plex/INV-PLEX-FANOUT-001.md](plex/INV-PLEX-FANOUT-001.md) | LAW-LIVENESS, LAW-RUNTIME-AUTHORITY |
 | INV-PLEX-ARTWORK-001 | [plex/INV-PLEX-ARTWORK-001.md](plex/INV-PLEX-ARTWORK-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+
+---
+
+## Governance Pass Notes (2025-07-14)
+
+The following invariants lack test matrix entries and are flagged for follow-up:
+
+| Invariant | Gap |
+|-----------|-----|
+| INV-CADENCE-SOURCE-SYNC-001–004 | No test matrix entry; see TEST_ANCHOR_BACKLOG.md §P3 |
+| INV-SEAM-BOUNDARY-COUNT-MATCH-001 | No test matrix entry |
+| INV-PRODUCER-DEMAND-DRIVEN-001 | No test matrix entry |
+| INV-SEAM-CONTINUITY-GUARANTEED-001 | No test matrix entry |
+| INV-SEAM-TAKEOVER-COMMITMENT-001 | No test matrix entry |
+| INV-TIME-MODE-EQUIVALENCE-001 | No test matrix entry |
+| INV-PCR-PACED-MUX | Sink invariant; no test matrix |
+| INV-SINK-NO-DEADLOCK | Sink invariant; no test matrix |
+| INV-TS-EMISSION-LIVENESS | Sink invariant; no test matrix |
+| INV-AUDIO-CONTINUITY-NO-DROP | Shared invariant; no test matrix |
+| INV-CONTENT-DEFICIT-FILL | Shared invariant; no test matrix |
+| INV-LOUDNESS-NORMALIZED-001 | Shared invariant; no test matrix |
+| INV-TIME-AUTHORITY-SINGLE-SOURCE | Shared; overlaps LAW-CLOCK; no test mapping |
+| INV-SWITCH-BOUNDARY-TIMING | No Derived From law cited; enforcement unclear |
+| INV-PACING-001, INV-PACING-ENFORCEMENT-002, INV-DECODE-RATE-001, INV-SEGMENT-CONTENT-001 | Primitive air invariants; doc-only; P4 in backlog |
+
+See [audit/TEST_ANCHOR_BACKLOG.md](audit/TEST_ANCHOR_BACKLOG.md) for prioritized action.
+
+**LAW-RUNTIME-AUDIO-AUTHORITY** is listed as an Air law but does not appear in `docs/contracts/laws/` alongside the other 11 laws. It resides in `pkg/air/docs/contracts/laws/PlayoutInvariants-BroadcastGradeGuarantees.md`. Its downstream INV-* entries are not indexed here. TODO: add index entry and law file, or document as intentionally Air-domain-only.
+
+**Migrated in this pass:**
+- AIR-012, AIR-015 → `pkg/air/docs/contracts/coordination/OutputBusAndOutputSinkContract.md` §11–12
+- AIR-016 → `pkg/air/docs/contracts/coordination/OrchestrationLoopContract.md`
+- CORE-002, CORE-003 → `pkg/core/docs/contracts/resources/ChannelManagerContract.md`

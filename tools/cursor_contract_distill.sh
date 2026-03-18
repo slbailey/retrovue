@@ -130,7 +130,7 @@ This file is intentionally verbose. We will delete rows only when they are expli
 |---|---|---|---|---|
 | PHASE1.md | INV-PAD-PRODUCER-007 | invariants/air/INV-PAD-PRODUCER-007.md | 🔴 | already referenced elsewhere; migrate phrasing + required tests |
 | PHASE10_FLOW_CONTROL.md | RULE-P10-DECODE-GATE | invariants/air/RULE-P10-DECODE-GATE.md | 🔴 | slot-based gating, no hysteresis |
-| PHASE10_FLOW_CONTROL.md | INV-P10-BACKPRESSURE-SYMMETRIC | invariants/air/INV-P10-BACKPRESSURE-SYMMETRIC.md | 🔴 | ensure aligns with code + diagnostics |
+| PHASE10_FLOW_CONTROL.md | INV-BACKPRESSURE-SYMMETRIC | invariants/air/INV-BACKPRESSURE-SYMMETRIC.md | 🔴 | ensure aligns with code + diagnostics |
 | PHASE10_FLOW_CONTROL.md | INV-P10-PCR-PACED-MUX | invariants/sink/INV-P10-PCR-PACED-MUX.md | 🔴 | time-driven mux algorithm |
 | PHASE9_STEADY_STATE_CORRECTNESS.md | INV-P9-STEADY-* set | invariants/sink/INV-P9-STEADY-*.md | 🔴 | split into discrete invariants, keep one-per-file |
 | PHASE12.md | INV-SESSION-CREATION-UNGATED-001 | invariants/core/INV-SESSION-CREATION-UNGATED-001.md | 🔴 | index-only today; needs full contract |
@@ -183,7 +183,7 @@ write_doc "$DC/laws/LAW-AUTHORITY-HIERARCHY.md" "LAW-AUTHORITY-HIERARCHY" "Core 
 # Invariants (high-impact first)
 write_doc "$DC/invariants/air/INV-PAD-PRODUCER-007.md" "INV-PAD-PRODUCER-007 (Content-before-pad gate)" "AIR" "INVARIANT" ""
 write_doc "$DC/invariants/air/RULE-P10-DECODE-GATE.md" "RULE-P10-DECODE-GATE (Slot-based decode gating)" "AIR (Producer)" "INVARIANT" ""
-write_doc "$DC/invariants/air/INV-P10-BACKPRESSURE-SYMMETRIC.md" "INV-P10-BACKPRESSURE-SYMMETRIC" "AIR" "INVARIANT" ""
+write_doc "$DC/invariants/air/INV-BACKPRESSURE-SYMMETRIC.md" "INV-BACKPRESSURE-SYMMETRIC" "AIR" "INVARIANT" ""
 write_doc "$DC/invariants/sink/INV-P10-PCR-PACED-MUX.md" "INV-P10-PCR-PACED-MUX" "Sink (Mux)" "INVARIANT" ""
 write_doc "$DC/invariants/sink/INV-P9-TS-EMISSION-LIVENESS.md" "INV-P9-TS-EMISSION-LIVENESS" "Sink" "INVARIANT" ""
 

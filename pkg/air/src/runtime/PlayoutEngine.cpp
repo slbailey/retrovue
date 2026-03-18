@@ -25,6 +25,7 @@
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/timing/MasterClock.h"
 #include "retrovue/timing/TimelineController.h"
+#include "retrovue/util/ObservabilityLogger.hpp"
 
 namespace retrovue::runtime {
 
@@ -611,6 +612,12 @@ EngineResult PlayoutEngine::LoadPreview(
     EngineResult result(true, "Preview loaded for channel " + std::to_string(channel_id));
     result.shadow_decode_started = true;
     result.result_code = ResultCode::kOk;
+    // LAW-OBS-004: Log load preview effective timing.
+    // TODO(LAW-OBS-002): correlation_id not propagated to PlayoutEngine::LoadPreview; cannot populate.
+    retrovue::util::LogLoadPreviewEffective(
+        /*correlation_id=*/"", channel_id, asset_path,
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
     return result;
   } catch (const std::exception& e) {
     EngineResult ex_result(false, "Exception loading preview for channel " + std::to_string(channel_id) + ": " + e.what());
@@ -867,6 +874,10 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id, int64_t target_boun
         metrics_exporter_->RecordSwitchBoundaryDelta(channel_id, delta_ms);
       }
     }
+    // LAW-OBS-004: Log switch effective timing.
+    // TODO(LAW-OBS-002): correlation_id not propagated here; cannot populate.
+    retrovue::util::LogSwitchToLiveEffective(
+        /*correlation_id=*/"", channel_id, result.switch_completion_time_ms);
     return result;
   }
 
@@ -901,6 +912,10 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id, int64_t target_boun
         metrics_exporter_->RecordSwitchBoundaryDelta(channel_id, delta_ms);
       }
     }
+    // LAW-OBS-004: Log switch effective timing (auto-completed path).
+    // TODO(LAW-OBS-002): correlation_id not propagated here; cannot populate.
+    retrovue::util::LogSwitchToLiveEffective(
+        /*correlation_id=*/"", channel_id, result.switch_completion_time_ms);
     return result;
   }
 
@@ -1352,6 +1367,10 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id, int64_t target_boun
       }
     }
 
+    // LAW-OBS-004: Log switch effective timing (direct completion path).
+    // TODO(LAW-OBS-002): correlation_id not propagated here; cannot populate.
+    retrovue::util::LogSwitchToLiveEffective(
+        /*correlation_id=*/"", channel_id, result.switch_completion_time_ms);
     return result;
   } catch (const std::exception& e) {
     EngineResult ex_result(false, "Exception switching to live for channel " + std::to_string(channel_id) + ": " + e.what());
@@ -1526,6 +1545,10 @@ EngineResult PlayoutEngine::ExecuteSwitchAtDeadline(int32_t channel_id, int64_t 
   result.result_code = ResultCode::kOk;
   // P11D-007: Return ACTUAL completion time (MasterClock when switch completed), not target
   result.switch_completion_time_ms = NowUtc(master_clock_) / 1000;
+  // LAW-OBS-004: Log switch to live effective timing.
+  // TODO(LAW-OBS-002): correlation_id not propagated to PlayoutEngine::SwitchToLive; cannot populate.
+  retrovue::util::LogSwitchToLiveEffective(
+      /*correlation_id=*/"", channel_id, result.switch_completion_time_ms);
   if (metrics_exporter_) {
     const int64_t actual_ms = result.switch_completion_time_ms;
     const int64_t delta_ms = actual_ms - target_boundary_time_ms;

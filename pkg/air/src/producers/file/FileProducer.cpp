@@ -316,7 +316,7 @@ namespace retrovue::producers::file
   }
 
   // ==========================================================================
-  // INV-P10-BACKPRESSURE-SYMMETRIC: Unified A/V gating
+  // INV-BACKPRESSURE-SYMMETRIC: Unified A/V gating
   // ==========================================================================
 
   bool FileProducer::CanPushAV() const
@@ -357,7 +357,7 @@ namespace retrovue::producers::file
       // Log backpressure event (once per episode)
       if (!logged_backpressure) {
         buffer_full_count_.fetch_add(1, std::memory_order_relaxed);
-        std::cout << "[FileProducer] INV-P10-BACKPRESSURE-SYMMETRIC: A/V gated together "
+        std::cout << "[FileProducer] INV-BACKPRESSURE-SYMMETRIC: A/V gated together "
                   << "(video_full=" << output_buffer_.IsFull()
                   << ", audio_full=" << output_buffer_.IsAudioFull() << ")"
                   << std::endl;
@@ -1303,7 +1303,7 @@ namespace retrovue::producers::file
       return false;
     }
 
-    // INV-P10-BACKPRESSURE-SYMMETRIC: Decode-level gate
+    // INV-BACKPRESSURE-SYMMETRIC: Decode-level gate
     // Exception: Shadow mode bypasses for ONE frame (then waits via INV-P8-SHADOW-PACE)
     bool in_shadow = shadow_decode_mode_.load(std::memory_order_acquire);
     if (!in_shadow && !WaitForDecodeReady()) {
@@ -2894,7 +2894,7 @@ namespace retrovue::producers::file
 
         // =======================================================================
         // INV-P10-ELASTIC-FLOW-CONTROL: Push with backpressure retry
-        // P11A-002: INV-AUDIO-SAMPLE-CONTINUITY-001 observability
+        // INV-AUDIO-CONTINUITY-NO-DROP observability
         // =======================================================================
         // Elastic gating allows bounded decode-ahead, so push may occasionally fail
         // if buffer fills between gate check and push. Retry with backpressure.

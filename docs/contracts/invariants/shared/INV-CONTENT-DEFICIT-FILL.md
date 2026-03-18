@@ -1,24 +1,25 @@
 # INV-CONTENT-DEFICIT-FILL
 
 ## Behavioral Guarantee
-If the live path reaches EOF before the scheduled segment end, the gap (content deficit) MUST be filled with pad at real-time cadence until the boundary. Output liveness and TS cadence are preserved; the mux does not stall.
+When content is absent or exhausted, output MUST continue at real-time cadence without stall. The fill mechanism is authority-dependent: PadProducer (black video + silent audio) fills zero-content and PADDED_GAP deficits; hold-last (repeat of last decoded frame) bridges mid-block content EOF. At any tick, exactly one authority — content, hold-last, or pad — owns the output frame.
 
 ## Authority Model
-Core declares the segment boundary. Sink/mux fills the gap at real-time rate. No stall for lack of content.
+PipelineManager owns the per-tick TAKE decision. `TAKE_PAD_ENTER` / `TAKE_PAD_EXIT` log lines are the observable authority transitions between content and pad.
 
 ## Boundary / Constraint
-Gap between EOF and boundary MUST be filled at real-time cadence. Mux MUST NOT stall or break TS cadence due to the content gap.
+Output MUST NOT stall or break TS cadence due to content deficit. Each tick MUST be served by exactly one of: content frame, hold-last frame, or pad frame. `TAKE_PAD_ENTER` and `TAKE_PAD_EXIT` MUST form a proper alternating state machine (no double-ENTER, no EXIT without prior ENTER). `pad_frames_emitted_total + content_frames == continuous_frames_emitted_total` at all times.
 
 ## Violation
-Mux stalling or breaking TS cadence due to pre-boundary content gap; gap not filled at real-time cadence. MUST be logged.
+Output stall or TS cadence break due to content gap; overlapping frame authority (pad active during content playback, or content active during pad); unpaired `TAKE_PAD_ENTER` / `TAKE_PAD_EXIT` transitions. MUST be logged.
+
+## Derives From
+`LAW-LIVENESS`
 
 ## Required Tests
-- `pkg/air/tests/contracts/BlockPlan/SegmentAdvanceOnEOFTests.cpp`
-- `pkg/air/tests/contracts/BlockPlan/ContinuousOutputContractTests.cpp` (pad-fill / gap fill)
+- `pkg/air/tests/contracts/BlockPlan/SharedInvContentDeficitFillContractTests.cpp` (`Compliant_ZeroContent_AllFrameFilledByPad`) — 100% deficit: all frames pad, `TAKE_PAD_ENTER` logged, `TAKE_PAD_EXIT` absent
+- `pkg/air/tests/contracts/BlockPlan/SharedInvContentDeficitFillContractTests.cpp` (`Compliant_ContentPlusDeficit_NoContinuityGap`) — content active: pad_frames=0, no `TAKE_PAD_ENTER` during content window
+- `pkg/air/tests/contracts/BlockPlan/SharedInvContentDeficitFillContractTests.cpp` (`Compliant_ContentEOFBeforeFence_OutputContinuous`) — mid-block EOF: hold-last bridges deficit, no `TAKE_PAD_ENTER`, pad_frames=0, total > content_frames
+- `pkg/air/tests/contracts/BlockPlan/SharedInvContentDeficitFillContractTests.cpp` (`SingleAuthority_PadContentTransitionsArePaired`) — PADDED_GAP: pad fills deficit, `TAKE_PAD_ENTER`/`EXIT` alternating, pad+content==total
 
 ## Enforcement Evidence
-
-- `PipelineManager` advances to PAD on EOF — when the live content path reaches end-of-file before the scheduled segment end, authority transfers to `PadProducer` (never loops content or stalls).
-- `PadProducer` provides real-time cadence fill frames (black video + silent audio) matching session format, maintaining output liveness through the content deficit.
-- `MpegTSOutputSink` boot window ensures no mux stall during initial content acquisition — null packets maintain TS cadence even before first media frame.
-- Contract tests: `SegmentAdvanceOnEOFTests.cpp` validates PAD activation on content EOF. `ContinuousOutputContractTests.cpp` validates continuous output (no TS cadence break) across content-to-pad transitions.
+TODO

@@ -34,6 +34,7 @@
 #include "retrovue/runtime/ProgramFormat.h"
 #include "retrovue/telemetry/MetricsExporter.h"
 #include "retrovue/util/Logger.hpp"
+#include "retrovue/util/ObservabilityLogger.hpp"
 
 // Phase 8: Map C++ ResultCode enum to proto ResultCode enum
 namespace {
@@ -51,6 +52,18 @@ namespace {
         return retrovue::playout::RESULT_CODE_FAILED;
       default:
         return retrovue::playout::RESULT_CODE_UNSPECIFIED;
+    }
+  }
+
+  // Map proto ResultCode enum to string for observability logging
+  std::string ResultCodeProtoToString(retrovue::playout::ResultCode code) {
+    switch (code) {
+      case retrovue::playout::RESULT_CODE_OK:                 return "RESULT_CODE_OK";
+      case retrovue::playout::RESULT_CODE_NOT_READY:          return "RESULT_CODE_NOT_READY";
+      case retrovue::playout::RESULT_CODE_REJECTED_BUSY:      return "RESULT_CODE_REJECTED_BUSY";
+      case retrovue::playout::RESULT_CODE_PROTOCOL_VIOLATION: return "RESULT_CODE_PROTOCOL_VIOLATION";
+      case retrovue::playout::RESULT_CODE_FAILED:             return "RESULT_CODE_FAILED";
+      default:                                                return "RESULT_CODE_UNSPECIFIED";
     }
   }
 }  // namespace
@@ -381,6 +394,12 @@ namespace retrovue
           oss << "[LoadPreview] Channel " << channel_id << " preview load failed: " << result.message
               << " (result_code=" << static_cast<int>(result.result_code) << ")";
           Logger::Info(oss.str()); }
+        retrovue::util::LogIntentResponse(
+            /*correlation_id=*/"", "LoadPreview", channel_id, false,
+            ResultCodeProtoToString(MapResultCode(result.result_code)), result.message,
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count(),
+            /*rpc_requires_timing=*/true);
         return grpc::Status::OK;
       }
 
@@ -389,6 +408,12 @@ namespace retrovue
             << " preview loaded successfully (shadow_decode_started="
             << std::boolalpha << result.shadow_decode_started << ")";
         Logger::Info(oss.str()); }
+      retrovue::util::LogIntentResponse(
+          /*correlation_id=*/"", "LoadPreview", channel_id, true,
+          "RESULT_CODE_OK", {},
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::system_clock::now().time_since_epoch()).count(),
+          /*rpc_requires_timing=*/true);
       return grpc::Status::OK;
     }
 
@@ -413,6 +438,15 @@ namespace retrovue
         oss << "[SwitchToLive] Request received: channel_id=" << channel_id;
         Logger::Info(oss.str()); }
 
+      // LAW-OBS-001/002/004: Log intent received.
+      // TODO(LAW-OBS-002): correlation_id is not present in SwitchToLiveRequest proto; cannot populate.
+      const int64_t switch_receipt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::system_clock::now().time_since_epoch()).count();
+      retrovue::util::LogIntentReceived(
+          /*correlation_id=*/"", /*rpc=*/"SwitchToLive", channel_id,
+          switch_receipt_ms, {}, 0, 0,
+          /*rpc_requires_timing=*/true);
+
       auto result = interface_->SwitchToLive(channel_id, target_boundary_time_ms, issued_at_time_ms);
 
       response->set_success(result.success);
@@ -432,6 +466,12 @@ namespace retrovue
           oss << "[SwitchToLive] Channel " << channel_id << " switch not complete (result_code="
               << static_cast<int>(result.result_code) << ")";
           Logger::Info(oss.str()); }
+        retrovue::util::LogIntentResponse(
+            /*correlation_id=*/"", "SwitchToLive", channel_id, false,
+            ResultCodeProtoToString(MapResultCode(result.result_code)), result.message,
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count(),
+            /*rpc_requires_timing=*/true);
         return grpc::Status::OK;
       }
 
@@ -447,6 +487,14 @@ namespace retrovue
             << " switch " << (result.success ? "succeeded" : "failed")
             << ", PTS contiguous: " << std::boolalpha << result.pts_contiguous;
         Logger::Info(oss.str()); }
+      retrovue::util::LogIntentResponse(
+          /*correlation_id=*/"", "SwitchToLive", channel_id, true,
+          "RESULT_CODE_OK", {},
+          result.switch_completion_time_ms != 0
+              ? result.switch_completion_time_ms
+              : std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count(),
+          /*rpc_requires_timing=*/true);
       return grpc::Status::OK;
     }
 

@@ -1637,8 +1637,13 @@ void PipelineManager::Run() {
     // INV-BUFFER-LIFECYCLE-001 + INV-PREROLL-STABILITY-001:
     // SEGMENT_B auto-transitions to PRIMED inside VideoLookaheadBuffer when
     // IsPrimed() && audio >= kMinAudioPrimeMs. PipelineManager observes and stops.
+    // FIX: Ensure we don't stop filling until the buffer actually meets the
+    // Swap Eligibility criteria (Depth >= Target && Audio >= SwapThreshold).
+    // Otherwise, we stop just short of eligibility and deadlock the transition.
     if (segment_b_video_buffer_ &&
-        segment_b_video_buffer_->FillState() == BufferFillState::PRIMED) {
+        segment_b_video_buffer_->FillState() == BufferFillState::PRIMED &&
+        segment_b_video_buffer_->DepthFrames() >= segment_b_video_buffer_->TargetDepthFrames() &&
+        (!segment_b_audio_buffer_ || segment_b_audio_buffer_->DepthMs() >= kMinSegmentSwapAudioMs)) {
       segment_b_video_buffer_->StopFilling(/*flush=*/false);  // → STOPPED
       { std::ostringstream oss;
         oss << "[PipelineManager] SEGMENT_B_FILL_STOP"
@@ -1893,7 +1898,9 @@ void PipelineManager::Run() {
         }
         if (preview_video_buffer_) next_fed = b_primed;
       }
-#ifdef RETROVUE_VERBOSE_LOGS
+// INV-CADENCE-SOURCE-SYNC-002: FENCE_TRANSITION is an invariant probe point.
+      // Emitted unconditionally (not gated on RETROVUE_VERBOSE_LOGS) so that
+      // contract tests can assert cadence is reset after every fence rotation.
       { std::ostringstream oss;
         oss << "[PipelineManager] FENCE_TRANSITION"
             << " tick=" << session_frame_index
@@ -1905,7 +1912,6 @@ void PipelineManager::Run() {
             << " decoder_state=" << (decoder_state ? "has_decoder" : "no_decoder")
             << " first_seg_asset_uri=" << (first_seg_asset_uri.empty() ? "empty" : first_seg_asset_uri);
         Logger::Info(oss.str()); }
-#endif
 
       // Preview ownership: preroll_owner_block_id must match next_block_id.
       if (preview_ && !expected_preroll_block_id_.empty() && next_block_id != expected_preroll_block_id_) {
@@ -3548,7 +3554,13 @@ void PipelineManager::Run() {
             << " tick=" << session_frame_index
             << " active_segment_id=" << current_segment_index_
             << " frame_origin_segment_id=" << frame_origin_segment_id;
-        Logger::Error(oss.str()); }
+        Logger::ErrorStructured(oss.str(),
+            "INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001-VIOLATED",
+            {{"reason", "content_seam_override_without_swap"},
+             {"tick", std::to_string(session_frame_index)},
+             {"active_segment_id", std::to_string(current_segment_index_)},
+             {"frame_origin_segment_id",
+              std::to_string(frame_origin_segment_id)}}); }
     }
 
     // ==================================================================
@@ -4689,7 +4701,15 @@ bool PipelineManager::CheckFrameAuthorityVacuum(
       << " active_video_depth=" << active_video_depth_frames
       << " successor_video_depth=" << successor_video_depth_frames
       << " successor_seam_ready=" << (successor_seam_ready ? "true" : "false");
-  Logger::Error(oss.str());
+  Logger::ErrorStructured(oss.str(),
+      "INV-CONTINUOUS-FRAME-AUTHORITY-001-VIOLATED",
+      {{"tick", std::to_string(tick)},
+       {"active_segment_id", std::to_string(active_segment_index)},
+       {"successor_segment_id", std::to_string(successor_segment_index)},
+       {"active_video_depth", std::to_string(active_video_depth_frames)},
+       {"successor_video_depth", std::to_string(successor_video_depth_frames)},
+       {"successor_seam_ready",
+        successor_seam_ready ? "true" : "false"}});
   return true;
 }
 
@@ -4723,7 +4743,12 @@ bool PipelineManager::EmittedFrameMatchesAuthority(
         << " active_segment_id=" << active_segment_id
         << " frame_origin_segment_id=" << frame_origin_segment_id
         << " reason=frame_origin_null";
-    Logger::Error(oss.str());
+    Logger::ErrorStructured(oss.str(),
+        "INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001-VIOLATED",
+        {{"tick", std::to_string(tick)},
+         {"active_segment_id", std::to_string(active_segment_id)},
+         {"frame_origin_segment_id", std::to_string(frame_origin_segment_id)},
+         {"reason", "frame_origin_null"}});
     return false;
   }
 
@@ -4735,7 +4760,12 @@ bool PipelineManager::EmittedFrameMatchesAuthority(
         << " active_segment_id=" << active_segment_id
         << " frame_origin_segment_id=" << frame_origin_segment_id
         << " reason=stale_frame_bleed";
-    Logger::Error(oss.str());
+    Logger::ErrorStructured(oss.str(),
+        "INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001-VIOLATED",
+        {{"tick", std::to_string(tick)},
+         {"active_segment_id", std::to_string(active_segment_id)},
+         {"frame_origin_segment_id", std::to_string(frame_origin_segment_id)},
+         {"reason", "stale_frame_bleed"}});
     return false;
   }
 
@@ -5592,6 +5622,24 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
     audio_buffer_ = std::move(segment_b_audio_buffer_);
     live_ = std::move(segment_b_producer_);
     video_buffer_->SetBufferLabel("LIVE_VIDEO_BUFFER");
+    // INV-VIDEO-LOOKAHEAD-001 / INV-CONTINUOUS-FRAME-AUTHORITY-001: Restart fill
+    // thread if it was stopped during preroll (INV-PREROLL-STABILITY-001).
+    // The segment-B fill thread is stopped once preroll stability is reached to
+    // avoid wasted decode cycles during the long content dwell.  When the seam
+    // fires and B is promoted to A, the fill thread MUST be restarted so the
+    // now-live buffer continues to receive frames.  Without this, FILLER (and
+    // any other prerolled segment) activates with only its primed frames and
+    // underflows immediately after the seam — producing a frozen frame and
+    // permanent AUDIO_UNDERFLOW_SILENCE (observed: HBO 2026-03-18, filler
+    // freeze after Rio 2, ACTIVE_FILL_THREADS=0 post-swap).
+    if (video_buffer_->FillState() == BufferFillState::STOPPED &&
+        !video_buffer_->IsFilling()) {  // INV-BUFFER-LIFECYCLE-001
+      auto* tp = AsTickProducer(live_.get());
+      video_buffer_->StartFilling(
+          tp, audio_buffer_.get(),
+          tp->GetInputRationalFps(), ctx_->fps,
+          &ctx_->stop_requested);
+    }
     prep_mode = "PREROLLED";
     swap_branch = "SWAP_B_TO_A";
   } else {

@@ -319,3 +319,45 @@ This contract covers Phase 8 (simplified playout). Future phases will add:
 - [Channel Domain](../../domain/Channel.md) — channel configuration
 - [MasterClock Domain](../../domain/MasterClock.md) — time source
 - [Contract Hygiene Checklist](../../../standards/contract-hygiene.md) — authoring guidelines
+
+---
+
+## PlayoutSegment Immutability [CORE-002]
+
+> **migrated from legacy contract** — Source: `pkg/core/docs/archive/phases/Phase5-ChannelManagerContract.md`.
+> Canonical home: this document (§CORE-002).
+> Ledger ID: CORE-002. Governance audit: 2025-07-14.
+
+- Every `PlayoutSegment` invocation MUST create a new instance; shared state MUST NOT be mutated across segments.
+- A `PlayoutSegment` MUST be treated as immutable once it has been issued to Air (via legacy preload RPC or equivalent BlockPlan mechanism).
+- If a segment's parameters must change, a new segment MUST be created and a new load/preview operation MUST be issued. In-place mutation of an issued segment is prohibited.
+
+**Violation condition:** Shared PlayoutSegment mutated after issuance; no new preload issued for a changed segment.
+
+**Test required (not yet implemented):** `test_channel_manager_segment_immutability`
+
+---
+
+## ChannelManager Prefeed and Switch Timing [CORE-003]
+
+> **migrated from legacy contract** — Source: `pkg/core/docs/archive/phases/Phase5-ChannelManagerContract.md`.
+> Canonical home: this document (§CORE-003).
+> Ledger ID: CORE-003. Governance audit: 2025-07-14.
+
+- ChannelManager MUST issue a preload (legacy preload RPC or BlockPlan equivalent) for the next segment no later than `hard_stop_time_ms − prefeed_window_ms`.
+- ChannelManager MUST issue a switch (legacy switch RPC or BlockPlan equivalent) at the segment boundary, after the preload for that segment has been issued.
+- ChannelManager MUST NOT wait for Air to request the next segment; ChannelManager drives the timeline proactively.
+- ChannelManager MUST NOT issue a duplicate preload for the same next segment when re-evaluating multiple times before the boundary.
+
+**Violation condition:** Prefeed issued after deadline; switch issued before prefeed; duplicate prefeed issued for same segment.
+
+**Tests required (not yet implemented):**
+- `test_channel_manager_prefeed_deadline`
+- `test_channel_manager_switch_at_boundary`
+- `test_channel_manager_no_duplicate_loadpreview`
+
+---
+
+## Archive Backward Reference
+
+The source archive document `pkg/core/docs/archive/phases/Phase5-ChannelManagerContract.md` contains the original Phase 5 contract text. CORE-002 and CORE-003 have been migrated here; the archive document is preserved as historical context. Do not treat the archive as normative for these rules — this file is canonical.

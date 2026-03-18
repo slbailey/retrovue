@@ -273,7 +273,7 @@ Session teardown is a lifecycle decision. Core decides when AIR stops based on v
 
 **Violation:** Schedule feasibility is a planning-time concern owned by Core. AIR must not validate schedule correctness.
 
-**Correction:** INV-SEGMENT-CONTENT-001 is Core-only. AIR consumes frame_count as planning authority without validation. If actual frames < frame_count at runtime, AIR fills with pad (INV-P8-CONTENT-DEFICIT-FILL-001). AIR adapts; AIR does not validate.
+**Correction:** INV-SEGMENT-CONTENT-001 is Core-only. AIR consumes frame_count as planning authority without validation. If actual frames < frame_count at runtime, AIR fills with pad (INV-CONTENT-DEFICIT-FILL). AIR adapts; AIR does not validate.
 
 ### 5.7 LIVE State Declaration in AIR
 

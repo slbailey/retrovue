@@ -870,12 +870,13 @@ TEST_F(PlayoutEngineContractTest, Phase6A1_StopReleasesProducer_ObservableStoppe
 // ---------------------------------------------------------------------------
 // Phase 6A.2 — FileBackedProducer: start_offset_ms and hard_stop_time_ms honored
 // (Phase6A-2-FileBackedProducer.md)
-// Phase 8.6: hard_stop removed; segment end = natural EOF only. This test skipped.
+// RETIRED: Superseded by BlockPlan boundary enforcement (LAW-002 Phase 8).
+// See: tests/contracts/BlockPlan/Law002HardStopContractTests.cpp
 // ---------------------------------------------------------------------------
 
 TEST_F(PlayoutEngineContractTest, Phase6A2_HardStopEnforced_ProducerStopsByDeadline)
 {
-  GTEST_SKIP() << "Phase 8.6: segment end is natural EOF only; hard_stop not enforced";
+  GTEST_SKIP() << "RETIRED: Superseded by Law002HardStopContractTests (BlockPlan boundary enforcement)";
 }
 
 TEST_F(PlayoutEngineContractTest, Phase6A2_SegmentParamsPassedToFileBackedProducer)
@@ -1584,7 +1585,7 @@ TEST_F(PlayoutEngineContractTest, INV_P8_AUDIO_GATE_ReadinessTripsAfterShadowDis
 // =============================================================================
 // Phase 8 Content Deficit Amendment — Contract Tests (P8-TEST-*)
 // =============================================================================
-// INV-P8-SEGMENT-EOF-DISTINCT-001, INV-P8-CONTENT-DEFICIT-FILL-001,
+// INV-P8-SEGMENT-EOF-DISTINCT-001, INV-CONTENT-DEFICIT-FILL,
 // INV-P8-FRAME-COUNT-PLANNING-AUTHORITY-001
 // =============================================================================
 

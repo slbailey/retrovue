@@ -131,7 +131,7 @@ bool FrameRingBuffer::PushAudioFrame(const AudioFrame& audio_frame) {
 
   // Check if buffer is full
   if (next_write == audio_read_index_.load(std::memory_order_acquire)) {
-    // P11A-002: INV-AUDIO-SAMPLE-CONTINUITY-001 observability (caller should block, not drop)
+    // INV-AUDIO-CONTINUITY-NO-DROP observability (caller should block, not drop)
     size_t depth = AudioSize();
     std::cout << "[FrameRingBuffer] Audio queue overflow: dropped_count=0, total_dropped=0, "
               << "queue_depth=" << depth << ", queue_capacity=" << audio_capacity_ - 1 << std::endl;

@@ -68,7 +68,8 @@ OutputTiming **MUST NOT**:
 
 ### 5.2 Real Time
 
-- OutputTiming uses a **process-local monotonic clock** (e.g. `std::chrono::steady_clock`) to measure elapsed time
+- OutputTiming uses a **process-local monotonic clock** (e.g. `std::chrono::steady_clock`) for delivery pacing. It does NOT use MasterClock or wall-clock for delivery timing.
+- MasterClock governs content time (CT) and scheduling only (LAW-001). OutputTiming governs delivery pacing independently.
 - Absolute wall-clock time is never used
 - Only elapsed time is relevant (relative, not absolute)
 

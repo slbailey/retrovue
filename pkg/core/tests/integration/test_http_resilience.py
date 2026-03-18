@@ -1,7 +1,7 @@
 """
 P8-INT-002 — HTTP Connection Survives Content Deficit.
 
-Contract: INV-P8-CONTENT-DEFICIT-FILL-001
+Contract: INV-CONTENT-DEFICIT-FILL
 Governing Law: LAW-OUTPUT-LIVENESS
 
 When a decoder reaches EOF before the scheduled segment boundary (content deficit),

@@ -1,7 +1,7 @@
 // Repository: Retrovue-playout
 // Component: Phase 10 Pipeline Flow Control Tests
-// Purpose: Verify INV-P10-REALTIME-THROUGHPUT, INV-P10-BACKPRESSURE-SYMMETRIC,
-//          INV-P10-PRODUCER-THROTTLE, INV-P10-FRAME-DROP-POLICY, INV-P10-BUFFER-EQUILIBRIUM
+// Purpose: Verify INV-P10-REALTIME-THROUGHPUT, INV-BACKPRESSURE-SYMMETRIC,
+//          INV-PRODUCER-THROTTLE, INV-P10-FRAME-DROP-POLICY, INV-BUFFER-EQUILIBRIUM
 // Contract: docs/contracts/phase10/INV-P10-PIPELINE-FLOW-CONTROL.md
 // Copyright (c) 2025 RetroVue
 
@@ -399,13 +399,13 @@ TEST_F(Phase10FlowControlTest, TEST_P10_BACKPRESSURE_002_AudioVideoThrottledToge
   ASSERT_GT(video_consumed, 0) << "No video frames consumed";
   ASSERT_GT(audio_consumed, 0) << "No audio frames consumed";
 
-  // INV-P10-BACKPRESSURE-SYMMETRIC: Neither stream may run ahead by more than 1 frame duration
+  // INV-BACKPRESSURE-SYMMETRIC: Neither stream may run ahead by more than 1 frame duration
   // 1 frame at 30fps = 33333us
   const int64_t max_divergence_us = 33333;
   int64_t pts_diff_us = std::abs(video_pts_max - audio_pts_max);
 
   EXPECT_LE(pts_diff_us, max_divergence_us)
-      << "INV-P10-BACKPRESSURE-SYMMETRIC violated: A/V PTS diverged by "
+      << "INV-BACKPRESSURE-SYMMETRIC violated: A/V PTS diverged by "
       << pts_diff_us << "us (max allowed: " << max_divergence_us << "us). "
       << "video_pts=" << video_pts_max << "us, audio_pts=" << audio_pts_max << "us";
 
@@ -561,7 +561,7 @@ TEST_F(Phase10FlowControlTest, TEST_P10_EQUILIBRIUM_001_BufferDepthStable) {
 
   // Check stability (stddev should be reasonable)
   EXPECT_LT(stddev, buffer_capacity / 2.0)
-      << "INV-P10-BUFFER-EQUILIBRIUM violated: Buffer depth too variable. "
+      << "INV-BUFFER-EQUILIBRIUM violated: Buffer depth too variable. "
       << "stddev=" << stddev << ", mean=" << mean;
 
   std::cout << "[TEST-P10-EQUILIBRIUM-001] "
@@ -1246,10 +1246,10 @@ TEST_F(Phase10FlowControlTest, TEST_INV_P10_BACKPRESSURE_SYMMETRIC_NoAudioDrops)
 
   uint64_t consumed = audio_consumed.load(std::memory_order_relaxed);
   EXPECT_GT(consumed, 0u)
-      << "INV-P10-BACKPRESSURE-SYMMETRIC (amended): Under backpressure audio must not be dropped; "
+      << "INV-BACKPRESSURE-SYMMETRIC (amended): Under backpressure audio must not be dropped; "
       << "producer blocks, so we must see consumed audio (no drops)";
 
-  std::cout << "[TEST-INV-P10-BACKPRESSURE-SYMMETRIC-NoAudioDrops] "
+  std::cout << "[TEST-INV-BACKPRESSURE-SYMMETRIC-NoAudioDrops] "
             << "audio_frames_consumed=" << consumed
             << " (audio_samples_dropped=0: producer blocks at capacity)"
             << std::endl;

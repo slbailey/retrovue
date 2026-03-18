@@ -257,6 +257,14 @@ class MpegTSOutputSink : public IOutputSink {
     return silence_injection_disabled_.load(std::memory_order_acquire);
   }
 
+  // AIR-015: Test hooks for frame drop counters (§12.1 - accessible for contract verification)
+  uint64_t GetVideoFramesDropped() const {
+    return video_frames_dropped_.load(std::memory_order_relaxed);
+  }
+  uint64_t GetAudioFramesDropped() const {
+    return audio_frames_dropped_.load(std::memory_order_relaxed);
+  }
+
  private:
   // =========================================================================
   // INV-P9-STEADY-008: No Silence Injection After Attach

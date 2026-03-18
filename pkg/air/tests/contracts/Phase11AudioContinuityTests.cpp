@@ -1,7 +1,7 @@
 // Repository: Retrovue-playout
 // Component: Phase 11 Audio Continuity Contract Tests
-// Purpose: Verify INV-AUDIO-SAMPLE-CONTINUITY-001 (no audio drops under backpressure)
-// Contract: docs/contracts/tasks/phase11/P11A-004.md
+// Purpose: Verify INV-AUDIO-CONTINUITY-NO-DROP (no audio drops under backpressure)
+// Contract: docs/contracts/invariants/shared/INV-AUDIO-CONTINUITY-NO-DROP.md
 // Copyright (c) 2025 RetroVue
 
 #include <gtest/gtest.h>
@@ -42,7 +42,7 @@ std::string GetTestVideoPath() {
 //
 // Assertions:
 // 1. audio_frames_produced == audio_frames_consumed (no loss)
-// 2. No INV-AUDIO-SAMPLE-CONTINUITY-001 VIOLATION logs (tested by no drops)
+// 2. No INV-AUDIO-CONTINUITY-NO-DROP VIOLATION logs (tested by no drops)
 // 3. Backpressure event is logged (producer blocked then released) - observable
 
 class Phase11AudioContinuityTest : public ::testing::Test {
@@ -117,14 +117,14 @@ TEST_F(Phase11AudioContinuityTest, TEST_INV_AUDIO_SAMPLE_CONTINUITY_001_NoDropsU
   uint64_t consumed = audio_consumed.load(std::memory_order_relaxed);
   uint64_t produced = producer.GetFramesProduced();  // video frames; audio has no direct getter
 
-  // INV-AUDIO-SAMPLE-CONTINUITY-001: No drops under backpressure
+  // INV-AUDIO-CONTINUITY-NO-DROP: No drops under backpressure
   // We cannot directly read "audio_frames_produced" from FileProducer; we verify by:
   // 1. Producer completed without deadlock (blocked when full, resumed when consumer freed slots)
   // 2. We consumed a non-zero number of audio frames
   // 3. No audio frames were dropped (producer blocks, never drops on queue full)
   EXPECT_GT(consumed, 0u) << "Should have consumed audio frames; producer blocks, never drops";
 
-  std::cout << "[TEST-INV-AUDIO-SAMPLE-CONTINUITY-001] "
+  std::cout << "[TEST-INV-AUDIO-CONTINUITY-NO-DROP] "
             << "audio_frames_consumed=" << consumed
             << ", video_frames_produced=" << produced
             << " (no drops: producer blocks at capacity)"

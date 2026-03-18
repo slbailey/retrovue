@@ -84,7 +84,7 @@ Phase 10 continues until:
 
 ### 3.2 Audio/Video Backpressure Symmetry
 
-**INV-P10-BACKPRESSURE-SYMMETRIC**: When backpressure is applied (buffer full), both audio and video must be throttled symmetrically.
+**INV-BACKPRESSURE-SYMMETRIC**: When backpressure is applied (buffer full), both audio and video must be throttled symmetrically.
 
 - If video buffer is full, producer blocks on video push
 - Audio push must also block (or be rate-limited) to prevent A/V desync
@@ -136,7 +136,7 @@ This is a **binding architectural rule** that all producers must follow:
 
 ### 3.3 Producer Throttling vs Consumer Capacity
 
-**INV-P10-PRODUCER-THROTTLE**: Producer decode rate must be governed by consumer capacity, not by decoder speed.
+**INV-PRODUCER-THROTTLE**: Producer decode rate must be governed by consumer capacity, not by decoder speed.
 
 - Decode-ahead budget: ≤ N frames (configurable, default 5)
 - When buffer depth reaches threshold, producer must yield
@@ -182,7 +182,7 @@ This is a **binding architectural rule** that all producers must follow:
 
 ### 3.5 Buffer Equilibrium
 
-**INV-P10-BUFFER-EQUILIBRIUM**: Buffer depth must oscillate around a target, not grow unbounded or drain to zero.
+**INV-BUFFER-EQUILIBRIUM**: Buffer depth must oscillate around a target, not grow unbounded or drain to zero.
 
 - Target depth: N frames (configurable, default 3)
 - Allowed range: [1, 2N] frames
@@ -665,7 +665,7 @@ Do NOT use hysteresis gating. Do NOT wait for low-water mark to resume. Use slot
    - Bursty delivery causes VLC stutter and audio clicks
    - PCR-paced emission produces smooth, steady output
 
-8. **INV-P10-NO-SILENCE-INJECTION: Audio liveness must be disabled when PCR-paced mux is active.**
+8. **INV-NO-SILENCE-INJECTION: Audio liveness must be disabled when PCR-paced mux is active.**
 
    When MpegTSOutputSink starts with PCR-paced mux, silence injection is permanently disabled.
    Producer audio is the ONLY audio source. No competing audio streams.

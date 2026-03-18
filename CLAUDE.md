@@ -184,10 +184,45 @@ AUTHORITATIVE DOCUMENTS
 ────────────────────────
 - pkg/core/CLAUDE.md → Core ontology and rules
 - pkg/air/CLAUDE.md  → AIR ontology and rules
-- each entity (core/air) contains a docs/contracts/    → Binding behavioral contracts
+- docs/contracts/    → Canonical behavioral contracts (system-wide)
+- docs/contracts/INVARIANTS.md → Single authoritative invariant index
 
 These documents define “what is allowed”.
 Implementation must conform.
+
+────────────────────────
+DEVELOPMENT CONTRACT
+────────────────────────
+
+Truth Model:
+- Canonical contracts are the ONLY source of truth.
+- Each rule exists exactly once.
+- Tests enforce contracts.
+
+Required Workflow (strict order):
+1. Update/create the canonical contract
+2. Add/update contract tests
+3. Then modify implementation code
+
+Prohibited:
+- No placeholder documents
+- No temporary or “we'll clean later” docs
+- No duplicate or alternate invariant IDs
+- No parallel rule definitions outside contracts
+- No storing rules in comments instead of contracts
+
+Decision Handling:
+- Do NOT create CON-* files or deferred-decision records
+- Raise conflicts immediately for resolution
+- Apply decisions directly to contracts
+
+Documentation Rules:
+- Contracts define behavior
+- History goes ONLY in docs/contracts/audit/CANONICALIZATION_HISTORY.md
+- READMEs are for navigation only (no rules)
+
+Simplicity Rule:
+If a change increases the number of places truth can live, it is wrong.
 
 ────────────────────────
 ACKNOWLEDGEMENT

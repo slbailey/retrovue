@@ -1,24 +1,25 @@
 # INV-TIME-AUTHORITY-SINGLE-SOURCE
 
 ## Behavioral Guarantee
-There is exactly one time authority in the system. Audio is PCR master. Producer (TimelineController) is CT authority. Mux derives PTS from producer CT plus offset. Mux does not maintain local CT counters. CT is not reset on attach.
+There is exactly one time authority in the system. Epoch MUST be set exactly once per session via `TrySetEpochOnce`. PREVIEW role MUST NOT set epoch. PTS is derived as epoch + offset; no subsystem maintains an independent CT counter. Session reset unlocks epoch for one new set.
 
 ## Authority Model
-Audio owns PCR. Producer owns CT. Mux is pass-through for time; it does not invent or reset presentation time.
+`MasterClock` owns the session epoch. Producer owns CT. Mux derives PTS from producer CT plus offset. Mux does not maintain local CT counters.
 
 ## Boundary / Constraint
-Mux MUST use producer-supplied CT only. No local CT; no reset on attach. PTS is derived (CT + offset), not used as scheduling authority.
+`TrySetEpochOnce` MUST succeed on first LIVE call and reject all subsequent calls within the same session. PREVIEW role MUST always be rejected. `scheduled_to_utc_us(offset)` MUST return `epoch + offset` (derivation, not independent counter). `ResetEpochForNewSession` MUST unlock epoch for one new set.
 
 ## Violation
-Video drives PCR. Mux resets CT. Mux maintains independent clock. PTS used as scheduling authority. MUST be logged.
+Duplicate epoch set accepted within a session; PREVIEW role sets epoch; local CT counter maintained by mux; PTS used as scheduling authority instead of derivation. MUST be logged.
+
+## Derives From
+`LAW-CLOCK`
 
 ## Required Tests
-- `pkg/air/tests/contracts/MasterClock/MasterClockContractTests.cpp`
-- `pkg/air/tests/contracts/TimelineController/TimelineControllerContractTests.cpp`
+- `pkg/air/tests/contracts/BlockPlan/SharedInvTimeAuthorityContractTests.cpp` (`Compliant_EpochSetOnce_SecondSetRejected`) — first TrySetEpochOnce succeeds, second rejected, epoch value unchanged
+- `pkg/air/tests/contracts/BlockPlan/SharedInvTimeAuthorityContractTests.cpp` (`Compliant_PreviewRoleAlwaysRejected`) — PREVIEW role always rejected, epoch not locked
+- `pkg/air/tests/contracts/BlockPlan/SharedInvTimeAuthorityContractTests.cpp` (`Compliant_PtsDerivedFromEpochPlusOffset`) — PTS=0 maps to epoch, PTS=1s maps to epoch+1s
+- `pkg/air/tests/contracts/BlockPlan/SharedInvTimeAuthorityContractTests.cpp` (`Compliant_SessionResetAllowsNewEpoch`) — reset unlocks, new epoch allowed, value updated
 
 ## Enforcement Evidence
-
-- `MasterClock::TrySetEpochOnce()` prevents epoch drift — epoch can only be set once per session; subsequent attempts are rejected, ensuring a single time origin.
-- `TimelineController` owns CT (composition time); all timing decisions derive from this single authority. No subsystem maintains an independent CT counter.
-- `EncoderPipeline` accepts pre-computed CT from the producer — it does not derive, reset, or maintain local CT counters. PTS is computed as `CT + offset`, not used as a scheduling authority.
-- Contract tests: `MasterClockContractTests.cpp` validates single-epoch enforcement and rejects duplicate epoch sets. `TimelineControllerContractTests.cpp` validates CT authority and no local counter drift.
+TODO

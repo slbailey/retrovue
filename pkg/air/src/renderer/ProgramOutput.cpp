@@ -318,7 +318,7 @@ void ProgramOutput::RenderLoop() {
     const int64_t frame_lateness_us = now_wall_us - next_deadline_us;
 
     if (!current_buffer->Pop(frame)) {
-      // P8-FILL-002 INV-P8-CONTENT-DEFICIT-FILL-001: Content deficit (EOF before boundary)
+      // INV-CONTENT-DEFICIT-FILL: Content deficit (EOF before boundary)
       // Emit pad immediately when buffer empty; no freeze window.
       if (content_deficit_active_ptr_ && content_deficit_active_ptr_->load(std::memory_order_acquire) && first_real_frame_emitted_) {
         goto emit_pad_frame;

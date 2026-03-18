@@ -18,6 +18,8 @@ This invariant ensures:
 - Filler EOF is expected success, not an error
 - Safety rails are for violations, not normal operation
 
+Supersedes LAW-005 (Phase 0 continuous-offset modulo model).
+
 See [ScheduleManagerContract.md](../runtime/ScheduleManagerContract.md#inv-sched-grid-filler-padding-deterministic-filler-frame-budget) for complete specification.
 
 ## Runtime Switching Invariants

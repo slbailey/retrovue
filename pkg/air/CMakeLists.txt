@@ -223,6 +223,7 @@ set(AIR_CORE_SOURCES
   src/evidence/GrpcEvidenceClient.cpp
   # Thread-safe logger (prevents multi-thread log interleave)
   src/util/Logger.cpp
+  src/util/ObservabilityLogger.cpp
 )
 
 # Optional: enable PAD/audio priming diagnostic logging (PipelineManager).
@@ -364,6 +365,8 @@ add_executable(contracts_playoutengine_tests
   tests/contracts/PrimitiveInvariants/PacingInvariantContractTests.cpp
   # INV-P9-SINK-LIVENESS: Sink liveness policy contract tests
   tests/contracts/PrimitiveInvariants/SinkLivenessContractTests.cpp
+  # AIR-012 / AIR-015: OutputBusAndOutputSink contract tests
+  tests/contracts/OutputBusAndOutputSinkContractTests.cpp
   # INV-P8-PRODUCER-CONTINUITY: Producer handoff continuity contract tests
   tests/contracts/ProducerContinuity/ProducerContinuityContractTests.cpp
   tests/contracts/test_inv_audio_pts_house_clock_001.cpp
@@ -513,6 +516,14 @@ add_executable(blockplan_contract_tests
   tests/contracts/BlockPlan/SeamContinuityGuaranteedTests.cpp
   tests/contracts/BlockPlan/FIVSTryPopEvictionSafetyContractTests.cpp
   tests/contracts/BlockPlan/SeamVsrcCommitContractTests.cpp
+  tests/contracts/BlockPlan/StopChannelCleanupContractTests.cpp
+  tests/contracts/BlockPlan/ObservabilityLawContractTests.cpp
+  tests/contracts/BlockPlan/SharedInvTimeAuthorityContractTests.cpp
+  tests/contracts/BlockPlan/SharedInvAudioContinuityContractTests.cpp
+  tests/contracts/BlockPlan/SharedInvLoudnessNormalizedContractTests.cpp
+  tests/contracts/BlockPlan/SharedInvContentDeficitFillContractTests.cpp
+  tests/contracts/BlockPlan/SharedInvControlPlaneCadenceContractTests.cpp
+  tests/contracts/BlockPlan/Law002HardStopContractTests.cpp
 )
 
 target_link_libraries(blockplan_contract_tests

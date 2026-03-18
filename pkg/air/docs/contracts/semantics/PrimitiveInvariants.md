@@ -155,7 +155,7 @@ When INV-DECODE-RATE-001 is violated:
 
 **Cascade effects:**
 
-- INV-P10-BUFFER-EQUILIBRIUM fails
+- INV-BUFFER-EQUILIBRIUM fails
 - Audio/video sync degrades (audio consumed, video starved or vice versa)
 - Metrics show high pad frame count despite healthy asset
 
@@ -327,5 +327,5 @@ These primitives derive other invariants documented elsewhere:
 | Derived From | Derived Invariants |
 |--------------|-------------------|
 | INV-PACING-001 | INV-P10-REALTIME-THROUGHPUT, gap metric correctness, PTS advancement rate |
-| INV-DECODE-RATE-001 | INV-P10-BUFFER-EQUILIBRIUM, shadow readiness timing, switch readiness |
+| INV-DECODE-RATE-001 | INV-BUFFER-EQUILIBRIUM, shadow readiness timing, switch readiness |
 | INV-SEGMENT-CONTENT-001 | First segment depth, CATCH-UP completion conditions |

@@ -460,7 +460,7 @@ namespace retrovue::producers::file
     bool av_rate_imbalance_logged_ = false;        // Log imbalance once per episode
 
     // ==========================================================================
-    // INV-P10-BACKPRESSURE-SYMMETRIC: Unified A/V gating
+    // INV-BACKPRESSURE-SYMMETRIC: Unified A/V gating
     // ==========================================================================
     // Audio and video must be gated together. When EITHER buffer is full or
     // write barrier is set, BOTH streams wait. No retries, no dropping.
@@ -474,7 +474,7 @@ namespace retrovue::producers::file
     bool WaitForAVPushReady();
 
     // Blocks BEFORE av_read_frame() until both buffers have space.
-    // INV-P10-BACKPRESSURE-SYMMETRIC: Gate at decode level, not push level.
+    // INV-BACKPRESSURE-SYMMETRIC: Gate at decode level, not push level.
     bool WaitForDecodeReady();
 
     // INV-P9-STEADY-003: Check if audio can push (A/V delta <= 1)
