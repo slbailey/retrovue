@@ -1557,9 +1557,14 @@ void PipelineManager::Run() {
       int pa_low = pcfg.audio_low_water_ms > 0
           ? pcfg.audio_low_water_ms
           : std::max(1, pa_target / 3);
+      // INV-AUDIO-BUFFER-HIGHWATER-001: cap at 2000ms so the fill thread
+      // cannot accumulate unbounded audio while idle before the fence.
+      // Excess audio beyond high_water is dropped (equivalent to what would
+      // be discarded at seam time anyway). Bug C fix (actual-depth seam gate)
+      // is the primary bound; 2000ms high_water is a safety net.
       preview_audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(
           pa_target, buffer::kHouseAudioSampleRate,
-          buffer::kHouseAudioChannels, pa_low);
+          buffer::kHouseAudioChannels, pa_low, /*high_water_ms=*/2000);
       auto* preview_tp = AsTickProducer(preview_.get());
       // INV-AUDIO-PREROLL-ISOLATION-001: Snapshot live audio depth before preview fill.
       int live_audio_before = audio_buffer_ ? audio_buffer_->DepthMs() : -1;
@@ -1589,14 +1594,31 @@ void PipelineManager::Run() {
     }
 
     // Seam-confidence-only: once preview has 500ms primed, stop the fill thread; keep buffered frames for TAKE.
+    //
+    // BUG-FIX INV-AUDIO-PRIME-SEAM-CONFIDENCE-001:
+    // Gate on preview_audio_buffer_->DepthMs() (the ACTUAL buffer at the fence),
+    // NOT on preview_audio_prime_depth_ms_ (the SeamPreparer's stale measurement).
+    // preview_audio_prime_depth_ms_ is captured from the SeamResult at TakeSource
+    // time — it reflects the SeamPreparer's internal buffer, which is discarded.
+    // PipelineManager creates a FRESH preview_audio_buffer_ at preview activation
+    // (line ~1560). Without this fix, seam confidence fires on the first tick after
+    // activation because preview_audio_prime_depth_ms_ is already >= 500ms from the
+    // SeamResult, stopping the fill thread while preview_audio_buffer_ has only
+    // ~46ms (the primed frame's audio). Result: 450ms silence injected at every
+    // block boundary via safety-net silence path.
+    // preview_audio_prime_depth_ms_ is intentionally retained for DEGRADED_TAKE
+    // tracking (line ~2998) where it correctly reflects preroll quality.
+    const int preview_actual_audio_ms =
+        (preview_audio_buffer_ ? preview_audio_buffer_->DepthMs() : 0);
     if (preview_video_buffer_ && preview_video_buffer_->IsFilling()
-        && preview_audio_prime_depth_ms_ >= kMinAudioPrimeMs
+        && preview_actual_audio_ms >= kMinAudioPrimeMs
         && preview_video_buffer_->IsPrimed() && !preview_fill_stopped_after_prime_) {
       preview_video_buffer_->StopFilling(/*flush=*/false);
       preview_fill_stopped_after_prime_ = true;
       { std::ostringstream oss;
         oss << "[PipelineManager] PREROLL_FILL_STOP"
-            << " depth_ms=" << preview_audio_prime_depth_ms_
+            << " depth_ms=" << preview_actual_audio_ms
+            << " seam_result_depth_ms=" << preview_audio_prime_depth_ms_
             << " reason=seam_confidence_500ms_primed";
         Logger::Info(oss.str()); }
     }
@@ -5300,9 +5322,13 @@ void PipelineManager::EnsureIncomingBReadyForSeam(int64_t to_seg, int64_t sessio
   segment_b_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
   segment_b_video_buffer_->SetBufferLabel("SEGMENT_B_VIDEO_BUFFER");
   segment_b_video_buffer_->SetSegmentOriginId(to_seg);  // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001
+  // INV-AUDIO-BUFFER-HIGHWATER-001: cap segment_b at 2000ms. The fill thread
+  // loops the incoming segment (often filler.mp4) while the live segment plays,
+  // accumulating audio with no consumer. Audio beyond high_water is dropped;
+  // this is equivalent to the discard that happens at the next seam anyway.
   segment_b_audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(
       a_target, buffer::kHouseAudioSampleRate,
-      buffer::kHouseAudioChannels, a_low);
+      buffer::kHouseAudioChannels, a_low, /*high_water_ms=*/2000);
   int seg_live_audio_before = audio_buffer_ ? audio_buffer_->DepthMs() : -1;
   segment_b_video_buffer_->StartFilling(
       AsTickProducer(segment_b_producer_.get()), segment_b_audio_buffer_.get(),
@@ -5535,9 +5561,10 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
     int a_low = bcfg.audio_low_water_ms > 0
         ? bcfg.audio_low_water_ms
         : std::max(1, a_target / 3);
+    // INV-AUDIO-BUFFER-HIGHWATER-001: same cap as ArmSegmentPrep path.
     segment_b_audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(
         a_target, buffer::kHouseAudioSampleRate,
-        buffer::kHouseAudioChannels, a_low);
+        buffer::kHouseAudioChannels, a_low, /*high_water_ms=*/2000);
     segment_b_video_buffer_->StartFilling(
         AsTickProducer(segment_b_producer_.get()), segment_b_audio_buffer_.get(),
         FPS_30, ctx_->fps, &ctx_->stop_requested);

@@ -812,7 +812,15 @@ void VideoLookaheadBuffer::FillLoop() {
         }
 
         // Push decoded audio to AudioLookaheadBuffer (generation-gated).
-        if (audio_buffer) {
+        // INV-AUDIO-BUFFER-HIGHWATER-001: skip push when above high_water.
+        // For lookahead buffers (SEGMENT_B, PREVIEW), excess audio beyond
+        // high_water is dropped here rather than at seam-reap time — semantically
+        // equivalent since leftover audio is discarded when the buffer is reaped.
+        // For LIVE buffers, high_water_ms is set high enough (2000ms) that this
+        // guard only fires transiently after a segment swap; the tick thread
+        // drains the buffer below high_water within ~60 ticks (~2s) and audio
+        // resumes. 2000ms headroom covers the gap without underflow risk.
+        if (audio_buffer && !audio_buffer->IsAboveHighWater()) {
           int64_t audio_samples_this_decode = 0;
           int audio_frames_this_decode = 0;
           for (auto& af : fd->audio) {
@@ -854,7 +862,7 @@ void VideoLookaheadBuffer::FillLoop() {
               Logger::Info(oss.str());
             }
           }
-        }
+        }  // end IsAboveHighWater guard
       } else if (have_last_decoded) {
         // Content gap — hold last frame while TryGetFrame advances block_ct_ms
         // toward the next segment boundary (filler/pad).
@@ -863,7 +871,9 @@ void VideoLookaheadBuffer::FillLoop() {
         vf.was_decoded = false;
         vf.source_frame_index = last_decoded_source_frame_index;
         // INV-HOLD-LAST-AUDIO: Push silence so audio buffer doesn't underflow.
-        if (audio_buffer && silence_samples_per_frame > 0) {
+        // INV-AUDIO-BUFFER-HIGHWATER-001: skip if already above high_water.
+        if (audio_buffer && silence_samples_per_frame > 0
+            && !audio_buffer->IsAboveHighWater()) {
           audio_buffer->Push(silence_template, my_audio_gen);
         }
       } else {
@@ -879,7 +889,9 @@ void VideoLookaheadBuffer::FillLoop() {
       vf.source_frame_index = last_decoded_source_frame_index;
       // Push silence on cadence-skip cycles when in a content gap
       // to prevent audio underflow on the block tail.
-      if (content_gap && audio_buffer && silence_samples_per_frame > 0) {
+      // INV-AUDIO-BUFFER-HIGHWATER-001: skip if already above high_water.
+      if (content_gap && audio_buffer && silence_samples_per_frame > 0
+          && !audio_buffer->IsAboveHighWater()) {
         audio_buffer->Push(silence_template, my_audio_gen);
       }
     } else {
