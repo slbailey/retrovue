@@ -949,7 +949,24 @@ void VideoLookaheadBuffer::FillLoop() {
             Logger::Info(oss.str());
           }
         }
-        audio_buffer->Push(std::move(af), my_audio_gen);
+        // INV-AV-FILL-INTERLOCK-001: Push() returns false on generation
+        // mismatch. If suppression_reason==kNone, this is a race between
+        // our precondition check and a fence — treat as a violation and abort.
+        const bool pushed = audio_buffer->Push(std::move(af), my_audio_gen);
+        if (!pushed &&
+            audio_suppression_reason == AudioSuppressionReason::kNone) {
+          audio_frames_suppressed_non_generation_.fetch_add(
+              1, std::memory_order_relaxed);
+          std::ostringstream _rej_oss;
+          _rej_oss << "[FillLoop:" << buffer_label_ << "] "
+                   << "INV-AV-FILL-INTERLOCK-001 PUSH_REJECTED: "
+                   << "audio push failed after precondition passed "
+                   << "src_idx=" << vf.source_frame_index
+                   << " af_idx=" << audio_frames_this_decode
+                   << " suppression_reason=kNone";
+          Logger::Error(_rej_oss.str());
+          std::abort();
+        }
       }
       audio_pushed_this_decode = true;
       // AV_SYNC_PROBE: Log after push so depth reflects the just-pushed audio.

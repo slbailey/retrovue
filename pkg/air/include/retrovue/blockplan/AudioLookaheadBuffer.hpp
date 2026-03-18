@@ -49,8 +49,11 @@ class AudioLookaheadBuffer {
   // Push a decoded audio frame into the buffer.
   // If expected_generation != 0 and doesn't match current generation_,
   // the push is silently dropped (stale data from old fill thread).
-  void Push(const buffer::AudioFrame& frame, uint64_t expected_generation = 0);
-  void Push(buffer::AudioFrame&& frame, uint64_t expected_generation = 0);
+  // Returns true if the frame was accepted, false if rejected (generation
+  // mismatch or zero samples). Callers that require push success (e.g. the
+  // INV-AV-FILL-INTERLOCK-001 decoded-frame path) must check the return value.
+  bool Push(const buffer::AudioFrame& frame, uint64_t expected_generation = 0);
+  bool Push(buffer::AudioFrame&& frame, uint64_t expected_generation = 0);
 
   // Current generation counter (for fill thread capture).
   uint64_t CurrentGeneration() const;

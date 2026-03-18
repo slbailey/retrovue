@@ -39,9 +39,9 @@ AudioLookaheadBuffer::AudioLookaheadBuffer(int target_depth_ms,
 
 AudioLookaheadBuffer::~AudioLookaheadBuffer() = default;
 
-void AudioLookaheadBuffer::Push(const buffer::AudioFrame& frame,
+bool AudioLookaheadBuffer::Push(const buffer::AudioFrame& frame,
                                 uint64_t expected_generation) {
-  if (frame.nb_samples <= 0) return;
+  if (frame.nb_samples <= 0) return false;
   std::lock_guard<std::mutex> lock(mutex_);
   if (expected_generation != 0 && expected_generation != generation_) {
     { std::ostringstream oss;
@@ -50,7 +50,7 @@ void AudioLookaheadBuffer::Push(const buffer::AudioFrame& frame,
           << " expected_gen=" << expected_generation
           << " current_gen=" << generation_;
       Logger::Warn(oss.str()); }
-    return;
+    return false;
   }
 #if defined(RETROVUE_VERBOSE_LOGS)
   // PUSH_DIAG (copy): only in Debug builds.
@@ -77,11 +77,12 @@ void AudioLookaheadBuffer::Push(const buffer::AudioFrame& frame,
   total_samples_in_buffer_ += frame.nb_samples;
   primed_ = true;
   frames_.push_back(frame);
+  return true;
 }
 
-void AudioLookaheadBuffer::Push(buffer::AudioFrame&& frame,
+bool AudioLookaheadBuffer::Push(buffer::AudioFrame&& frame,
                                 uint64_t expected_generation) {
-  if (frame.nb_samples <= 0) return;
+  if (frame.nb_samples <= 0) return false;
   std::lock_guard<std::mutex> lock(mutex_);
   if (expected_generation != 0 && expected_generation != generation_) {
     { std::ostringstream oss;
@@ -90,7 +91,7 @@ void AudioLookaheadBuffer::Push(buffer::AudioFrame&& frame,
           << " expected_gen=" << expected_generation
           << " current_gen=" << generation_;
       Logger::Warn(oss.str()); }
-    return;
+    return false;
   }
 #if defined(RETROVUE_VERBOSE_LOGS)
   // PUSH_DIAG: only in Debug builds.
@@ -117,6 +118,7 @@ void AudioLookaheadBuffer::Push(buffer::AudioFrame&& frame,
   total_samples_in_buffer_ += frame.nb_samples;
   primed_ = true;
   frames_.push_back(std::move(frame));
+  return true;
 }
 
 bool AudioLookaheadBuffer::TryPopSamples(int samples_needed,
