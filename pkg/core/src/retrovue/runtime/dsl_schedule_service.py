@@ -1185,28 +1185,59 @@ class DslScheduleService:
                 if not revisions:
                     return None
 
-                out=[]
+                # INV-EPG-NO-REVISION-OVERLAP-001: collect items from all candidate
+                # revisions, then suppress items from earlier revisions that start
+                # at or after the first item of the next chronological revision.
+                # This prevents stale carry-over programs from previous broadcast_day
+                # revisions from producing overlapping EPG entries (e.g. Bird Box from
+                # yesterday appearing alongside Mission Galactica from today).
+                rev_items = []  # (broadcast_day, start_time, ScheduleItem)
                 for rev in revisions:
-                    items = (
+                    _rev_items = (
                         db.query(ScheduleItem)
                         .filter(ScheduleItem.schedule_revision_id == rev.id)
                         .order_by(ScheduleItem.slot_index.asc())
                         .all()
                     )
-                    for it in items:
-                        block_start = it.start_time
-                        block_end = block_start + timedelta(seconds=it.duration_sec)
-                        if block_end <= window_start or block_start >= window_end:
-                            continue
-                        meta = it.metadata_ or {}
-                        out.append({
-                            "start_at": block_start.isoformat(),
-                            "slot_duration_sec": int(it.duration_sec),
-                            "asset_id": meta.get("asset_id_raw") or (str(it.asset_id) if it.asset_id else ""),
-                            "collection": meta.get("collection_raw") or (str(it.container_id) if it.container_id else None),
-                            "content_type": it.content_type,
-                        })
+                    for it in _rev_items:
+                        rev_items.append((rev.broadcast_day, it.start_time, it))
 
+                # Find the earliest start_time in each revision.
+                rev_day_first: dict = {}
+                for bd, st, _ in rev_items:
+                    if bd not in rev_day_first or st < rev_day_first[bd]:
+                        rev_day_first[bd] = st
+
+                # cutover[bd] = first start_time of the next later revision.
+                # Items from revision bd that start >= cutover[bd] are suppressed.
+                sorted_days = sorted(rev_day_first.keys())
+                cutover: dict = {}
+                for i, bd in enumerate(sorted_days):
+                    cutover[bd] = rev_day_first[sorted_days[i + 1]] if i + 1 < len(sorted_days) else None
+
+                out = []
+                for bd, block_start, it in rev_items:
+                    block_end = block_start + timedelta(seconds=it.duration_sec)
+                    if block_end <= window_start or block_start >= window_end:
+                        continue
+                    co = cutover.get(bd)
+                    if co is not None and block_start >= co:
+                        # This item starts at or after the next revision took over; suppress it.
+                        continue
+                    # Clip block_end at the cutover so items that straddle the
+                    # revision boundary do not overlap the successor revision.
+                    effective_end = block_end if (co is None or block_end <= co) else co
+                    effective_dur = int((effective_end - block_start).total_seconds())
+                    meta = it.metadata_ or {}
+                    out.append({
+                        "start_at": block_start.isoformat(),
+                        "slot_duration_sec": effective_dur,
+                        "asset_id": meta.get("asset_id_raw") or (str(it.asset_id) if it.asset_id else ""),
+                        "collection": meta.get("collection_raw") or (str(it.container_id) if it.container_id else None),
+                        "content_type": it.content_type,
+                    })
+
+                out.sort(key=lambda x: x["start_at"])
                 return out if out else None
         except Exception as e:
             logger.warning("Failed to read canonical EPG for %s/%s: %s", channel_id, window_start, e)
