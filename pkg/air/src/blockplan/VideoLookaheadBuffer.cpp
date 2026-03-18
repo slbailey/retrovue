@@ -762,10 +762,13 @@ void VideoLookaheadBuffer::FillLoop() {
     // (pointer rotation).  No decoder lifecycle work happens on this thread.
     // INV-AV-FILL-INTERLOCK-001: reason-code based suppression tracking.
     // Declared at while-loop scope to cross the if(should_decode) boundary
-    // into the FIVS insert/interlock-check section below.
+    // into the precondition + push section below.
     AudioSuppressionReason audio_suppression_reason = AudioSuppressionReason::kNone;
     bool audio_pushed_this_decode = false;
     bool has_decoded_audio = false;  // true if decoded frame carried audio packets
+    // Decoded audio stashed here; pushed atomically with video insert below.
+    // INV-AV-FILL-INTERLOCK-001: no audio push occurs before precondition passes.
+    std::vector<buffer::AudioFrame> pending_audio_frames;
 
     if (should_decode) {
 #if defined(RETROVUE_VERBOSE_FILL)
@@ -841,6 +844,8 @@ void VideoLookaheadBuffer::FillLoop() {
         // Detect generation mismatch BEFORE push; track whether audio was actually
         // pushed; verify interlock after FIVS insert below.
         // INV-AV-FILL-INTERLOCK-001: determine suppression reason BEFORE any push.
+        // Audio frames are stashed in pending_audio_frames; they will be pushed
+        // atomically with the video insert after the precondition passes below.
         const bool audio_gen_ok = (audio_buffer &&
             audio_buffer->CurrentGeneration() == my_audio_gen);
         audio_suppression_reason = audio_gen_ok
@@ -848,51 +853,8 @@ void VideoLookaheadBuffer::FillLoop() {
             : AudioSuppressionReason::kGenerationMismatch;
         audio_pushed_this_decode = false;
         has_decoded_audio = !fd->audio.empty();
-        if (audio_buffer) {
-          int64_t audio_samples_this_decode = 0;
-          int audio_frames_this_decode = 0;
-          for (auto& af : fd->audio) {
-            audio_samples_this_decode += af.nb_samples;
-            audio_frames_this_decode++;
-            // AV_DETAIL_PROBE: Per-audio-frame detail (first 60 decodes).
-            {
-              static int64_t detail_count = 0;
-              if (++detail_count <= 60) {
-                std::ostringstream oss;
-                oss << "[FillLoop:" << buffer_label_ << "] AV_AUDIO_DETAIL"
-                    << " src_idx=" << fd->source_frame_index
-                    << " af_idx=" << audio_frames_this_decode
-                    << " nb_samples=" << af.nb_samples
-                    << " sample_rate=" << af.sample_rate
-                    << " channels=" << af.channels
-                    << " data_bytes=" << af.data.size();
-                Logger::Info(oss.str());
-              }
-            }
-            audio_buffer->Push(std::move(af), my_audio_gen);
-            if (audio_suppression_reason == AudioSuppressionReason::kNone)
-              audio_pushed_this_decode = true;
-          }
-          // AV_SYNC_PROBE: Log audio production rate vs video position.
-          {
-            static int64_t av_probe_count = 0;
-            if (++av_probe_count <= 30 || av_probe_count % 200 == 0) {
-              const int64_t sel = consumer_selected_src_.load(std::memory_order_relaxed);
-              std::ostringstream oss;
-              oss << "[FillLoop:" << buffer_label_ << "] AV_SYNC_PROBE"
-                  << " src_idx=" << fd->source_frame_index
-                  << " consumer_sel=" << sel
-                  << " gap=" << (fd->source_frame_index - sel)
-                  << " audio_frames=" << audio_frames_this_decode
-                  << " audio_samples=" << audio_samples_this_decode
-                  << " audio_depth_ms=" << audio_buffer->DepthMs()
-                  << " drop_video=" << drop_video_this_cycle
-                  << " total_pushed=" << audio_buffer->TotalSamplesPushed()
-                  << " total_popped=" << audio_buffer->TotalSamplesPopped();
-              Logger::Info(oss.str());
-            }
-          }
-        }  // end audio push block
+        // Stash audio for deferred push — do NOT push yet.
+        pending_audio_frames = std::move(fd->audio);
       } else if (have_last_decoded) {
         // Content gap — hold last frame while TryGetFrame advances block_ct_ms
         // toward the next segment boundary (filler/pad).
@@ -931,6 +893,86 @@ void VideoLookaheadBuffer::FillLoop() {
       exit_reason = "fill_stop";
       break;
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // INV-AV-FILL-INTERLOCK-001 PRECONDITION
+    // Evaluated BEFORE any mutation of FIVS or frame deque.
+    // If video will enter the frame store AND audio was decoded AND the
+    // suppression reason is kNone (i.e. generation matched), then audio
+    // frames MUST be present in pending_audio_frames. Their absence means
+    // the audio was lost between decode and this push site — a hard bug.
+    // ─────────────────────────────────────────────────────────────────────
+    if (has_decoded_audio &&
+        audio_suppression_reason == AudioSuppressionReason::kNone &&
+        pending_audio_frames.empty()) {
+      // Audio expected but lost before push site — invariant violated.
+      audio_frames_suppressed_non_generation_.fetch_add(1, std::memory_order_relaxed);
+      std::ostringstream _pre_oss;
+      _pre_oss << "[FillLoop:" << buffer_label_ << "] "
+               << "INV-AV-FILL-INTERLOCK-001 PRECONDITION VIOLATED: "
+               << "audio frames lost between decode and push site "
+               << "src_idx=" << vf.source_frame_index
+               << " suppression_reason=kNone"
+               << " has_decoded_audio=" << has_decoded_audio
+               << " pending_count=0";
+      Logger::Error(_pre_oss.str());
+      std::abort();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // ATOMIC AUDIO PUSH — precondition passed; push audio before video insert.
+    // Generation is verified by AudioLookaheadBuffer::Push() internally.
+    // If generation changed after our kNone determination, Push() drops the
+    // frame silently; the fill_generation_ check under the mutex below then
+    // catches the fence and exits before the video insert, maintaining the
+    // invariant by construction.
+    // ─────────────────────────────────────────────────────────────────────
+    if (!pending_audio_frames.empty() && audio_buffer &&
+        audio_suppression_reason == AudioSuppressionReason::kNone) {
+      int64_t audio_samples_this_decode = 0;
+      int audio_frames_this_decode = 0;
+      for (auto& af : pending_audio_frames) {
+        audio_samples_this_decode += af.nb_samples;
+        audio_frames_this_decode++;
+        // AV_DETAIL_PROBE: Per-audio-frame detail (first 60 decodes).
+        {
+          static int64_t detail_count = 0;
+          if (++detail_count <= 60) {
+            std::ostringstream oss;
+            oss << "[FillLoop:" << buffer_label_ << "] AV_AUDIO_DETAIL"
+                << " src_idx=" << vf.source_frame_index
+                << " af_idx=" << audio_frames_this_decode
+                << " nb_samples=" << af.nb_samples
+                << " sample_rate=" << af.sample_rate
+                << " channels=" << af.channels
+                << " data_bytes=" << af.data.size();
+            Logger::Info(oss.str());
+          }
+        }
+        audio_buffer->Push(std::move(af), my_audio_gen);
+      }
+      audio_pushed_this_decode = true;
+      // AV_SYNC_PROBE: Log after push so depth reflects the just-pushed audio.
+      {
+        static int64_t av_probe_count = 0;
+        if (++av_probe_count <= 30 || av_probe_count % 200 == 0) {
+          const int64_t sel = consumer_selected_src_.load(std::memory_order_relaxed);
+          std::ostringstream oss;
+          oss << "[FillLoop:" << buffer_label_ << "] AV_SYNC_PROBE"
+              << " src_idx=" << vf.source_frame_index
+              << " consumer_sel=" << sel
+              << " gap=" << (vf.source_frame_index - sel)
+              << " audio_frames=" << audio_frames_this_decode
+              << " audio_samples=" << audio_samples_this_decode
+              << " audio_depth_ms=" << audio_buffer->DepthMs()
+              << " drop_video=" << drop_video_this_cycle
+              << " total_pushed=" << audio_buffer->TotalSamplesPushed()
+              << " total_popped=" << audio_buffer->TotalSamplesPopped();
+          Logger::Info(oss.str());
+        }
+      }
+    }
+    pending_audio_frames.clear();
 
     // INV-AUDIO-LIVENESS-001: When video was full but we decoded for audio only,
     // push audio (already done above) but do not enqueue video into deque — drop deque frame
@@ -983,23 +1025,8 @@ void VideoLookaheadBuffer::FillLoop() {
       }
       frames_.push_back(std::move(vf));
       total_pushed_++;
-      // INV-AV-FILL-INTERLOCK-001: reason code is the authoritative gate.
-      // kNone = audio was expected; any miss is an unconditional violation.
-      if (has_decoded_audio &&
-          audio_suppression_reason == AudioSuppressionReason::kNone &&
-          !audio_pushed_this_decode) {
-        audio_frames_suppressed_non_generation_.fetch_add(1, std::memory_order_relaxed);
-        std::ostringstream _inv_oss;
-        _inv_oss << "[FillLoop:" << buffer_label_ << "] "
-                 << "INV-AV-FILL-INTERLOCK-001 VIOLATION: "
-                 << "video advanced LatestIndex without audio push "
-                 << "src_idx=" << vf.source_frame_index
-                 << " suppression_reason=kNone"
-                 << " has_decoded_audio=" << has_decoded_audio
-                 << " audio_pushed=" << audio_pushed_this_decode;
-        Logger::Error(_inv_oss.str());
-        std::abort();
-      }
+      // INV-AV-FILL-INTERLOCK-001: postcondition check removed.
+      // Enforcement is now a PRECONDITION before this insert (see above).
       // INV-FIVS-LOOKAHEAD-001: Diagnostic every 100 frames.
       if (total_pushed_ % 100 == 0) {
         const int64_t sel = consumer_selected_src_.load(std::memory_order_relaxed);
