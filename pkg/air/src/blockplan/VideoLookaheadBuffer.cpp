@@ -745,6 +745,13 @@ void VideoLookaheadBuffer::FillLoop() {
     // current segment's content is exhausted.  The fill thread enters
     // hold-last mode until PipelineManager performs the segment swap
     // (pointer rotation).  No decoder lifecycle work happens on this thread.
+    // INV-AV-FILL-INTERLOCK-001: reason-code based suppression tracking.
+    // Declared at while-loop scope to cross the if(should_decode) boundary
+    // into the FIVS insert/interlock-check section below.
+    AudioSuppressionReason audio_suppression_reason = AudioSuppressionReason::kNone;
+    bool audio_pushed_this_decode = false;
+    bool has_decoded_audio = false;  // true if decoded frame carried audio packets
+
     if (should_decode) {
 #if defined(RETROVUE_VERBOSE_FILL)
       int allow_lookahead;
@@ -812,10 +819,20 @@ void VideoLookaheadBuffer::FillLoop() {
         }
 
         // Push decoded audio to AudioLookaheadBuffer (generation-gated).
-        // Note: high_water enforcement removed from the fill loop because applying
-        // it universally skips audio pushes for LIVE buffers while video continues,
-        // causing A/V desync. SEGMENT_B and PREVIEW are now bounded by StopFilling
-        // at seam-readiness (INV-PREROLL-STABILITY-001 / Bug C fix) instead.
+        // INV-AV-FILL-INTERLOCK-001: audio MUST be pushed for every decoded frame
+        // that carries audio. The ONLY legitimate suppression is generation mismatch
+        // (stale fill thread after buffer swap). Any other suppression while video
+        // advances LatestIndex() is a hard contract violation.
+        // Detect generation mismatch BEFORE push; track whether audio was actually
+        // pushed; verify interlock after FIVS insert below.
+        // INV-AV-FILL-INTERLOCK-001: determine suppression reason BEFORE any push.
+        const bool audio_gen_ok = (audio_buffer &&
+            audio_buffer->CurrentGeneration() == my_audio_gen);
+        audio_suppression_reason = audio_gen_ok
+            ? AudioSuppressionReason::kNone
+            : AudioSuppressionReason::kGenerationMismatch;
+        audio_pushed_this_decode = false;
+        has_decoded_audio = !fd->audio.empty();
         if (audio_buffer) {
           int64_t audio_samples_this_decode = 0;
           int audio_frames_this_decode = 0;
@@ -838,6 +855,8 @@ void VideoLookaheadBuffer::FillLoop() {
               }
             }
             audio_buffer->Push(std::move(af), my_audio_gen);
+            if (audio_suppression_reason == AudioSuppressionReason::kNone)
+              audio_pushed_this_decode = true;
           }
           // AV_SYNC_PROBE: Log audio production rate vs video position.
           {
@@ -949,6 +968,23 @@ void VideoLookaheadBuffer::FillLoop() {
       }
       frames_.push_back(std::move(vf));
       total_pushed_++;
+      // INV-AV-FILL-INTERLOCK-001: reason code is the authoritative gate.
+      // kNone = audio was expected; any miss is an unconditional violation.
+      if (has_decoded_audio &&
+          audio_suppression_reason == AudioSuppressionReason::kNone &&
+          !audio_pushed_this_decode) {
+        audio_frames_suppressed_non_generation_.fetch_add(1, std::memory_order_relaxed);
+        std::ostringstream _inv_oss;
+        _inv_oss << "[FillLoop:" << buffer_label_ << "] "
+                 << "INV-AV-FILL-INTERLOCK-001 VIOLATION: "
+                 << "video advanced LatestIndex without audio push "
+                 << "src_idx=" << vf.source_frame_index
+                 << " suppression_reason=kNone"
+                 << " has_decoded_audio=" << has_decoded_audio
+                 << " audio_pushed=" << audio_pushed_this_decode;
+        Logger::Error(_inv_oss.str());
+        std::abort();
+      }
       // INV-FIVS-LOOKAHEAD-001: Diagnostic every 100 frames.
       if (total_pushed_ % 100 == 0) {
         const int64_t sel = consumer_selected_src_.load(std::memory_order_relaxed);

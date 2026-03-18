@@ -29,6 +29,15 @@
 
 namespace retrovue::blockplan {
 
+// INV-AV-FILL-INTERLOCK-001: Explicit reason codes for audio suppression.
+// The ONLY legitimate reason to suppress audio while video advances LatestIndex
+// is generation mismatch (stale fill thread after a fence/swap). Any other
+// suppression reason is a contract violation and must abort.
+enum class AudioSuppressionReason {
+  kNone,               // audio was pushed — no suppression
+  kGenerationMismatch, // stale fill thread; audio buffer swapped to new generation
+};
+
 class AudioLookaheadBuffer;
 class ITickProducer;
 
@@ -142,6 +151,10 @@ class VideoLookaheadBuffer {
 
   // Number of underflow events (TryPopFrame returned false).
   int64_t UnderflowCount() const;
+  // INV-AV-FILL-INTERLOCK-001: non-zero means audio was dropped without generation mismatch.
+  int64_t AudioFramesSuppressedNonGeneration() const {
+    return audio_frames_suppressed_non_generation_.load(std::memory_order_relaxed);
+  }
 
   // Total frames pushed since creation or last Reset().
   int64_t TotalFramesPushed() const;
@@ -336,6 +349,10 @@ class VideoLookaheadBuffer {
   // INV-AUDIO-LIVENESS-001 diagnostics (not invariants): audio-first decode under backpressure.
   std::atomic<int64_t> decode_continued_for_audio_while_video_full_{0};
   std::atomic<int64_t> decode_parked_video_full_audio_low_{0};
+
+  // INV-AV-FILL-INTERLOCK-001: counts audio suppressed for reasons OTHER than
+  // generation mismatch. Any increment on a LIVE buffer is a hard contract violation.
+  std::atomic<int64_t> audio_frames_suppressed_non_generation_{0};
 
   // --- FIVS stall diagnostics (INV-FIVS-LOOKAHEAD-STATE-001) ---
  public:

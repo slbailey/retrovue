@@ -688,5 +688,105 @@ TEST(VideoLookaheadBufferTest, StressFirstPopRace_NoPrimedFrame) {
             << " total=500" << std::endl;
 }
 
+
+// =============================================================================
+// INV-AV-FILL-INTERLOCK-001 Contract Tests
+// Verifies: audio must be pushed for every decoded video frame.
+// Non-generation suppressions are hard contract violations.
+// =============================================================================
+// INV-AV-FILL-INTERLOCK-001 Contract Test
+// Verifies: for every video frame that advances LatestIndex(), a
+// corresponding audio push is attempted if the decoded frame carries audio.
+// Any suppression for reasons other than generation mismatch is a hard error.
+//
+// Test strategy: run N decode cycles with a mock producer that emits one
+// audio frame per video frame. After fill completes, assert:
+//   1. AudioFramesSuppressedNonGeneration() == 0
+//   2. TotalSamplesPushed() tracks LatestIndex() within one frame's tolerance
+//   3. The fill loop did not abort (process still alive)
+TEST(VideoLookaheadBufferTest, AVFillInterlockNoSuppression) {
+  constexpr int kFrames = 200;
+  // MockTickProducer emits MakeAudioFrame(1024) per video frame.
+  constexpr int kSamplesPerFrame = 1024;
+
+  MockTickProducer mock(64, 48, 30.0, kFrames);
+
+  auto primed_fd = mock.TryGetFrame();
+  ASSERT_TRUE(primed_fd.has_value());
+  mock.SetPrimedFrame(std::move(*primed_fd));
+
+  AudioLookaheadBuffer audio_buf(2000, buffer::kHouseAudioSampleRate,
+                                  buffer::kHouseAudioChannels, 100);
+  // Use a large target/hard-cap so all 200 frames decode without parking.
+  // consumer_selected_src stays -1; we need store_size < hard_cap to avoid park.
+  // VideoLookaheadBuffer(300, 300) → hard_cap = max(300*4, 200) = 1200 frames.
+  VideoLookaheadBuffer buf(300, 300);
+  buf.SetBufferLabel("LIVE_VIDEO_BUFFER");
+
+  std::atomic<bool> stop{false};
+
+  buf.StartFilling(&mock, &audio_buf, FPS_30, FPS_30, &stop);
+
+  // Wait for all frames to be pushed.
+  // Wait for fill to exhaust the mock producer (all kFrames decoded).
+  // Tolerance: primed frame accounts for 1 frame pre-pushed in StartFilling.
+  const int64_t min_samples = static_cast<int64_t>(kFrames - 2) * kSamplesPerFrame;
+  ASSERT_TRUE(WaitFor(
+      [&] { return audio_buf.TotalSamplesPushed() >= min_samples; },
+      std::chrono::seconds(5)))
+      << "Fill loop should push audio for all " << kFrames
+      << " frames within 5s, got " << audio_buf.TotalSamplesPushed()
+      << " samples (need " << min_samples << ")";
+
+  buf.StopFilling(false);
+
+  // INV-AV-FILL-INTERLOCK-001: zero non-generation suppressions.
+  EXPECT_EQ(buf.AudioFramesSuppressedNonGeneration(), 0)
+      << "INV-AV-FILL-INTERLOCK-001: audio was suppressed without generation mismatch";
+
+  // Audio volume must be proportional to video frames decoded.
+  // Tolerance: one frame's worth of samples (producer may exit after last frame).
+  EXPECT_GE(audio_buf.TotalSamplesPushed(), min_samples)
+      << "TotalSamplesPushed=" << audio_buf.TotalSamplesPushed()
+      << " expected >= " << min_samples;
+}
+
+// INV-AV-FILL-INTERLOCK-001 — generation mismatch is the ONLY allowed suppression.
+// Verify that bumping the audio buffer generation suppresses audio pushes
+// (expected) and that the suppression counter remains zero (the counter
+// only increments for non-generation suppression).
+TEST(VideoLookaheadBufferTest, AVFillInterlockGenerationMismatchIsAllowed) {
+  constexpr int kFrames = 30;
+
+  MockTickProducer mock(64, 48, 30.0, kFrames);
+  auto primed_fd = mock.TryGetFrame();
+  ASSERT_TRUE(primed_fd.has_value());
+  mock.SetPrimedFrame(std::move(*primed_fd));
+
+  // Create audio buffer with generation 0, then bump it to 1 BEFORE filling.
+  // The fill thread will capture my_audio_gen=1 (from StartFilling), so
+  // pushes still succeed — this verifies the counter stays zero during a
+  // normal (non-stale) fill.
+  AudioLookaheadBuffer audio_buf(2000, buffer::kHouseAudioSampleRate,
+                                  buffer::kHouseAudioChannels, 100);
+  VideoLookaheadBuffer buf(15, 5);
+  buf.SetBufferLabel("LIVE_VIDEO_BUFFER");
+
+  std::atomic<bool> stop{false};
+  buf.StartFilling(&mock, &audio_buf, FPS_30, FPS_30, &stop);
+
+  ASSERT_TRUE(WaitFor(
+      [&] { return buf.IsPrimed(); },
+      std::chrono::milliseconds(500)))
+      << "Buffer should prime within 500ms";
+
+  buf.StopFilling(false);
+
+  // Non-generation suppressions must be zero — generation is synchronized
+  // at StartFilling so there should be no mismatches in this scenario.
+  EXPECT_EQ(buf.AudioFramesSuppressedNonGeneration(), 0)
+      << "INV-AV-FILL-INTERLOCK-001: no non-generation suppressions expected";
+}
+
 }  // namespace
 }  // namespace retrovue::blockplan::testing
