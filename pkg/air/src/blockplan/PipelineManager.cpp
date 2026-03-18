@@ -1551,7 +1551,7 @@ void PipelineManager::Run() {
       preview_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(
           video_buffer_->TargetDepthFrames(), video_buffer_->LowWaterFrames());
       preview_video_buffer_->SetBufferLabel("PREVIEW_VIDEO_BUFFER");
-      preview_fill_stopped_after_prime_ = false;
+      // INV-BUFFER-LIFECYCLE-001: lifecycle resets automatically via new buffer object.
       const auto& pcfg = ctx_->buffer_config;
       int pa_target = pcfg.audio_target_depth_ms;
       int pa_low = pcfg.audio_low_water_ms > 0
@@ -1568,6 +1568,7 @@ void PipelineManager::Run() {
       auto* preview_tp = AsTickProducer(preview_.get());
       // INV-AUDIO-PREROLL-ISOLATION-001: Snapshot live audio depth before preview fill.
       int live_audio_before = audio_buffer_ ? audio_buffer_->DepthMs() : -1;
+      preview_video_buffer_->SetMinAudioPrimeMs(kMinAudioPrimeMs);  // INV-BUFFER-LIFECYCLE-001
       preview_video_buffer_->StartFilling(
           preview_tp, preview_audio_buffer_.get(),
           preview_tp->GetInputRationalFps(), ctx_->fps,
@@ -1610,11 +1611,12 @@ void PipelineManager::Run() {
     // tracking (line ~2998) where it correctly reflects preroll quality.
     const int preview_actual_audio_ms =
         (preview_audio_buffer_ ? preview_audio_buffer_->DepthMs() : 0);
-    if (preview_video_buffer_ && preview_video_buffer_->IsFilling()
-        && preview_actual_audio_ms >= kMinAudioPrimeMs
-        && preview_video_buffer_->IsPrimed() && !preview_fill_stopped_after_prime_) {
-      preview_video_buffer_->StopFilling(/*flush=*/false);
-      preview_fill_stopped_after_prime_ = true;
+    // INV-BUFFER-LIFECYCLE-001: PRIMED state is set inside VideoLookaheadBuffer
+    // when both video IsPrimed() and audio depth >= kMinAudioPrimeMs.
+    // PipelineManager only observes state and calls StopFilling() once.
+    if (preview_video_buffer_ &&
+        preview_video_buffer_->FillState() == BufferFillState::PRIMED) {
+      preview_video_buffer_->StopFilling(/*flush=*/false);  // → STOPPED
       { std::ostringstream oss;
         oss << "[PipelineManager] PREROLL_FILL_STOP"
             << " depth_ms=" << preview_actual_audio_ms
@@ -1632,17 +1634,16 @@ void PipelineManager::Run() {
     // The audio_liveness condvar path cannot reactivate a stopped fill thread.
     // High-water caps (INV-AUDIO-BUFFER-HIGHWATER-001) are a separate
     // resource guard and are NOT the mechanism enforcing this invariant.
-    if (segment_b_video_buffer_ && segment_b_video_buffer_->IsFilling()
-        && segment_b_audio_buffer_
-        && segment_b_audio_buffer_->DepthMs() >= kMinAudioPrimeMs
-        && segment_b_video_buffer_->IsPrimed()
-        && !segment_b_fill_stopped_after_prime_) {
-      segment_b_video_buffer_->StopFilling(/*flush=*/false);
-      segment_b_fill_stopped_after_prime_ = true;
+    // INV-BUFFER-LIFECYCLE-001 + INV-PREROLL-STABILITY-001:
+    // SEGMENT_B auto-transitions to PRIMED inside VideoLookaheadBuffer when
+    // IsPrimed() && audio >= kMinAudioPrimeMs. PipelineManager observes and stops.
+    if (segment_b_video_buffer_ &&
+        segment_b_video_buffer_->FillState() == BufferFillState::PRIMED) {
+      segment_b_video_buffer_->StopFilling(/*flush=*/false);  // → STOPPED
       { std::ostringstream oss;
         oss << "[PipelineManager] SEGMENT_B_FILL_STOP"
             << " segment=" << (current_segment_index_ + 1)
-            << " audio_depth_ms=" << segment_b_audio_buffer_->DepthMs()
+            << " audio_depth_ms=" << (segment_b_audio_buffer_ ? segment_b_audio_buffer_->DepthMs() : -1)
             << " video_depth_frames=" << segment_b_video_buffer_->DepthFrames()
             << " tick=" << session_frame_index
             << " reason=INV-PREROLL-STABILITY-001";
@@ -2819,7 +2820,8 @@ void PipelineManager::Run() {
         // INV-VIDEO-LOOKAHEAD-001: Restart fill thread if it was stopped during
         // preroll (seam_confidence_500ms_primed).  Without this, the now-live
         // VLB has only primed frames and underflows at the next tick.
-        if (preview_fill_stopped_after_prime_ && !video_buffer_->IsFilling()) {
+        if (video_buffer_->FillState() == BufferFillState::STOPPED &&
+            !video_buffer_->IsFilling()) {  // INV-BUFFER-LIFECYCLE-001
           auto* tp = AsTickProducer(live_.get());
           { std::ostringstream oss;
             oss << "[PipelineManager] STARTUP_TRACE StartFilling_live_buffer"
@@ -4530,7 +4532,6 @@ void PipelineManager::Run() {
   }
   segment_b_audio_buffer_.reset();
   segment_b_producer_.reset();
-  segment_b_fill_stopped_after_prime_ = false;  // INV-PREROLL-STABILITY-001: reset on teardown
 
   // Stop persistent pad B chain if still running.
   if (pad_b_video_buffer_) {
@@ -5349,6 +5350,7 @@ void PipelineManager::EnsureIncomingBReadyForSeam(int64_t to_seg, int64_t sessio
   segment_b_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
   segment_b_video_buffer_->SetBufferLabel("SEGMENT_B_VIDEO_BUFFER");
   segment_b_video_buffer_->SetSegmentOriginId(to_seg);  // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001
+  segment_b_video_buffer_->SetMinAudioPrimeMs(kMinAudioPrimeMs);  // INV-BUFFER-LIFECYCLE-001
   // INV-AUDIO-BUFFER-HIGHWATER-001: cap segment_b at 2000ms. The fill thread
   // loops the incoming segment (often filler.mp4) while the live segment plays,
   // accumulating audio with no consumer. Audio beyond high_water is dropped;
@@ -5381,8 +5383,7 @@ void PipelineManager::EnsureIncomingBReadyForSeam(int64_t to_seg, int64_t sessio
       runway_ticks = seam_tick - session_frame_index;
     }
   }
-  // INV-PREROLL-STABILITY-001: new B buffer created — reset primed flag.
-  segment_b_fill_stopped_after_prime_ = false;
+  // INV-BUFFER-LIFECYCLE-001: new B buffer starts in STOPPED; StartFilling sets FILLING.
   { std::ostringstream oss;
     oss << "[PipelineManager] SEGMENT_PREFILL_STARTED"
         << " segment=" << to_seg
@@ -5583,14 +5584,14 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
           << " fivs_latest=" << fivs.store_max_index
           << " fivs_size=" << fivs.store_size
           << " audio_depth_ms=" << seg_b_audio_ms
-          << " fill_stopped=" << segment_b_fill_stopped_after_prime_
+          << " fill_stopped=" <<
+              (segment_b_video_buffer_ && segment_b_video_buffer_->FillState() == BufferFillState::STOPPED ? 1 : 0)
           << " tick=" << session_frame_index;
       Logger::Info(oss.str()); }
     video_buffer_ = std::move(segment_b_video_buffer_);
     audio_buffer_ = std::move(segment_b_audio_buffer_);
     live_ = std::move(segment_b_producer_);
     video_buffer_->SetBufferLabel("LIVE_VIDEO_BUFFER");
-    segment_b_fill_stopped_after_prime_ = false;  // consumed — reset for next B
     prep_mode = "PREROLLED";
     swap_branch = "SWAP_B_TO_A";
   } else {
@@ -5600,6 +5601,7 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
     segment_b_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
     segment_b_video_buffer_->SetBufferLabel("SEGMENT_B_VIDEO_BUFFER");
     segment_b_video_buffer_->SetSegmentOriginId(to_seg);  // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001
+    segment_b_video_buffer_->SetMinAudioPrimeMs(kMinAudioPrimeMs);  // INV-BUFFER-LIFECYCLE-001
     const auto& bcfg = ctx_->buffer_config;
     int a_target = bcfg.audio_target_depth_ms;
     int a_low = bcfg.audio_low_water_ms > 0

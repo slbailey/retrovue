@@ -38,6 +38,17 @@ enum class AudioSuppressionReason {
   kGenerationMismatch, // stale fill thread; audio buffer swapped to new generation
 };
 
+// INV-BUFFER-LIFECYCLE-001: Unified buffer lifecycle state.
+// All VideoLookaheadBuffer instances (PREVIEW, SEGMENT_B, LIVE) use this model.
+// Transitions: FILLING → PRIMED → STOPPED (terminal once STOPPED via StopFilling).
+// PRIMED: seam-readiness threshold met; buffer awaits StopFilling() from caller.
+// LIVE buffers do not configure min_audio_prime_ms and remain in FILLING.
+enum class BufferFillState {
+  FILLING,  // fill thread running, decoding ahead
+  PRIMED,   // both video and audio thresholds met; ready for seam-take
+  STOPPED,  // terminal; fill thread joined; no further decode permitted
+};
+
 class AudioLookaheadBuffer;
 class ITickProducer;
 
@@ -105,6 +116,11 @@ class VideoLookaheadBuffer {
 
   // True while the fill thread is running.
   bool IsFilling() const;
+  BufferFillState FillState() const;
+  // Set minimum audio depth (ms) required for PRIMED transition.
+  // Default -1 = no auto-PRIMED transition (LIVE buffer). Set to
+  // kMinAudioPrimeMs for PREVIEW and SEGMENT_B before StartFilling().
+  void SetMinAudioPrimeMs(int ms);
 
   // --- Consumer ---
 
@@ -302,6 +318,10 @@ class VideoLookaheadBuffer {
   std::thread fill_thread_;
   std::atomic<bool> fill_stop_{false};
   bool fill_running_ = false;
+  // INV-BUFFER-LIFECYCLE-001: lifecycle state, owned by this buffer.
+  std::atomic<int> fill_state_{static_cast<int>(BufferFillState::STOPPED)};
+  // Auto-PRIMED threshold. -1 = disabled (LIVE). Set via SetMinAudioPrimeMs().
+  std::atomic<int> min_audio_prime_ms_{-1};
   std::atomic<uint64_t> fill_generation_{0};  // Monotonic; bumped at StopFillingAsync/StartFilling (atomic so tick path can bump without taking mutex_)
 
   // INV-FIVS-LOOKAHEAD-001: Consumer timeline position (set by tick loop, read by fill thread).

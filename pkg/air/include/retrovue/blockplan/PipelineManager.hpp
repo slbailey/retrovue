@@ -387,13 +387,9 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // After the TAKE (first tick >= fence_tick), B rotates into A.
   std::unique_ptr<VideoLookaheadBuffer> preview_video_buffer_;
   std::unique_ptr<AudioLookaheadBuffer> preview_audio_buffer_;
-  // One-shot: after preview is primed (500ms), stop fill thread for seam-confidence-only; reset when creating new preview buffer.
-  bool preview_fill_stopped_after_prime_ = false;
-  // INV-PREROLL-STABILITY-001: same one-shot flag for SEGMENT_B.
-  // Set when segment_b_audio_buffer_->DepthMs() >= kMinAudioPrimeMs and IsPrimed().
-  // Reset when segment_b_video_buffer_ is torn down or replaced.
-  // Once set, the fill thread has been terminated; SEGMENT_B is frozen until activation.
-  bool segment_b_fill_stopped_after_prime_ = false;
+  // INV-BUFFER-LIFECYCLE-001: lifecycle is owned by VideoLookaheadBuffer::FillState().
+  // preview_fill_stopped_after_prime_ and segment_b_fill_stopped_after_prime_ removed.
+  // Use preview_video_buffer_->FillState() == BufferFillState::STOPPED instead.
 
   // --- Segment seam tracking (INV-SEAM-SEG) ---
   // Original multi-segment FedBlock, stored at block activation so that

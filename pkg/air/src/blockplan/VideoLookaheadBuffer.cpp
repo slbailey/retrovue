@@ -207,6 +207,7 @@ void VideoLookaheadBuffer::StartFilling(
     Logger::Debug(oss.str()); }
 
   fill_running_ = true;
+  fill_state_.store(static_cast<int>(BufferFillState::FILLING), std::memory_order_release);  // INV-BUFFER-LIFECYCLE-001
   fill_generation_.fetch_add(1, std::memory_order_release);  // New generation for new fill thread
   fill_thread_ = std::thread(&VideoLookaheadBuffer::FillLoop, this);
   {
@@ -236,6 +237,8 @@ void VideoLookaheadBuffer::StopFilling(bool flush) {
     }
     fill_running_ = false;
   }
+  // INV-BUFFER-LIFECYCLE-001: STOPPED is terminal regardless of prior state.
+  fill_state_.store(static_cast<int>(BufferFillState::STOPPED), std::memory_order_release);
 
   if (flush) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -267,6 +270,8 @@ VideoLookaheadBuffer::StopFillingAsync(bool flush) {
   consumer_selected_src_.store(-1, std::memory_order_relaxed);  // INV-FIVS-LOOKAHEAD-001
   // Bump generation without lock so tick thread never blocks on fill thread's mutex_ (INV-SEAM-001).
   fill_generation_.fetch_add(1, std::memory_order_release);
+  // INV-BUFFER-LIFECYCLE-001: async stop also marks terminal state immediately.
+  fill_state_.store(static_cast<int>(BufferFillState::STOPPED), std::memory_order_release);
   if (flush) {
     std::lock_guard<std::mutex> lock(mutex_);
     frames_.clear();
@@ -289,6 +294,16 @@ VideoLookaheadBuffer::StopFillingAsync(bool flush) {
 
 bool VideoLookaheadBuffer::IsFilling() const {
   return fill_running_;
+}
+
+// INV-BUFFER-LIFECYCLE-001: expose lifecycle state to callers.
+BufferFillState VideoLookaheadBuffer::FillState() const {
+  return static_cast<BufferFillState>(
+      fill_state_.load(std::memory_order_acquire));
+}
+
+void VideoLookaheadBuffer::SetMinAudioPrimeMs(int ms) {
+  min_audio_prime_ms_.store(ms, std::memory_order_relaxed);
 }
 
 // =============================================================================
@@ -1010,6 +1025,19 @@ void VideoLookaheadBuffer::FillLoop() {
       }
 #endif
       primed_ = true;
+      // INV-BUFFER-LIFECYCLE-001: check PRIMED threshold when video first primes.
+      // Only transitions from FILLING; stays FILLING if min_audio_prime_ms not met.
+      {
+        const int min_prime = min_audio_prime_ms_.load(std::memory_order_relaxed);
+        const int cur_state = fill_state_.load(std::memory_order_relaxed);
+        if (min_prime >= 0 && cur_state == static_cast<int>(BufferFillState::FILLING)) {
+          const int audio_depth = audio_buffer ? audio_buffer->DepthMs() : 0;
+          if (audio_depth >= min_prime) {
+            fill_state_.store(static_cast<int>(BufferFillState::PRIMED),
+                              std::memory_order_release);
+          }
+        }
+      }
     }
   }
   // Exited via while condition — determine reason
