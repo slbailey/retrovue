@@ -26,6 +26,7 @@ class ProgramFormat:
     audio_sample_rate: int
     audio_channels: int
     aspect_policy: str = "preserve"  # "preserve", "stretch", "crop"
+    video_bitrate: int = 8_000_000   # Encoding hint (bits/sec); not part of ProgramFormat signal
 
     @property
     def frame_rate_num(self) -> int:
@@ -58,6 +59,9 @@ class ProgramFormat:
                 "sample_rate": self.audio_sample_rate,
                 "channels": self.audio_channels,
             },
+            "encoding": {
+                "video_bitrate": self.video_bitrate,
+            },
         })
 
     @classmethod
@@ -78,6 +82,7 @@ class ProgramFormat:
             # Nested format
             video = data["video"]
             audio = data["audio"]
+            encoding = data.get("encoding", {})
             return cls(
                 video_width=video["width"],
                 video_height=video["height"],
@@ -85,6 +90,7 @@ class ProgramFormat:
                 audio_sample_rate=audio["sample_rate"],
                 audio_channels=audio["channels"],
                 aspect_policy=video.get("aspect_policy", "preserve"),
+                video_bitrate=encoding.get("video_bitrate", 8_000_000),
             )
         else:
             # Flat format
@@ -95,6 +101,7 @@ class ProgramFormat:
                 audio_sample_rate=data["audio_sample_rate"],
                 audio_channels=data["audio_channels"],
                 aspect_policy=data.get("aspect_policy", "preserve"),
+                video_bitrate=data.get("video_bitrate", 8_000_000),
             )
 
 

@@ -133,6 +133,28 @@ message StartChannelRequest {
 - Unknown fields MUST be ignored (forward compatibility)
 - Missing required fields MUST cause StartChannel to fail
 
+### 5.3 Encoding Hints (Optional)
+
+The JSON payload MAY include an `encoding` section alongside `video` and `audio`. Encoding hints are NOT part of ProgramFormat — they configure the OutputSink encoding layer.
+
+```json
+{
+  "video": { ... },
+  "audio": { ... },
+  "encoding": {
+    "video_bitrate": 8000000
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `video_bitrate` | int | 8000000 | Video encoding bitrate in bits/sec. Applied to OutputSink encoder. |
+
+- If `encoding` is absent or `video_bitrate` is absent, the default (8000000) MUST be used.
+- `encoding` fields MUST NOT alter ProgramFormat, frame timing, or playout behavior.
+- `encoding` fields are consumed by the encoding layer only (EncoderPipeline / OutputSink).
+
 ## 6. Parsing & Validation (Normative)
 
 - ProgramFormat JSON is parsed by PlayoutEngine during StartChannel

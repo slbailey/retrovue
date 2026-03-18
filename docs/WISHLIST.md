@@ -161,10 +161,6 @@ This phase should not alter current single-node behavior and must remain an addi
 
 ---
 
-- **Per-Channel Encoding Bitrate.** Allow each channel to specify its own video encoding bitrate instead of the hardcoded 5 Mbps. A movie channel with 8 Mbps source material should encode at 8 Mbps; a TV channel with 3 Mbps content should encode at 3 Mbps. Requires a `bitrate` field in channel YAML format config, propagation through the Core playout plan to AIR, and AIR using the per-channel value instead of the hardcoded `config.bitrate = 5000000` in `playout_service.cpp` and `MpegTSPlayoutSinkConfig.hpp`.
-
----
-
 - **Deterministic Playout Test Endpoint.** Enable on-demand, deterministic playback of any scheduled block (and later program/segment/channel) via HTTP, using the exact same playout pipeline as live AIR.
 
   **Problem this solves:** Current debugging of seams and playout behavior is time-dependent, non-deterministic, and slow to iterate (must wait for the timeline to reach the relevant block). This makes contract validation (seam continuity, cadence, short segments, etc.) inefficient and unreliable.

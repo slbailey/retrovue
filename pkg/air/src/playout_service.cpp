@@ -534,7 +534,7 @@ namespace retrovue
       config.target_fps = program_format.GetFrameRateAsDouble();
       config.target_width = program_format.video.width;
       config.target_height = program_format.video.height;
-      config.bitrate = 8000000;  // 8 Mbps
+      config.bitrate = 8000000;  // Default; legacy StartChannel path (BlockPlan uses per-channel)
       config.gop_size = 30;
 
       std::string sink_name = "channel-" + std::to_string(channel_id) + "-mpeg-ts";
@@ -832,6 +832,22 @@ namespace retrovue
             blockplan_session_->aspect_policy = runtime::AspectPolicy::Crop;
           } else {
             blockplan_session_->aspect_policy = runtime::AspectPolicy::Preserve;
+          }
+          // §5.3 Encoding hints: parse video_bitrate from "encoding" section.
+          // Not part of ProgramFormat — consumed by encoding layer only.
+          {
+            auto pos = format_json.find("\"video_bitrate\"");
+            if (pos != std::string::npos) {
+              auto colon = format_json.find(':', pos + 15);
+              if (colon != std::string::npos) {
+                try {
+                  int parsed = std::stoi(format_json.substr(colon + 1));
+                  if (parsed > 0) {
+                    blockplan_session_->video_bitrate = parsed;
+                  }
+                } catch (...) {}
+              }
+            }
           }
         } else {
           Logger::Error("[StartBlockPlanSession] Failed to parse program_format_json");

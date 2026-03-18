@@ -28,7 +28,7 @@ struct MpegTSPlayoutSinkConfig {
   int64_t fps_den = 0;
   int target_width = 640;             // Phase 8.6: per-channel fixed output width (all content scaled to this)
   int target_height = 480;            // Phase 8.6: per-channel fixed output height
-  int bitrate = 5000000;              // Encoding bitrate (5 Mbps)
+  int bitrate = 8000000;              // Encoding bitrate; per-channel via contract §5.3
   int gop_size = 30;                  // GOP size (1 second at 30fps)
   bool stub_mode = false;             // Use stub mode (no real encoding)
   bool persistent_mux = false;        // Phase 8.4: if true, do not set resend_headers (no continuity reset)

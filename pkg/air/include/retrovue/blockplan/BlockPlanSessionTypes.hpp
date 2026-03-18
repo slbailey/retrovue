@@ -180,6 +180,7 @@ struct BlockPlanSessionContext {
   int height = 480;
   RationalFps fps = FPS_30;
   runtime::AspectPolicy aspect_policy = runtime::AspectPolicy::Preserve;
+  int video_bitrate = 8000000;  // Encoding hint from Core (bits/sec); contract §5.3
 
   BufferConfig buffer_config;
 
