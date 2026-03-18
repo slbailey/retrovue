@@ -1623,6 +1623,32 @@ void PipelineManager::Run() {
         Logger::Info(oss.str()); }
     }
 
+    // INV-PREROLL-STABILITY-001: SEGMENT_B primed → parked transition.
+    // Mirror of the preview seam-confidence gate above.
+    // Once segment_b_audio_buffer_ reaches kMinAudioPrimeMs actual depth
+    // AND the video buffer is primed, stop the fill thread permanently.
+    // This freezes the FIVS (no further decode, no cursor advancement,
+    // no frame eviction) until PerformSegmentSwap activates the buffer.
+    // The audio_liveness condvar path cannot reactivate a stopped fill thread.
+    // High-water caps (INV-AUDIO-BUFFER-HIGHWATER-001) are a separate
+    // resource guard and are NOT the mechanism enforcing this invariant.
+    if (segment_b_video_buffer_ && segment_b_video_buffer_->IsFilling()
+        && segment_b_audio_buffer_
+        && segment_b_audio_buffer_->DepthMs() >= kMinAudioPrimeMs
+        && segment_b_video_buffer_->IsPrimed()
+        && !segment_b_fill_stopped_after_prime_) {
+      segment_b_video_buffer_->StopFilling(/*flush=*/false);
+      segment_b_fill_stopped_after_prime_ = true;
+      { std::ostringstream oss;
+        oss << "[PipelineManager] SEGMENT_B_FILL_STOP"
+            << " segment=" << (current_segment_index_ + 1)
+            << " audio_depth_ms=" << segment_b_audio_buffer_->DepthMs()
+            << " video_depth_frames=" << segment_b_video_buffer_->DepthFrames()
+            << " tick=" << session_frame_index
+            << " reason=INV-PREROLL-STABILITY-001";
+        Logger::Info(oss.str()); }
+    }
+
     // Step 2 probe: one tick before fence — was next block opened, first seg opened, B primed?
     if (session_frame_index == block_fence_frame_ - 1 && block_fence_frame_ != INT64_MAX) {
       std::string next_block_id("none");
@@ -4504,6 +4530,7 @@ void PipelineManager::Run() {
   }
   segment_b_audio_buffer_.reset();
   segment_b_producer_.reset();
+  segment_b_fill_stopped_after_prime_ = false;  // INV-PREROLL-STABILITY-001: reset on teardown
 
   // Stop persistent pad B chain if still running.
   if (pad_b_video_buffer_) {
@@ -5354,6 +5381,8 @@ void PipelineManager::EnsureIncomingBReadyForSeam(int64_t to_seg, int64_t sessio
       runway_ticks = seam_tick - session_frame_index;
     }
   }
+  // INV-PREROLL-STABILITY-001: new B buffer created — reset primed flag.
+  segment_b_fill_stopped_after_prime_ = false;
   { std::ostringstream oss;
     oss << "[PipelineManager] SEGMENT_PREFILL_STARTED"
         << " segment=" << to_seg
@@ -5543,10 +5572,25 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
     pad_swap_used_pad_b = true;
   } else if (segment_b_video_buffer_ && segment_b_audio_buffer_) {
     // CONTENT: swap only — B into A slots. No allocation.
+    // INV-PREROLL-STABILITY-001: capture FIVS state before swap to verify
+    // decode cursor did not advance after SEGMENT_B_FILL_STOP.
+    { const auto fivs = segment_b_video_buffer_->SnapshotFivsDiag();
+      const int seg_b_audio_ms = segment_b_audio_buffer_->DepthMs();
+      std::ostringstream oss;
+      oss << "[PipelineManager] SEGMENT_B_ACTIVATION_SNAPSHOT"
+          << " to_seg=" << to_seg
+          << " fivs_oldest=" << fivs.store_min_index
+          << " fivs_latest=" << fivs.store_max_index
+          << " fivs_size=" << fivs.store_size
+          << " audio_depth_ms=" << seg_b_audio_ms
+          << " fill_stopped=" << segment_b_fill_stopped_after_prime_
+          << " tick=" << session_frame_index;
+      Logger::Info(oss.str()); }
     video_buffer_ = std::move(segment_b_video_buffer_);
     audio_buffer_ = std::move(segment_b_audio_buffer_);
     live_ = std::move(segment_b_producer_);
     video_buffer_->SetBufferLabel("LIVE_VIDEO_BUFFER");
+    segment_b_fill_stopped_after_prime_ = false;  // consumed — reset for next B
     prep_mode = "PREROLLED";
     swap_branch = "SWAP_B_TO_A";
   } else {
