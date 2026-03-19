@@ -67,11 +67,10 @@ from datetime import date as date_type
 
 logger = logging.getLogger(__name__)
 
-# How many days ahead to compile on initial load
-HORIZON_DAYS = 3
-
-# When remaining schedule falls below this many hours, compile the next day
-RECOMPILE_THRESHOLD_HOURS = 6
+# Module-level sentinels — only used as documentation anchors for grep.
+# Runtime values come from resolved_config via DslScheduleService.__init__.
+HORIZON_DAYS = 3  # overridden per-instance from resolved_config
+RECOMPILE_THRESHOLD_HOURS = 6  # overridden per-instance from resolved_config
 
 
 def _serialize_scheduled_block(block: "ScheduledBlock") -> dict:
@@ -111,10 +110,10 @@ def _serialize_scheduled_block(block: "ScheduledBlock") -> dict:
 
 
 # INV-BLOCK-SEGMENT-CONSERVATION-001: 1 frame at 29.97fps, rounded up.
-FRAME_TOLERANCE_MS = 40
+FRAME_TOLERANCE_MS = 40  # overridden per-instance from resolved_config
 
 
-def _deserialize_scheduled_block(d: dict) -> "ScheduledBlock":
+def _deserialize_scheduled_block(d: dict, frame_tolerance_ms: int = FRAME_TOLERANCE_MS) -> "ScheduledBlock":
     """Deserialize a dict back into a ScheduledBlock.
 
     INV-SCHEDULE-HORIZON-001: Used by Tier 2 (Playlog Horizon Daemon)
@@ -165,7 +164,7 @@ def _deserialize_scheduled_block(d: dict) -> "ScheduledBlock":
     block_duration_ms = block.end_utc_ms - block.start_utc_ms
     sum_segment_ms = sum(s.segment_duration_ms for s in block.segments)
     delta_ms = sum_segment_ms - block_duration_ms
-    if abs(delta_ms) > FRAME_TOLERANCE_MS:
+    if abs(delta_ms) > frame_tolerance_ms:
         raise ValueError(
             f"INV-BLOCK-SEGMENT-CONSERVATION-001: Stale Tier 2 data — "
             f"block={block.block_id} sum={sum_segment_ms}ms "
@@ -194,7 +193,18 @@ class DslScheduleService:
         programming_day_start_hour: int = 6,
         channel_slug: str | None = None,
         channel_type: str = "network",
+        resolved_config: dict | None = None,
     ) -> None:
+        if resolved_config is None:
+            raise RuntimeError(
+                "resolved_config is required for DslScheduleService — "
+                "fallback defaults are no longer supported"
+            )
+        self._resolved_config = resolved_config
+        _sched = resolved_config["scheduling"]
+        self._horizon_days: int = _sched["horizon"]["days"]
+        self._recompile_threshold_hours: int = _sched["horizon"]["recompile_threshold_hours"]
+        self._frame_tolerance_ms: int = _sched["frame_tolerance_ms"]
         self._dsl_path = dsl_path
         self._filler_path = filler_path
         self._filler_duration_ms = filler_duration_ms
@@ -485,7 +495,7 @@ class DslScheduleService:
                     cached_sum = sum(
                         s.segment_duration_ms for s in cached.segments
                     )
-                    if abs(cached_sum - cached_dur) > FRAME_TOLERANCE_MS:
+                    if abs(cached_sum - cached_dur) > self._frame_tolerance_ms:
                         logger.warning(
                             "INV-BLOCK-SEGMENT-CONSERVATION-001: Stale Tier 2 "
                             "row in ensure_block_compiled — block=%s sum=%dms "
@@ -728,7 +738,7 @@ class DslScheduleService:
                 seg_sum = sum(
                     s.segment_duration_ms for s in filled.segments
                 )
-                if abs(seg_sum - block_dur) > FRAME_TOLERANCE_MS:
+                if abs(seg_sum - block_dur) > self._frame_tolerance_ms:
                     logger.warning(
                         "INV-BLOCK-SEGMENT-CONSERVATION-001: Stale Tier 2 "
                         "row invalidated — block=%s sum=%dms duration=%dms "
@@ -821,7 +831,7 @@ class DslScheduleService:
                 return
             last_end_ms = self._blocks[-1].end_utc_ms
             remaining_ms = last_end_ms - now_utc_ms
-            threshold_ms = RECOMPILE_THRESHOLD_HOURS * 3600 * 1000
+            threshold_ms = self._recompile_threshold_hours * 3600 * 1000
             if remaining_ms > threshold_ms:
                 return
             self._extending = True
@@ -987,7 +997,7 @@ class DslScheduleService:
         # entire broadcast day).
         all_blocks: list[ScheduledBlock] = []
         active_carry_in_end_ms = 0
-        for day_offset in range(HORIZON_DAYS):
+        for day_offset in range(self._horizon_days):
             day = start_date + timedelta(days=day_offset)
             day_str = day.strftime("%Y-%m-%d")
             try:
@@ -1043,12 +1053,8 @@ class DslScheduleService:
           - block-style: block_def["block"] with duration/start/end
           - movie_marathon: block_def["movie_marathon"] with start/end
         """
-        from retrovue.runtime.schedule_compiler import (
-            NETWORK_GRID_MINUTES,
-            BROADCAST_DAY_START_HOUR,
-        )
-
-        grid_minutes = NETWORK_GRID_MINUTES
+        _sched = self._resolved_config["scheduling"]
+        grid_minutes = _sched["grid_minutes"]["network_television"]
 
         def _parse_duration(dur_str: str) -> timedelta:
             import re
@@ -1284,7 +1290,8 @@ class DslScheduleService:
         with session() as run_db:
             run_store = DbProgressionRunStore(run_db)
             schedule = compile_schedule(dsl, resolver=resolver, dsl_path=self._dsl_path,
-                                         seed=_seed, run_store=run_store)
+                                         seed=_seed, run_store=run_store,
+                                         resolved_config=self._resolved_config)
 
         # Resolve all plex:// URIs to local file paths
         self._resolve_uris(resolver, schedule)

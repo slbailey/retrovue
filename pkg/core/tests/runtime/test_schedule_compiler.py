@@ -16,6 +16,7 @@ import pytest
 import yaml
 
 from retrovue.runtime.asset_resolver import AssetMetadata, StubAssetResolver
+from retrovue.config.testing import TEST_RESOLVED_CONFIG
 from retrovue.runtime.schedule_compiler import (
     AssetResolutionError,
     CompileError,
@@ -229,7 +230,7 @@ class TestGridAlignment:
         """Network TV slots must start at :00 or :30."""
         dsl = parse_dsl((FIXTURES_DIR / "weeknight_sitcom.yaml").read_text())
         resolver = make_sitcom_resolver()
-        plan = compile_schedule(dsl, resolver, seed=42)
+        plan = compile_schedule(dsl, resolver, seed=42, resolved_config=TEST_RESOLVED_CONFIG)
         for block in plan["program_blocks"]:
             start = datetime.fromisoformat(block["start_at"])
             assert start.minute % 30 == 0, f"Block starts at :{start.minute}, not grid-aligned"
@@ -238,7 +239,7 @@ class TestGridAlignment:
         """Premium movie slots must start at :00 or :15/:30/:45."""
         dsl = parse_dsl((FIXTURES_DIR / "weekend_movie.yaml").read_text())
         resolver = make_movie_resolver()
-        plan = compile_schedule(dsl, resolver, seed=42)
+        plan = compile_schedule(dsl, resolver, seed=42, resolved_config=TEST_RESOLVED_CONFIG)
         for block in plan["program_blocks"]:
             start = datetime.fromisoformat(block["start_at"])
             assert start.minute % 15 == 0, f"Block starts at :{start.minute}, not grid-aligned"
@@ -254,7 +255,7 @@ class TestNoBreaksInOutput:
         """Program schedule must contain only program blocks, no breaks/bumpers."""
         dsl = parse_dsl((FIXTURES_DIR / "weeknight_sitcom.yaml").read_text())
         resolver = make_sitcom_resolver()
-        plan = compile_schedule(dsl, resolver, seed=42)
+        plan = compile_schedule(dsl, resolver, seed=42, resolved_config=TEST_RESOLVED_CONFIG)
         assert "program_blocks" in plan
         assert "segments" not in plan
         for block in plan["program_blocks"]:
@@ -266,7 +267,7 @@ class TestNoBreaksInOutput:
         """Movie schedule must contain only program blocks."""
         dsl = parse_dsl((FIXTURES_DIR / "weekend_movie.yaml").read_text())
         resolver = make_movie_resolver()
-        plan = compile_schedule(dsl, resolver, seed=42)
+        plan = compile_schedule(dsl, resolver, seed=42, resolved_config=TEST_RESOLVED_CONFIG)
         assert "program_blocks" in plan
         for block in plan["program_blocks"]:
             assert block["slot_duration_sec"] >= block["episode_duration_sec"]
@@ -281,14 +282,14 @@ class TestOutputSchema:
     def test_weeknight_matches_schema(self):
         dsl = parse_dsl((FIXTURES_DIR / "weeknight_sitcom.yaml").read_text())
         resolver = make_sitcom_resolver()
-        plan = compile_schedule(dsl, resolver, seed=42)
+        plan = compile_schedule(dsl, resolver, seed=42, resolved_config=TEST_RESOLVED_CONFIG)
         schema = json.loads(SCHEMA_PATH.read_text())
         jsonschema.validate(instance=plan, schema=schema)
 
     def test_weekend_movie_matches_schema(self):
         dsl = parse_dsl((FIXTURES_DIR / "weekend_movie.yaml").read_text())
         resolver = make_movie_resolver()
-        plan = compile_schedule(dsl, resolver, seed=42)
+        plan = compile_schedule(dsl, resolver, seed=42, resolved_config=TEST_RESOLVED_CONFIG)
         schema = json.loads(SCHEMA_PATH.read_text())
         jsonschema.validate(instance=plan, schema=schema)
 
@@ -302,8 +303,8 @@ class TestHashDeterminism:
     def test_same_input_same_hash(self):
         dsl = parse_dsl((FIXTURES_DIR / "weeknight_sitcom.yaml").read_text())
         resolver = make_sitcom_resolver()
-        plan1 = compile_schedule(dsl, resolver, seed=42)
-        plan2 = compile_schedule(dsl, resolver, seed=42)
+        plan1 = compile_schedule(dsl, resolver, seed=42, resolved_config=TEST_RESOLVED_CONFIG)
+        plan2 = compile_schedule(dsl, resolver, seed=42, resolved_config=TEST_RESOLVED_CONFIG)
         assert plan1["hash"] == plan2["hash"]
         assert plan1["hash"].startswith("sha256:")
 
@@ -317,7 +318,7 @@ class TestFullCompilation:
     def test_weeknight_compiles(self):
         dsl = parse_dsl((FIXTURES_DIR / "weeknight_sitcom.yaml").read_text())
         resolver = make_sitcom_resolver()
-        plan = compile_schedule(dsl, resolver, seed=42)
+        plan = compile_schedule(dsl, resolver, seed=42, resolved_config=TEST_RESOLVED_CONFIG)
         assert plan["version"] == "program-schedule.v2"
         assert plan["channel_id"] == "retro_prime"
         assert len(plan["program_blocks"]) == 3  # 3 shows
@@ -325,7 +326,7 @@ class TestFullCompilation:
     def test_weekend_movie_compiles(self):
         dsl = parse_dsl((FIXTURES_DIR / "weekend_movie.yaml").read_text())
         resolver = make_movie_resolver()
-        plan = compile_schedule(dsl, resolver, seed=42)
+        plan = compile_schedule(dsl, resolver, seed=42, resolved_config=TEST_RESOLVED_CONFIG)
         assert plan["version"] == "program-schedule.v2"
         assert plan["channel_id"] == "retro_movies"
         assert len(plan["program_blocks"]) == 2  # 2 movies
@@ -333,7 +334,7 @@ class TestFullCompilation:
     def test_notes_preserved(self):
         dsl = parse_dsl((FIXTURES_DIR / "weeknight_sitcom.yaml").read_text())
         resolver = make_sitcom_resolver()
-        plan = compile_schedule(dsl, resolver, seed=42)
+        plan = compile_schedule(dsl, resolver, seed=42, resolved_config=TEST_RESOLVED_CONFIG)
         assert "notes" in plan
         assert plan["notes"]["vibe"] == "Water-cooler Thursday"
 
@@ -341,7 +342,7 @@ class TestFullCompilation:
         """Every program block's slot_duration must be >= episode_duration."""
         dsl = parse_dsl((FIXTURES_DIR / "weeknight_sitcom.yaml").read_text())
         resolver = make_sitcom_resolver()
-        plan = compile_schedule(dsl, resolver, seed=42)
+        plan = compile_schedule(dsl, resolver, seed=42, resolved_config=TEST_RESOLVED_CONFIG)
         for block in plan["program_blocks"]:
             assert block["slot_duration_sec"] >= block["episode_duration_sec"]
 
@@ -349,7 +350,7 @@ class TestFullCompilation:
         """Every V2 program block must include compiled_segments."""
         dsl = parse_dsl((FIXTURES_DIR / "weeknight_sitcom.yaml").read_text())
         resolver = make_sitcom_resolver()
-        plan = compile_schedule(dsl, resolver, seed=42)
+        plan = compile_schedule(dsl, resolver, seed=42, resolved_config=TEST_RESOLVED_CONFIG)
         for block in plan["program_blocks"]:
             assert "compiled_segments" in block
             assert len(block["compiled_segments"]) >= 1

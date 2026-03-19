@@ -183,7 +183,8 @@ def _start_channel_direct(channel_id: str, config_file: str | None, socket_path:
         typer.echo(f"Error: YAML channels directory not found: {yaml_dir}", err=True)
         raise typer.Exit(1)
     from retrovue.runtime.providers import YamlChannelConfigProvider
-    provider = YamlChannelConfigProvider(yaml_dir)
+    from retrovue.config import load_defaults
+    provider = YamlChannelConfigProvider(yaml_dir, resolved_config=load_defaults())
     all_channels = provider.to_channels_list()
 
     # Find the channel

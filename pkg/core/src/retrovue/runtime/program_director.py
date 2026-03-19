@@ -24,6 +24,7 @@ Design Principles:
 """
 
 import asyncio
+from collections import deque
 import gc
 import logging
 import os
@@ -355,6 +356,7 @@ class ProgramDirector:
         asset_a_path: Optional[str] = None,
         asset_b_path: Optional[str] = None,
         segment_seconds: float = 10.0,
+        resolved_config: Optional[Any] = None,
     ) -> None:
         """Initialize the Program Director.
         
@@ -371,6 +373,14 @@ class ProgramDirector:
             mock_schedule_*: For embedded mode: mock schedule options
         """
         self._logger = logging.getLogger(__name__)
+        self._resolved_config = resolved_config
+        if resolved_config is None:
+            raise RuntimeError(
+                "resolved_config is required for ProgramDirector — "
+                "fallback defaults are no longer supported"
+            )
+        # INV-CONFIG-IMMUTABLE-001: Read from resolved config (required).
+        _ch_cfg = resolved_config["channel"]
         self._clock = clock or RealTimeMasterClock()
         if target_hz is None and RuntimeSettings:
             target_hz = RuntimeSettings.pace_target_hz
@@ -390,7 +400,7 @@ class ProgramDirector:
         self._health_check_stop: Optional[threading.Event] = None
         self._health_check_thread: Optional[Thread] = None
         # P11D-009: boundaries are feasible at planning time; 1s tick cadence is sufficient
-        self._health_check_interval_seconds = 1.0
+        self._health_check_interval_seconds = _ch_cfg["health_check_interval_seconds"]
         self._embedded_clock: Optional[Any] = None  # MasterClock with now_utc() for ChannelManagers
         self._test_mode = os.getenv("RETROVUE_TEST_MODE") == "1"
         self._mock_schedule_grid_mode = mock_schedule_grid_mode
@@ -439,22 +449,31 @@ class ProgramDirector:
         self._hls_phantom_sessions: dict[str, str] = {}  # channel_id -> hls_session_id
         self._hls_activity_lock = threading.Lock()
 
+        # Conditional diagnostic mode (per channel): minimal steady-state overhead.
+        self._hls_diag_lock = threading.Lock()
+        self._hls_diag_mode_until: dict[str, float] = {}
+        self._hls_diag_ring: dict[str, deque] = {}
+        self._hls_diag_reconnect_hits: dict[str, deque] = {}
+        _diag = _ch_cfg["diagnostics"]
+        self._hls_diag_duration_s: float = _diag["duration_seconds"]
+        self._hls_diag_ring_max_events: int = _diag["ring_max_events"]
+
         # Evidence pipeline configuration
-        self._evidence_enabled = True
-        self._evidence_port = 50052
-        self._evidence_asrun_dir = "/opt/retrovue/data/logs/asrun"
-        self._evidence_ack_dir = "/opt/retrovue/data/logs/asrun/acks"
+        _ev = _ch_cfg["evidence"]
+        self._evidence_enabled = _ev["enabled"]
+        self._evidence_port = _ev["port"]
+        self._evidence_asrun_dir = _ev["asrun_dir"]
+        self._evidence_ack_dir = _ev["ack_dir"]
         self._evidence_endpoint = f"127.0.0.1:{self._evidence_port}" if self._evidence_enabled else ""
         self._evidence_server = None
 
         # INV-CHANNEL-STARTUP-NONBLOCKING-001 + INV-CHANNEL-STARTUP-CONCURRENCY-001:
-        # Bounded executor and semaphore for channel startup. The semaphore
-        # caps concurrent startups; the executor provides the thread pool.
-        # Handlers check locked() and fail-fast 503 when at capacity.
+        _startup = _ch_cfg["startup"]
         self._startup_executor = ThreadPoolExecutor(
-            max_workers=4, thread_name_prefix="channel-startup"
+            max_workers=_startup["max_workers"],
+            thread_name_prefix="channel-startup",
         )
-        self._startup_semaphore = asyncio.Semaphore(4)
+        self._startup_semaphore = asyncio.Semaphore(_startup["concurrency"])
 
         # INV-SCHEDULE-PREWARM-001: Gate set once background schedule
         # prewarm + horizon init completes. Request handlers check this
@@ -479,6 +498,56 @@ class ProgramDirector:
             port,
         )
 
+    def _hls_diag_is_active(self, channel_id: str) -> bool:
+        now = time.monotonic()
+        with self._hls_diag_lock:
+            return self._hls_diag_mode_until.get(channel_id, 0.0) > now
+
+    def _hls_diag_record(self, channel_id: str, event: str, **fields: Any) -> None:
+        now = time.monotonic()
+        with self._hls_diag_lock:
+            ring = self._hls_diag_ring.get(channel_id)
+            if ring is None:
+                ring = deque(maxlen=self._hls_diag_ring_max_events)
+                self._hls_diag_ring[channel_id] = ring
+            ring.append({"t": now, "event": event, **fields})
+
+    def _hls_diag_dump_recent(self, channel_id: str, max_events: int = 120) -> None:
+        with self._hls_diag_lock:
+            ring = list(self._hls_diag_ring.get(channel_id, []))[-max_events:]
+        for item in ring:
+            self._logger.warning("[HLS-DIAG][%s] %s", channel_id, item)
+
+    def _hls_diag_trigger(self, channel_id: str, reason: str, **fields: Any) -> None:
+        now = time.monotonic()
+        with self._hls_diag_lock:
+            prev = self._hls_diag_mode_until.get(channel_id, 0.0)
+            self._hls_diag_mode_until[channel_id] = max(prev, now + self._hls_diag_duration_s)
+        self._hls_diag_record(channel_id, "DIAG_TRIGGER", reason=reason, **fields)
+        self._logger.warning("[HLS-DIAG][%s] ENABLED reason=%s duration_s=%.0f", channel_id, reason, self._hls_diag_duration_s)
+        self._hls_diag_dump_recent(channel_id)
+
+    def _hls_diag_note_reconnect_attempt(self, channel_id: str, reason: str) -> None:
+        now = time.monotonic()
+        with self._hls_diag_lock:
+            dq = self._hls_diag_reconnect_hits.get(channel_id)
+            if dq is None:
+                dq = deque()
+                self._hls_diag_reconnect_hits[channel_id] = dq
+            dq.append(now)
+            while dq and (now - dq[0]) > 30.0:
+                dq.popleft()
+            hits = len(dq)
+        self._hls_diag_record(channel_id, RECONNECT_ATTEMPT, reason=reason, hits_30s=hits)
+        if hits >= 3:
+            self._hls_diag_trigger(channel_id, "repeated_reconnect_attempts", hits_30s=hits)
+
+    # External hook (used by HlsSegmenter)
+    def hls_diag_event(self, channel_id: str, event: str, **fields: Any) -> None:
+        self._hls_diag_record(channel_id, event, **fields)
+        if event == "INV-HLS-SEGMENT-WALLCLOCK-AUDIT-001":
+            self._hls_diag_trigger(channel_id, "wallclock_audit_violation", **fields)
+
     def _load_channels_list(self):
         """Load channels as list of dicts, using provider if available."""
         import json as _json
@@ -502,7 +571,7 @@ class ProgramDirector:
             from retrovue.runtime.providers import YamlChannelConfigProvider
             yaml_dir = Path("/opt/retrovue/config/channels")
             if yaml_dir.is_dir():
-                return YamlChannelConfigProvider(yaml_dir).to_channels_list()
+                return YamlChannelConfigProvider(yaml_dir, resolved_config=self._resolved_config).to_channels_list()
             return []
 
     def _generate_iptv_m3u(self, request: "Request") -> "Response":
@@ -685,6 +754,7 @@ class ProgramDirector:
             filler_duration_ms=filler_duration_ms,
             channel_slug=channel_id,
             channel_type=sc.get("channel_type", "network"),
+            resolved_config=self._resolved_config,
         )
 
         setattr(self, key, svc)
@@ -869,6 +939,7 @@ class ProgramDirector:
                 program_director=self,
                 event_loop=_loop,
                 evidence_endpoint=self._evidence_endpoint,
+                resolved_config=self._resolved_config,
             )
             manager.channel_config = channel_config
             if self._mock_schedule_grid_mode:
@@ -2674,7 +2745,7 @@ class ProgramDirector:
             are available, then returns a valid manifest.
             """
             sid = session or f"hls-anon-{uuid.uuid4().hex[:8]}"
-
+            req_id = uuid.uuid4().hex[:10]
             mgr = self._resolve_channel_manager(channel_id)
 
             # Determine whether the channel is active
@@ -2698,14 +2769,23 @@ class ProgramDirector:
             playlist = gen.generate(ring) if (gen and ring) else None
 
             if playlist is None:
-                # No segments yet — return a valid empty live manifest.
-                # HLS clients will re-poll after TARGETDURATION seconds.
-                # Using a 1-second target duration so clients retry quickly.
-                playlist = (
-                    "#EXTM3U\n"
-                    "#EXT-X-VERSION:3\n"
-                    "#EXT-X-TARGETDURATION:1\n"
-                    "#EXT-X-MEDIA-SEQUENCE:0\n"
+                # INV-HLS-LIFECYCLE-SEGMENT-READY-001:
+                # During startup (or reconnect), return 503 + Retry-After
+                # until at least one completed segment is available.
+                ring_count = ring.count() if ring is not None else 0
+                self._hls_diag_record(
+                    channel_id,
+                    "HLS_SERVE_SNAPSHOT",
+                    req_id=req_id,
+                    path="manifest",
+                    status=503,
+                    ring_count=ring_count,
+                    is_active=is_active,
+                )
+                return Response(
+                    content="Playlist not ready yet",
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    headers={"Retry-After": "1"},
                 )
 
             # INV-HLS-ENDPOINT-SESSION-TOUCH-001: Touch on success only
@@ -2717,6 +2797,22 @@ class ProgramDirector:
             # Refresh phantom activity so drain thread keeps channel alive
             with self._hls_activity_lock:
                 self._hls_last_activity[channel_id] = __import__("time").monotonic()
+
+            ring_count = ring.count() if ring is not None else 0
+            self._hls_diag_record(
+                channel_id,
+                "HLS_SERVE_SNAPSHOT",
+                req_id=req_id,
+                path="manifest",
+                status=200,
+                ring_count=ring_count,
+                is_active=is_active,
+            )
+            if self._hls_diag_is_active(channel_id):
+                self._logger.warning(
+                    "[HLS-DIAG][%s] HLS_SERVE_SNAPSHOT req_id=%s status=200 ring_count=%d active=%s",
+                    channel_id, req_id, ring_count, is_active,
+                )
 
             return Response(
                 content=playlist,
@@ -2739,6 +2835,7 @@ class ProgramDirector:
             INV-HLS-ENDPOINT-SESSION-TOUCH-001: Touch on success only.
             INV-HLS-QUIET-POLLING-001: No INFO logging per request.
             """
+            req_id = uuid.uuid4().hex[:10]
             mgr = self._resolve_channel_manager(channel_id)
             if mgr is None:
                 return Response(content="Channel not found", status_code=404)
@@ -2749,6 +2846,43 @@ class ProgramDirector:
 
             segment = ring.get(index)
             if segment is None:
+                self._hls_diag_record(channel_id, "HLS_SEGMENT_SERVE", req_id=req_id, index=index, status=404)
+
+                # Derive claimed manifest window + hash for correlation payload.
+                gen = getattr(mgr, "hls_manifest_generator", None)
+                playlist = gen.generate(ring) if gen is not None else None
+                playlist_hash = hashlib.sha1(playlist.encode("utf-8")).hexdigest()[:16] if playlist else None
+
+                all_segments = ring.window()
+                manifest_count = ring.manifest_window
+                if len(all_segments) > manifest_count:
+                    manifest_segments = all_segments[-manifest_count:]
+                else:
+                    manifest_segments = all_segments
+
+                oldest_index = manifest_segments[0].index if manifest_segments else None
+                newest_index = manifest_segments[-1].index if manifest_segments else None
+                media_sequence = oldest_index
+
+                unexpected_404 = (
+                    oldest_index is not None
+                    and newest_index is not None
+                    and oldest_index <= index <= newest_index
+                )
+                if unexpected_404:
+                    # Trigger immediately on FIRST unexpected in-window segment miss.
+                    self._hls_diag_trigger(
+                        channel_id,
+                        "unexpected_segment_404_first",
+                        req_id=req_id,
+                        requested_index=index,
+                        oldest_index=oldest_index,
+                        newest_index=newest_index,
+                        media_sequence=media_sequence,
+                        playlist_hash=playlist_hash,
+                    )
+
+                self._hls_diag_note_reconnect_attempt(channel_id, reason="segment_404")
                 return Response(content="Not found", status_code=404)
 
             # INV-HLS-ENDPOINT-SESSION-TOUCH-001: Touch on success only
@@ -2761,6 +2895,23 @@ class ProgramDirector:
             # Refresh phantom activity so drain thread keeps channel alive
             with self._hls_activity_lock:
                 self._hls_last_activity[channel_id] = __import__("time").monotonic()
+
+            self._hls_diag_record(
+                channel_id,
+                "HLS_SEGMENT_SERVE",
+                req_id=req_id,
+                index=index,
+                status=200,
+                bytes=segment.byte_count,
+                wall_clock_ms=segment.wall_clock_start_utc_ms,
+                duration_ms=segment.duration_ms,
+            )
+            if self._hls_diag_is_active(channel_id):
+                self._logger.warning(
+                    "[HLS-DIAG][%s] HLS_SEGMENT_SERVE req_id=%s idx=%d status=200 bytes=%d wall=%d dur=%d",
+                    channel_id, req_id, index, segment.byte_count,
+                    segment.wall_clock_start_utc_ms, segment.duration_ms,
+                )
 
             return Response(
                 content=segment.data,

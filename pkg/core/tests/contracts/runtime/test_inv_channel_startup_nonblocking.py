@@ -12,6 +12,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from retrovue.config.testing import TEST_RESOLVED_CONFIG
+
 
 # ---------------------------------------------------------------------------
 # Helpers — lightweight ProgramDirector construction
@@ -44,6 +46,7 @@ def _make_program_director(channel_id: str = "test-ch"):
     """
     from retrovue.runtime.config import InlineChannelConfigProvider
     from retrovue.runtime.program_director import ProgramDirector
+    from retrovue.config.testing import TEST_RESOLVED_CONFIG
 
     config = _make_channel_config(channel_id)
     provider = InlineChannelConfigProvider([config])
@@ -54,6 +57,7 @@ def _make_program_director(channel_id: str = "test-ch"):
         channel_config_provider=provider,
         host="127.0.0.1",
         port=0,
+        resolved_config=TEST_RESOLVED_CONFIG,
     )
 
     # Inject a fake DslScheduleService that tracks _build_initial calls
@@ -152,6 +156,7 @@ class TestInvChannelStartupNonblocking001:
             dsl_path="/dev/null",
             filler_path="/opt/retrovue/assets/filler.mp4",
             filler_duration_ms=3_650_000,
+            resolved_config=TEST_RESOLVED_CONFIG,
         )
 
         # Pre-populate blocks to simulate a previously loaded schedule

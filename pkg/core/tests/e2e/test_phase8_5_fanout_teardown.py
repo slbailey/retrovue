@@ -17,6 +17,7 @@ import requests
 
 from retrovue.runtime.channel_stream import ChannelStream, FakeTsSource
 from retrovue.runtime.program_director import ProgramDirector
+from retrovue.config.testing import TEST_RESOLVED_CONFIG
 
 
 def _free_port() -> int:
@@ -72,6 +73,7 @@ def _start_director_85(provider: _StubChannelManagerProvider85) -> tuple[Program
         channel_manager_provider=provider,
         host="127.0.0.1",
         port=port,
+        resolved_config=TEST_RESOLVED_CONFIG,
     )
     director._channel_stream_factory = lambda cid, path: ChannelStream(
         cid, ts_source_factory=lambda _=None: FakeTsSource(chunk_size=188 * 10)

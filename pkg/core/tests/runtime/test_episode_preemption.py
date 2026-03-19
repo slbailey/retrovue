@@ -11,6 +11,7 @@ from datetime import datetime, timezone as tz_mod
 
 import pytest
 
+from retrovue.config.testing import TEST_RESOLVED_CONFIG
 from retrovue.runtime.asset_resolver import AssetMetadata, StubAssetResolver
 from retrovue.runtime.schedule_compiler import (
     compile_schedule,
@@ -73,7 +74,7 @@ schedule:
 """
         resolver = _make_resolver()
         dsl = parse_dsl(yaml_text)
-        plan = compile_schedule(dsl, resolver, seed=42)
+        plan = compile_schedule(dsl, resolver, seed=42, resolved_config=TEST_RESOLVED_CONFIG)
         blocks = plan["program_blocks"]
         assert len(blocks) == 1
         assert blocks[0]["slot_duration_sec"] == 3600  # expanded to fit 60min
@@ -103,7 +104,7 @@ schedule:
 """
         resolver = _make_resolver()
         dsl = parse_dsl(yaml_text)
-        plan = compile_schedule(dsl, resolver, seed=42)
+        plan = compile_schedule(dsl, resolver, seed=42, resolved_config=TEST_RESOLVED_CONFIG)
         blocks = plan["program_blocks"]
         assert len(blocks) == 1
         assert blocks[0]["slot_duration_sec"] == 3600  # 45min ceil to 60min grid
@@ -132,7 +133,7 @@ schedule:
 """
         resolver = _make_resolver()
         dsl = parse_dsl(yaml_text)
-        plan = compile_schedule(dsl, resolver, seed=42)
+        plan = compile_schedule(dsl, resolver, seed=42, resolved_config=TEST_RESOLVED_CONFIG)
         blocks = plan["program_blocks"]
         assert len(blocks) == 2
         for b in blocks:
@@ -164,7 +165,7 @@ schedule:
         resolver = _make_resolver()
         cursor_store = CursorStore()
         dsl = parse_dsl(yaml_text)
-        plan = compile_schedule(dsl, resolver, seed=42, cursor_store=cursor_store)
+        plan = compile_schedule(dsl, resolver, seed=42, cursor_store=cursor_store, resolved_config=TEST_RESOLVED_CONFIG)
         blocks = plan["program_blocks"]
         assert len(blocks) == 3
         # Each block should have a different asset (sequential progression)

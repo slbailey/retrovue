@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from retrovue.config.testing import TEST_RESOLVED_CONFIG
 from retrovue.runtime.config import ProgramFormat
 from retrovue.runtime.providers.yaml_channel_config_provider import (
     YamlChannelConfigProvider,
@@ -115,7 +116,7 @@ schedule_source: dsl
         yaml_file = tmp_path / "test-channel.yaml"
         yaml_file.write_text(yaml_content)
 
-        provider = YamlChannelConfigProvider(tmp_path)
+        provider = YamlChannelConfigProvider(tmp_path, resolved_config=TEST_RESOLVED_CONFIG)
         config = provider.get_channel_config("test-channel")
         assert config is not None
         assert config.program_format.aspect_policy == "stretch"
@@ -134,7 +135,7 @@ schedule_source: dsl
         yaml_file = tmp_path / "test-channel.yaml"
         yaml_file.write_text(yaml_content)
 
-        provider = YamlChannelConfigProvider(tmp_path)
+        provider = YamlChannelConfigProvider(tmp_path, resolved_config=TEST_RESOLVED_CONFIG)
         config = provider.get_channel_config("test-channel")
         assert config is not None
         assert config.program_format.aspect_policy == "preserve"

@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 
 import pytest
 
+from retrovue.config.testing import TEST_RESOLVED_CONFIG
+
 
 class FakeAdvancingClock:
     """Deterministic clock for testing; advance() controls time."""
@@ -41,6 +43,7 @@ def test_runway_follows_injected_clock_not_wall_clock():
         clock=clock,
         schedule_service=schedule_service,
         program_director=program_director,
+        resolved_config=TEST_RESOLVED_CONFIG,
     )
     cm.set_blockplan_mode(True)
 

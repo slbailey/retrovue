@@ -9,6 +9,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from retrovue.config.testing import TEST_RESOLVED_CONFIG
+
 
 class FakeAdvancingClock:
     """Deterministic clock for testing; advance() controls time (reused from runway test)."""
@@ -44,6 +46,7 @@ def test_feed_ahead_due_and_miss_follow_injected_clock():
         clock=clock,
         schedule_service=schedule_service,
         program_director=program_director,
+        resolved_config=TEST_RESOLVED_CONFIG,
     )
     cm.set_blockplan_mode(True)
     producer = cm._build_producer_for_mode("normal")

@@ -14,8 +14,10 @@ from typing import Callable, Optional
 
 _logger = logging.getLogger(__name__)
 
-# Default max size: 8 MB (configurable 8–32 MB typical)
-DEFAULT_RING_BUFFER_MAX_BYTES = 8 * 1024 * 1024
+# Sentinel used only as a parameter default for callers that predate
+# resolved_config injection.  Production code should always pass an
+# explicit max_bytes from resolved_config["streaming"]["buffers"]["ring_buffer_max_bytes"].
+DEFAULT_RING_BUFFER_MAX_BYTES = 8 * 1024 * 1024  # 8 MiB
 
 
 class TsRingBuffer:

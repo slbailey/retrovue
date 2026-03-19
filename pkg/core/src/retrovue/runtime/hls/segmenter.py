@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Optional
+from typing import Callable, Optional
 
 from .segment_ring import LiveSegment, SegmentRing
 
@@ -139,12 +139,14 @@ class HlsSegmenter:
         max_gop_ms: int = 1000,
         starting_index: int = 0,
         log: logging.Logger | None = None,
+        diagnostic_hook: Callable[..., None] | None = None,
     ) -> None:
         self._channel_id = channel_id
         self._ring = segment_ring
         self._target_duration_ms = target_duration_ms
         self._max_gop_ms = max_gop_ms
         self._log = log or logger
+        self._diagnostic_hook = diagnostic_hook
 
         self._lock = threading.Lock()
         self._closed = False
@@ -179,6 +181,14 @@ class HlsSegmenter:
         # --- Stall detection ---
         self._last_completed_index: int | None = None
         self._last_completed_monotonic_ms: int | None = None
+
+    def _diag(self, event: str, **fields) -> None:
+        if self._diagnostic_hook is None:
+            return
+        try:
+            self._diagnostic_hook(self._channel_id, event, **fields)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Public API
@@ -372,6 +382,14 @@ class HlsSegmenter:
 
         # INV-HLS-RING-PUSH-ATOMIC-001: push to ring
         self._ring.push(segment)
+        self._diag(
+            "HLS_SEGMENT_META",
+            index=index,
+            wall_clock_ms=wall_clock_ms,
+            duration_ms=duration_ms,
+            byte_count=len(seg_data),
+            discontinuity=is_discontinuous,
+        )
 
         # INV-HLS-SEGMENT-WALLCLOCK-AUDIT-001: audit against active block range
         if self._active_block_end_utc_ms > 0:
@@ -382,6 +400,13 @@ class HlsSegmenter:
                     index, wall_clock_ms,
                     self._active_block_start_utc_ms, self._active_block_end_utc_ms,
                     self._channel_id,
+                )
+                self._diag(
+                    "INV-HLS-SEGMENT-WALLCLOCK-AUDIT-001",
+                    index=index,
+                    wall_clock_ms=wall_clock_ms,
+                    active_block_start_utc_ms=self._active_block_start_utc_ms,
+                    active_block_end_utc_ms=self._active_block_end_utc_ms,
                 )
 
         # Update tracking state

@@ -155,6 +155,15 @@ class SegmentRing:
                 return None
             return max(self._segments)
 
+
+    def clear(self) -> None:
+        """Clear all retained segments.
+
+        Used when a channel activation is torn down so reconnect cannot
+        observe stale manifest windows from the prior activation.
+        """
+        with self._lock:
+            self._segments.clear()
     def count(self) -> int:
         """Return the number of segments currently in the ring."""
         with self._lock:

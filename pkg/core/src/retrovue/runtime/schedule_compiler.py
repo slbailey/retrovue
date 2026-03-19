@@ -32,10 +32,23 @@ from retrovue.runtime.asset_resolver import AssetResolver
 # Constants
 # ---------------------------------------------------------------------------
 
-COMPILER_VERSION = "3.0.0"
-BROADCAST_DAY_START_HOUR = 6  # 06:00 local
-NETWORK_GRID_MINUTES = 30
-PREMIUM_GRID_MINUTES = 15
+def _extract_scheduling_constants(resolved_config: dict[str, Any] | None) -> tuple[str, int, int, int]:
+    """Extract scheduling constants from resolved config.
+
+    Returns (compiler_version, broadcast_day_start_hour, network_grid_minutes, premium_grid_minutes).
+    """
+    if resolved_config is None:
+        raise RuntimeError(
+            "resolved_config is required for schedule compilation — "
+            "fallback defaults are no longer supported"
+        )
+    sched = resolved_config["scheduling"]
+    return (
+        sched["compiler_version"],
+        sched["broadcast_day_start_hour"],
+        sched["grid_minutes"]["network_television"],
+        sched["grid_minutes"]["premium_movie"],
+    )
 
 # ---------------------------------------------------------------------------
 # Errors
@@ -184,7 +197,7 @@ def _window_seed(seed: int | None, start_str: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _parse_time(time_str: str, broadcast_day: str, tz_name: str) -> datetime:
+def _parse_time(time_str: str, broadcast_day: str, tz_name: str, broadcast_day_start_hour: int = 6) -> datetime:
     """Parse HH:MM into an aware datetime for the broadcast day."""
     from zoneinfo import ZoneInfo
 
@@ -194,7 +207,7 @@ def _parse_time(time_str: str, broadcast_day: str, tz_name: str) -> datetime:
     hour = int(parts[0])
     minute = int(parts[1]) if len(parts) > 1 else 0
 
-    if hour < BROADCAST_DAY_START_HOUR:
+    if hour < broadcast_day_start_hour:
         bd = bd + timedelta(days=1)
 
     return datetime(bd.year, bd.month, bd.day, hour, minute, tzinfo=tz)
@@ -294,10 +307,15 @@ def get_channel_template(dsl: dict[str, Any]) -> str:
     return dsl.get("template", "network_television")
 
 
-def get_grid_minutes(template: str) -> int:
+def get_grid_minutes(template: str, grid_minutes: dict[str, int] | None = None) -> int:
+    if grid_minutes is not None:
+        if template == "premium_movie":
+            return grid_minutes["premium_movie"]
+        return grid_minutes["network_television"]
+    # Unreachable in production (resolved_config always provides grid_minutes).
     if template == "premium_movie":
-        return PREMIUM_GRID_MINUTES
-    return NETWORK_GRID_MINUTES
+        return 15
+    return 30
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +335,7 @@ def _compile_program_block(
     run_store: object = None,
     emissions_per_occurrence: int = 1,
     prior_same_day_emissions: int = 0,
+    broadcast_day_start_hour: int = 6,
 ) -> list[ProgramBlockOutput]:
     """Compile a V2 schedule block into program blocks.
 
@@ -398,7 +417,7 @@ def _compile_program_block(
                 f"values: {grid_blocks_values}"
             )
 
-    current_time = _parse_time(start_str, broadcast_day, tz_name)
+    current_time = _parse_time(start_str, broadcast_day, tz_name, broadcast_day_start_hour)
 
     # INV-SCHEDULE-SEED-DAY-VARIANCE-001 Rule 2: window-specific seed
     wseed = _window_seed(seed, start_str)
@@ -677,6 +696,7 @@ def compile_schedule(
     seed: int | None = 42,
     cursor_store: object = None,  # deprecated, unused — retained for caller compat
     run_store: object = None,
+    resolved_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Compile a V2 DSL definition into a Program Schedule.
@@ -690,6 +710,10 @@ def compile_schedule(
 
     Pure function — no DB writes, no globals.
     """
+    # Extract scheduling constants from resolved config.
+    _compiler_version, _bd_start_hour, _net_grid, _prem_grid = _extract_scheduling_constants(resolved_config)
+    _grid_mins = {"network_television": _net_grid, "premium_movie": _prem_grid}
+
     # Register pools from DSL with the resolver (if supported)
     pools = dsl.get("pools", {})
     if pools and hasattr(resolver, "register_pools"):
@@ -704,7 +728,7 @@ def compile_schedule(
     broadcast_day = str(dsl["broadcast_day"])
     tz_name = dsl["timezone"]
     template = get_channel_template(dsl)
-    grid_minutes = get_grid_minutes(template)
+    grid_minutes = get_grid_minutes(template, _grid_mins)
     programs_defs = dsl.get("programs", {})
 
     # Schedule resolution: resolve DOW layering to flat block list
@@ -798,6 +822,7 @@ def compile_schedule(
                 run_store=run_store,
                 emissions_per_occurrence=epo,
                 prior_same_day_emissions=prior,
+                broadcast_day_start_hour=_bd_start_hour,
             )
             all_blocks.extend(blocks)
 
@@ -842,7 +867,7 @@ def compile_schedule(
         "source": {
             "dsl_path": dsl_path,
             "git_commit": git_commit,
-            "compiler_version": COMPILER_VERSION,
+            "compiler_version": _compiler_version,
         },
         "program_blocks": [b.to_dict() for b in all_blocks],
     }

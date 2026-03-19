@@ -123,11 +123,13 @@ class TestInvChannelStartupConcurrency001:
 
         from retrovue.runtime.program_director import ProgramDirector
         from retrovue.runtime.config import InlineChannelConfigProvider
+        from retrovue.config.testing import TEST_RESOLVED_CONFIG
 
         pd = ProgramDirector(
             channel_config_provider=InlineChannelConfigProvider([]),
             host="127.0.0.1",
             port=0,
+            resolved_config=TEST_RESOLVED_CONFIG,
         )
 
         # Semaphore must exist

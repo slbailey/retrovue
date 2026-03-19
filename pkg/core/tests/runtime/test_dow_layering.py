@@ -10,6 +10,7 @@ from datetime import date, datetime, timezone as tz_mod
 
 import pytest
 
+from retrovue.config.testing import TEST_RESOLVED_CONFIG
 from retrovue.runtime.asset_resolver import AssetMetadata, StubAssetResolver
 from retrovue.runtime.schedule_compiler import (
     compile_schedule,
@@ -162,7 +163,7 @@ schedule:
 """
         resolver = _make_resolver()
         dsl = parse_dsl(yaml_text)
-        plan = compile_schedule(dsl, resolver, seed=42)
+        plan = compile_schedule(dsl, resolver, seed=42, resolved_config=TEST_RESOLVED_CONFIG)
         assert len(plan["program_blocks"]) == 1
 
     def test_dow_layered_compilation(self):
@@ -193,6 +194,6 @@ schedule:
 """
         resolver = _make_resolver()
         dsl = parse_dsl(yaml_text)
-        plan = compile_schedule(dsl, resolver, seed=42)
+        plan = compile_schedule(dsl, resolver, seed=42, resolved_config=TEST_RESOLVED_CONFIG)
         # Monday: 06:00 from all_day + 20:00 from monday = 2 blocks
         assert len(plan["program_blocks"]) == 2

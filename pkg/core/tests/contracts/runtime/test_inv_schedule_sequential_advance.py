@@ -21,10 +21,10 @@ pytestmark = pytest.mark.skip(
 )
 from datetime import date, timedelta
 
+from retrovue.config.testing import TEST_RESOLVED_CONFIG
 from retrovue.runtime.schedule_compiler import (
     compile_schedule,
     channel_seed,
-    NETWORK_GRID_MINUTES,
     parse_dsl,
 )
 from retrovue.runtime.asset_resolver import AssetMetadata, StubAssetResolver
@@ -96,7 +96,7 @@ class TestRule1SlotCountPositive:
         """V2 DSL with 36 slots MUST produce at least 1 program block."""
         resolver = _make_sequential_resolver()
         dsl = dict(_V2_SEQUENTIAL_DSL)
-        schedule = compile_schedule(dsl, resolver=resolver, seed=42)
+        schedule = compile_schedule(dsl, resolver=resolver, seed=42, resolved_config=TEST_RESOLVED_CONFIG)
         assert len(schedule["program_blocks"]) > 0, (
             "V2 DSL with slots=36 produced zero program blocks"
         )
@@ -106,7 +106,7 @@ class TestRule1SlotCountPositive:
         """V2 DSL with 36 slots and grid_blocks=1 MUST produce 36 blocks."""
         resolver = _make_sequential_resolver()
         dsl = dict(_V2_SEQUENTIAL_DSL)
-        schedule = compile_schedule(dsl, resolver=resolver, seed=42)
+        schedule = compile_schedule(dsl, resolver=resolver, seed=42, resolved_config=TEST_RESOLVED_CONFIG)
         assert len(schedule["program_blocks"]) == SLOTS_PER_DAY, (
             f"Expected {SLOTS_PER_DAY} blocks, got {len(schedule['program_blocks'])}"
         )
@@ -152,6 +152,7 @@ class TestRule2ConsecutiveDaysDiffer:
                 dsl, resolver=resolver,
                 cursor_store=cursor_store,
                 seed=seed,
+                resolved_config=TEST_RESOLVED_CONFIG,
             )
 
         schedule_a = compile_day(day_a)

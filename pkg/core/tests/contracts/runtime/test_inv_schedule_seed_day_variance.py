@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 
+from retrovue.config.testing import TEST_RESOLVED_CONFIG
 from retrovue.runtime.asset_resolver import AssetMetadata, StubAssetResolver
 from retrovue.runtime.schedule_compiler import (
     compile_schedule,
@@ -85,7 +86,7 @@ def _compile_day(broadcast_day: str) -> list[str]:
     dsl["broadcast_day"] = broadcast_day
     resolver = _make_movie_resolver()
     seed = compilation_seed("test-movies", broadcast_day)
-    schedule = compile_schedule(dsl, resolver=resolver, seed=seed)
+    schedule = compile_schedule(dsl, resolver=resolver, seed=seed, resolved_config=TEST_RESOLVED_CONFIG)
     return [b["asset_id"] for b in schedule["program_blocks"]]
 
 
@@ -152,7 +153,7 @@ class TestInvScheduleSeedDayVariance001:
         dsl["broadcast_day"] = "2026-03-01"
         resolver = _make_movie_resolver()
         seed = compilation_seed("test-movies", "2026-03-01")
-        schedule = compile_schedule(dsl, resolver=resolver, seed=seed)
+        schedule = compile_schedule(dsl, resolver=resolver, seed=seed, resolved_config=TEST_RESOLVED_CONFIG)
 
         blocks = schedule["program_blocks"]
         # Split into window 1 (08:00-16:00) and window 2 (16:00-00:00)

@@ -16,6 +16,7 @@ from retrovue.runtime.channel_manager import (
     MockGridScheduleService,
 )
 from retrovue.runtime.clock import MasterClock
+from retrovue.config.testing import TEST_RESOLVED_CONFIG
 
 
 class _StubProgramDirector:
@@ -39,6 +40,7 @@ class TestMockGridAlignment:
             clock=self.clock,
             schedule_service=None,  # Will be set per test
             program_director=self.program_director,
+            resolved_config=TEST_RESOLVED_CONFIG,
         )
         self.channel_manager._mock_grid_block_minutes = 30
         self.channel_manager._mock_grid_program_asset_path = "/path/to/program.mp4"

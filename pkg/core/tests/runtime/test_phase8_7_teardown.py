@@ -26,6 +26,7 @@ from retrovue.runtime.producer.base import (
 )
 from retrovue.runtime.channel_manager import ChannelManager
 from retrovue.runtime.program_director import ProgramDirector
+from retrovue.config.testing import TEST_RESOLVED_CONFIG
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +90,7 @@ def channel_manager_provider() -> ProgramDirector:
     from retrovue.runtime.config import InlineChannelConfigProvider, MOCK_CHANNEL_CONFIG
     provider = ProgramDirector(
         channel_config_provider=InlineChannelConfigProvider([MOCK_CHANNEL_CONFIG]),
+        resolved_config=TEST_RESOLVED_CONFIG,
     )
     provider._producer_factory = lambda channel_id, mode, config, channel_config=None: FakeProducer(
         channel_id, ProducerMode.NORMAL, config or {}
@@ -110,7 +112,7 @@ def test_viewer_count_zero_destroys_channel_manager(channel_manager_provider: Pr
     - Simulate viewer disconnect → channel manager removed immediately.
     """
     provider = channel_manager_provider
-    director = ProgramDirector(channel_manager_provider=provider)
+    director = ProgramDirector(channel_manager_provider=provider, resolved_config=TEST_RESOLVED_CONFIG)
     director.start()
     try:
         assert CHANNEL_ID not in provider.list_channels()

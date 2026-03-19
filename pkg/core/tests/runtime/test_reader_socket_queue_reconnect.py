@@ -20,6 +20,7 @@ import pytest
 import requests
 
 from retrovue.runtime.program_director import ProgramDirector
+from retrovue.config.testing import TEST_RESOLVED_CONFIG
 
 
 CHANNEL_ID = "reader-queue-test"
@@ -140,6 +141,7 @@ def _start_director(provider: _ProviderWithReaderQueue) -> tuple[ProgramDirector
         channel_manager_provider=provider,
         host="127.0.0.1",
         port=port,
+        resolved_config=TEST_RESOLVED_CONFIG,
     )
     director.start()
     base = f"http://127.0.0.1:{port}"

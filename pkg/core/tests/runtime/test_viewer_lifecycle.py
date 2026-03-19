@@ -34,6 +34,7 @@ from retrovue.runtime.channel_manager import (
     ChannelRuntimeState,
 )
 from retrovue.runtime.config import MOCK_CHANNEL_CONFIG
+from retrovue.config.testing import TEST_RESOLVED_CONFIG
 
 
 class MockClock:
@@ -102,6 +103,7 @@ class TestViewerLifecycle:
             clock=self.clock,
             schedule_service=self.schedule_service,
             program_director=self.program_director,
+            resolved_config=TEST_RESOLVED_CONFIG,
         )
         cm.set_blockplan_mode(True)
         return cm
@@ -378,6 +380,7 @@ class TestLingerGracePeriod:
                 schedule_service=self.schedule_service,
                 program_director=self.program_director,
                 event_loop=loop,
+                resolved_config=TEST_RESOLVED_CONFIG,
             )
             cm.set_blockplan_mode(True)
 
@@ -403,6 +406,7 @@ class TestLingerGracePeriod:
             clock=self.clock,
             schedule_service=self.schedule_service,
             program_director=self.program_director,
+            resolved_config=TEST_RESOLVED_CONFIG,
             # event_loop not passed → self._loop is None
         )
         cm.set_blockplan_mode(True)

@@ -45,7 +45,8 @@ def _load_filler_config(channel_slug: str) -> tuple[str, int]:
         yaml_dir = Path("/opt/retrovue/config/channels")
         cfg = None
         if yaml_dir.is_dir():
-            cfg = YamlChannelConfigProvider(yaml_dir).get_channel_config(channel_slug)
+            from retrovue.config import load_defaults
+            cfg = YamlChannelConfigProvider(yaml_dir, resolved_config=load_defaults()).get_channel_config(channel_slug)
         if cfg is not None:
             sc = cfg.schedule_config or {}
             filler_uri = sc.get("filler_path", filler_uri)

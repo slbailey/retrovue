@@ -25,27 +25,7 @@ from pathlib import Path
 from queue import Empty, Full, Queue
 from typing import Any, Callable, Literal, Optional, Protocol
 
-from .ts_ring_buffer import DEFAULT_RING_BUFFER_MAX_BYTES, TsRingBuffer
-
-# Config from env (bytes-based client buffer; default ~6 s at ~5 Mbit/s TS)
-def _client_buffer_bytes() -> int:
-    val = os.environ.get("HTTP_CLIENT_BUFFER_BYTES")
-    if val is not None:
-        try:
-            return max(64 * 1024, int(val))
-        except ValueError:
-            pass
-    return 4_000_000
-
-
-def _ring_buffer_bytes() -> int:
-    val = os.environ.get("HTTP_RING_BUFFER_BYTES")
-    if val is not None:
-        try:
-            return max(64 * 1024, int(val))
-        except ValueError:
-            pass
-    return DEFAULT_RING_BUFFER_MAX_BYTES
+from .ts_ring_buffer import TsRingBuffer
 
 
 class BytesBoundedQueue:
@@ -173,9 +153,11 @@ _logger = logging.getLogger(__name__)
 # CORE_TRANSPORT_DIAG: Per-stage timing instrumentation for slope analysis.
 # Proves or falsifies whether Core delivery is bursty when AIR output is uniform.
 # =============================================================================
-_DIAG_ENABLED = False  # Set True to enable Core transport diagnostics
-_DIAG_STARTUP_EVENTS = 200  # Log first N events per stage, then every Nth
-_DIAG_STEADY_INTERVAL = 100  # Log every Nth event after startup
+# Diagnostic constants — set per-instance from resolved_config in ChannelStream.__init__.
+# Module-level values are sentinels for code outside the class (pre-instance).
+_DIAG_ENABLED = False
+_DIAG_STARTUP_EVENTS = 200
+_DIAG_STEADY_INTERVAL = 100
 
 # =============================================================================
 # AUDIT: INV-UDS-DRAIN timing instrumentation
@@ -196,25 +178,16 @@ _AUDIT_LOCK = threading.Lock()
 #
 # Policy: Emit at most ONE warning per session, only if we observe >= 10 gaps
 # exceeding the threshold. This prevents log spam while still surfacing patterns.
-RECV_GAP_WARN_THRESHOLD_MS: int = 40  # Fixed threshold - do not "move the bar"
-RECV_GAP_WARN_COUNT: int = 10  # Minimum gaps before warning (prevents noise)
-
-# Fan-out: if a client cannot accept a chunk within this timeout, it is evicted.
-# Keeps backpressure bounded while tolerating brief network/CPU stalls.
+# Streaming constants — set per-instance from resolved_config in ChannelStream.__init__.
+# Module-level values are sentinels for type annotations and pre-instance code.
+RECV_GAP_WARN_THRESHOLD_MS: int = 40
+RECV_GAP_WARN_COUNT: int = 10
 SLOW_CLIENT_PUT_TIMEOUT_S: float = 3.0
-
-# Backpressure when ring buffer exceeds this bytes: drop oldest (Policy A) or disconnect client (Policy B).
 BACKPRESSURE_SLOW_THRESHOLD_S: float = 5.0
-# Policy: "drop_oldest" = drop oldest TS from buffer and continue; "disconnect" = close HTTP client only.
 BackpressurePolicy = Literal["drop_oldest", "disconnect"]
 DEFAULT_BACKPRESSURE_POLICY: BackpressurePolicy = "drop_oldest"
-
-# Upstream reader select timeout: short so we react quickly; 50 ms max.
 UPSTREAM_POLL_TIMEOUT_S: float = 0.05
-# Log WARNING when upstream loop iteration exceeds this (indicates jitter/blocking).
 UPSTREAM_LOOP_SPIKE_MS: float = 50.0
-
-# Throttle BACKPRESSURE logs per client (avoid flood when one client is consistently slow).
 BACKPRESSURE_LOG_INTERVAL_S: float = 5.0
 
 
@@ -479,6 +452,7 @@ class ChannelStream:
         ring_buffer_max_bytes: int | None = None,
         client_buffer_max_bytes: int | None = None,
         backpressure_policy: BackpressurePolicy = DEFAULT_BACKPRESSURE_POLICY,
+        resolved_config: Any | None = None,
     ):
         """
         Initialize ChannelStream for a channel.
@@ -489,10 +463,22 @@ class ChannelStream:
             ts_source_factory: Factory for creating TS source (for tests)
             hls_manager: Optional legacy HLSManager to tee TS data for HLS output
             hls_segmenter: Optional HlsSegmenter (new canonical segmenter) to tee TS data
-            ring_buffer_max_bytes: Max ring buffer size (default: HTTP_RING_BUFFER_BYTES or 8MB)
-            client_buffer_max_bytes: Per-client queue byte cap (default: HTTP_CLIENT_BUFFER_BYTES or 2MB)
+            ring_buffer_max_bytes: Max ring buffer size (overrides config)
+            client_buffer_max_bytes: Per-client queue byte cap (overrides config)
             backpressure_policy: "drop_oldest" (preferred for live) or "disconnect"
+            resolved_config: Frozen resolved config (REQUIRED in production)
         """
+        # Extract streaming config values from resolved_config.
+        if resolved_config is not None and "streaming" in resolved_config:
+            _stm = resolved_config["streaming"]
+            _bufs = _stm["buffers"]
+            _default_ring = _bufs["ring_buffer_max_bytes"]
+            _default_client = _bufs["client_buffer_bytes"]
+        else:
+            # Test-only path: explicit bytes params are required when no config.
+            _default_ring = 8 * 1024 * 1024
+            _default_client = 4_000_000
+
         self.channel_id = channel_id
         self.socket_path = Path(socket_path) if socket_path else None
         self.ts_source_factory = ts_source_factory
@@ -502,12 +488,12 @@ class ChannelStream:
         self._client_buffer_max_bytes = (
             client_buffer_max_bytes
             if client_buffer_max_bytes is not None
-            else _client_buffer_bytes()
+            else _default_client
         )
         ring_bytes = (
             ring_buffer_max_bytes
             if ring_buffer_max_bytes is not None
-            else _ring_buffer_bytes()
+            else _default_ring
         )
 
         self._logger = logging.getLogger(f"{__name__}.{channel_id}")

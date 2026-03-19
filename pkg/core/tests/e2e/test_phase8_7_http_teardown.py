@@ -28,6 +28,7 @@ pytestmark = pytest.mark.skip(reason="E2E test requires Air binary and runtime e
 
 from retrovue.runtime.channel_stream import ChannelStream, FakeTsSource
 from retrovue.runtime.program_director import ProgramDirector
+from retrovue.config.testing import TEST_RESOLVED_CONFIG
 from retrovue.runtime.producer.base import (
     ContentSegment,
     Producer,
@@ -101,6 +102,7 @@ def _start_director_with_provider(
         channel_manager_provider=provider,
         host="127.0.0.1",
         port=port,
+        resolved_config=TEST_RESOLVED_CONFIG,
     )
     director._channel_stream_factory = channel_stream_factory
     director.start()
@@ -142,6 +144,7 @@ def test_http_close_teardown_within_500ms_no_reconnect(caplog: pytest.LogCapture
     from retrovue.runtime.config import InlineChannelConfigProvider, MOCK_CHANNEL_CONFIG
     provider = ProgramDirector(
         channel_config_provider=InlineChannelConfigProvider([MOCK_CHANNEL_CONFIG]),
+        resolved_config=TEST_RESOLVED_CONFIG,
     )
     provider._producer_factory = lambda cid, mode, cfg, channel_config=None: FakeProducerWithSocket(
         cid, ProducerMode.NORMAL, cfg or {}

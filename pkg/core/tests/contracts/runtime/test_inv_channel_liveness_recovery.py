@@ -16,6 +16,8 @@ from unittest.mock import MagicMock, patch, call
 
 import pytest
 
+from retrovue.config.testing import TEST_RESOLVED_CONFIG
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -64,6 +66,7 @@ def _make_channel_manager(
         clock=clock,
         schedule_service=schedule_service,
         program_director=program_director,
+        resolved_config=TEST_RESOLVED_CONFIG,
     )
 
     # Simulate active viewers

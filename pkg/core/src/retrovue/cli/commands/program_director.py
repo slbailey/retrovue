@@ -81,8 +81,10 @@ def start(
     # Load channel config from YAML directory
     channel_config_provider = None
     yaml_channels_dir = Path("/opt/retrovue/config/channels")
+    from retrovue.config import load_defaults
+    _resolved = load_defaults()
     if yaml_channels_dir.is_dir():
-        channel_config_provider = YamlChannelConfigProvider(yaml_channels_dir)
+        channel_config_provider = YamlChannelConfigProvider(yaml_channels_dir, resolved_config=_resolved)
 
     if not mock_schedule_ab and not mock_schedule_grid and channel_config_provider is None:
         typer.echo(

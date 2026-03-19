@@ -44,6 +44,7 @@ pytestmark = pytest.mark.skip(reason="Integration test requires live server with
 from retrovue.runtime.channel_stream import ChannelStream, TsSource
 from retrovue.runtime.config import InlineChannelConfigProvider, MOCK_CHANNEL_CONFIG
 from retrovue.runtime.program_director import ProgramDirector
+from retrovue.config.testing import TEST_RESOLVED_CONFIG
 from retrovue.runtime.producer.base import (
     ContentSegment,
     Producer,
@@ -229,6 +230,7 @@ def _start_director_with_deficit_source(
         channel_manager_provider=provider,
         host="127.0.0.1",
         port=port,
+        resolved_config=TEST_RESOLVED_CONFIG,
     )
 
     # Factory that creates ContentDeficitTsSource for the channel
@@ -281,6 +283,7 @@ class TestHttpResilience:
         # Set up provider with blockplan channel config and fake producer
         provider = ProgramDirector(
             channel_config_provider=InlineChannelConfigProvider([MOCK_CHANNEL_CONFIG]),
+            resolved_config=TEST_RESOLVED_CONFIG,
         )
         provider._producer_factory = lambda cid, mode, cfg, channel_config=None: (
             FakeProducerWithDeficit(cid, ProducerMode.NORMAL, cfg or {})
@@ -400,6 +403,7 @@ class TestHttpResilience:
 
         provider = ProgramDirector(
             channel_config_provider=InlineChannelConfigProvider([MOCK_CHANNEL_CONFIG]),
+            resolved_config=TEST_RESOLVED_CONFIG,
         )
         provider._producer_factory = lambda cid, mode, cfg, channel_config=None: (
             FakeProducerWithDeficit(cid, ProducerMode.NORMAL, cfg or {})

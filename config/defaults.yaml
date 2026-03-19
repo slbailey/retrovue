@@ -1,0 +1,425 @@
+# ============================================================================
+# RetroVue — Global Configuration Defaults
+# ============================================================================
+#
+# Every tunable default in the system lives here exactly once.
+# Runtime code should load this file and allow per-channel or per-environment
+# overrides to shadow individual keys.
+#
+# Naming conventions:
+#   *_seconds, *_ms   — durations (never mix within one section)
+#   *_bytes            — buffer / chunk sizes
+#   *_hz               — frequencies
+#   *_bps              — bitrates (bits per second)
+#   *_db               — decibels
+#   *_days, *_hours    — calendar durations
+#
+# ============================================================================
+
+
+# --------------------------------------------------------------------------
+# scheduling — compilation, grid geometry, episode progression, EPG
+# --------------------------------------------------------------------------
+scheduling:
+  # Broadcast day boundary (local time hour, 0–23).
+  # Everything before this hour belongs to the previous broadcast day.
+  broadcast_day_start_hour: 6
+
+  # Grid slot durations per channel template.
+  grid_minutes:
+    network_television: 30
+    premium_movie: 15
+
+  # EPG grid alignment (minutes).  Must agree with grid_minutes for the
+  # channel template in use; kept separate because EPG is consumed externally.
+  epg_grid_minutes: 30
+
+  # Default template applied when a channel DSL omits "template".
+  default_template: "network_television"
+
+  # Default channel type ("network", "premium", "movie").
+  default_channel_type: "network"
+
+  # Default timezone when the channel DSL omits "timezone".
+  default_timezone: "UTC"
+
+  # Compiler determinism seed (null = non-deterministic).
+  compiler_seed: 42
+
+  # Compiler version tag embedded in compiled schedules.
+  compiler_version: "3.0.0"
+
+  # --- horizon & recompilation -----------------------------------------
+  horizon:
+    # Days to compile ahead on initial load.
+    days: 3
+    # Hours of compiled schedule remaining before extending the horizon.
+    recompile_threshold_hours: 6
+
+  # --- resolver cache ---------------------------------------------------
+  resolver:
+    # Seconds before the CatalogAssetResolver cache is rebuilt.
+    ttl_seconds: 60.0
+
+  # --- block defaults (applied when DSL omits the key) ------------------
+  block_defaults:
+    slots: 1
+    grid_blocks: 1
+    progression: "sequential"
+    exhaustion_policy: "wrap"
+    fill_mode: "single"
+    bleed: false
+    schedule_layer: "all_day"
+    start_time: "06:00"
+
+  # --- frame / duration tolerance ---------------------------------------
+  # Tolerance (ms) for segment-sum vs block-duration conservation checks.
+  # Roughly one frame at 29.97 fps.
+  frame_tolerance_ms: 40
+
+  # Default frames-per-second used when segment/block FPS is unspecified.
+  default_fps_numerator: 30
+  default_fps_denominator: 1
+
+
+# --------------------------------------------------------------------------
+# playout — segment construction, transitions, ad breaks, pacing
+# --------------------------------------------------------------------------
+playout:
+  # --- prefeed & startup timing ----------------------------------------
+  timing:
+    # Minimum ms between LoadPreview and the target boundary.
+    # Env override: RETROVUE_MIN_PREFEED_LEAD_TIME_MS
+    min_prefeed_lead_time_ms: 5000
+
+    # Upper bound (seconds) for channel launch overhead
+    # (AIR spawn + gRPC connect + handshake).
+    startup_latency_seconds: 7
+
+    # Jitter buffer (seconds) added when triggering LoadPreview.
+    scheduling_buffer_seconds: 2.0
+
+  # --- pacing loop ------------------------------------------------------
+  pace:
+    target_hz: 30.0
+    max_frame_multiplier: 3.0
+
+  # --- ad breaks --------------------------------------------------------
+  breaks:
+    # Number of ad breaks inserted when no chapter markers exist.
+    default_count: 3
+
+  # --- transitions & gain -----------------------------------------------
+  transitions:
+    # Default fade duration (ms) applied to break boundaries.
+    default_fade_duration_ms: 500
+    # Default transition type for segments.
+    default_type: "TRANSITION_NONE"
+    default_duration_ms: 0
+
+  # Default loudness gain (dB).  0.0 = unity / no adjustment.
+  default_gain_db: 0.0
+
+  # --- gRPC timeouts (Core → AIR) --------------------------------------
+  grpc:
+    readiness_timeout_seconds: 10.0
+    version_timeout_seconds: 2.0
+    retry_interval_seconds: 0.2
+    attach_stream_timeout_seconds: 5.0
+    start_session_timeout_seconds: 10.0
+    feed_timeout_seconds: 5.0
+    stop_session_timeout_seconds: 5.0
+    air_termination_timeout_seconds: 5.0
+    event_thread_join_timeout_seconds: 2.0
+
+
+# --------------------------------------------------------------------------
+# channel — per-channel runtime behavior, recovery, encoding format
+# --------------------------------------------------------------------------
+channel:
+  # Seconds to keep the producer alive after the last viewer disconnects.
+  linger_seconds: 20
+
+  # Producer teardown hard-timeout (seconds).
+  teardown_timeout_seconds: 5.0
+
+  # Grid block duration used when running the mock grid schedule.
+  mock_grid_block_minutes: 30
+
+  # Default filler duration (seconds) — used as a backstop when no
+  # content is available.  1 hour.
+  default_filler_duration_seconds: 3600.0
+
+  # Default segment duration (seconds) surfaced to the DSL service.
+  default_segment_seconds: 10.0
+
+  # --- recovery (exponential back-off) ----------------------------------
+  recovery:
+    base_delay_seconds: 1.0
+    max_attempts: 5
+    # Ticks at the error-backoff ceiling (~30 s at 3.75 Hz).
+    error_backoff_max_ticks: 112
+
+  # --- AIR feed-ahead queue ---------------------------------------------
+  queue:
+    # Depth of the feed-ahead queue (A executing, B pending, C queued).
+    # Minimum enforced: 2.
+    depth: 3
+
+  # --- health checks ----------------------------------------------------
+  health_check_interval_seconds: 1.0
+
+  # --- diagnostics (HLS diagnostic mode) --------------------------------
+  diagnostics:
+    duration_seconds: 90.0
+    ring_max_events: 512
+
+  # --- startup concurrency ----------------------------------------------
+  startup:
+    max_workers: 4
+    concurrency: 4
+
+  # --- evidence / as-run ------------------------------------------------
+  evidence:
+    enabled: true
+    port: 50052
+    asrun_dir: "/opt/retrovue/data/logs/asrun"
+    ack_dir: "/opt/retrovue/data/logs/asrun/acks"
+    segment_cache_max: 10
+
+  # --- encoding / program format ----------------------------------------
+  encoding:
+    video_bitrate_bps: 8000000
+    aspect_policy: "preserve"
+    blockplan_only: false
+
+  # Default program format (applied when a channel omits format section).
+  default_program_format:
+    width: 1920
+    height: 1080
+    frame_rate: "30000/1001"
+    sample_rate: 48000
+    audio_channels: 2
+    aspect_policy: "preserve"
+
+  # Default filler asset (used when channel omits filler section).
+  filler:
+    path: "/opt/retrovue/assets/filler.mp4"
+    duration_ms: 3650000
+
+
+# --------------------------------------------------------------------------
+# hls — HTTP Live Streaming segmentation, ring buffer, sessions
+# --------------------------------------------------------------------------
+hls:
+  # --- segmenter --------------------------------------------------------
+  segmenter:
+    target_duration_ms: 6000
+    max_gop_ms: 1000
+    # PCR jump (90 kHz ticks) above which a discontinuity is signalled.
+    max_plausible_pcr_ticks: 5400000
+
+  # --- segment ring -----------------------------------------------------
+  ring:
+    # Total segments held in the ring.
+    capacity: 7
+    # Segments exposed in the HLS manifest window.
+    manifest_window: 3
+
+  # --- viewer sessions --------------------------------------------------
+  session:
+    timeout_ms: 30000
+    reap_interval_ms: 10000
+
+
+# --------------------------------------------------------------------------
+# streaming — HTTP transport, ring buffers, back-pressure, UDS
+# --------------------------------------------------------------------------
+streaming:
+  # --- client buffers ---------------------------------------------------
+  buffers:
+    # Per-client TS byte buffer.  Env override: HTTP_CLIENT_BUFFER_BYTES
+    client_buffer_bytes: 4000000
+    # Upstream ring buffer max.  Env override: HTTP_RING_BUFFER_BYTES
+    ring_buffer_max_bytes: 8388608       # 8 MiB
+    # Floor enforced on client queue size.
+    min_client_buffer_bytes: 65536       # 64 KiB
+    # UDS socket SO_RCVBUF request.
+    uds_rcvbuf_bytes: 131072             # 128 KiB
+
+  # --- chunking ---------------------------------------------------------
+  chunks:
+    # Bytes read per ChannelStream iteration (~174 TS packets).
+    read_chunk_bytes: 32768
+    # Legacy FFmpeg-based streaming chunk size (bytes).
+    legacy_chunk_bytes: 1316
+    # Max bytes drained per drain_many() call.
+    drain_max_bytes: 65536
+
+  # --- drain / poll timing ----------------------------------------------
+  drain_timeout_seconds: 0.1
+  upstream_poll_timeout_seconds: 0.05
+
+  # --- back-pressure ----------------------------------------------------
+  backpressure:
+    # Policy: "drop_oldest" | "block"
+    policy: "drop_oldest"
+    slow_threshold_seconds: 5.0
+    log_interval_seconds: 5.0
+
+  # --- slow-client eviction ---------------------------------------------
+  slow_client:
+    put_timeout_seconds: 3.0
+
+  # --- diagnostics (Core transport) -------------------------------------
+  diagnostics:
+    enabled: false
+    startup_events: 200
+    steady_interval: 100
+    recv_gap_warn_threshold_ms: 40
+    recv_gap_warn_count: 10
+    upstream_loop_spike_ms: 50.0
+
+  # --- FFmpeg / legacy probe defaults -----------------------------------
+  ffmpeg:
+    read_from_files_live: true
+    probe_size: "10M"
+    analyze_duration: "2M"
+    enable_resend_headers: true
+    enable_initial_discontinuity: true
+
+
+# --------------------------------------------------------------------------
+# system — ports, paths, database, logging, job retention, enrichment
+# --------------------------------------------------------------------------
+system:
+  # --- network ports ----------------------------------------------------
+  ports:
+    program_director: 8000
+    channel_manager: 9000
+
+  # --- filesystem paths -------------------------------------------------
+  paths:
+    schedules_dir: "/opt/retrovue/config/schedules"
+    channels_dir: "/opt/retrovue/config/channels"
+    sqlite_path: "/opt/retrovue/data/retrovue.db"
+    sidecar_schema: "docs/metadata/sidecar-schema.json"
+
+  # --- database (PostgreSQL via SQLAlchemy) -----------------------------
+  database:
+    pool_size: 5
+    max_overflow: 10
+    pool_timeout_seconds: 30
+    connect_timeout_seconds: 30
+
+  # --- logging ----------------------------------------------------------
+  log_level: "INFO"
+  environment: "dev"
+
+  # --- job retention ----------------------------------------------------
+  processor_job_retention_days: 30
+
+  # --- metrics ----------------------------------------------------------
+  metrics:
+    sample_hz: 2.0
+    aggregation_window_seconds: 1.0
+
+  # --- enrichment limits ------------------------------------------------
+  enrichment:
+    # Hard cap on loudness supplement applied to any asset (dB).
+    loudness_max_supplement_db: 6.0
+    loudness_timeout_seconds: 600
+    ffprobe_timeout_seconds: 30
+    # Maximum content duration accepted during enrichment (ms).  3 hours.
+    max_content_duration_ms: 10800000
+
+  # --- traffic policy defaults ------------------------------------------
+  traffic:
+    default_cooldown_seconds: 3600
+    max_plays_per_day: 0                  # 0 = unlimited
+
+  # --- playlist builder -------------------------------------------------
+  playlist_builder:
+    warn_on_first_missing_tier2_only: true
+
+
+# --------------------------------------------------------------------------
+# integrations — Plex / HDHomeRun emulation, IPTV / XMLTV
+# --------------------------------------------------------------------------
+integrations:
+  plex:
+    device_id: "RVUE1234"
+    friendly_name: "RetroVue"
+    tuner_count: 8
+    firmware_version: "20200101"
+
+  iptv:
+    default_timezone: "America/New_York"
+
+
+# --------------------------------------------------------------------------
+# air — C++ playout engine (AIR) tunables
+# --------------------------------------------------------------------------
+air:
+  # --- gRPC server ------------------------------------------------------
+  grpc:
+    bind_address: "0.0.0.0:50051"
+    enable_reflection: true
+
+  # Prometheus metrics endpoint port.
+  metrics_port: 9308
+
+  # API version reported by GetVersion.
+  api_version: "1.0.0"
+
+  # --- frame buffers ----------------------------------------------------
+  buffers:
+    # Default decode-ahead buffer size (frames).  ~2 s at 30 fps.
+    default_frames: 60
+    # Minimum video frames required before playback / swap.
+    min_video_depth: 2
+    # Minimum buffer depth before starvation-triggered frame drop.
+    min_depth_for_drop: 5
+    # Minimum audio depth (ms) for seamless segment transition.
+    min_audio_seam_ms: 200
+
+  # --- prefeed ----------------------------------------------------------
+  prefeed:
+    min_lead_time_ms: 5000
+    max_poll_attempts: 200
+
+  # --- tick producer ----------------------------------------------------
+  tick:
+    max_null_run: 10
+    max_total_decodes: 60
+    max_prime_wallclock_ms: 2000
+
+  # --- pipeline manager -------------------------------------------------
+  pipeline:
+    min_audio_prime_ms: 500
+    min_segment_swap_audio_ms: 500
+    min_segment_swap_video_frames: 2
+    min_segment_prep_headroom_ms: 250
+    min_segment_prep_headroom_frames: 8
+    max_wait_ms: 2000
+
+  # --- file producer / decoder ------------------------------------------
+  producer:
+    max_audio_frames_per_tick: 8
+    max_opportunistic_drain_frames: 2
+    # Longest media file accepted (hours).
+    max_media_duration_hours: 4
+
+  decoder:
+    max_pending_audio_frames: 120
+    max_eagain_retries: 4
+
+  # --- evidence spool ---------------------------------------------------
+  evidence:
+    spool_root: "/opt/retrovue/data/logs/evidence_spool"
+    flush_interval_ms: 250
+    flush_records_max: 50
+    # 0 = unlimited spool size.
+    max_spool_bytes: 0
+    schema_version: 1
+    max_backoff_ms: 5000

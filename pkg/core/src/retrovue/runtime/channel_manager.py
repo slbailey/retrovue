@@ -399,6 +399,7 @@ class ChannelManager:
         program_director: ProgramDirector,
         event_loop: asyncio.AbstractEventLoop | None = None,
         evidence_endpoint: str = "",
+        resolved_config: Any = None,
     ):
         """
         Initialize the ChannelManager for a specific channel.
@@ -410,7 +411,13 @@ class ChannelManager:
             program_director: ProgramDirector for global policy/mode
             event_loop: Optional event loop for P11F-005; when set, switch issuance uses call_later instead of threading.Timer
             evidence_endpoint: host:port for evidence gRPC, empty = disabled
+            resolved_config: Frozen resolved config from config resolver (REQUIRED)
         """
+        if resolved_config is None:
+            raise RuntimeError(
+                "resolved_config is required for ChannelManager — "
+                "fallback defaults are no longer supported"
+            )
         self.channel_id = channel_id
         self.clock = clock
         assert self.clock is not None, "ChannelManager requires a MasterClock"
@@ -438,13 +445,16 @@ class ChannelManager:
             last_health=None,
         )
         self._metrics_publisher: "MetricsPublisher | None" = None
+        self._resolved_config = resolved_config
         self._logger = logging.getLogger(__name__)
-        self._teardown_timeout_seconds = 5.0
+        # INV-CONFIG-IMMUTABLE-001: Read from resolved config (required).
+        _ch = resolved_config["channel"]
+        self._teardown_timeout_seconds = _ch["teardown_timeout_seconds"]
         self._teardown_started_station: float | None = None
         self._teardown_reason: str | None = None
 
         # Mock grid configuration (when using mock grid schedule)
-        self._mock_grid_block_minutes = 30  # Fixed 30-minute grid
+        self._mock_grid_block_minutes = _ch["mock_grid_block_minutes"]
         self._mock_grid_program_asset_path: str | None = None  # Set from daemon config
         self._mock_grid_filler_asset_path: str | None = None  # Set from daemon config
         self._mock_grid_filler_epoch: datetime | None = None  # Epoch for filler offset calculation
@@ -456,10 +466,11 @@ class ChannelManager:
         self._stop_reason: str = "channel_stop"
 
         # Linger: grace period before tearing down producer after last viewer leaves.
-        self.LINGER_SECONDS: int = 20
+        self.LINGER_SECONDS: int = _ch["linger_seconds"]
         # INV-CHANNEL-LIVENESS-RECOVERY-001: Recovery constants
-        self._RECOVERY_BASE_DELAY_S: float = 1.0
-        self._RECOVERY_MAX_ATTEMPTS: int = 5
+        _rec = _ch["recovery"]
+        self._RECOVERY_BASE_DELAY_S: float = _rec["base_delay_seconds"]
+        self._RECOVERY_MAX_ATTEMPTS: int = _rec["max_attempts"]
         self._linger_handle: asyncio.TimerHandle | None = None
         self._linger_deadline: float | None = None
 
@@ -498,19 +509,28 @@ class ChannelManager:
                 ManifestGenerator,
                 HlsSessionManager,
             )
-            self._hls_segment_ring = SegmentRing(capacity=7, manifest_window=3)
+            # INV-CONFIG-IMMUTABLE-001: HLS params from resolved config (required).
+            _hls = self._resolved_config["hls"]
+            _hls_ring = _hls["ring"]
+            _hls_seg = _hls["segmenter"]
+            _hls_sess = _hls["session"]
+            self._hls_segment_ring = SegmentRing(
+                capacity=_hls_ring["capacity"],
+                manifest_window=_hls_ring["manifest_window"],
+            )
             self._hls_segmenter = HlsSegmenter(
                 channel_id=self.channel_id,
                 segment_ring=self._hls_segment_ring,
-                target_duration_ms=6000,
-                max_gop_ms=1000,
+                target_duration_ms=_hls_seg["target_duration_ms"],
+                max_gop_ms=_hls_seg["max_gop_ms"],
                 starting_index=self._hls_segment_counter,
+                diagnostic_hook=getattr(self.program_director, hls_diag_event, None),
             )
             self._hls_manifest_generator = ManifestGenerator(self.channel_id)
             self._hls_session_manager = HlsSessionManager(
                 channel_id=self.channel_id,
-                session_timeout_ms=30_000,
-                reap_interval_ms=10_000,
+                session_timeout_ms=_hls_sess["timeout_ms"],
+                reap_interval_ms=_hls_sess["reap_interval_ms"],
             )
             self._logger.debug(
                 "HLS delivery state initialized for channel %s", self.channel_id,
@@ -581,6 +601,14 @@ class ChannelManager:
         self._channel_state = "STOPPED"
         self._teardown_reason = None
         self._pending_fatal = None
+        # Clear stale HLS window so reconnect cannot consume prior-activation manifest/segments.
+        if self._hls_segment_ring is not None:
+            self._hls_segment_ring.clear()
+
+        # Preserve index continuity and reset segmenter parser state for next activation.
+        self._update_hls_segment_counter()
+        self._reset_hls_segmenter_for_restart()
+
         self._stop_producer_if_idle()
 
     def _request_teardown(self, reason: str) -> bool:
@@ -1822,6 +1850,8 @@ class BlockPlanProducer(Producer):
 
         # INV-WALLCLOCK-FENCE-002: Track active (seeded/fed, not yet completed) blocks
         self._in_flight_block_ids: set[str] = set()
+        # Authoritative metadata for in-flight blocks (start/end wallclock)
+        self._in_flight_block_meta: dict[str, tuple[int, int]] = {}
 
         # Block generation state
         self._block_index = 0
@@ -1993,6 +2023,7 @@ class BlockPlanProducer(Producer):
                     raise RuntimeError("No block data from schedule service")
                 self._next_block_start_ms = current_entry.start_utc_ms
                 self._in_flight_block_ids.clear()
+                self._in_flight_block_meta.clear()
 
                 # Generate and seed initial 2 blocks
                 # INV-JIP-BP-005/006: Only block_a carries JIP offset
@@ -2029,6 +2060,8 @@ class BlockPlanProducer(Producer):
                 # INV-WALLCLOCK-FENCE-002: Track seeded blocks as active
                 self._in_flight_block_ids.add(block_a.block_id)
                 self._in_flight_block_ids.add(block_b.block_id)
+                self._in_flight_block_meta[block_a.block_id] = (block_a.start_utc_ms, block_a.end_utc_ms)
+                self._in_flight_block_meta[block_b.block_id] = (block_b.start_utc_ms, block_b.end_utc_ms)
 
                 # INV-HLS-SEGMENT-WALLCLOCK-001: Supply editorial timebase to HLS segmenter
                 if self._hls_segmenter_ref is not None:
@@ -2167,6 +2200,8 @@ class BlockPlanProducer(Producer):
         self._session_ended = False
         self._session_end_reason = None
         self._fed_block_ids.clear()
+        self._in_flight_block_ids.clear()
+        self._in_flight_block_meta.clear()
         self._pending_block = None  # INV-FEED-QUEUE-002: Clear pending slot
 
         # Reset feed-ahead controller state
@@ -2373,6 +2408,7 @@ class BlockPlanProducer(Producer):
             prepopulate_block_segment_cache(block.block_id, fed_segments)
             # INV-WALLCLOCK-FENCE-002: Track fed block as active
             self._in_flight_block_ids.add(block.block_id)
+            self._in_flight_block_meta[block.block_id] = (block.start_utc_ms, block.end_utc_ms)
             # INV-HLS-SEGMENT-WALLCLOCK-001: Update HLS segmenter timebase on block feed
             if self._hls_segmenter_ref is not None:
                 try:
@@ -2689,6 +2725,21 @@ class BlockPlanProducer(Producer):
             # BlockStarted = queue slot consumed → credit += 1
             self._feed_credits = min(self._feed_credits + 1, self._queue_depth)
 
+            # INV-HLS-TIMEBASE-AUTHORITY-001: Advance HLS timebase from
+            # authoritative runtime activation (BlockStarted), not feed-only signals.
+            if self._hls_segmenter_ref is not None:
+                block_meta = self._in_flight_block_meta.get(block_id)
+                if block_meta is not None:
+                    try:
+                        start_utc_ms, end_utc_ms = block_meta
+                        self._hls_segmenter_ref.set_blockplan_timebase(
+                            start_utc_ms=start_utc_ms,
+                            active_block_start_utc_ms=start_utc_ms,
+                            active_block_end_utc_ms=end_utc_ms,
+                        )
+                    except Exception:
+                        pass
+
             # State transition: SEEDED → RUNNING on first BlockStarted
             if self._feed_state == _FeedState.SEEDED:
                 self._feed_state = _FeedState.RUNNING
@@ -2748,6 +2799,7 @@ class BlockPlanProducer(Producer):
 
             self._fed_block_ids.add(block_id)
             self._in_flight_block_ids.discard(block_id)
+            self._in_flight_block_meta.pop(block_id, None)
 
             self._logger.debug(
                 "Channel %s: Block %s completed, feeding next",

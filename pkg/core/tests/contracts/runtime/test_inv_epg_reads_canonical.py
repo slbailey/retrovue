@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from retrovue.config.testing import TEST_RESOLVED_CONFIG
 from retrovue.runtime.dsl_schedule_service import DslScheduleService
 
 

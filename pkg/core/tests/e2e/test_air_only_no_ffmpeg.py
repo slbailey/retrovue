@@ -57,6 +57,7 @@ def test_get_channel_ts_503_when_air_unavailable():
     import requests
 
     from retrovue.runtime.program_director import ProgramDirector
+    from retrovue.config.testing import TEST_RESOLVED_CONFIG
     from retrovue.usecases import channel_manager_launch
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -72,6 +73,7 @@ def test_get_channel_ts_503_when_air_unavailable():
             asset_a_path="/tmp/a.mp4",
             asset_b_path="/tmp/b.mp4",
             segment_seconds=10.0,
+            resolved_config=TEST_RESOLVED_CONFIG,
         )
         program_director.start()
         r = None

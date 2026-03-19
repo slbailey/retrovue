@@ -45,8 +45,10 @@ def compile_cmd(
     resolver = StubAssetResolver()
 
     try:
+        from retrovue.config import load_defaults
         plan = compile_schedule(
             dsl, resolver, dsl_path=str(path), git_commit=git_commit, seed=seed,
+            resolved_config=load_defaults(),
         )
     except ValidationError as e:
         typer.echo("Validation errors:", err=True)

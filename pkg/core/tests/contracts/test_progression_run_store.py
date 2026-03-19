@@ -26,6 +26,7 @@ from retrovue.runtime.serial_episode_resolver import (
     WEEKDAY,
     WEEKEND,
 )
+from retrovue.config.testing import TEST_RESOLVED_CONFIG
 from retrovue.runtime.asset_resolver import AssetMetadata, StubAssetResolver
 from retrovue.runtime.program_assembly import assemble_schedule_block, _MIGRATION_EPOCH
 from retrovue.runtime.schedule_compiler import compile_schedule
@@ -677,7 +678,7 @@ class TestCompileScheduleEmissions:
         from retrovue.runtime.schedule_compiler import compilation_seed
         seed = compilation_seed("test-ch", "2026-03-09")
 
-        result_day1 = compile_schedule(dsl, resolver, seed=seed, run_store=store)
+        result_day1 = compile_schedule(dsl, resolver, seed=seed, run_store=store, resolved_config=TEST_RESOLVED_CONFIG)
         day1_ids = [b["asset_id"] for b in result_day1["program_blocks"]]
         assert len(day1_ids) == 6, f"Expected 6 blocks, got {len(day1_ids)}"
 
@@ -687,7 +688,7 @@ class TestCompileScheduleEmissions:
         # Day 2
         dsl2 = dict(dsl, broadcast_day="2026-03-10")
         seed2 = compilation_seed("test-ch", "2026-03-10")
-        result_day2 = compile_schedule(dsl2, resolver, seed=seed2, run_store=store)
+        result_day2 = compile_schedule(dsl2, resolver, seed=seed2, run_store=store, resolved_config=TEST_RESOLVED_CONFIG)
         day2_ids = [b["asset_id"] for b in result_day2["program_blocks"]]
 
         # No overlap between days

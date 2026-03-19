@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from retrovue.config.testing import TEST_RESOLVED_CONFIG
 from retrovue.infra.exceptions import ConfigurationError
 from retrovue.runtime.providers import YamlChannelConfigProvider
 
@@ -25,7 +26,7 @@ def test_channel_numbers_must_be_unique():
         (d / "ch1.yaml").write_text("channel: ch1\nnumber: 101\nname: Ch1\n")
         (d / "ch2.yaml").write_text("channel: ch2\nnumber: 101\nname: Ch2\n")
         with pytest.raises(ConfigurationError) as exc_info:
-            YamlChannelConfigProvider(d).to_channels_list()
+            YamlChannelConfigProvider(d, resolved_config=TEST_RESOLVED_CONFIG).to_channels_list()
         assert "Duplicate channel number" in str(exc_info.value)
         assert "101" in str(exc_info.value)
 
@@ -36,7 +37,7 @@ def test_channel_numbers_must_be_positive():
         d = Path(tmp)
         (d / "ch1.yaml").write_text("channel: ch1\nnumber: 0\nname: Ch1\n")
         with pytest.raises(ConfigurationError) as exc_info:
-            YamlChannelConfigProvider(d).to_channels_list()
+            YamlChannelConfigProvider(d, resolved_config=TEST_RESOLVED_CONFIG).to_channels_list()
         assert "positive" in str(exc_info.value).lower()
 
 
@@ -46,7 +47,7 @@ def test_channel_numbers_must_be_integer():
         d = Path(tmp)
         (d / "ch1.yaml").write_text("channel: ch1\nnumber: 101.5\nname: Ch1\n")
         with pytest.raises(ConfigurationError) as exc_info:
-            YamlChannelConfigProvider(d).to_channels_list()
+            YamlChannelConfigProvider(d, resolved_config=TEST_RESOLVED_CONFIG).to_channels_list()
         assert "integer" in str(exc_info.value).lower()
 
 
@@ -55,7 +56,7 @@ def test_channel_number_propagates_to_channels_list():
     with tempfile.TemporaryDirectory() as tmp:
         d = Path(tmp)
         (d / "ch1.yaml").write_text("channel: ch1\nnumber: 201\nname: Ch1\n")
-        provider = YamlChannelConfigProvider(d)
+        provider = YamlChannelConfigProvider(d, resolved_config=TEST_RESOLVED_CONFIG)
         channels = provider.to_channels_list()
         assert len(channels) == 1
         assert channels[0]["number"] == 201
@@ -68,7 +69,7 @@ def test_channel_number_required_raises_when_missing():
         d = Path(tmp)
         (d / "ch1.yaml").write_text("channel: ch1\nname: Ch1\n")
         with pytest.raises(ConfigurationError) as exc_info:
-            YamlChannelConfigProvider(d).to_channels_list()
+            YamlChannelConfigProvider(d, resolved_config=TEST_RESOLVED_CONFIG).to_channels_list()
         assert "Missing" in str(exc_info.value)
         assert "number" in str(exc_info.value).lower()
 
@@ -78,7 +79,7 @@ def test_channel_number_backward_compat_channel_number_key():
     with tempfile.TemporaryDirectory() as tmp:
         d = Path(tmp)
         (d / "ch1.yaml").write_text("channel: ch1\nchannel_number: 301\nname: Ch1\n")
-        provider = YamlChannelConfigProvider(d)
+        provider = YamlChannelConfigProvider(d, resolved_config=TEST_RESOLVED_CONFIG)
         channels = provider.to_channels_list()
         assert len(channels) == 1
         assert channels[0]["number"] == 301

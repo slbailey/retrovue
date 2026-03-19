@@ -12,6 +12,7 @@ import pytest
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
+from retrovue.config.testing import TEST_RESOLVED_CONFIG
 from retrovue.runtime.asset_resolver import AssetMetadata, StubAssetResolver
 from retrovue.runtime.schedule_compiler import (
     CompileError,
@@ -177,7 +178,7 @@ def _three_block_dsl() -> dict:
 
 def _compile(dsl: dict, resolver: StubAssetResolver) -> list[dict]:
     """Compile and return program_blocks list."""
-    result = compile_schedule(dsl, resolver, seed=42)
+    result = compile_schedule(dsl, resolver, seed=42, resolved_config=TEST_RESOLVED_CONFIG)
     return result["program_blocks"]
 
 

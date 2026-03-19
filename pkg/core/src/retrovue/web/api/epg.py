@@ -28,8 +28,9 @@ YAML_CHANNELS_DIR = Path("/opt/retrovue/config/channels")
 
 def _load_channels() -> list[dict[str, Any]]:
     from retrovue.runtime.providers import YamlChannelConfigProvider
+    from retrovue.config import load_defaults
     if YAML_CHANNELS_DIR.is_dir():
-        return YamlChannelConfigProvider(YAML_CHANNELS_DIR).to_channels_list()
+        return YamlChannelConfigProvider(YAML_CHANNELS_DIR, resolved_config=load_defaults()).to_channels_list()
     return []
 
 
@@ -55,8 +56,10 @@ def _compile_epg(channel_cfg: dict[str, Any], broadcast_day: str, resolver: Cata
     from retrovue.runtime.schedule_compiler import compilation_seed
     _seed = compilation_seed(ch_id, broadcast_day)
 
+    from retrovue.config import load_defaults
     schedule = compile_schedule(dsl, resolver=resolver, dsl_path=dsl_path,
-                                seed=_seed, run_store=run_store)
+                                seed=_seed, run_store=run_store,
+                                resolved_config=load_defaults())
 
     entries = []
     for block in schedule["program_blocks"]:

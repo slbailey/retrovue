@@ -18,15 +18,17 @@ app = typer.Typer(help="Retrovue Channel Manager commands (alias for program-dir
 YAML_CHANNELS_DIR = Path("/opt/retrovue/config/channels")
 
 
-def _build_config_provider(channel_config: str | None):
+def _build_config_provider(channel_config: str | None, resolved_config=None):
     """Build the appropriate config provider from the YAML channels directory."""
-    # If explicit path given, treat as YAML directory
-    if channel_config:
-        return YamlChannelConfigProvider(Path(channel_config))
+    if resolved_config is None:
+        from retrovue.config import load_defaults
+        resolved_config = load_defaults()
 
-    # YAML auto-discovery directory
+    if channel_config:
+        return YamlChannelConfigProvider(Path(channel_config), resolved_config=resolved_config)
+
     if YAML_CHANNELS_DIR.is_dir():
-        return YamlChannelConfigProvider(YAML_CHANNELS_DIR)
+        return YamlChannelConfigProvider(YAML_CHANNELS_DIR, resolved_config=resolved_config)
 
     return None
 

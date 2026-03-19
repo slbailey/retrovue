@@ -5,6 +5,7 @@ import time
 from retrovue.runtime.clock import RealTimeMasterClock, SteppedMasterClock
 from retrovue.runtime.config import InlineChannelConfigProvider, MOCK_CHANNEL_CONFIG
 from retrovue.runtime.program_director import ProgramDirector
+from retrovue.config.testing import TEST_RESOLVED_CONFIG
 
 
 def test_program_director_start_stop_without_channels():
@@ -13,6 +14,7 @@ def test_program_director_start_stop_without_channels():
         clock=clock,
         target_hz=15.0,
         channel_config_provider=InlineChannelConfigProvider([MOCK_CHANNEL_CONFIG]),
+        resolved_config=TEST_RESOLVED_CONFIG,
     )
 
     director.start()
@@ -39,6 +41,7 @@ def test_program_director_stepped_clock_no_sleep():
         target_hz=10.0,
         sleep_fn=None,
         channel_config_provider=InlineChannelConfigProvider([MOCK_CHANNEL_CONFIG]),
+        resolved_config=TEST_RESOLVED_CONFIG,
     )
 
     director.start()
