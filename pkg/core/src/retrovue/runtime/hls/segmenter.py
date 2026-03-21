@@ -173,10 +173,19 @@ class HlsSegmenter:
         self._force_next_discontinuity = True
 
         # --- BlockPlan timebase (editorial wall-clock) ---
+        # Current (mutable) timebase — updated by set_blockplan_timebase().
         self._timebase_start_utc_ms: int = 0
         self._timebase_pcr_origin: int | None = None  # PCR at timebase start
         self._active_block_start_utc_ms: int = 0
         self._active_block_end_utc_ms: int = 0
+
+        # --- INV-HLS-SEGMENT-EDITORIAL-TIMEBASE-IMMUTABILITY-001 ---
+        # Per-segment snapshot: frozen when the segment begins accumulating.
+        # _finalize_segment() uses these instead of the mutable fields above.
+        self._snap_timebase_start_utc_ms: int = 0
+        self._snap_timebase_pcr_origin: int | None = None
+        self._snap_active_block_start_utc_ms: int = 0
+        self._snap_active_block_end_utc_ms: int = 0
 
         # --- Stall detection ---
         self._last_completed_index: int | None = None
@@ -253,6 +262,7 @@ class HlsSegmenter:
             self._next_index = next_index
             self._closed = False
             self._timebase_pcr_origin = None
+            self._snap_timebase_pcr_origin = None
 
     def set_blockplan_timebase(
         self,
@@ -288,6 +298,19 @@ class HlsSegmenter:
         """
         return self._last_completed_monotonic_ms
 
+    def _snapshot_timebase(self) -> None:
+        """Freeze the current timebase into per-segment snapshot fields.
+
+        INV-HLS-SEGMENT-EDITORIAL-TIMEBASE-IMMUTABILITY-001:
+        Once a segment begins accumulation, its editorial wallclock mapping
+        is bound to the timebase active at segment start, regardless of
+        later blockplan changes. Must be called with lock held.
+        """
+        self._snap_timebase_start_utc_ms = self._timebase_start_utc_ms
+        self._snap_timebase_pcr_origin = self._timebase_pcr_origin
+        self._snap_active_block_start_utc_ms = self._active_block_start_utc_ms
+        self._snap_active_block_end_utc_ms = self._active_block_end_utc_ms
+
     # ------------------------------------------------------------------
     # Internal packet processing
     # ------------------------------------------------------------------
@@ -310,6 +333,7 @@ class HlsSegmenter:
 
             if self._seg_start_pcr is None:
                 self._seg_start_pcr = pcr
+                self._snapshot_timebase()
 
             if self._timebase_pcr_origin is None:
                 self._timebase_pcr_origin = pcr
@@ -354,6 +378,7 @@ class HlsSegmenter:
             self._seg_buffer = bytearray()
             self._seg_pkt_count = 0
             self._seg_start_pcr = self._last_pcr
+            self._snapshot_timebase()
             return
 
         seg_data = bytes(self._seg_buffer)
@@ -391,22 +416,23 @@ class HlsSegmenter:
             discontinuity=is_discontinuous,
         )
 
-        # INV-HLS-SEGMENT-WALLCLOCK-AUDIT-001: audit against active block range
-        if self._active_block_end_utc_ms > 0:
-            if not (self._active_block_start_utc_ms <= wall_clock_ms < self._active_block_end_utc_ms):
+        # INV-HLS-SEGMENT-BLOCK-ALIGNMENT-001: audit against the snapshot block
+        # window (the block that was active when this segment started).
+        if self._snap_active_block_end_utc_ms > 0:
+            if not (self._snap_active_block_start_utc_ms <= wall_clock_ms < self._snap_active_block_end_utc_ms):
                 self._log.warning(
                     "INV-HLS-SEGMENT-WALLCLOCK-AUDIT-001: segment %d wall_clock %d "
                     "outside active block [%d, %d) for channel %s",
                     index, wall_clock_ms,
-                    self._active_block_start_utc_ms, self._active_block_end_utc_ms,
+                    self._snap_active_block_start_utc_ms, self._snap_active_block_end_utc_ms,
                     self._channel_id,
                 )
                 self._diag(
                     "INV-HLS-SEGMENT-WALLCLOCK-AUDIT-001",
                     index=index,
                     wall_clock_ms=wall_clock_ms,
-                    active_block_start_utc_ms=self._active_block_start_utc_ms,
-                    active_block_end_utc_ms=self._active_block_end_utc_ms,
+                    active_block_start_utc_ms=self._snap_active_block_start_utc_ms,
+                    active_block_end_utc_ms=self._snap_active_block_end_utc_ms,
                 )
 
         # Update tracking state
@@ -428,18 +454,21 @@ class HlsSegmenter:
         self._seg_buffer = bytearray()
         self._seg_pkt_count = 0
         self._seg_start_pcr = self._last_pcr
+        self._snapshot_timebase()
 
     def _compute_wall_clock_ms(self) -> int:
-        """Derive wall-clock timestamp from BlockPlan timebase + PCR offset.
+        """Derive wall-clock timestamp from frozen per-segment timebase snapshot.
 
         INV-HLS-SEGMENT-WALLCLOCK-001: No system clock calls.
         INV-HLS-MANIFEST-PDT-CLOCK-SOURCE-001: Derived from editorial timebase.
+        INV-HLS-SEGMENT-EDITORIAL-TIMEBASE-IMMUTABILITY-001: Uses the
+        snapshot captured when the segment began, not the current mutable
+        timebase.
         """
-        if self._timebase_pcr_origin is not None and self._seg_start_pcr is not None:
-            # PCR offset from timebase origin, converted to ms
-            pcr_offset_ticks = self._seg_start_pcr - self._timebase_pcr_origin
+        if self._snap_timebase_pcr_origin is not None and self._seg_start_pcr is not None:
+            pcr_offset_ticks = self._seg_start_pcr - self._snap_timebase_pcr_origin
             pcr_offset_ms = (pcr_offset_ticks * 1000) // 90000
-            return self._timebase_start_utc_ms + pcr_offset_ms
+            return self._snap_timebase_start_utc_ms + pcr_offset_ms
 
-        # Fallback: use timebase start directly (first segment case)
-        return self._timebase_start_utc_ms
+        # Fallback: use snapshot start directly (first segment case)
+        return self._snap_timebase_start_utc_ms

@@ -53,7 +53,9 @@ def start(
         format="%(levelname)s:     %(message)s",
         force=True,
     )
-    config_provider = _build_config_provider(channel_config)
+    from retrovue.config import load_defaults
+    _resolved = load_defaults()
+    config_provider = _build_config_provider(channel_config, resolved_config=_resolved)
 
     if config_provider is None:
         typer.echo(
@@ -68,6 +70,7 @@ def start(
         port=port,
         schedule_dir=Path(schedule_dir) if schedule_dir else None,
         channel_config_provider=config_provider,
+        resolved_config=_resolved,
     )
     program_director.start()
     try:
@@ -114,7 +117,9 @@ def start_channel_cmd(
         format="%(levelname)s:     %(message)s",
         force=True,
     )
-    config_provider = _build_config_provider(channel_config)
+    from retrovue.config import load_defaults
+    _resolved = load_defaults()
+    config_provider = _build_config_provider(channel_config, resolved_config=_resolved)
 
     if config_provider is None:
         typer.echo("Error: Channel config is required.", err=True)
@@ -125,6 +130,7 @@ def start_channel_cmd(
         port=port,
         schedule_dir=Path(schedule_dir) if schedule_dir else None,
         channel_config_provider=config_provider,
+        resolved_config=_resolved,
     )
     # CLI-started channel: pass grace period so channel tears down if no viewer connects in time
     pre_warmed_grace = None if dry_run else grace_period

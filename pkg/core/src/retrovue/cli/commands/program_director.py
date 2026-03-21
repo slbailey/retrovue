@@ -136,6 +136,7 @@ def start(
             asset_a_path=asset_a,
             asset_b_path=asset_b,
             segment_seconds=segment_seconds,
+            resolved_config=_resolved,
         )
     elif mock_schedule_grid:
         program_director = ProgramDirector(
@@ -147,12 +148,14 @@ def start(
             program_duration_seconds=program_duration,
             filler_asset_path=filler_asset,
             filler_duration_seconds=filler_duration,
+            resolved_config=_resolved,
         )
     else:
         program_director = ProgramDirector(
             host="0.0.0.0",
             port=http_port,
             channel_config_provider=channel_config_provider,
+            resolved_config=_resolved,
         )
 
     program_director.start()
