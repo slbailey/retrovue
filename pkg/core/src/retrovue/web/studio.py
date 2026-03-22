@@ -1,6 +1,6 @@
 """RetroVue Studio — Interstitial Tagging UI"""
 from __future__ import annotations
-import json, math, sqlite3 as sq
+import json, math, os, sqlite3 as sq
 from pathlib import Path
 from typing import Optional, Any
 from uuid import UUID
@@ -12,7 +12,7 @@ from pydantic import BaseModel
 router = APIRouter(prefix="/studio", tags=["studio"])
 SQLITE = "/opt/retrovue/data/retrovue.db"
 TPL    = "/opt/retrovue/pkg/core/templates/studio/studio.html"
-PGDSN  = "host=192.168.1.50 dbname=retrovue user=retrovue password=***REDACTED_PASSWORD***"
+PGDSN  = os.environ.get("PGDSN", "host=192.168.1.50 dbname=retrovue user=retrovue")
 INTERSTITIAL_COLS = ["commercials","promos","bumpers","psas","station_ids","trailers","teasers","shortform","oddities"]
 
 def _sq():

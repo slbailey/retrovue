@@ -149,6 +149,7 @@ def make_test_config(**overrides: Any) -> MappingProxyType[str, Any]:
             "filler": {
                 "path": "/opt/retrovue/assets/filler.mp4",
                 "duration_ms": 3650000,
+                "alignment": "start",
             },
         },
         "hls": {

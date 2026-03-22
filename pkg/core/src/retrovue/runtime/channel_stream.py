@@ -1099,6 +1099,25 @@ async def generate_ts_stream_async(client_queue: Queue[bytes]) -> Any:
     _diag_timeout_total = 0
     _exit_reason = "normal"
 
+    # TS liveness tracking — zero steady-state logging
+    _ts_session_start_mono = time.monotonic()
+    _ts_last_write_mono = _ts_session_start_mono
+    _ts_max_gap_ms: float = 0.0
+    _ts_stall_count = 0
+    _TS_STALL_THRESHOLD_S = 2.0  # emit TS_WRITE_STALL if gap exceeds this
+
+    # Cadence histogram — bucket counts, zero per-write logging
+    # Buckets: 0-10, 10-30, 30-60, 60-100, 100-300, 300+ ms
+    _cadence_buckets = [0, 0, 0, 0, 0, 0]  # counts per bucket
+    _cadence_sum_ms: float = 0.0  # for avg computation
+    # Burst detection: runs of <10ms followed by >100ms
+    _burst_count = 0
+    _in_rapid_run = False
+    # Sorted reservoir for percentile estimation (fixed-size)
+    _RESERVOIR_SIZE = 2000
+    _cadence_reservoir: list[float] = []
+    _cadence_reservoir_idx = 0  # total samples seen (for reservoir sampling)
+
     while True:
         try:
             t_drain_start = time.monotonic_ns()
@@ -1113,6 +1132,58 @@ async def generate_ts_stream_async(client_queue: Queue[bytes]) -> Any:
                 break
             _diag_yield_count += 1
             _diag_yield_cumulative_bytes += len(batch)
+
+            # TS liveness: track write gap
+            now_mono = time.monotonic()
+            gap_ms = (now_mono - _ts_last_write_mono) * 1000.0
+            if gap_ms > _ts_max_gap_ms:
+                _ts_max_gap_ms = gap_ms
+            # Stall detector: only fires on anomaly
+            if gap_ms > _TS_STALL_THRESHOLD_S * 1000.0:
+                _ts_stall_count += 1
+                _logger.warning(
+                    "TS_WRITE_STALL: gap_ms=%.0f bytes_total=%d "
+                    "yields=%d stall_count=%d timeouts=%d",
+                    gap_ms, _diag_yield_cumulative_bytes,
+                    _diag_yield_count, _ts_stall_count, _diag_timeout_total,
+                )
+
+            # Cadence histogram (no logging, just accumulate)
+            _cadence_sum_ms += gap_ms
+            if gap_ms < 10:
+                _cadence_buckets[0] += 1
+            elif gap_ms < 30:
+                _cadence_buckets[1] += 1
+            elif gap_ms < 60:
+                _cadence_buckets[2] += 1
+            elif gap_ms < 100:
+                _cadence_buckets[3] += 1
+            elif gap_ms < 300:
+                _cadence_buckets[4] += 1
+            else:
+                _cadence_buckets[5] += 1
+
+            # Burst detection: rapid run (<10ms) followed by gap (>100ms)
+            if gap_ms < 10:
+                _in_rapid_run = True
+            elif _in_rapid_run and gap_ms > 100:
+                _burst_count += 1
+                _in_rapid_run = False
+            else:
+                _in_rapid_run = False
+
+            # Reservoir sampling for percentiles
+            import random as _rand
+            _cadence_reservoir_idx += 1
+            if len(_cadence_reservoir) < _RESERVOIR_SIZE:
+                _cadence_reservoir.append(gap_ms)
+            else:
+                j = _rand.randint(0, _cadence_reservoir_idx - 1)
+                if j < _RESERVOIR_SIZE:
+                    _cadence_reservoir[j] = gap_ms
+
+            _ts_last_write_mono = now_mono
+
             # CORE_TRANSPORT_DIAG: HTTP yield timing
             if _DIAG_ENABLED:
                 if (_diag_yield_count <= _DIAG_STARTUP_EVENTS or
@@ -1150,6 +1221,35 @@ async def generate_ts_stream_async(client_queue: Queue[bytes]) -> Any:
                 break
             raise
 
+    # TS_SESSION_SUMMARY: once on disconnect, always emitted
+    session_duration_s = time.monotonic() - _ts_session_start_mono
+    total_writes = sum(_cadence_buckets)
+    avg_ms = (_cadence_sum_ms / total_writes) if total_writes > 0 else 0.0
+
+    # Percentiles from reservoir
+    _p50 = _p95 = _p99 = 0.0
+    if _cadence_reservoir:
+        _sorted = sorted(_cadence_reservoir)
+        _n = len(_sorted)
+        _p50 = _sorted[int(_n * 0.50)]
+        _p95 = _sorted[int(min(_n * 0.95, _n - 1))]
+        _p99 = _sorted[int(min(_n * 0.99, _n - 1))]
+
+    _logger.info(
+        "TS_SESSION_SUMMARY: reason=%s duration_s=%.1f bytes=%d "
+        "yields=%d max_gap_ms=%.0f stalls=%d timeouts=%d",
+        _exit_reason, session_duration_s, _diag_yield_cumulative_bytes,
+        _diag_yield_count, _ts_max_gap_ms, _ts_stall_count,
+        _diag_timeout_total,
+    )
+    _logger.info(
+        "TS_CADENCE: avg_ms=%.1f p50=%.1f p95=%.1f p99=%.1f max=%.0f "
+        "bursts=%d histogram=[0-10:%d 10-30:%d 30-60:%d 60-100:%d 100-300:%d 300+:%d]",
+        avg_ms, _p50, _p95, _p99, _ts_max_gap_ms,
+        _burst_count,
+        _cadence_buckets[0], _cadence_buckets[1], _cadence_buckets[2],
+        _cadence_buckets[3], _cadence_buckets[4], _cadence_buckets[5],
+    )
     _logger.info(
         "[HTTP] GENERATOR_EXIT reason=%s yields=%d bytes=%d timeouts=%d",
         _exit_reason, _diag_yield_count, _diag_yield_cumulative_bytes,

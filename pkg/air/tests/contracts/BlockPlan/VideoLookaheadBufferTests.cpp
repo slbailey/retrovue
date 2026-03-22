@@ -280,17 +280,20 @@ TEST(VideoLookaheadBufferTest, FillThreadRefillsAfterPop) {
                        std::chrono::milliseconds(500)));
 
   // Pop 3 frames to drop below target.
+  // INV-FIVS-TRYPOP-EVICTION-SAFE-001: TryPopFrame does not evict;
+  // UpdateConsumerPosition must be called to inform the fill thread.
   int pop_count = 3;
   for (int i = 0; i < pop_count; i++) {
     VideoBufferFrame out;
     ASSERT_TRUE(buf.TryPopFrame(out));
+    buf.UpdateConsumerPosition(out.source_frame_index);
   }
 
-  EXPECT_EQ(buf.DepthFrames(), target - pop_count);
-
-  // Wait for fill thread to refill to target.
+  // After UpdateConsumerPosition, the fill thread evicts and refills asynchronously.
+  // Wait for refill — the fill thread will evict old frames and decode new ones.
   ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= target; },
-                       std::chrono::milliseconds(500)));
+                       std::chrono::seconds(2)))
+      << "Fill thread did not refill after UpdateConsumerPosition, depth=" << buf.DepthFrames();
 
   EXPECT_GE(buf.DepthFrames(), target);
 
@@ -462,10 +465,12 @@ TEST(VideoLookaheadBufferTest, StallSimulation) {
   mock.SetDecodeDelay(std::chrono::milliseconds(20));
 
   // Simulate 30 ticks of consumption (~1 second at 30fps).
+  // INV-FIVS-TRYPOP-EVICTION-SAFE-001: pair TryPopFrame with UpdateConsumerPosition.
   int frames_consumed = 0;
   for (int i = 0; i < 30; i++) {
     VideoBufferFrame out;
     if (buf.TryPopFrame(out)) {
+      buf.UpdateConsumerPosition(out.source_frame_index);
       frames_consumed++;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(33));

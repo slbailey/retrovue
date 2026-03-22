@@ -206,6 +206,7 @@ channel:
   filler:
     path: "/opt/retrovue/assets/filler.mp4"
     duration_ms: 3650000
+    alignment: "end"
 
 
 # --------------------------------------------------------------------------

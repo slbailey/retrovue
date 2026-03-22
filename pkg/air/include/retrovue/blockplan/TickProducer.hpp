@@ -247,6 +247,15 @@ class TickProducer : public producers::IProducer,
   // snapped block_ct_ms_.
   int64_t seg_first_pts_ms_ = -1;
 
+  // INV-PTS-DISCONTINUITY-ABSORB-001: Intra-segment PTS correction.
+  // When a source PTS jump is detected within a segment (decoded_pts
+  // jumps by more than 2x the expected frame period), the excess is
+  // accumulated here and subtracted from all subsequent decoded_pts
+  // values so that content-time remains continuous at playout rate.
+  // Reset to 0 on segment switch.
+  int64_t pts_correction_ms_ = 0;
+  int64_t prev_decoded_pts_ms_ = -1;
+
   // Monotonic counter: incremented each time a segment decoder is opened.
   // Logged for correlation across segment transitions.
   int32_t open_generation_ = 0;

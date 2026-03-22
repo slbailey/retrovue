@@ -237,6 +237,8 @@ TEST(LookaheadContract, TickThread_NeverCallsVideoDecodeAPIs) {
     VideoBufferFrame vbf;
     ASSERT_TRUE(buf.TryPopFrame(vbf))
         << "Unexpected underflow at tick " << t;
+    buf.UpdateConsumerPosition(vbf.source_frame_index);
+    buf.UpdateConsumerPosition(vbf.source_frame_index);
     // Minimal sleep to simulate 30fps cadence and give fill thread time.
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
@@ -278,6 +280,7 @@ TEST(LookaheadContract, TickThread_NeverCallsAudioDecodeAPIs) {
   for (int t = 0; t < 30; t++) {
     VideoBufferFrame vbf;
     ASSERT_TRUE(vbuf.TryPopFrame(vbf));
+    vbuf.UpdateConsumerPosition(vbf.source_frame_index);
 
     // Pop audio (1600 samples for 30fps @ 48kHz).
     buffer::AudioFrame af;
@@ -328,6 +331,7 @@ TEST(LookaheadContract, TickThread_PrimedFrameIsOnlyException) {
   for (int t = 0; t < 30; t++) {
     VideoBufferFrame vbf;
     ASSERT_TRUE(buf.TryPopFrame(vbf));
+    buf.UpdateConsumerPosition(vbf.source_frame_index);
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
 
@@ -381,6 +385,7 @@ TEST(LookaheadContract, VideoDecodeStall_BufferAbsorbsLatency) {
     ASSERT_TRUE(buf.TryPopFrame(vbf))
         << "INV-VIDEO-LOOKAHEAD-001 R5 violation: underflow at tick " << t
         << " despite buffer headroom (depth=" << buf.DepthFrames() << ")";
+    buf.UpdateConsumerPosition(vbf.source_frame_index);
     consumed++;
     std::this_thread::sleep_for(std::chrono::milliseconds(33));
   }
@@ -424,6 +429,7 @@ TEST(LookaheadContract, AudioDecodeStall_BufferAbsorbsLatency) {
     VideoBufferFrame vbf;
     ASSERT_TRUE(vbuf.TryPopFrame(vbf))
         << "Video underflow at tick " << t;
+    vbuf.UpdateConsumerPosition(vbf.source_frame_index);
 
     // Pop audio: exact rational sample count (30fps @ 48kHz = 1600/tick).
     if (abuf.IsPrimed()) {
@@ -466,6 +472,7 @@ TEST(LookaheadContract, CombinedStall_BothBuffersSustainOutput) {
   for (int t = 0; t < 10; t++) {
     VideoBufferFrame vbf;
     ASSERT_TRUE(vbuf.TryPopFrame(vbf));
+    vbuf.UpdateConsumerPosition(vbf.source_frame_index);
     std::this_thread::sleep_for(std::chrono::milliseconds(33));
   }
 
@@ -476,6 +483,7 @@ TEST(LookaheadContract, CombinedStall_BothBuffersSustainOutput) {
     VideoBufferFrame vbf;
     ASSERT_TRUE(vbuf.TryPopFrame(vbf))
         << "Video underflow at tick " << t << " during stall phase";
+    vbuf.UpdateConsumerPosition(vbf.source_frame_index);
     std::this_thread::sleep_for(std::chrono::milliseconds(33));
   }
 
@@ -572,6 +580,7 @@ TEST(LookaheadContract, VideoUnderflow_ReturnsFalse_NoPadInjected) {
   // Drain all buffered frames from deque.
   VideoBufferFrame vbf;
   while (buf.TryPopFrame(vbf)) {
+    buf.UpdateConsumerPosition(vbf.source_frame_index);
     // drain
   }
 
@@ -581,6 +590,7 @@ TEST(LookaheadContract, VideoUnderflow_ReturnsFalse_NoPadInjected) {
   // Next pop MUST fail — no substitute data.
   VideoBufferFrame vbf2;
   bool ok = buf.TryPopFrame(vbf2);
+  if (ok) buf.UpdateConsumerPosition(vbf2.source_frame_index);
 
   EXPECT_FALSE(ok)
       << "INV-VIDEO-LOOKAHEAD-001 R3 violation: TryPopFrame must return false "
@@ -629,6 +639,7 @@ TEST(LookaheadContract, VideoUnderflow_NeverReturnsSubstituteData) {
   vbf.block_ct_ms = 999;
 
   bool ok = buf.TryPopFrame(vbf);
+  if (ok) buf.UpdateConsumerPosition(vbf.source_frame_index);
   EXPECT_FALSE(ok);
 
   // The output struct must NOT have been modified with substitute data.
@@ -717,6 +728,7 @@ TEST(LookaheadContract, FenceTick_DeliversNextBlock_ExactIndex) {
     VideoBufferFrame vbf;
     ASSERT_TRUE(buf.TryPopFrame(vbf))
         << "Underflow before fence at tick " << t;
+    buf.UpdateConsumerPosition(vbf.source_frame_index);
     EXPECT_EQ(vbf.asset_uri, "block_a.mp4")
         << "Pre-fence frames must be from block A";
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -733,6 +745,7 @@ TEST(LookaheadContract, FenceTick_DeliversNextBlock_ExactIndex) {
   VideoBufferFrame fence_frame;
   ASSERT_TRUE(buf.TryPopFrame(fence_frame))
       << "Fence tick frame must be available immediately (primed frame)";
+  buf.UpdateConsumerPosition(fence_frame.source_frame_index);
   EXPECT_EQ(fence_frame.asset_uri, "block_b.mp4")
       << "INV-VIDEO-LOOKAHEAD-001 R4 violation: fence tick frame must be from "
          "the next block";
@@ -747,6 +760,7 @@ TEST(LookaheadContract, FenceTick_DeliversNextBlock_ExactIndex) {
   for (int t = 0; t < kTotalTicksAfterFence; t++) {
     VideoBufferFrame vbf;
     ASSERT_TRUE(buf.TryPopFrame(vbf));
+    buf.UpdateConsumerPosition(vbf.source_frame_index);
     EXPECT_EQ(vbf.asset_uri, "block_b.mp4")
         << "Post-fence frames must be from block B";
   }
@@ -789,6 +803,7 @@ TEST(LookaheadContract, FenceTick_PrecisionPreservedUnderStall) {
     ASSERT_TRUE(buf.TryPopFrame(vbf))
         << "Underflow before fence at tick " << t
         << " (depth=" << buf.DepthFrames() << ")";
+    buf.UpdateConsumerPosition(vbf.source_frame_index);
     std::this_thread::sleep_for(std::chrono::milliseconds(33));
   }
 
@@ -800,6 +815,7 @@ TEST(LookaheadContract, FenceTick_PrecisionPreservedUnderStall) {
   VideoBufferFrame fence_frame;
   ASSERT_TRUE(buf.TryPopFrame(fence_frame))
       << "Fence tick frame must be available despite prior stall";
+  buf.UpdateConsumerPosition(fence_frame.source_frame_index);
   EXPECT_EQ(fence_frame.asset_uri, "block_b.mp4")
       << "INV-VIDEO-LOOKAHEAD-001 R4 violation: fence tick frame must be from "
          "new block even under prior decode stall";
@@ -880,6 +896,7 @@ TEST(LookaheadContract, FenceTick_RapidTransitions_Stable) {
                          std::chrono::milliseconds(500)));
     VideoBufferFrame vbf;
     ASSERT_TRUE(buf.TryPopFrame(vbf));
+    buf.UpdateConsumerPosition(vbf.source_frame_index);
     EXPECT_EQ(vbf.asset_uri, uri)
         << "Fence frame for block " << block_idx << " must be from that block";
     EXPECT_EQ(vbf.video.data[0], static_cast<uint8_t>(block_idx));
@@ -889,6 +906,7 @@ TEST(LookaheadContract, FenceTick_RapidTransitions_Stable) {
                          std::chrono::milliseconds(500)));
     for (int t = 0; t < 3; t++) {
       ASSERT_TRUE(buf.TryPopFrame(vbf));
+      buf.UpdateConsumerPosition(vbf.source_frame_index);
     }
 
     // Stop+flush before next block.

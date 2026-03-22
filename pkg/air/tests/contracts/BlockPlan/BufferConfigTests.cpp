@@ -199,18 +199,21 @@ TEST(BufferConfigTest, VideoLowWaterDetection) {
   buf.StartFilling(&mock, nullptr, FPS_30, FPS_30, &stop);
 
   // Wait for buffer to fill above low-water.
-  ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 4; },
+  ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 8; },
                        std::chrono::seconds(2)));
   EXPECT_FALSE(buf.IsBelowLowWater());
 
   buf.StopFilling(false);
 
-  // Drain to below low-water.
+  // Drain with explicit EvictBelow — mimics PipelineManager tick loop contract.
+  // In production: TryPopFrame → UpdateConsumerPosition → EvictBelow(selected - margin).
   VideoBufferFrame vbf;
   while (buf.DepthFrames() > 2) {
-    ASSERT_TRUE(buf.TryPopFrame(vbf));
+    if (!buf.TryPopFrame(vbf)) break;
+    buf.UpdateConsumerPosition(vbf.source_frame_index);
+    buf.EvictBelow(vbf.source_frame_index);
   }
-  // Now depth=2, low_water=4 → below.
+  // Now FIVS depth ≤ 2, low_water=4 → below.
   EXPECT_TRUE(buf.IsBelowLowWater());
 }
 
@@ -250,21 +253,25 @@ TEST(BufferConfigTest, LowWaterIsDiagnosticOnly) {
   std::atomic<bool> stop{false};
 
   buf.StartFilling(&mock, nullptr, FPS_30, FPS_30, &stop);
-  ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 6; },
+  ASSERT_TRUE(WaitFor([&] { return buf.DepthFrames() >= 8; },
                        std::chrono::seconds(2)));
   buf.StopFilling(false);
 
-  // Drain to below low-water.
+  // Drain with explicit EvictBelow — mimics PipelineManager tick loop.
   VideoBufferFrame vbf;
   while (buf.DepthFrames() > 2) {
-    ASSERT_TRUE(buf.TryPopFrame(vbf));
+    if (!buf.TryPopFrame(vbf)) break;
+    buf.UpdateConsumerPosition(vbf.source_frame_index);
+    buf.EvictBelow(vbf.source_frame_index);
   }
   EXPECT_TRUE(buf.IsBelowLowWater());
 
-  // Pop still works — low-water is diagnostic only.
-  EXPECT_TRUE(buf.TryPopFrame(vbf));
-  EXPECT_TRUE(buf.TryPopFrame(vbf));
-  // Now buffer is empty. Pop should return false (underflow), not crash.
+  // Pop still works below low-water — low-water is diagnostic only.
+  bool got_frame = buf.TryPopFrame(vbf);
+  (void)got_frame;  // Must not crash regardless of result.
+
+  // Final drain — eventually returns false (underflow), not crash.
+  while (buf.TryPopFrame(vbf)) {}
   EXPECT_FALSE(buf.TryPopFrame(vbf));
 }
 

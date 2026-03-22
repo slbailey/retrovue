@@ -9,6 +9,7 @@ Enrich asset durations from Plex metadata and promote ready assets.
 """
 
 import json
+import os
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -16,9 +17,9 @@ import xml.etree.ElementTree as ET
 import psycopg
 import requests
 
-DB_URL = "postgresql://retrovue:***REDACTED_PASSWORD***@192.168.1.50:5432/retrovue"
-PLEX_BASE = "https://plex.slbhome.com"
-PLEX_TOKEN = "***REDACTED_PLEX_TOKEN***"
+DB_URL = os.environ.get("DATABASE_URL", "postgresql://retrovue@192.168.1.50:5432/retrovue")
+PLEX_BASE = os.environ.get("PLEX_BASE", "https://plex.slbhome.com")
+PLEX_TOKEN = os.environ["PLEX_TOKEN"]  # required — see secrets.env
 
 
 def get_plex_duration(rating_key: str) -> int | None:

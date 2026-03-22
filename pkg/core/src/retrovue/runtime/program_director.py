@@ -538,7 +538,7 @@ class ProgramDirector:
             while dq and (now - dq[0]) > 30.0:
                 dq.popleft()
             hits = len(dq)
-        self._hls_diag_record(channel_id, RECONNECT_ATTEMPT, reason=reason, hits_30s=hits)
+        self._hls_diag_record(channel_id, "RECONNECT_ATTEMPT", reason=reason, hits_30s=hits)
         if hits >= 3:
             self._hls_diag_trigger(channel_id, "repeated_reconnect_attempts", hits_30s=hits)
 

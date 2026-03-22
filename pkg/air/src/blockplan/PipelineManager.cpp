@@ -2118,8 +2118,12 @@ void PipelineManager::Run() {
                   if (pts_drift_last_log_tick_ < 0 ||
                       session_frame_index - pts_drift_last_log_tick_ >= 30) {
                     pts_drift_last_log_tick_ = session_frame_index;
+                    auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count();
                     std::ostringstream oss;
                     oss << "[PipelineManager] PTS_DRIFT_DETECTED"
+                        << " wall_ms=" << now_ms
+                        << " session_frame=" << session_frame_index
                         << " actual_delta_us=" << delta
                         << " established_delta_us=" << pts_drift_established_delta_us_
                         << " deviation_us=" << deviation

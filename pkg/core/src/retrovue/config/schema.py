@@ -144,6 +144,7 @@ class ChannelDefaultProgramFormat(_Strict):
 class ChannelFiller(_Strict):
     path: str
     duration_ms: int
+    alignment: Literal["start", "end"]
 
 class ChannelSchema(_Strict):
     linger_seconds: int
@@ -399,6 +400,7 @@ class ChannelFillerYaml(BaseModel):
     model_config = ConfigDict(extra="forbid")
     path: str | None = None
     duration_ms: int | None = None
+    alignment: Literal["start", "end"] | None = None
 
 class ChannelYamlSchema(BaseModel):
     """

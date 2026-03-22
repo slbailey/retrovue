@@ -238,6 +238,8 @@ void TickProducer::AssignBlock(const FedBlock& block) {
   current_segment_index_ = 0;
   block_ct_ms_ = 0;
   seg_first_pts_ms_ = -1;  // INV-PTS-ANCHOR-RESET: capture from first decode
+  pts_correction_ms_ = 0;  // INV-PTS-DISCONTINUITY-ABSORB-001: reset on segment switch
+  prev_decoded_pts_ms_ = -1;
   decoder_ok_ = true;
   open_generation_++;
   std::cout << "[TickProducer] SEGMENT_DECODER_OPEN"
@@ -401,11 +403,28 @@ void TickProducer::PrimeFirstFrame() {
     seg_first_pts_ms_ = decoded_pts_ms;
   }
 
+  // INV-PTS-DISCONTINUITY-ABSORB-001: Detect and absorb intra-segment PTS jumps.
+  // If decoded PTS jumps by more than 2x the expected frame period, accumulate
+  // the excess into pts_correction_ms_ so CT remains continuous at playout rate.
+  if (prev_decoded_pts_ms_ >= 0) {
+    const int64_t expected_ms = InputFramePeriodMs();
+    const int64_t delta_ms = decoded_pts_ms - prev_decoded_pts_ms_;
+    const int64_t threshold_ms = expected_ms * 2;
+    if (std::abs(delta_ms) > threshold_ms && expected_ms > 0) {
+      const int64_t correction = delta_ms - expected_ms;
+      pts_correction_ms_ += correction;
+    }
+  }
+  prev_decoded_pts_ms_ = decoded_pts_ms;
+
+  // Apply accumulated correction to get continuous content-time.
+  int64_t corrected_pts_ms = decoded_pts_ms - pts_correction_ms_;
+
   int64_t seg_start_ct = 0;
   if (current_segment_index_ < static_cast<int32_t>(boundaries_.size())) {
     seg_start_ct = boundaries_[current_segment_index_].start_ct_ms;
   }
-  int64_t ct_before = seg_start_ct + (decoded_pts_ms - seg_first_pts_ms_);
+  int64_t ct_before = seg_start_ct + (corrected_pts_ms - seg_first_pts_ms_);
   next_frame_offset_ms_ = decoded_pts_ms + InputFramePeriodMs();
 
   primed_frame_ = FrameData{
@@ -937,12 +956,26 @@ std::optional<FrameData> TickProducer::DecodeNextFrameRaw(bool advance_output_st
     seg_first_pts_ms_ = decoded_pts_ms;
   }
 
+  // INV-PTS-DISCONTINUITY-ABSORB-001: Detect and absorb intra-segment PTS jumps.
+  if (prev_decoded_pts_ms_ >= 0) {
+    const int64_t expected_ms = InputFramePeriodMs();
+    const int64_t delta_ms = decoded_pts_ms - prev_decoded_pts_ms_;
+    const int64_t threshold_ms = expected_ms * 2;
+    if (std::abs(delta_ms) > threshold_ms && expected_ms > 0) {
+      const int64_t correction = delta_ms - expected_ms;
+      pts_correction_ms_ += correction;
+    }
+  }
+  prev_decoded_pts_ms_ = decoded_pts_ms;
+
+  int64_t corrected_pts_ms = decoded_pts_ms - pts_correction_ms_;
+
   int64_t seg_start_ct = 0;
   if (current_segment_index_ < static_cast<int32_t>(boundaries_.size())) {
     seg_start_ct = boundaries_[current_segment_index_].start_ct_ms;
   }
 
-  int64_t ct_before = seg_start_ct + (decoded_pts_ms - seg_first_pts_ms_);
+  int64_t ct_before = seg_start_ct + (corrected_pts_ms - seg_first_pts_ms_);
   next_frame_offset_ms_ = decoded_pts_ms + InputFramePeriodMs();
 
   // INV-AIR-MEDIA-TIME: media_ct_ms from decoded PTS only; do not use CtMs(frame_index_).
@@ -1062,6 +1095,8 @@ void TickProducer::Reset() {
   drop_step_ = 1;
   frame_index_ = 0;
   seg_first_pts_ms_ = -1;
+  pts_correction_ms_ = 0;
+  prev_decoded_pts_ms_ = -1;
   open_generation_ = 0;
   diag_emit_count_ = 0;
   diag_decode_emit_count_ = 0;

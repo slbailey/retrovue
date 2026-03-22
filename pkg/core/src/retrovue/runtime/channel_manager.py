@@ -524,7 +524,7 @@ class ChannelManager:
                 target_duration_ms=_hls_seg["target_duration_ms"],
                 max_gop_ms=_hls_seg["max_gop_ms"],
                 starting_index=self._hls_segment_counter,
-                diagnostic_hook=getattr(self.program_director, hls_diag_event, None),
+                diagnostic_hook=getattr(self.program_director, "hls_diag_event", None),
             )
             self._hls_manifest_generator = ManifestGenerator(self.channel_id)
             self._hls_session_manager = HlsSessionManager(
