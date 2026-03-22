@@ -10,11 +10,11 @@ tick. Historical record lives only in as-run logs.
 
 ## Motivation
 
-ProgramLogDay (Tier 1) and PlaylistEvent (Tier 2) are *caches* of
+ProgramLogDay (program schedule cache) and PlaylistEvent (playlog plan) are *caches* of
 forward-looking schedule data. Without retention enforcement:
 
 1. Old broadcast days accumulate indefinitely in both tables.
-2. Pre-`segmented_blocks` Tier 1 rows can never be updated because
+2. Pre-`segmented_blocks` program schedule rows can never be updated because
    `_save_compiled_schedule` used `db.merge()` with a fresh UUID, which
    silently failed on the `(channel_id, broadcast_day)` unique constraint
    in the `program_log_days` table.
@@ -22,21 +22,21 @@ forward-looking schedule data. Without retention enforcement:
 
 ## Invariant
 
-### Tier 1 — ProgramLogDay
+### Program schedule — ProgramLogDay
 
 - **Retention window**: rows where `broadcast_day >= today - 1 day`.
   This covers the current broadcast day and HORIZON_DAYS (3) forward days.
 - **Purge**: rows with `broadcast_day < today - 1` are deleted.
-- **Trigger**: `_purge_expired_tier1()` called from `_maybe_extend_horizon()`.
-- **Throttle**: at most once per hour (`_last_tier1_purge_utc_ms`).
+- **Trigger**: `_purge_expired_program_schedule()` called from `_maybe_extend_horizon()`.
+- **Throttle**: at most once per hour (`_last_program_schedule_purge_utc_ms`).
 
-### Tier 2 — PlaylistEvent
+### Playlog Plan — PlaylistEvent
 
 - **Retention window**: rows where `end_utc_ms > now_ms - 4 hours`.
   This covers the current playback window plus a safety margin.
 - **Purge**: rows with `end_utc_ms <= now_ms - 4 hours` are deleted.
-- **Trigger**: `_purge_expired_tier2()` called from `evaluate_once()`.
-- **Throttle**: at most once per hour (`_last_tier2_purge_utc_ms`).
+- **Trigger**: `_purge_expired_playlog_plan()` called from `evaluate_once()`.
+- **Throttle**: at most once per hour (`_last_playlog_plan_purge_utc_ms`).
 
 ### Upsert Correctness
 
@@ -55,6 +55,6 @@ pattern replaces the broken `db.merge()` with fresh UUID approach.
 ## Verification
 
 - Contract test: `pkg/core/tests/contracts/scheduling/test_inv_schedule_retention_001.py`
-- Tier 1 purge: deletes rows with `broadcast_day < cutoff`, keeps current/future.
-- Tier 2 purge: deletes rows with `end_utc_ms <= cutoff`, keeps recent.
+- Program schedule purge: deletes rows with `broadcast_day < cutoff`, keeps current/future.
+- Playlog Plan purge: deletes rows with `end_utc_ms <= cutoff`, keeps recent.
 - Upsert: updates existing row on conflict, does not silently fail.

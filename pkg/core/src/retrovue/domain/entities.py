@@ -1018,7 +1018,7 @@ class Zone(Base):
 
 
 class ProgramLogDay(Base):
-    """Tier 1: cached compiled schedule for a channel/broadcast-day pair.
+    """Program schedule cache: compiled schedule for a channel/broadcast-day pair.
 
     DB-first: once a row exists with locked=True, the schedule is never
     recompiled unless the row is explicitly deleted (e.g. via rebuild CLI).
@@ -1058,12 +1058,12 @@ class ProgramLogDay(Base):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Schedule Revisions (Tier-1 authority snapshots)
+# Schedule Revisions (program_schedule authority snapshots)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
 class ScheduleRevision(Base):
-    """Immutable Tier-1 authority snapshot for one channel/broadcast_day.
+    """Immutable program schedule authority snapshot for one channel/broadcast_day.
 
     Lifecycle: draft → active → superseded.
     At most one revision per (channel_id, broadcast_day) may be 'active'
@@ -1261,18 +1261,19 @@ class TrafficPlayLog(Base):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Playlist Events (Tier 2 — execution plan)
+# Playlist Events (Playlog Plan — persisted horizon; see INV-PLAYLOG-PLAN-VS-RUNTIME-001)
 # Contract: docs/contracts/runtime/TransmissionLogPersistenceContract.md
 # INV-TRAFFIC-LATE-BIND-001
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
 class PlaylistEvent(Base):
-    """Tier 2: authoritative record of what was fed to AIR for each block.
+    """Playlog Plan row (`playlog_plan`): persisted horizon, not the runtime playlog.
 
     Written by PlaylistBuilderDaemon after filling ad break placeholders
-    with real interstitials. Read by EvidenceServicer to enrich .asrun logs
-    with commercial titles.
+    with real interstitials. ChannelManager reads these rows and constructs the
+    runtime playlog (join-aware segments) for AIR. EvidenceServicer uses rows
+    to enrich .asrun logs. See INV-PLAYLOG-PLAN-VS-RUNTIME-001.
 
     See: docs/contracts/runtime/TransmissionLogPersistenceContract.md
     """

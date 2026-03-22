@@ -202,6 +202,19 @@ Canonical contract: [episode_progression.md](episode_progression.md)
 
 Canonical contract: [program_presentation.md](program_presentation.md)
 
+### Scheduling — Block Assembly Tiers
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-TIER-DISPLACEMENT-001 | [block_assembly_tiers.md](block_assembly_tiers.md) | LAW-CONTENT-AUTHORITY, LAW-GRID |
+| INV-TIER2-OBLIGATION-YAML-ONLY-001 | [block_assembly_tiers.md](block_assembly_tiers.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-TIER2-OBLIGATION-COMPILE-TIME-001 | [block_assembly_tiers.md](block_assembly_tiers.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-TIER3-BUDGET-CONDITIONAL-001 | [block_assembly_tiers.md](block_assembly_tiers.md) | LAW-GRID, LAW-CONTENT-AUTHORITY |
+| INV-TIER3-NEXT-BLOCK-IDENTITY-001 | [block_assembly_tiers.md](block_assembly_tiers.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-ASSEMBLY-SEQUENCE-001 | [block_assembly_tiers.md](block_assembly_tiers.md) | LAW-CONTENT-AUTHORITY, LAW-GRID, LAW-DERIVATION |
+
+Canonical contract: [block_assembly_tiers.md](block_assembly_tiers.md)
+
 ### Scheduling — Programming Pools
 
 | Invariant | File | Derived From |
@@ -323,6 +336,7 @@ Canonical contract: [schedule_block_program_reference.md](schedule_block_program
 | INV-CHANNEL-STARTUP-NONBLOCKING-001 | [invariants/core/runtime/INV-CHANNEL-STARTUP-NONBLOCKING-001.md](invariants/core/runtime/INV-CHANNEL-STARTUP-NONBLOCKING-001.md) | LAW-LIVENESS |
 | INV-CHANNEL-STARTUP-CONCURRENCY-001 | [invariants/core/runtime/INV-CHANNEL-STARTUP-CONCURRENCY-001.md](invariants/core/runtime/INV-CHANNEL-STARTUP-CONCURRENCY-001.md) | LAW-LIVENESS, INV-CHANNEL-STARTUP-NONBLOCKING-001 |
 | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | [invariants/core/runtime/INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001.md](invariants/core/runtime/INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001.md) | LAW-LIVENESS |
+| INV-PLAYLOG-PLAN-VS-RUNTIME-001 | [invariants/core/runtime/INV-PLAYLOG-PLAN-VS-RUNTIME-001.md](invariants/core/runtime/INV-PLAYLOG-PLAN-VS-RUNTIME-001.md) | LAW-RUNTIME-AUTHORITY, LAW-DERIVATION |
 | INV-HLS-PHANTOM-CLEANUP-001 | [invariants/core/runtime/INV-HLS-PHANTOM-CLEANUP-001.md](invariants/core/runtime/INV-HLS-PHANTOM-CLEANUP-001.md) | LAW-LIVENESS |
 | INV-HLS-DISCONTINUITY-MARKER-001 | [invariants/core/runtime/INV-HLS-DISCONTINUITY-MARKER-001.md](invariants/core/runtime/INV-HLS-DISCONTINUITY-MARKER-001.md) | LAW-DECODABILITY, LAW-LIVENESS |
 | INV-CHANNEL-LIVENESS-RECOVERY-001 | [invariants/core/runtime/INV-CHANNEL-LIVENESS-RECOVERY-001.md](invariants/core/runtime/INV-CHANNEL-LIVENESS-RECOVERY-001.md) | LAW-LIVENESS |

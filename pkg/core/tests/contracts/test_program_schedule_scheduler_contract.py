@@ -1,6 +1,6 @@
-# pkg/core/tests/contracts/test_scheduler_tier1_contract.py
+# pkg/core/tests/contracts/test_program_schedule_scheduler_contract.py
 #
-# Operator-facing contract tests for Tier1Scheduler.
+# Operator-facing contract tests for ProgramScheduleScheduler.
 #
 # Covers:
 #   VAL-T1-001  build_horizon: type:template references unknown template
@@ -15,7 +15,7 @@
 #   - The success path (zero references) completes without error.
 #
 # ── Expected failure mode ────────────────────────────────────────────────────
-# All tests FAIL (NotImplementedError) until Tier1Scheduler is implemented.
+# All tests FAIL (NotImplementedError) until ProgramScheduleScheduler is implemented.
 
 from __future__ import annotations
 
@@ -34,10 +34,10 @@ from retrovue.runtime.template_runtime import (
     TemplateSegment,
     WindowKey,
 )
-from retrovue.runtime.scheduler_tier1 import (
+from retrovue.runtime.program_schedule_scheduler import (
     ScheduleEntrySpec,
     SchedulerError,
-    Tier1Scheduler,
+    ProgramScheduleScheduler,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -107,7 +107,7 @@ def _add_template(state: ChannelRuntimeState, template_id: str) -> TemplateDef:
 
 
 def _commit_one(
-    scheduler: Tier1Scheduler,
+    scheduler: ProgramScheduleScheduler,
     template_id: str,
     start_offset_s: int = 0,
     duration_s: int = 3_600,
@@ -136,7 +136,7 @@ class TestDeleteTemplateVALT1004:
         references the template."""
         state = _make_channel_state()
         _add_template(state, "tmpl_a")
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
         _commit_one(scheduler, "tmpl_a")
 
         with pytest.raises(SchedulerError) as exc_info:
@@ -153,7 +153,7 @@ class TestDeleteTemplateVALT1004:
         """
         state = _make_channel_state()
         _add_template(state, "tmpl_a")
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
         key = _commit_one(scheduler, "tmpl_a")
 
         # Simulate ProgramDirector BLOCKED transition
@@ -173,7 +173,7 @@ class TestDeleteTemplateVALT1004:
         """VAL-T1-004 error message contains the template_id and reference count."""
         state = _make_channel_state()
         _add_template(state, "tmpl_a")
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
         _commit_one(scheduler, "tmpl_a", start_offset_s=0)
         _commit_one(scheduler, "tmpl_a", start_offset_s=3_600)
 
@@ -195,7 +195,7 @@ class TestDeleteTemplateVALT1004:
         """
         state = _make_channel_state()
         _add_template(state, "tmpl_a")
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
 
         # Commit later window first, earlier window second
         _commit_one(scheduler, "tmpl_a", start_offset_s=7_200)  # wall_start = T+7200s
@@ -217,7 +217,7 @@ class TestDeleteTemplateVALT1004:
         """
         state = _make_channel_state()
         _add_template(state, "tmpl_a")
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
 
         # Commit a window, then rebuild it to pool type (removes template reference)
         key = _commit_one(scheduler, "tmpl_a")
@@ -247,7 +247,7 @@ class TestRenameTemplateVALT1005:
         references the old template_id."""
         state = _make_channel_state()
         _add_template(state, "tmpl_old")
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
         _commit_one(scheduler, "tmpl_old")
 
         with pytest.raises(SchedulerError) as exc_info:
@@ -260,7 +260,7 @@ class TestRenameTemplateVALT1005:
         window is BLOCKED."""
         state = _make_channel_state()
         _add_template(state, "tmpl_old")
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
         key = _commit_one(scheduler, "tmpl_old")
 
         with state.schedule_registry._lock:
@@ -279,7 +279,7 @@ class TestRenameTemplateVALT1005:
         """VAL-T1-005 error message contains old_id, new_id, and reference count."""
         state = _make_channel_state()
         _add_template(state, "tmpl_old")
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
         _commit_one(scheduler, "tmpl_old", start_offset_s=0)
         _commit_one(scheduler, "tmpl_old", start_offset_s=3_600)
 
@@ -297,7 +297,7 @@ class TestRenameTemplateVALT1005:
         channel_id and wall_start_ms."""
         state = _make_channel_state()
         _add_template(state, "tmpl_old")
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
 
         _commit_one(scheduler, "tmpl_old", start_offset_s=3_600)  # later
         _commit_one(scheduler, "tmpl_old", start_offset_s=0)       # earlier ← earliest
@@ -321,7 +321,7 @@ class TestRenameTemplateVALT1005:
         """
         state = _make_channel_state()
         original = _add_template(state, "tmpl_old")
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
 
         # No windows committed for tmpl_old
         scheduler.rename_template("tmpl_old", "tmpl_new")
@@ -350,7 +350,7 @@ class TestBuildTimeReferenceValidation:
         """
         state = _make_channel_state()
         # Intentionally NOT adding "ghost_template" to TemplateRegistry
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
 
         with pytest.raises(SchedulerError) as exc_info:
             scheduler.build_horizon([
@@ -371,7 +371,7 @@ class TestBuildTimeReferenceValidation:
         template exists in TemplateRegistry."""
         state = _make_channel_state()
         _add_template(state, "real_template")
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
 
         committed = scheduler.build_horizon([
             ScheduleEntrySpec(
@@ -388,7 +388,7 @@ class TestBuildTimeReferenceValidation:
         pool_id not present in the known_pools set.
         """
         state = _make_channel_state()
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
 
         with pytest.raises(SchedulerError) as exc_info:
             scheduler.build_horizon(
@@ -411,7 +411,7 @@ class TestBuildTimeReferenceValidation:
         """build_horizon does NOT raise VAL-T1-002 when the referenced pool
         is in the known_pools set."""
         state = _make_channel_state()
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
 
         committed = scheduler.build_horizon(
             entries=[
@@ -431,7 +431,7 @@ class TestBuildTimeReferenceValidation:
         asset_id not present in the known_asset_ids set.
         """
         state = _make_channel_state()
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
 
         with pytest.raises(SchedulerError) as exc_info:
             scheduler.build_horizon(
@@ -454,7 +454,7 @@ class TestBuildTimeReferenceValidation:
         """build_horizon does NOT raise VAL-T1-003 when the referenced asset_id
         is in the known_asset_ids set."""
         state = _make_channel_state()
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
 
         committed = scheduler.build_horizon(
             entries=[

@@ -1,6 +1,6 @@
 """Explain why a particular program is airing at a given time.
 
-Read-only introspection of Tier-1 editorial schedule for debugging.
+Read-only introspection of program schedule (editorial) for debugging.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ def explain_at(
     channel_slug: str,
     at: datetime,
 ) -> dict[str, Any]:
-    """Return Tier-1 explanation for what is airing at the given time.
+    """Return program schedule explanation for what is airing at the given time.
 
     Read-only — no database mutations.
     """
@@ -105,7 +105,7 @@ def explain_at(
     result: dict[str, Any] = {
         "channel": channel_slug,
         "time": at.isoformat(),
-        "tier1": {
+        "program_schedule": {
             "revision_id": str(revision.id),
             "broadcast_day": str(revision.broadcast_day),
             "revision_status": revision.status,
@@ -131,7 +131,7 @@ def explain_at(
             "asset_id_raw": meta.get("asset_id_raw"),
             "episode_duration_sec": meta.get("episode_duration_sec"),
             "selector": meta.get("selector"),
-            "note": "Block will be expanded at runtime via Tier 2 playlog expander",
+            "note": "Block will be expanded at runtime via playlog plan expander",
         }
 
     return result

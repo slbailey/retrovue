@@ -1,4 +1,4 @@
-# pkg/core/tests/contracts/runtime/test_inv_tier1_immutability.py
+# pkg/core/tests/contracts/runtime/test_inv_program_schedule_immutability.py
 #
 # Contract: TIER1-IMMUTABILITY-001
 #
@@ -15,7 +15,7 @@
 # can replace a committed window.
 #
 # ── Expected failure mode ────────────────────────────────────────────────────
-# All tests in this file FAIL (NotImplementedError) until Tier1Scheduler
+# All tests in this file FAIL (NotImplementedError) until ProgramScheduleScheduler
 # methods are implemented.  That failure is correct and expected.
 
 from __future__ import annotations
@@ -35,9 +35,9 @@ from retrovue.runtime.template_runtime import (
     TemplateSegment,
     WindowKey,
 )
-from retrovue.runtime.scheduler_tier1 import (
+from retrovue.runtime.program_schedule_scheduler import (
     ScheduleEntrySpec,
-    Tier1Scheduler,
+    ProgramScheduleScheduler,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -131,7 +131,7 @@ def test_non_state_fields_unchanged_after_additive_build():
     """
     state = _make_channel_state()
     _add_template(state, "tmpl_a")
-    scheduler = Tier1Scheduler(state)
+    scheduler = ProgramScheduleScheduler(state)
 
     spec = _spec("tmpl_a")
     committed = scheduler.build_horizon([spec])
@@ -170,7 +170,7 @@ def test_rebuild_issues_new_window_uuid():
     """
     state = _make_channel_state()
     _add_template(state, "tmpl_a")
-    scheduler = Tier1Scheduler(state)
+    scheduler = ProgramScheduleScheduler(state)
 
     spec = _spec("tmpl_a")
     committed = scheduler.build_horizon([spec])
@@ -195,7 +195,7 @@ def test_rebuild_replaces_entry_object_not_mutates():
     """
     state = _make_channel_state()
     _add_template(state, "tmpl_a")
-    scheduler = Tier1Scheduler(state)
+    scheduler = ProgramScheduleScheduler(state)
 
     spec = _spec("tmpl_a")
     committed = scheduler.build_horizon([spec])
@@ -219,7 +219,7 @@ def test_rebuild_old_entry_unreachable_via_registry():
     """
     state = _make_channel_state()
     _add_template(state, "tmpl_a")
-    scheduler = Tier1Scheduler(state)
+    scheduler = ProgramScheduleScheduler(state)
 
     spec = _spec("tmpl_a")
     committed = scheduler.build_horizon([spec])
@@ -243,7 +243,7 @@ def test_rebuild_blocked_window_resets_all_blocked_fields():
     """
     state = _make_channel_state()
     _add_template(state, "tmpl_a")
-    scheduler = Tier1Scheduler(state)
+    scheduler = ProgramScheduleScheduler(state)
 
     spec = _spec("tmpl_a")
     committed = scheduler.build_horizon([spec])
@@ -281,7 +281,7 @@ def test_window_uuid_values_are_unique_across_distinct_commits():
     """
     state = _make_channel_state()
     _add_template(state, "tmpl_a")
-    scheduler = Tier1Scheduler(state)
+    scheduler = ProgramScheduleScheduler(state)
 
     entries = [
         _spec("tmpl_a", start_offset_s=0),

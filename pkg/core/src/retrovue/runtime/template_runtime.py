@@ -9,8 +9,8 @@
 # ─── Layer map (bottom-up) ───────────────────────────────────────────────────
 #
 #   L0  Config          — TemplateRegistry (live template definitions)
-#   L1  Tier 1          — ScheduleRegistry + TemplateReferenceIndex
-#   L2  Tier 2          — PlaylogRegistry + PlaylogWindow
+#   L1  program schedule          — ScheduleRegistry + TemplateReferenceIndex
+#   L2  playlog plan          — PlaylogRegistry + PlaylogWindow
 #   L3  Active tracking — ChannelActiveState
 #   L4  Coordinator     — ChannelRuntimeState (one per channel)
 #
@@ -52,7 +52,7 @@
 #
 # ─── External dependency interfaces ─────────────────────────────────────────
 #
-#   Three external interfaces are consumed at Tier 2 resolution time.
+#   Three external interfaces are consumed at playlog plan resolution time.
 #   They are declared as Protocols below and documented at the bottom of
 #   this file. Implementations live outside this module.
 #
@@ -86,7 +86,7 @@ from typing import Literal, Protocol, runtime_checkable
 class AssetCatalog(Protocol):
     """Provides asset resolution and approval-state queries.
 
-    Used by Tier 2 resolver to:
+    Used by playlog plan resolver to:
       - Resolve an asset_id to its physical path and duration_ms.
       - Check whether a candidate asset is in an approved state before
         emitting it as a resolved segment.
@@ -97,7 +97,7 @@ class AssetCatalog(Protocol):
 
     The catalog is read-only from the perspective of the resolver.
     All mutations to catalog state (ingest, approval, retirement) occur
-    outside the Tier 2 build path.
+    outside the playlog plan build path.
 
     Implementations MUST NOT acquire any runtime lock (TemplateRegistry,
     ScheduleRegistry, TemplateReferenceIndex, PlaylogRegistry) internally.
@@ -115,7 +115,7 @@ class AssetCatalog(Protocol):
 class MetadataEvaluator(Protocol):
     """Evaluates selection rules against asset metadata.
 
-    Used by Tier 2 resolver to filter candidate asset sets within a
+    Used by playlog plan resolver to filter candidate asset sets within a
     template segment before the mode strategy is applied.
 
     Rules are evaluated conjunctively in declared order. If any rule
@@ -176,7 +176,7 @@ class WindowKey:
     """Time-coordinate identity for a scheduled window.
 
     WindowKey is the time-based lookup key used across all registries and
-    indexes. It is NOT the sole identity of a committed Tier 1 entry —
+    indexes. It is NOT the sole identity of a committed program schedule entry —
     that role belongs to ScheduledEntry.window_uuid.
 
     A given (channel_id, wall_start_ms, wall_end_ms) triple may be
@@ -201,8 +201,8 @@ class WindowKey:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ScheduleWindowState(enum.Enum):
-    COMMITTED = "committed"  # normal; Tier 2 resolution permitted
-    BLOCKED   = "blocked"    # VAL-T2-001 fired; no Tier 2 retry until operator
+    COMMITTED = "committed"  # normal; playlog plan resolution permitted
+    BLOCKED   = "blocked"    # VAL-T2-001 fired; no playlog plan retry until operator
                              # explicitly rebuilds (issues a new window_uuid)
 
 
@@ -216,10 +216,10 @@ class PlaylogWindowState(enum.Enum):
 # L0 — Config (Template definitions)
 #
 # Owner:      Config loader
-# Read by:    Tier 2 resolver — live at each Tier 2 build; no snapshot taken
+# Read by:    playlog plan resolver — live at each playlog plan build; no snapshot taken
 # Written by: Config loader only (on channel config load or operator reload)
 # Mutable:    yes — operator may modify template definitions between builds;
-#             modifications affect the next Tier 2 build of any referencing window
+#             modifications affect the next playlog plan build of any referencing window
 # Protected:  TemplateRegistry._lock (see GLOBAL LOCK ORDERING: position 1)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -262,7 +262,7 @@ class TemplateSegment:
 class TemplateDef:
     """A complete template definition as declared in channel config.
 
-    Immutable once loaded. The Tier 2 resolver reads this object live at
+    Immutable once loaded. The playlog plan resolver reads this object live at
     each build and never caches or snapshots it.
 
     PRIMARY SEGMENT DETERMINISM (Modification 5):
@@ -298,14 +298,14 @@ class TemplateRegistry:
     """Channel-scoped live template registry.
 
     One instance per channel. Populated and maintained by Config loader.
-    Read live by Tier 2 resolver at the start of each PlaylogWindow build.
+    Read live by playlog plan resolver at the start of each PlaylogWindow build.
 
     LOCK ORDERING: position 1 — must be acquired before ScheduleRegistry,
     TemplateReferenceIndex, or PlaylogRegistry when multiple locks are held.
 
     No snapshot is ever taken from this registry. The TemplateDef visible
-    at Tier 2 build time is the TemplateDef that governs that build,
-    regardless of what was visible at Tier 1 commit time.
+    at playlog plan build time is the TemplateDef that governs that build,
+    regardless of what was visible at program schedule commit time.
 
     Primary index: template_id (str) → TemplateDef
     """
@@ -315,7 +315,7 @@ class TemplateRegistry:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# L1 — Tier 1 (Schedule commitments)
+# L1 — program schedule (Schedule commitments)
 #
 # Owner:      Scheduler
 # Written by: Scheduler (on operator schedule build or explicit operator rebuild)
@@ -333,12 +333,12 @@ class TemplateRegistry:
 
 @dataclass
 class ScheduledEntry:
-    """One committed Tier 1 schedule window.
+    """One committed program schedule window.
 
     IDENTITY (Modification 1):
     window_uuid is the stable identity of this specific commit. It is a
     UUID4 string assigned by the Scheduler at commit time. It uniquely
-    identifies this particular version of the Tier 1 entry.
+    identifies this particular version of the program schedule entry.
 
     WindowKey is the time-coordinate key used for registry lookups. A given
     WindowKey may be associated with multiple window_uuids over time if the
@@ -353,7 +353,7 @@ class ScheduledEntry:
     fields are populated atomically with the failure context. They are None
     while state == COMMITTED.
 
-    A BLOCKED window requires explicit operator rebuild before Tier 2 will
+    A BLOCKED window requires explicit operator rebuild before playlog plan will
     attempt resolution again. Operator rebuild issues a new window_uuid,
     resets state to COMMITTED, and clears the blocked_* fields.
 
@@ -372,11 +372,11 @@ class ScheduledEntry:
     type:           Literal["template", "pool", "asset"]
     name:           str | None   # template_id or pool_id
     asset_id:       str | None   # direct asset reference (type == 'asset' only)
-    epg_title:      str | None   # if set, EPG identity committed at Tier 1
+    epg_title:      str | None   # if set, EPG identity committed at program schedule
     allow_bleed:    bool         # default False
     mode:           str | None   # selection strategy (type == 'pool' only)
 
-    # Tier 1 lifecycle
+    # program schedule lifecycle
     committed_at_ms: int
     state:           ScheduleWindowState = ScheduleWindowState.COMMITTED
 
@@ -391,7 +391,7 @@ class ScheduledEntry:
 
 @dataclass
 class ScheduleRegistry:
-    """Channel-scoped Tier 1 schedule window store.
+    """Channel-scoped program schedule window store.
 
     One instance per channel. Written only by Scheduler.
     Consumers (ProgramDirector, ChannelManager) read only.
@@ -413,7 +413,7 @@ class ScheduleRegistry:
 
 @dataclass
 class TemplateReferenceIndex:
-    """Reverse index from template_id to committed Tier 1 window keys.
+    """Reverse index from template_id to committed program schedule window keys.
 
     Owner: Scheduler.
     SCHED-INDEX-001: Co-maintained atomically with ScheduleRegistry on every write.
@@ -424,7 +424,7 @@ class TemplateReferenceIndex:
     indexed. This is required because:
       - VAL-T1-004 (prevent template deletion while referenced) must fire
         even when the referencing window is BLOCKED. A BLOCKED window is a
-        committed Tier 1 entry that still holds the reference; the template
+        committed program schedule entry that still holds the reference; the template
         cannot be deleted until the operator explicitly removes or rebuilds
         that window.
       - Restricting the index to COMMITTED-only entries would create a window
@@ -462,7 +462,7 @@ class TemplateReferenceIndex:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# L2 — Tier 2 (Playlog resolution)
+# L2 — playlog plan (Playlog resolution)
 #
 # Owner:      ProgramDirector
 # Written by: ProgramDirector (on Playlog horizon extension)
@@ -478,7 +478,7 @@ class TemplateReferenceIndex:
 class ResolvedSegment:
     """One template segment resolved to a concrete asset.
 
-    Produced during Tier 2 resolution. Immutable once created.
+    Produced during playlog plan resolution. Immutable once created.
 
     segment_index is the 0-based position in the source TemplateDef.segments.
     is_primary_content is True when segment_index == TemplateDef.primary_segment_index.
@@ -494,13 +494,13 @@ class ResolvedSegment:
 class PlaylogEvent:
     """One complete iteration of a schedulable entry within its window.
 
-    Produced during Tier 2 resolution. Immutable once created.
+    Produced during playlog plan resolution. Immutable once created.
     segments preserves the source template's declared segment order.
 
     epg_title is the resolved EPG identity string for this event:
-      - Taken from ScheduledEntry.epg_title if set (Tier 1 authority).
+      - Taken from ScheduledEntry.epg_title if set (program schedule authority).
       - Derived from the primary content asset title if ScheduledEntry.epg_title
-        is None (Tier 2 derivation via AssetCatalog).
+        is None (playlog plan derivation via AssetCatalog).
     """
     iteration_index:   int
     segments:          tuple[ResolvedSegment, ...]
@@ -511,13 +511,13 @@ class PlaylogEvent:
 
 @dataclass
 class PlaylogWindow:
-    """Tier 2 resolution output for one Tier 1 scheduled window.
+    """Playlog Plan resolution output for one program-schedule window.
 
     SOURCE IDENTITY (Modification 1):
     source_window_uuid records the ScheduledEntry.window_uuid of the commit
     that this PlaylogWindow was built from. ProgramDirector uses this to
     detect staleness: if ScheduledEntry.window_uuid has changed since this
-    window was built (operator rebuilt the Tier 1 entry), this PlaylogWindow
+    window was built (operator rebuilt the program schedule entry), this PlaylogWindow
     is stale and must be discarded before a new build begins.
 
     WINDOW-LEVEL FREEZE (Modification 4):
@@ -551,9 +551,9 @@ class PlaylogWindow:
 
 @dataclass
 class PlaylogBuildContext:
-    """Transient resolution context for one Tier 2 horizon build session.
+    """Transient resolution context for one playlog plan horizon build session.
 
-    Created at the start of a Tier 2 build for one window.
+    Created at the start of a playlog plan build for one window.
     Discarded after the build completes. Never stored in PlaylogRegistry.
 
     window_uuid is the ScheduledEntry.window_uuid of the entry being built.
@@ -571,7 +571,7 @@ class PlaylogBuildContext:
 
 @dataclass
 class PlaylogRegistry:
-    """Channel-scoped Tier 2 playlog window store.
+    """Channel-scoped playlog plan window store.
 
     One instance per channel. Written by ProgramDirector.
     Read by ProgramDirector (lookahead) and ChannelManager (execution).
@@ -655,7 +655,7 @@ class ChannelRuntimeState:
       playlog_registry     — ProgramDirector writes; ChannelManager reads (L2)
       active_state         — ChannelManager writes; ProgramDirector reads (L3)
 
-    External interface references are held here for injection into Tier 2
+    External interface references are held here for injection into playlog plan
     build operations. These are read-only from the perspective of this struct.
     """
     channel_id: str

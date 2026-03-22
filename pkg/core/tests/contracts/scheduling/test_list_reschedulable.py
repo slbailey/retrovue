@@ -66,7 +66,7 @@ class TestListReschedulable:
         db = _mock_db(revisions=[r], items_by_rev={r.id: [it]})
         result = list_reschedulable(db, now=NOW)
         assert result["status"] == "ok"
-        assert len(result["tier1"]) == 1
+        assert len(result["program_schedule"]) == 1
 
     # Tier: 2 | Scheduling logic invariant
     def test_returns_future_tier2(self):
@@ -76,7 +76,7 @@ class TestListReschedulable:
         )
         db = _mock_db(tier2_rows=[row])
         result = list_reschedulable(db, now=NOW)
-        assert len(result["tier2"]) == 1
+        assert len(result["playlog_plan"]) == 1
 
     # Tier: 2 | Scheduling logic invariant
     def test_tier1_order_follows_slot_index(self):
@@ -85,10 +85,25 @@ class TestListReschedulable:
         b = _item(r.id, 1, NOW + timedelta(hours=2))
         db = _mock_db(revisions=[r], items_by_rev={r.id: [a, b]})
         result = list_reschedulable(db, now=NOW)
-        assert len(result["tier1"]) == 1
+        assert len(result["program_schedule"]) == 1
 
     # Tier: 2 | Scheduling logic invariant
     def test_tier_filter(self):
         db = _mock_db()
         result = list_reschedulable(db, now=NOW, tier="1")
-        assert "tier1" in result and result["tier2"] == []
+        assert "program_schedule" in result and result["playlog_plan"] == []
+
+    # Tier: 2 | Scheduling logic invariant — deprecated alias for CLI/scripts
+    def test_tier_filter_compiled_playlog_alias(self):
+        row = SimpleNamespace(
+            block_id="b1",
+            channel_slug="hbo-classics",
+            broadcast_day=date(2026, 3, 4),
+            start_utc_ms=NOW_UTC_MS + 5000,
+            end_utc_ms=NOW_UTC_MS + 10000,
+            window_uuid=None,
+        )
+        db = _mock_db(tier2_rows=[row])
+        result = list_reschedulable(db, now=NOW, tier="compiled_playlog")
+        assert result["program_schedule"] == []
+        assert len(result["playlog_plan"]) == 1

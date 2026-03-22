@@ -27,7 +27,7 @@ from retrovue.usecases.schedule_rebuild import (
     RebuildResult,
     _get_currently_playing_block,
     _broadcast_date_for,
-    rebuild_tier2,
+    rebuild_playlog_plan,
 )
 
 
@@ -133,7 +133,7 @@ class TestTier2RebuildReplacesBlocks:
 
         mock_expand.side_effect = _fake_expand
 
-        result = rebuild_tier2(
+        result = rebuild_playlog_plan(
             db,
             channel_slug="test-channel",
             start_utc_ms=BASE_MS,
@@ -161,7 +161,7 @@ class TestTier1Unchanged:
         db.query.return_value.filter.return_value.delete.return_value = 0
         mock_load.return_value = []
 
-        result = rebuild_tier2(
+        result = rebuild_playlog_plan(
             db,
             channel_slug="test-channel",
             start_utc_ms=BASE_MS,
@@ -268,7 +268,7 @@ class TestCompiledSegmentsRebuild:
         ]
         mock_expand.return_value = fake_scheduled
 
-        result = rebuild_tier2(
+        result = rebuild_playlog_plan(
             db,
             channel_slug="test-channel",
             start_utc_ms=BASE_MS,
@@ -297,7 +297,7 @@ class TestDryRun:
         # Mock count (used in dry_run)
         db.query.return_value.filter.return_value.count.return_value = 3
 
-        result = rebuild_tier2(
+        result = rebuild_playlog_plan(
             db,
             channel_slug="test-channel",
             start_utc_ms=BASE_MS,
@@ -351,7 +351,7 @@ class TestLiveSafe:
             ) as mock_load:
                 mock_load.return_value = []
 
-                result = rebuild_tier2(
+                result = rebuild_playlog_plan(
                     db,
                     channel_slug="test-channel",
                     start_utc_ms=BASE_MS,
@@ -378,7 +378,7 @@ class TestLiveSafe:
             ) as mock_load:
                 mock_load.return_value = []
 
-                result = rebuild_tier2(
+                result = rebuild_playlog_plan(
                     db,
                     channel_slug="test-channel",
                     start_utc_ms=BASE_MS,
@@ -422,7 +422,7 @@ class TestWindowBoundary:
 
         mock_expand.side_effect = _fake_expand
 
-        result = rebuild_tier2(
+        result = rebuild_playlog_plan(
             db,
             channel_slug="test-channel",
             start_utc_ms=window_start,
@@ -460,7 +460,7 @@ class TestWindowBoundary:
 
         mock_expand.side_effect = _fake_expand
 
-        result = rebuild_tier2(
+        result = rebuild_playlog_plan(
             db,
             channel_slug="test-channel",
             start_utc_ms=window_start,
@@ -489,7 +489,7 @@ class TestFillerArgsPassedToExpandEditorialBlock:
     @patch("retrovue.usecases.schedule_rebuild.expand_editorial_block")
     @patch("retrovue.usecases.schedule_rebuild.load_segmented_blocks_from_active_revision")
     def test_filler_args_forwarded(self, mock_load, mock_expand):
-        """rebuild_tier2 must pass filler_uri and filler_duration_ms to
+        """rebuild_playlog_plan must pass filler_uri and filler_duration_ms to
         expand_editorial_block."""
         db = MagicMock()
         db.query.return_value.filter.return_value.delete.return_value = 0
@@ -503,7 +503,7 @@ class TestFillerArgsPassedToExpandEditorialBlock:
 
         mock_expand.side_effect = _fake_expand
 
-        rebuild_tier2(
+        rebuild_playlog_plan(
             db,
             channel_slug="test-channel",
             start_utc_ms=BASE_MS,
@@ -538,7 +538,7 @@ class TestFillerArgsPassedToExpandEditorialBlock:
 
         mock_expand.side_effect = _fake_expand
 
-        rebuild_tier2(
+        rebuild_playlog_plan(
             db,
             channel_slug="test-channel",
             start_utc_ms=BASE_MS,
@@ -681,7 +681,7 @@ class TestNoExceptionsDuringRebuild:
 
         mock_expand.side_effect = _fake_expand
 
-        result = rebuild_tier2(
+        result = rebuild_playlog_plan(
             db,
             channel_slug="test-channel",
             start_utc_ms=BASE_MS,

@@ -1,10 +1,10 @@
-"""Tier-2 schedule rebuild operations.
+"""Playlog Plan rebuild operations.
 
-Rebuilds Tier-2 (PlaylistEvent) segmented blocks from Tier-1
+Rebuilds playlog_plan (PlaylistEvent) segmented blocks from the program schedule
 (ScheduleRevision/ScheduleItems) without modifying editorial data.
 
 Used after logic fixes (e.g. template segment compilation) to regenerate
-playout-ready blocks while preserving the Tier-1 editorial schedule.
+playout-ready blocks while preserving the program schedule editorial snapshot.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class RebuildResult:
-    """Result of a Tier-2 rebuild operation."""
+    """Result of a playlog plan rebuild operation."""
     channel_slug: str
     start_utc_ms: int
     end_utc_ms: int
@@ -64,7 +64,7 @@ def _broadcast_date_for(dt: datetime, day_start_hour: int = 6) -> date:
     return dt.date()
 
 
-def rebuild_tier2(
+def rebuild_playlog_plan(
     db: Session,
     *,
     channel_slug: str,
@@ -76,19 +76,19 @@ def rebuild_tier2(
     dry_run: bool = False,
     channel_dsl: dict[str, Any] | None = None,
 ) -> RebuildResult:
-    """Rebuild Tier-2 PlaylistEvent rows in a time window.
+    """Rebuild playlog plan (PlaylistEvent) rows in a time window.
 
     Steps:
       1. Optionally shift start past currently-playing block (--live-safe)
       2. Delete PlaylistEvent rows in [start, end)
-      3. Load Tier-1 blocks via load_segmented_blocks_from_active_revision
+      3. Load program schedule blocks via load_segmented_blocks_from_active_revision
       4. Deserialize, fill ads, write back as PlaylistEvent
 
     When channel_dsl is provided, resolves break_config and traffic policy
     from the channel YAML so that structured break expansion matches the
     runtime path (INV-TIER2-EXPANSION-CANONICAL-001).
 
-    Does NOT modify Tier-1 ScheduleItems.
+    Does NOT modify program schedule ScheduleItems.
     """
     result = RebuildResult(
         channel_slug=channel_slug,
@@ -106,7 +106,7 @@ def rebuild_tier2(
             result.live_safe_skipped = True
             start_utc_ms = result.start_utc_ms
             logger.info(
-                "rebuild_tier2[%s]: live-safe shifted start to %d (end of playing block)",
+                "rebuild_playlog_plan[%s]: live-safe shifted start to %d (end of playing block)",
                 channel_slug, start_utc_ms,
             )
 
@@ -122,7 +122,7 @@ def rebuild_tier2(
         ).count()
         return result
 
-    # Step 2: delete existing Tier-2 rows that overlap the window
+    # Step 2: delete existing playlog plan rows that overlap the window
     result.deleted = db.query(PlaylistEvent).filter(
         PlaylistEvent.channel_slug == channel_slug,
         PlaylistEvent.start_utc_ms < end_utc_ms,
@@ -136,13 +136,13 @@ def rebuild_tier2(
     end_date = _broadcast_date_for(end_dt) + timedelta(days=1)
 
     # Build asset library for interstitial selection
-    # INV-TIER2-EXPANSION-CANONICAL-001: all Tier-2 writers MUST pass asset_library
+    # INV-TIER2-EXPANSION-CANONICAL-001: all playlog plan writers MUST pass asset_library
     try:
         from retrovue.catalog.db_asset_library import DatabaseAssetLibrary
         asset_library = DatabaseAssetLibrary(db, channel_slug=channel_slug)
     except Exception as e:
         logger.warning(
-            "rebuild_tier2[%s]: could not create asset library, "
+            "rebuild_playlog_plan[%s]: could not create asset library, "
             "falling back to static filler: %s",
             channel_slug, e,
         )
@@ -163,12 +163,12 @@ def rebuild_tier2(
                 traffic_policy = resolve_traffic_policy(channel_dsl, {})
         except Exception as e:
             logger.warning(
-                "rebuild_tier2[%s]: could not resolve traffic config "
+                "rebuild_playlog_plan[%s]: could not resolve traffic config "
                 "from channel DSL: %s",
                 channel_slug, e,
             )
 
-    # Step 4: load Tier-1, rebuild Tier-2
+    # Step 4: load program schedule blocks, rebuild playlog plan
     while scan_date <= end_date:
         blocks = load_segmented_blocks_from_active_revision(
             db, channel_slug=channel_slug, broadcast_day=scan_date,
@@ -218,7 +218,7 @@ def rebuild_tier2(
             except Exception as e:
                 msg = f"Failed to rebuild block {sb_dict.get('block_id', '?')}: {e}"
                 result.errors.append(msg)
-                logger.error("rebuild_tier2[%s]: %s", channel_slug, msg)
+                logger.error("rebuild_playlog_plan[%s]: %s", channel_slug, msg)
 
         scan_date += timedelta(days=1)
 

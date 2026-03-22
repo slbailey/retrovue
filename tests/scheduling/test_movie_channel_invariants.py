@@ -23,7 +23,7 @@ from retrovue.runtime.schedule_types import ScheduledBlock, ScheduledSegment
 from retrovue.runtime.playout_log_expander import expand_program_block
 from retrovue.runtime.traffic_manager import fill_ad_blocks
 from retrovue.runtime.asset_resolver import AssetMetadata
-from retrovue.usecases.schedule_rebuild import rebuild_tier2
+from retrovue.usecases.schedule_rebuild import rebuild_playlog_plan
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -474,7 +474,7 @@ class TestTier2RebuildParity:
     def test_rebuild_uses_same_loader_as_daemon(
         self, mock_load, mock_expand,
     ):
-        """rebuild_tier2 must call load_segmented_blocks_from_active_revision —
+        """rebuild_playlog_plan must call load_segmented_blocks_from_active_revision —
         the same function the horizon daemon uses."""
         db = MagicMock()
         db.query.return_value.filter.return_value.delete.return_value = 0
@@ -494,7 +494,7 @@ class TestTier2RebuildParity:
         fake_scheduled.segments = []
         mock_expand.return_value = fake_scheduled
 
-        rebuild_tier2(
+        rebuild_playlog_plan(
             db,
             channel_slug="hbo-classics",
             start_utc_ms=BASE_MS,
@@ -503,7 +503,7 @@ class TestTier2RebuildParity:
 
         # Verify the canonical loader was called
         assert mock_load.called, (
-            "rebuild_tier2 must call load_segmented_blocks_from_active_revision"
+            "rebuild_playlog_plan must call load_segmented_blocks_from_active_revision"
         )
 
     # Tier: 2 | Scheduling logic invariant
@@ -512,7 +512,7 @@ class TestTier2RebuildParity:
     def test_rebuild_calls_expand_editorial_block(
         self, mock_load, mock_expand,
     ):
-        """rebuild_tier2 must call expand_editorial_block for each block —
+        """rebuild_playlog_plan must call expand_editorial_block for each block —
         the canonical expansion pipeline shared with the daemon."""
         db = MagicMock()
         db.query.return_value.filter.return_value.delete.return_value = 0
@@ -532,7 +532,7 @@ class TestTier2RebuildParity:
         fake_scheduled.segments = []
         mock_expand.return_value = fake_scheduled
 
-        rebuild_tier2(
+        rebuild_playlog_plan(
             db,
             channel_slug="hbo-classics",
             start_utc_ms=BASE_MS,
@@ -620,7 +620,7 @@ class TestTier2RebuildParity:
         )
         mock_expand.return_value = filled_block
 
-        rebuild_tier2(
+        rebuild_playlog_plan(
             db,
             channel_slug="hbo-classics",
             start_utc_ms=BASE_MS,

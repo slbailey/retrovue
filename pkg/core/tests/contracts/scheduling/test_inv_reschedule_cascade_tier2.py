@@ -64,14 +64,14 @@ class TestInvRescheduleCascadeTier2001:
         r = _rev()
         db = _db(r, deleted_count=3)
         result = reschedule_by_id(db, identifier=str(r.id), now=NOW)
-        assert result["deleted_tier2"] == 3
+        assert result["deleted_playlog_plan"] == 3
 
     # Tier: 2 | Scheduling logic invariant
     def test_cascade_preserves_past_tier2_rows(self):
         r = _rev()
         db = _db(r, deleted_count=0)
         result = reschedule_by_id(db, identifier=str(r.id), now=NOW)
-        assert result["deleted_tier2"] == 0
+        assert result["deleted_playlog_plan"] == 0
 
     # Tier: 2 | Scheduling logic invariant
     def test_revision_lifecycle_supersedes_old(self):

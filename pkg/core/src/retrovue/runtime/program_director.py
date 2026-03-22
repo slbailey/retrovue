@@ -394,7 +394,7 @@ class ProgramDirector:
         self._managers: dict[str, Any] = {}
         self._managers_lock = threading.Lock()
         self._schedule_service: Optional[Any] = None
-        # Playlist Builder Daemons (Tier 2 — INV-PLAYLOG-HORIZON-001)
+        # Playlist Builder Daemons (playlog plan — INV-PLAYLOG-HORIZON-001)
         self._playlog_daemons: dict[str, Any] = {}
         self._channel_config_provider: Optional[Any] = None
         self._health_check_stop: Optional[threading.Event] = None
@@ -826,18 +826,18 @@ class ProgramDirector:
             if config.schedule_source != "dsl":
                 continue
 
-            # Tier 1 (active revisions/items) is already warmed by
+            # Program schedule (active revisions/items) is already warmed by
             # _prewarm_channel_schedules() which runs before this method.
 
             sc = config.schedule_config or {}
 
-            # INV-EPG-VIEWER-INDEPENDENT-001: Wire Tier 1 horizon extension
+            # INV-EPG-VIEWER-INDEPENDENT-001: Wire program schedule horizon extension
             # into the daemon so EPG stays fresh without viewers.
-            tier1_cb = None
+            program_schedule_cb = None
             try:
                 svc = self._get_schedule_service_for_channel(channel_id, config)
                 if hasattr(svc, "_maybe_extend_horizon"):
-                    tier1_cb = svc._maybe_extend_horizon
+                    program_schedule_cb = svc._maybe_extend_horizon
             except Exception:
                 pass
 
@@ -856,7 +856,7 @@ class ProgramDirector:
                 master_clock=self._embedded_clock,
                 channel_tz=sc.get("channel_tz", "UTC"),
                 dsl_path=sc.get("dsl_path", ""),
-                tier1_extend_callback=tier1_cb,
+                program_schedule_extend_callback=program_schedule_cb,
             )
 
             # Readiness gate: synchronous initial evaluation

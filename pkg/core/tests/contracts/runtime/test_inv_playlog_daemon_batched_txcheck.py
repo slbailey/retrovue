@@ -110,7 +110,7 @@ class TestRule1BatchedExistenceCheck:
         ]
 
         with (
-            patch.object(daemon, "_load_tier1_blocks", return_value=blocks),
+            patch.object(daemon, "_load_program_schedule_blocks", return_value=blocks),
             patch.object(daemon, "_block_exists_in_txlog", wraps=lambda _bid: False) as mock_per_block,
             patch.object(daemon, "_batch_block_exists_in_txlog", return_value=set()) as mock_batch,
             patch("retrovue.runtime.playlist_builder_daemon.expand_editorial_block", side_effect=_deser),
@@ -156,7 +156,7 @@ class TestRule2GilYield:
         sleep_calls = []
 
         with (
-            patch.object(daemon, "_load_tier1_blocks", return_value=blocks),
+            patch.object(daemon, "_load_program_schedule_blocks", return_value=blocks),
             patch.object(daemon, "_batch_block_exists_in_txlog", return_value=set()),
             patch("retrovue.runtime.playlist_builder_daemon.expand_editorial_block", side_effect=_deser),
             patch.object(daemon, "_write_to_txlog"),

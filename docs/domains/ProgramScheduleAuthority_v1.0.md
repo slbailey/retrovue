@@ -1,4 +1,4 @@
-# Scheduler Tier 1 Authority — v1.0
+# Program Schedule Authority — v1.0
 
 **Status:** Binding
 **Owner:** Core / Scheduler
@@ -12,15 +12,15 @@
 
 ## 1. Purpose
 
-This document defines the authoritative rules governing Tier 1 schedule commitments in RetroVue Core. It specifies:
+This document defines the authoritative rules governing program schedule commitments in RetroVue Core. It specifies:
 
-- What a Tier 1 window is and what it stores.
+- What a program schedule window is and what it stores.
 - When and how windows are created, rebuilt, and invalidated.
 - How the `TemplateReferenceIndex` is maintained and why.
 - What enforcement the Scheduler owns at template mutation time.
-- The boundary between Tier 1 authority and Tier 2 resolution authority.
+- The boundary between program schedule authority and playlog plan resolution authority.
 
-This document is binding. Any code or process that commits, rebuilds, or validates Tier 1 schedule windows must conform to the rules stated here.
+This document is binding. Any code or process that commits, rebuilds, or validates program schedule windows must conform to the rules stated here.
 
 ---
 
@@ -50,7 +50,7 @@ L2  PlaylogRegistry             — resolved event sequences per window; owned b
 - Reads L1 commitments and resolves them into concrete `PlaylogWindow` and `PlaylogEvent` objects.
 - Reads `TemplateRegistry` live at each build; sees whatever template definition is current.
 - Writes `PlaylogRegistry` exclusively.
-- Detects Tier 1 staleness by comparing `PlaylogWindow.source_window_uuid` against `ScheduledEntry.window_uuid`.
+- Detects program schedule staleness by comparing `PlaylogWindow.source_window_uuid` against `ScheduledEntry.window_uuid`.
 
 **Strict boundary rule:** The Scheduler writes only to L0 (template mutation via operator action) and L1. It never reads `PlaylogRegistry` and never transitions `PlaylogWindowState`. The Scheduler's only permitted mutation to an existing `ScheduledEntry` after commit is a full replacement via explicit rebuild (see §5).
 
@@ -58,7 +58,7 @@ L2  PlaylogRegistry             — resolved event sequences per window; owned b
 
 ## 3. Canonical Schedule Entry Schema
 
-A Tier 1 committed window stores exactly the following fields on `ScheduledEntry`. No other schedule-time information is persisted at L1.
+A program schedule committed window stores exactly the following fields on `ScheduledEntry`. No other schedule-time information is persisted at L1.
 
 | Field | Type | Description |
 |---|---|---|
@@ -67,8 +67,8 @@ A Tier 1 committed window stores exactly the following fields on `ScheduledEntry
 | `type` | `"template"` \| `"pool"` \| `"asset"` | Entry type discriminator. |
 | `name` | `str \| None` | Template ID or pool ID. Set when `type == "template"` or `type == "pool"`. Null when `type == "asset"`. |
 | `asset_id` | `str \| None` | Direct asset reference. Set only when `type == "asset"`. Null otherwise. |
-| `epg_title` | `str \| None` | Operator-assigned EPG display title. If set, this is the Tier 1 authority for EPG identity. Null triggers Tier 2 derivation from primary content asset. |
-| `allow_bleed` | `bool` | When true, the last content iteration may run past `wall_end_ms`. Default false. Capacity gating above this floor belongs to the scheduling layer, not to Tier 2 fill logic. |
+| `epg_title` | `str \| None` | Operator-assigned EPG display title. If set, this is the program schedule authority for EPG identity. Null triggers playlog plan derivation from primary content asset. |
+| `allow_bleed` | `bool` | When true, the last content iteration may run past `wall_end_ms`. Default false. Capacity gating above this floor belongs to the scheduling layer, not to playlog plan fill logic. |
 | `mode` | `str \| None` | Selection strategy (e.g. `"random"`). Applicable only when `type == "pool"`. Null otherwise. |
 | `committed_at_ms` | `int` | Epoch ms at which this commit was recorded. |
 | `state` | `ScheduleWindowState` | `COMMITTED` (default) or `BLOCKED`. See §6. |
@@ -84,21 +84,21 @@ type == "pool"      →  name is set, asset_id is None, mode may be set
 type == "asset"     →  name is None, asset_id is set, mode is None
 ```
 
-**What Tier 1 does NOT store:**
+**What the program schedule does NOT store:**
 
 - Template segment definitions or counts.
-- Asset IDs resolved from templates (those are Tier 2 outputs).
-- Duration of any resolved content (Tier 2 concern).
+- Asset IDs resolved from templates (those are playlog plan outputs).
+- Duration of any resolved content (playlog plan concern).
 - PlaylogEvent sequences.
 - Any snapshot of the template definition as it existed at commit time.
 
-The Tier 1 record is intentionally thin. It is a *reference* to schedulable content and a *time window*. Resolution of that reference is deferred to Tier 2.
+The program schedule record is intentionally thin. It is a *reference* to schedulable content and a *time window*. Resolution of that reference is deferred to playlog plan resolution.
 
 ---
 
 ## 4. Window Time Model
 
-All time values in Tier 1 are stored as absolute epoch milliseconds (UTC). The Scheduler is responsible for converting HH:MM boundaries from channel config into absolute epoch ms before creating a `WindowKey`.
+All time values in the program schedule are stored as absolute epoch milliseconds (UTC). The Scheduler is responsible for converting HH:MM boundaries from channel config into absolute epoch ms before creating a `WindowKey`.
 
 **HH:MM → epoch ms conversion rules:**
 
@@ -111,7 +111,7 @@ All time values in Tier 1 are stored as absolute epoch milliseconds (UTC). The S
 
 ---
 
-## 5. Tier 1 Build Algorithm
+## 5. Program schedule build algorithm
 
 The Scheduler builds the schedule horizon additively. It does not rebuild existing windows; that is an explicit operator action (§6).
 
@@ -138,13 +138,13 @@ The Scheduler builds the schedule horizon additively. It does not rebuild existi
 
 **Atomicity guarantee:** Steps 2a–2d for all entries in a single call are executed within the same lock acquisition. Partially committed batches do not occur.
 
-**Note on template existence:** The Scheduler does NOT verify that a referenced template exists in `TemplateRegistry` at commit time. Template resolution occurs at Tier 2 build time. A reference to a non-existent template results in a BLOCKED window via VAL-T2-001 at Tier 2, not at Tier 1 commit time. This preserves the L0/L1 boundary: Tier 1 stores references, not resolved content.
+**Note on template existence:** The Scheduler does NOT verify that a referenced template exists in `TemplateRegistry` at commit time. Template resolution occurs at playlog plan build time. A reference to a non-existent template results in a BLOCKED window via VAL-T2-001 during playlog plan build, not at program schedule commit time. This preserves the L0/L1 boundary: program schedule stores references, not resolved content.
 
 ---
 
-## 6. Tier 1 Rebuild Semantics
+## 6. Program schedule rebuild semantics
 
-A Tier 1 rebuild is an **explicit operator action** that replaces a single committed window with a new commit. Rebuilds are not triggered automatically by the system.
+A program schedule rebuild is an **explicit operator action** that replaces a single committed window with a new commit. Rebuilds are not triggered automatically by the system.
 
 **When rebuild is required:**
 
@@ -155,7 +155,7 @@ A Tier 1 rebuild is an **explicit operator action** that replaces a single commi
 **Rebuild procedure (`rebuild_window`):**
 
 1. Prepare the replacement `ScheduledEntry` with:
-   - A freshly generated UUID4 `window_uuid`. This is the critical signal to Tier 2: the old `window_uuid` is now invalid.
+   - A freshly generated UUID4 `window_uuid`. This is the critical signal for playlog plan resolution: the old `window_uuid` is now invalid.
    - The same `window_key` as the window being replaced (same time slot).
    - `state == COMMITTED` and all `blocked_*` fields set to `None` — regardless of the previous entry's state.
    - `committed_at_ms` set to the current wall clock.
@@ -169,7 +169,7 @@ A Tier 1 rebuild is an **explicit operator action** that replaces a single commi
 
 3. Release both locks together.
 
-**Effect on Tier 2:** ProgramDirector detects the new `window_uuid` on the next `extend_horizon` call. Any existing `PlaylogWindow` for the same `window_key` built from the old commit will have a `source_window_uuid` that no longer matches the new `ScheduledEntry.window_uuid`. ProgramDirector discards that stale `PlaylogWindow` (if `PENDING`) and rebuilds. If the existing `PlaylogWindow` is `ACTIVE`, it is protected by the window-level freeze and is not disturbed; ProgramDirector will detect the staleness and rebuild after the window expires.
+**Effect on playlog plan:** ProgramDirector detects the new `window_uuid` on the next `extend_horizon` call. Any existing `PlaylogWindow` for the same `window_key` built from the old commit will have a `source_window_uuid` that no longer matches the new `ScheduledEntry.window_uuid`. ProgramDirector discards that stale `PlaylogWindow` (if `PENDING`) and rebuilds. If the existing `PlaylogWindow` is `ACTIVE`, it is protected by the window-level freeze and is not disturbed; ProgramDirector will detect the staleness and rebuild after the window expires.
 
 **Immutability rule:** The Scheduler **never mutates** any field of a committed `ScheduledEntry` except through rebuild (which replaces the entry entirely). The `state` field (`COMMITTED → BLOCKED`) is written only by `ProgramDirector` via `_mark_blocked`. A rebuild resets `state` to `COMMITTED` by construction — not by mutation of the existing object.
 
@@ -177,7 +177,7 @@ A Tier 1 rebuild is an **explicit operator action** that replaces a single commi
 
 ## 7. window_uuid Semantics
 
-`window_uuid` is a UUID4 string that identifies a specific **commit version** of a Tier 1 window.
+`window_uuid` is a UUID4 string that identifies a specific **commit version** of a program schedule window.
 
 | Property | Rule |
 |---|---|
@@ -185,8 +185,8 @@ A Tier 1 rebuild is an **explicit operator action** that replaces a single commi
 | Stable | Unchanged for the lifetime of that `ScheduledEntry` object. |
 | Invalidated | When `rebuild_window` replaces the entry. The old object is discarded; a new object with a new UUID is created. |
 | Not reused | No two `ScheduledEntry` commits, past or present, share a `window_uuid` for the same channel. |
-| Staleness signal | ProgramDirector compares `PlaylogWindow.source_window_uuid` against `ScheduledEntry.window_uuid`. A mismatch means the Tier 1 entry has been rebuilt since the `PlaylogWindow` was last built. |
-| Not a seed | `window_uuid` is not used to derive the Tier 2 build seed. The Tier 2 build seed is drawn fresh per build session and stored in `PlaylogBuildContext.seed`. |
+| Staleness signal | ProgramDirector compares `PlaylogWindow.source_window_uuid` against `ScheduledEntry.window_uuid`. A mismatch means the program schedule entry has been rebuilt since the `PlaylogWindow` was last built. |
+| Not a seed | `window_uuid` is not used to derive the playlog plan build seed. The playlog plan build seed is drawn fresh per build session and stored in `PlaylogBuildContext.seed`. |
 
 `WindowKey` is **not** the commit identity. Multiple `ScheduledEntry` commits may share the same `WindowKey` (same time slot, different rebuild versions) over time. `WindowKey` is the **time-coordinate lookup key**; `window_uuid` is the **version identity**.
 
@@ -204,7 +204,7 @@ template_id  →  list[WindowKey]   (sorted ascending by wall_start_ms)
 
 The index must include ALL `ScheduledEntry` records that reference a given `template_id`, regardless of `ScheduleWindowState`. Both `COMMITTED` and `BLOCKED` entries are indexed.
 
-Rationale: A `BLOCKED` window is a committed Tier 1 entry. It still holds a live reference to its template. Allowing that template to be deleted while the window is `BLOCKED` would create a dangling reference that will fail again on the next rebuild attempt. The operator must explicitly remove or rebuild the `BLOCKED` window before the template can be deleted.
+Rationale: A `BLOCKED` window is a committed program schedule entry. It still holds a live reference to its template. Allowing that template to be deleted while the window is `BLOCKED` would create a dangling reference that will fail again on the next rebuild attempt. The operator must explicitly remove or rebuild the `BLOCKED` window before the template can be deleted.
 
 **Index maintenance events (all atomic with ScheduleRegistry write, both locks held):**
 
@@ -291,9 +291,9 @@ Same field definitions as VAL-T1-004.
 
 ---
 
-## 10. BLOCKED State at Tier 1
+## 10. BLOCKED state in program schedule
 
-`ScheduleWindowState.BLOCKED` is set by `ProgramDirector`, not by the Scheduler. It signals that a Tier 2 resolution attempt for this window encountered a non-retryable failure (currently: VAL-T2-001, template absent at resolution time).
+`ScheduleWindowState.BLOCKED` is set by `ProgramDirector`, not by the Scheduler. It signals that a playlog plan resolution attempt for this window encountered a non-retryable failure (currently: VAL-T2-001, template absent at resolution time).
 
 **Scheduler's relationship to BLOCKED state:**
 
@@ -337,15 +337,15 @@ The Scheduler participates in the system-wide global lock ordering defined in `t
 
 | ID | Tier | Condition | Enforcer |
 |---|---|---|---|
-| VAL-T1-001 | Tier 1 | Duplicate `window_key` in a single horizon build batch | Scheduler (skip on conflict) |
-| VAL-T1-002 | Tier 1 | `wall_end_ms <= wall_start_ms` after HH:MM resolution | `_resolve_window_bounds` helper |
-| VAL-T1-003 | Tier 1 | Required field absent or mismatched for declared `type` (e.g. `type == "template"` with no `name`) | Config parser (parse-time) |
-| VAL-T1-004 | Tier 1 | Template deletion attempted while referenced by any `ScheduledEntry` | Scheduler (mutation-time) |
-| VAL-T1-005 | Tier 1 | Template rename attempted while referenced by any `ScheduledEntry` | Scheduler (mutation-time) |
+| VAL-T1-001 | Program schedule | Duplicate `window_key` in a single horizon build batch | Scheduler (skip on conflict) |
+| VAL-T1-002 | Program schedule | `wall_end_ms <= wall_start_ms` after HH:MM resolution | `_resolve_window_bounds` helper |
+| VAL-T1-003 | Program schedule | Required field absent or mismatched for declared `type` (e.g. `type == "template"` with no `name`) | Config parser (parse-time) |
+| VAL-T1-004 | Program schedule | Template deletion attempted while referenced by any `ScheduledEntry` | Scheduler (mutation-time) |
+| VAL-T1-005 | Program schedule | Template rename attempted while referenced by any `ScheduledEntry` | Scheduler (mutation-time) |
 
-Parse-time failures (VAL-PARSE-* series) that precede Tier 1 build — including field type errors, unknown entry types, missing required fields, and `primary_segment_index` inference failures — are defined and enforced by the config parser layer. They are outside the scope of this document and are catalogued in `docs/domains/ProgramTemplateAssembly.md`.
+Parse-time failures (VAL-PARSE-* series) that precede program schedule build — including field type errors, unknown entry types, missing required fields, and `primary_segment_index` inference failures — are defined and enforced by the config parser layer. They are outside the scope of this document and are catalogued in `docs/domains/ProgramTemplateAssembly.md`.
 
-Tier 2 failures (VAL-T2-* series) that trigger `BLOCKED` state transitions are outside the scope of this document and are owned by `ProgramDirector`.
+playlog plan failures (VAL-T2-* series) that trigger `BLOCKED` state transitions are outside the scope of this document and are owned by `ProgramDirector`.
 
 ---
 
@@ -353,11 +353,11 @@ Tier 2 failures (VAL-T2-* series) that trigger `BLOCKED` state transitions are o
 
 This document does not define and the Scheduler does not own:
 
-- **Segment resolution:** The Scheduler does not resolve template segments to concrete assets. This is Tier 2 behavior owned by `ProgramDirector`.
+- **Segment resolution:** The Scheduler does not resolve template segments to concrete assets. This is playlog plan behavior owned by `ProgramDirector`.
 - **PlaylogWindow lifecycle:** The Scheduler does not read, write, or transition `PlaylogWindowState`. It does not know whether a `PlaylogWindow` exists for any committed entry.
-- **Tier 2 staleness handling:** The Scheduler does not trigger Tier 2 discards or rebuilds. It issues a new `window_uuid` on rebuild; `ProgramDirector` detects the staleness signal on its next `extend_horizon` call.
-- **Asset approval and availability:** Asset approval state is an `AssetCatalog` concern evaluated at Tier 2.
-- **EPG derivation from asset metadata:** EPG title derivation from the primary content asset is a Tier 2 concern. The Scheduler stores only the operator-committed `epg_title` string (or `None`).
+- **playlog plan staleness handling:** The Scheduler does not trigger playlog plan discards or rebuilds. It issues a new `window_uuid` on rebuild; `ProgramDirector` detects the staleness signal on its next `extend_horizon` call.
+- **Asset approval and availability:** Asset approval state is an `AssetCatalog` concern evaluated at playlog plan.
+- **EPG derivation from asset metadata:** EPG title derivation from the primary content asset is a playlog plan concern. The Scheduler stores only the operator-committed `epg_title` string (or `None`).
 - **Filler scheduling:** Gaps between resolved events and `wall_end_ms` are handled by the channel-level filler system, not by the Scheduler.
 - **Bleed extension duration calculation:** The Scheduler stores `allow_bleed` as a flag. The extent of any bleed is determined by the runtime duration of the last resolved event; the Scheduler has no knowledge of content durations.
 - **TemplateRegistry content:** The Scheduler does not define, parse, or validate template segment composition. It stores `name` (a `template_id` string reference) and nothing more.
@@ -370,7 +370,7 @@ The following test files are expected to exist and cover the behavioral contract
 
 ### `pkg/core/tests/contracts/runtime/test_inv_sched_index_atomicity.py`
 
-Verifies SCHED-INDEX-001: `TemplateReferenceIndex` is always consistent with `ScheduleRegistry` across all Tier 1 mutations.
+Verifies SCHED-INDEX-001: `TemplateReferenceIndex` is always consistent with `ScheduleRegistry` across all program schedule mutations.
 
 Expected cases:
 - After `build_schedule_horizon`, every `type == "template"` entry in `ScheduleRegistry` has a corresponding `WindowKey` in `TemplateReferenceIndex`.
@@ -389,9 +389,9 @@ Expected cases:
 - `COMMITTED → BLOCKED` transition (simulated via `_mark_blocked`) changes only `state`, `blocked_reason_code`, `blocked_at_ms`, and `blocked_details`; all other fields are unchanged.
 - No field mutation path exists on `ScheduledEntry` other than the four `blocked_*` fields.
 
-### `pkg/core/tests/contracts/test_scheduler_tier1_contract.py`
+### `pkg/core/tests/contracts/test_program_schedule_scheduler_contract.py`
 
-Integration-level contract tests covering the full Tier 1 authority surface.
+Integration-level contract tests covering the full program schedule authority surface.
 
 Expected cases:
 - `build_schedule_horizon` is additive: calling it twice with the same config produces no duplicates and does not overwrite existing entries.

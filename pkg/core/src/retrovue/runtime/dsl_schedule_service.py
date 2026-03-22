@@ -116,7 +116,7 @@ FRAME_TOLERANCE_MS = 40  # overridden per-instance from resolved_config
 def _deserialize_scheduled_block(d: dict, frame_tolerance_ms: int = FRAME_TOLERANCE_MS) -> "ScheduledBlock":
     """Deserialize a dict back into a ScheduledBlock.
 
-    INV-SCHEDULE-HORIZON-001: Used by Tier 2 (Playlog Horizon Daemon)
+    INV-SCHEDULE-HORIZON-001: Used by playlog plan (PlaylistBuilderDaemon)
     and _hydrate_schedule to reconstruct blocks from DB cache.
 
     INV-BLOCK-SEGMENT-CONSERVATION-001: Rejects blocks where segment
@@ -166,7 +166,7 @@ def _deserialize_scheduled_block(d: dict, frame_tolerance_ms: int = FRAME_TOLERA
     delta_ms = sum_segment_ms - block_duration_ms
     if abs(delta_ms) > frame_tolerance_ms:
         raise ValueError(
-            f"INV-BLOCK-SEGMENT-CONSERVATION-001: Stale Tier 2 data — "
+            f"INV-BLOCK-SEGMENT-CONSERVATION-001: Stale playlog plan data — "
             f"block={block.block_id} sum={sum_segment_ms}ms "
             f"duration={block_duration_ms}ms delta={delta_ms}ms "
             f"segment_count={len(block.segments)} stage=deserialization"
@@ -226,7 +226,7 @@ class DslScheduleService:
         self._extending = False
 
         # INV-SCHEDULE-RETENTION-001: throttle DB purge to at most once/hour
-        self._last_tier1_purge_utc_ms: int = 0
+        self._last_program_schedule_purge_utc_ms: int = 0
 
         # Cached CatalogAssetResolver (Part 2B: avoid per-compile reload)
         # TTL-based: resolver is rebuilt if catalog may have changed.
@@ -235,7 +235,7 @@ class DslScheduleService:
         self._resolver_ttl_s: float = 60.0  # 60-second TTL
 
         # Cached channel timezone from DSL parse (avoids re-reading DSL file
-        # on every Tier 2 miss in ensure_block_compiled).
+        # on every playlog plan miss in ensure_block_compiled).
         self._channel_tz = None
 
         # Cached parsed channel DSL for traffic policy resolution.
@@ -416,7 +416,7 @@ class DslScheduleService:
         in-memory compilation exclusively. PlaylistEvent is queried by block_id
         only — never by time range.
 
-        INV-CHANNEL-NO-COMPILE-001: If Tier 2 has no row for this block, compiles
+        INV-CHANNEL-NO-COMPILE-001: If playlog plan has no row for this block, compiles
         it synchronously via ensure_block_compiled().
 
         Also checks if the horizon needs extending.
@@ -444,9 +444,9 @@ class DslScheduleService:
         return self.ensure_block_compiled(channel_id, block)
 
     def ensure_block_compiled(self, channel_id: str, block: ScheduledBlock) -> ScheduledBlock:
-        """Ensure a single block has a Tier 2 (PlaylistEvent) entry.
+        """Ensure a single block has a playlog plan (PlaylistEvent) entry.
 
-        INV-TIER2-AUTHORITY-001: Synchronous, idempotent Tier 2 compilation.
+        INV-TIER2-AUTHORITY-001: Synchronous, idempotent playlog plan compilation.
 
         Properties:
           - If block already compiled in PlaylistEvent → returns compiled version (no-op)
@@ -497,7 +497,7 @@ class DslScheduleService:
                     )
                     if abs(cached_sum - cached_dur) > self._frame_tolerance_ms:
                         logger.warning(
-                            "INV-BLOCK-SEGMENT-CONSERVATION-001: Stale Tier 2 "
+                            "INV-BLOCK-SEGMENT-CONSERVATION-001: Stale playlog plan "
                             "row in ensure_block_compiled — block=%s sum=%dms "
                             "duration=%dms delta=%dms segment_count=%d "
                             "stage=deserialization. Deleting to recompile.",
@@ -522,7 +522,7 @@ class DslScheduleService:
         # Not compiled — fill ads synchronously
         logger.info(
             "INV-TIER2-AUTHORITY-001: Synchronous compile for block=%s channel=%s "
-            "(Tier 2 miss at ownership boundary)",
+            "(playlog plan miss at ownership boundary)",
             block.block_id, channel_id,
         )
 
@@ -740,7 +740,7 @@ class DslScheduleService:
                 )
                 if abs(seg_sum - block_dur) > self._frame_tolerance_ms:
                     logger.warning(
-                        "INV-BLOCK-SEGMENT-CONSERVATION-001: Stale Tier 2 "
+                        "INV-BLOCK-SEGMENT-CONSERVATION-001: Stale playlog plan "
                         "row invalidated — block=%s sum=%dms duration=%dms "
                         "delta=%dms segment_count=%d stage=deserialization. "
                         "Deleting to force recompile.",
@@ -752,7 +752,7 @@ class DslScheduleService:
                     return None
 
                 logger.debug(
-                    "INV-CHANNEL-NO-COMPILE-001: Tier 2 hit for "
+                    "INV-CHANNEL-NO-COMPILE-001: playlog plan hit for "
                     "block=%s (%d segs)",
                     row.block_id, len(segments),
                 )
@@ -761,7 +761,7 @@ class DslScheduleService:
 
         except Exception as e:
             logger.warning(
-                "INV-CHANNEL-NO-COMPILE-001: Tier 2 lookup failed for "
+                "INV-CHANNEL-NO-COMPILE-001: playlog plan lookup failed for "
                 "block_id=%s: %s — falling back to unfilled",
                 block_id, e,
             )
@@ -882,8 +882,8 @@ class DslScheduleService:
             # Prune old blocks (>24h in the past) to save memory
             self._prune_old_blocks(now_utc_ms)
 
-            # INV-SCHEDULE-RETENTION-001: purge expired Tier 1 DB rows
-            self._purge_expired_tier1(now_utc_ms)
+            # INV-SCHEDULE-RETENTION-001: purge expired program schedule DB rows
+            self._purge_expired_program_schedule(now_utc_ms)
 
         except Exception as e:
             logger.error(
@@ -904,10 +904,10 @@ class DslScheduleService:
             if pruned > 0:
                 logger.info("Pruned %d old blocks (>24h past)", pruned)
 
-    def _purge_expired_tier1(self, now_utc_ms: int = 0) -> int:
+    def _purge_expired_program_schedule(self, now_utc_ms: int = 0) -> int:
         """Delete ProgramLogDay rows with broadcast_day < today - 1.
 
-        INV-SCHEDULE-RETENTION-001: Tier 1 retains only rows where
+        INV-SCHEDULE-RETENTION-001: program schedule retains only rows where
         broadcast_day >= today - 1. Throttled to at most once per hour.
 
         Returns the number of rows deleted (0 if throttled or no-op).
@@ -916,7 +916,7 @@ class DslScheduleService:
             now_utc_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
         # Hourly throttle
-        if (now_utc_ms - self._last_tier1_purge_utc_ms) < 3_600_000:
+        if (now_utc_ms - self._last_program_schedule_purge_utc_ms) < 3_600_000:
             return 0
 
         from retrovue.domain.entities import ProgramLogDay
@@ -927,17 +927,17 @@ class DslScheduleService:
                 count = db.query(ProgramLogDay).filter(
                     ProgramLogDay.broadcast_day < cutoff,
                 ).delete()
-            self._last_tier1_purge_utc_ms = now_utc_ms
+            self._last_program_schedule_purge_utc_ms = now_utc_ms
             if count > 0:
                 logger.info(
-                    "INV-SCHEDULE-RETENTION-001: Purged %d expired Tier 1 rows "
+                    "INV-SCHEDULE-RETENTION-001: Purged %d expired program schedule rows "
                     "(broadcast_day < %s)",
                     count, cutoff.isoformat(),
                 )
             return count
         except Exception as e:
             logger.warning(
-                "INV-SCHEDULE-RETENTION-001: Tier 1 purge failed: %s", e,
+                "INV-SCHEDULE-RETENTION-001: program schedule purge failed: %s", e,
             )
             return 0
 
@@ -1128,7 +1128,7 @@ class DslScheduleService:
         return None
 
     def _save_compiled_schedule(self, channel_id: str, broadcast_day: str, schedule: dict, dsl_hash: str) -> None:
-        """Persist compiled schedule to relational Tier-1 authority only.
+        """Persist compiled schedule to relational program_schedule authority only.
 
         Stage 4: ProgramLogDay schedule storage is deprecated.
         """
@@ -1314,7 +1314,7 @@ class DslScheduleService:
         blocks = self._expand_schedule_to_blocks(schedule, resolver)
 
         # INV-SCHEDULE-HORIZON-001: Persist segmented blocks alongside
-        # program metadata so Tier 2 (Playlog Horizon Daemon) can consume
+        # program metadata so playlog plan (PlaylistBuilderDaemon) can consume
         # pre-segmented data without re-expanding.
         schedule["segmented_blocks"] = [
             _serialize_scheduled_block(b) for b in blocks
@@ -1332,7 +1332,7 @@ class DslScheduleService:
         INV-SCHEDULE-HORIZON-001: If segmented_blocks are present in the
         cached schedule, deserialize directly (no re-expansion needed).
         Falls back to expand_program_block if segmented_blocks are absent
-        (backward compatibility with pre-Tier-1 cached schedules).
+        (backward compatibility with pre-program_schedule cached schedules).
         """
         # Fast path: segmented blocks already cached
         if "segmented_blocks" in schedule and schedule["segmented_blocks"]:
@@ -1368,9 +1368,9 @@ class DslScheduleService:
         blocks = self._expand_schedule_to_blocks(schedule, resolver)
 
         # INV-SCHEDULE-RETENTION-001: Backfill segmented_blocks into the
-        # cached Tier 1 row so PlaylistBuilderDaemon can consume them.
+        # cached program schedule row so PlaylistBuilderDaemon can consume them.
         # Without this, stale rows (pre-segmented_blocks) stay stale and
-        # the daemon can't pre-fill Tier 2, causing synchronous compiles
+        # the daemon can't pre-fill playlog plan, causing synchronous compiles
         # on the viewer-join path.
         try:
             schedule["segmented_blocks"] = [
@@ -1467,24 +1467,24 @@ class DslScheduleService:
     def _expand_schedule_to_blocks(self, schedule: dict, resolver: CatalogAssetResolver) -> list[ScheduledBlock]:
         """Expand compiled program blocks into ScheduledBlocks with empty filler placeholders.
 
-        Produces Tier 1 data: content segments + empty filler placeholders
-        (break opportunities). Ad fill happens at Tier 2 (PlaylistBuilderDaemon),
+        Produces program schedule data: content segments + empty filler placeholders
+        (break opportunities). Ad fill happens at playlog plan generation (PlaylistBuilderDaemon),
         not here.
 
         INV-TRAFFIC-LATE-BIND-001: RETIRED — replaced by INV-PLAYLOG-PREFILL-001.
-        Ad fill now happens at Tier 2 generation time (2-3h ahead), not at
-        feed time. See: docs/architecture/two-tier-horizon.md
+        Ad fill now happens at playlog plan generation time (2-3h ahead), not at
+        feed time. See: docs/architecture/program-schedule-playlog-plan-horizon.md
         """
         return self._expand_blocks_inner(schedule, resolver)
 
     def _expand_blocks_inner(self, schedule: dict, resolver: CatalogAssetResolver) -> list[ScheduledBlock]:
-        """Inner expand loop -- produces Tier 1 blocks with EMPTY filler placeholders.
+        """Inner expand loop -- produces program schedule blocks with EMPTY filler placeholders.
 
         Filler placeholders (segment_type=filler, asset_uri="") are filled by
-        PlaylistBuilderDaemon at Tier 2 generation time and written to
+        PlaylistBuilderDaemon at playlog plan generation time and written to
         PlaylistEvent. ChannelManager reads filled blocks from PlaylistEvent.
 
-        INV-PLAYLOG-PREFILL-001: Ad selection at Tier 2, not compile time or feed time.
+        INV-PLAYLOG-PREFILL-001: Ad selection at playlog plan generation, not compile time or feed time.
         INV-PRESENTATION-PRECEDES-PRIMARY-001: When compiled_segments contains
         presentation entries, they are hydrated and prepended to the expanded block.
         """
@@ -1543,8 +1543,8 @@ class DslScheduleService:
             )
             content_slot_ms = full_slot_ms - presentation_total_ms
 
-            # Expand into acts + ad breaks (empty filler placeholders — Tier 1 data).
-            # INV-PLAYLOG-PREFILL-001: Ad fill happens at Tier 2 (PlaylistBuilderDaemon),
+            # Expand into acts + ad breaks (empty filler placeholders — program schedule data).
+            # INV-PLAYLOG-PREFILL-001: Ad fill happens at playlog plan generation (PlaylistBuilderDaemon),
             # not here at compile time and not at feed time.
             expanded = expand_program_block(
                 asset_id=asset_id,
@@ -1597,8 +1597,8 @@ class DslScheduleService:
 
         return blocks
 
-    # _get_asset_library removed: ad fill now handled by PlaylistBuilderDaemon (Tier 2).
-    # See: INV-PLAYLOG-PREFILL-001, docs/architecture/two-tier-horizon.md
+    # _get_asset_library removed: ad fill now handled by PlaylistBuilderDaemon (playlog plan).
+    # See: INV-PLAYLOG-PREFILL-001, docs/architecture/program-schedule-playlog-plan-horizon.md
 
     def _resolve_uris(self, resolver: CatalogAssetResolver, schedule: dict) -> None:
         """Pre-resolve source file paths to local paths using PathMappings.

@@ -94,7 +94,7 @@ scheduler_daemon (each evaluation cycle)
   container_refresh   (discovery + reconciliation for configured containers)
        │
        ▼
-  horizon_expansion   (extend Tier 2 / playout horizon using updated catalog)
+  horizon_expansion   (extend playlog plan / playout horizon using updated catalog)
 ```
 
 CLI ingest (`source ingest`, `container ingest`) remains a valid trigger; the daemon adds a second trigger so that refresh runs on a schedule or before each horizon extension. (During compatibility rollout, `collection ingest` may still be accepted as a deprecated alias.)

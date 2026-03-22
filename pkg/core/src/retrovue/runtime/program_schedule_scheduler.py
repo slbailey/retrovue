@@ -1,6 +1,6 @@
-# pkg/core/src/retrovue/runtime/scheduler_tier1.py
+# pkg/core/src/retrovue/runtime/program_schedule_scheduler.py
 #
-# Tier 1 schedule commitment authority.
+# Program schedule commitment authority.
 #
 # Owns:
 #   ScheduleRegistry        — committed time windows and entry references
@@ -34,7 +34,7 @@ from retrovue.runtime.template_runtime import (
 # ─────────────────────────────────────────────────────────────────────────────
 
 class SchedulerError(Exception):
-    """Raised when a Tier 1 Scheduler operation violates a documented contract rule.
+    """Raised when a program schedule scheduler operation violates a documented contract rule.
 
     code    — machine-readable validation ID (e.g. "VAL-T1-004")
     message — human-readable description including affected IDs and earliest window
@@ -55,11 +55,11 @@ class ScheduleEntrySpec:
     """A pre-parsed schedule entry with wall-clock bounds in epoch ms.
 
     HH:MM parsing, timezone resolution, and midnight-crossing adjustment are
-    performed by the caller upstream of Tier1Scheduler.  By the time this
+    performed by the caller upstream of ProgramScheduleScheduler.  By the time this
     object is passed to build_horizon, all time values are absolute UTC
     epoch milliseconds and wall_end_ms > wall_start_ms is guaranteed.
 
-    Field constraints (enforced by caller, not by Tier1Scheduler):
+    Field constraints (enforced by caller, not by ProgramScheduleScheduler):
       type == "template"  →  name is set, asset_id is None, mode is None
       type == "pool"      →  name is set, asset_id is None, mode may be set
       type == "asset"     →  name is None, asset_id is set, mode is None
@@ -71,7 +71,7 @@ class ScheduleEntrySpec:
 
     name: str | None = None       # template_id or pool_id
     asset_id: str | None = None   # direct asset reference (type == "asset" only)
-    epg_title: str | None = None  # operator-assigned EPG title; None → Tier 2 derivation
+    epg_title: str | None = None  # operator-assigned EPG title; None → playlog plan derivation
     allow_bleed: bool = False
     mode: str | None = None       # selection strategy (type == "pool" only)
 
@@ -122,11 +122,11 @@ def _index_remove(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Tier 1 Scheduler
+# Program schedule scheduler
 # ─────────────────────────────────────────────────────────────────────────────
 
-class Tier1Scheduler:
-    """Owns Tier 1 schedule commitments and TemplateReferenceIndex maintenance.
+class ProgramScheduleScheduler:
+    """Owns program schedule commitments and TemplateReferenceIndex maintenance.
 
     One instance per channel.  Caller supplies the ChannelRuntimeState
     aggregating all per-channel runtime structures.
@@ -172,7 +172,7 @@ class Tier1Scheduler:
 
         # VAL-T1-001: snapshot the template key set under TemplateRegistry lock,
         # then release immediately.  We do not hold the lock during commit; the
-        # contract says Tier 1 does not snapshot templates, but checking existence
+        # contract says the program schedule layer does not snapshot templates, but checking existence
         # at build time is a point-in-time guard, not a persistent copy.
         with s.template_registry._lock:
             known_templates: frozenset[str] = frozenset(
@@ -253,7 +253,7 @@ class Tier1Scheduler:
         window_key: WindowKey,
         replacement: ScheduleEntrySpec,
     ) -> WindowKey:
-        """Replace an existing Tier 1 window with a new commit.
+        """Replace an existing program schedule window with a new commit.
 
         Issues a new window_uuid (UUID4).  Resets state to COMMITTED and
         clears all blocked_* fields, regardless of the previous entry's state.

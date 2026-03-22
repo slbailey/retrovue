@@ -35,7 +35,7 @@ The scheduling layer has no authority over the following concerns. Each belongs 
 | Concern | Owner | Why not scheduling |
 |---|---|---|
 | Execution horizon depth | Horizon Manager | Runtime coordination, not editorial |
-| PlaylistEvent generation | Tier 2 / PlaylistBuilderDaemon | Execution intent derived from schedule output |
+| PlaylistEvent generation | playlog plan / PlaylistBuilderDaemon | Execution intent derived from schedule output |
 | Block feeding and queue management | ChannelManager | Runtime playout orchestration |
 | Frame timing and pacing | AIR | Real-time execution |
 | HLS segment emission | Transport / Sink | Output format |
@@ -84,7 +84,7 @@ The boundary is strict: scheduling produces ScheduleRevisions containing Schedul
     ── scheduling boundary ──────────────────────
          │
          ▼
-    Execution intent (PlaylistEvent, Tier 2)
+    Execution intent (PlaylistEvent, playlog plan)
          │
          ▼
     ExecutionSegment
@@ -327,11 +327,11 @@ This invariant covers the ScheduleManager resolution path. INV-SCHEDULE-SEED-DET
 
 **Reschedule must reject artifacts whose coverage window has begun or is in the past.**
 
-A reschedule operation (deletion-for-regeneration) on a Tier 1 `ProgramLogDay` or Tier 2 `PlaylistEvent` MUST be rejected when:
+A reschedule operation (deletion-for-regeneration) on a program schedule `ProgramLogDay` or playlog plan `PlaylistEvent` MUST be rejected when:
 
-- Tier 1: `range_start` is not strictly greater than `now()`
-- Tier 2: `start_utc_ms` is not strictly greater than `now_utc_ms`
-- Tier 1: `range_start IS NULL` (temporal eligibility cannot be determined)
+- Program schedule: `range_start` is not strictly greater than `now()`
+- Playlog Plan: `start_utc_ms` is not strictly greater than `now_utc_ms`
+- Program schedule: `range_start IS NULL` (temporal eligibility cannot be determined)
 
 An operator reschedule that deletes an actively-airing block disrupts viewers mid-program. The temporal guard ensures mutations can only affect the future.
 
@@ -394,7 +394,7 @@ These govern internal representation details. They belong in schema documentatio
 | Invariant ID | What it governs | Why excluded |
 |---|---|---|
 | INV-WINDOW-UUID-EMBEDDED-001 | Window UUID stored in JSON blob, not as a column | Storage format for window identity. The architectural concern is "windows have stable identity" — how the UUID is serialized is a schema detail. |
-| INV-PROGRAM-LOG-COLUMN-NAME-001 | Tier 1 column named `program_log_json` | Column rename from `compiled_json`. Schema naming with no architectural significance. |
+| INV-PROGRAM-LOG-COLUMN-NAME-001 | Program schedule cache column named `program_log_json` | Column rename from `compiled_json`. Schema naming with no architectural significance. |
 
 ### Phantom Invariants
 

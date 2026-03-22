@@ -341,7 +341,7 @@ system:
 
   # --- playlist builder -------------------------------------------------
   playlist_builder:
-    warn_on_first_missing_tier2_only: true
+    warn_on_first_missing_playlog_plan_only: true
 
 
 # --------------------------------------------------------------------------

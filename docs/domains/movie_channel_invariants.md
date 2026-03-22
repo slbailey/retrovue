@@ -135,7 +135,7 @@ PlaylistEvent
 - `schedule_items_reader.py` — `load_segmented_blocks_from_active_revision()`, `_hydrate_compiled_segments()`
 - `playout_log_expander.py` — `expand_program_block()`, `_expand_movie()`
 - `traffic_manager.py` — `fill_ad_blocks()`
-- `schedule_rebuild.py` — `rebuild_tier2()`
+- `schedule_rebuild.py` — `rebuild_playlog_plan()`
 
 ---
 
@@ -157,7 +157,7 @@ Neither path may introduce mid-content filler or ad break segments.
 
 **INV-MOVIE-REBUILD-EQUIVALENCE:** `schedule rebuild --tier 2` MUST use the same editorial block expansion path as the horizon scheduler daemon.
 
-The `rebuild_tier2()` function in `schedule_rebuild.py` calls `load_segmented_blocks_from_active_revision()` — the same function used by the horizon daemon. This ensures:
+The `rebuild_playlog_plan()` function in `schedule_rebuild.py` calls `load_segmented_blocks_from_active_revision()` — the same function used by the horizon daemon. This ensures:
 
 - The same `compiled_segments` gate logic applies.
 - The same `_hydrate_compiled_segments()` or `expand_program_block()` path is taken.

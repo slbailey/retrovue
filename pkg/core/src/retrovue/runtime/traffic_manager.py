@@ -146,7 +146,7 @@ def fill_ad_blocks(
     )
 
     # INV-BLOCK-SEGMENT-CONSERVATION-001: Verify segment sum == block duration
-    # after Tier-2 fill.  If overflow, trim final non-content segment to fit.
+    # after playlog plan fill.  If overflow, trim final non-content segment to fit.
     block_duration_ms = filled.end_utc_ms - filled.start_utc_ms
     sum_segment_ms = sum(s.segment_duration_ms for s in filled.segments)
     delta_ms = sum_segment_ms - block_duration_ms

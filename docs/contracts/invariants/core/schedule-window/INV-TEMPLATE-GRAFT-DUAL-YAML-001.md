@@ -64,5 +64,5 @@ Contract test: `pkg/core/tests/contracts/test_template_graft_contract.py`
 ## Related
 
 - `docs/domains/ProgramTemplateAssembly.md` — template segment model
-- `docs/domains/SchedulerTier1Authority_v1.0.md` — window_uuid semantics
+- `docs/domains/ProgramScheduleAuthority_v1.0.md` — window_uuid semantics
 - `pkg/core/src/retrovue/runtime/schedule_compiler.py` — production compiler

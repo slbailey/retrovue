@@ -15,16 +15,16 @@ A logical grouping of related content from a source (e.g., "The Simpsons", "Clas
 **Source**  
 An origin of media content (e.g., Plex server, local filesystem, ad library). Sources are discovered and enumerated to find available content.
 
-## Scheduling Layer — Planned (Tier 1)
+## Scheduling Layer — Planned (program schedule)
 
 **SchedulableAsset**
-Abstract base for all schedule entries. Concrete types: [Program](#program), [Asset](#asset), [VirtualAsset](#virtualasset), SyntheticAsset. SchedulableAssets are placed in Zones within SchedulePlans and resolve to physical assets during Tier 2 resolution.
+Abstract base for all schedule entries. Concrete types: [Program](#program), [Asset](#asset), [VirtualAsset](#virtualasset), SyntheticAsset. SchedulableAssets are placed in Zones within SchedulePlans and resolve to physical assets during playlog plan resolution.
 
 **Program**
-[SchedulableAsset](#schedulableasset) type that represents a logical collection with metadata and playback policies. Contains `asset_chain` (linked list of SchedulableAssets: Programs, Assets, VirtualAssets, SyntheticAssets) and `play_mode` (random, sequential, manual). Programs resolve to concrete files via linked chain expansion and pool selection during Tier 2 resolution. See [Program](domain/Program.md).
+[SchedulableAsset](#schedulableasset) type that represents a logical collection with metadata and playback policies. Contains `asset_chain` (linked list of SchedulableAssets: Programs, Assets, VirtualAssets, SyntheticAssets) and `play_mode` (random, sequential, manual). Programs resolve to concrete files via linked chain expansion and pool selection during playlog plan resolution. See [Program](domain/Program.md).
 
 **VirtualAsset**
-[SchedulableAsset](#schedulableasset) type that represents an input-driven composite template (e.g., "SpongeBob Episode Block" = intro + 2 episodes). VirtualAssets are indistinguishable from regular Assets at scheduling time but expand into one or more physical Assets during Tier 2 resolution. See [VirtualAsset](domain/VirtualAsset.md).
+[SchedulableAsset](#schedulableasset) type that represents an input-driven composite template (e.g., "SpongeBob Episode Block" = intro + 2 episodes). VirtualAssets are indistinguishable from regular Assets at scheduling time but expand into one or more physical Assets during playlog plan resolution. See [VirtualAsset](domain/VirtualAsset.md).
 
 **ScheduleDay**
 Resolved, immutable daily schedule for a specific channel and calendar date. Contains ScheduleItems placed in Zones with real-world wall-clock times. Derived from SchedulePlans, resolved 3–4 days in advance, and serves as the foundation for EPG generation. ScheduleDay is frozen after generation unless force-regenerated or manually overridden. See [ScheduleDay](domain/ScheduleDay.md).
@@ -35,19 +35,24 @@ The canonical, persistent unit of editorial scheduling. Defines a single airing 
 **EPG**
 Electronic program guide. High-level future schedule for a Channel ("9:00 Movie", "11:00 Cartoons"). Typically planned days ahead. Derived from [ScheduleDay](#scheduleday).
 
-## Scheduling Layer — Execution (Tier 2)
+## Scheduling Layer — Playlog Plan (persisted)
 
 **PlaylistEvent**
-Execution-intent unit representing a single time-bounded instruction for playout. Derived from [ScheduleItem](#scheduleitem) during Tier 2 resolution. Contains segment structure (content, filler, pad, transition), wall-clock timestamps, and resolved asset references. PlaylistEvents tile the timeline without gaps or overlaps within a channel. See [PlaylistEvent](../../docs/domains/playout/PlaylistEvent.md).
+Row in the **Playlog Plan** (`playlog_plan`): ahead-of-air materialization derived from [ScheduleItem](#scheduleitem). Persisted `segments` and block times are **planned** execution intent for the horizon (cache, tooling, evidence). They MUST NOT be treated as the **runtime playlog** (see `INV-PLAYLOG-PLAN-VS-RUNTIME-001`). ChannelManager reads the Playlog Plan and constructs the executable timeline for AIR. PlaylistEvents tile the horizon without gaps or overlaps within a channel. See [PlaylistEvent](../../docs/domains/playout/PlaylistEvent.md).
+
+## Runtime execution — Runtime playlog (ephemeral)
+
+**Runtime playlog** (`runtime_playlog`)
+The time-scoped, join-aware segment sequence Core produces for emission **at wall-clock now**: planned `PlaylistEvent` segments transformed by the execution path (e.g. join-in-progress trim, offset bumps, renumbering). This is the only structure that is **executable** in the emission sense for AIR. Distinct from **Playlog Plan** (persisted) and **as-run** (historical). See `INV-PLAYLOG-PLAN-VS-RUNTIME-001`.
 
 **ExecutionSegment**
-Frame-accurate playback instruction derived from [PlaylistEvent](#playlistevent). The final Core-produced artifact before handoff to AIR. Contains seek positions, asset URIs, PTS offsets, and segment-level metadata. See [ExecutionSegment](../../docs/domains/playout/ExecutionSegment.md).
+Frame-accurate playback instruction in a **BlockPlan** / feed step, typically derived from **runtime playlog** construction (not from raw `PlaylistEvent` rows alone). Contains seek positions, asset URIs, PTS offsets, and segment-level metadata. See [ExecutionSegment](../../docs/domains/playout/ExecutionSegment.md).
 
 **BlockPlan**
 The AIR execution unit fed via gRPC (`FeedBlockPlan`). Contains a sequence of ExecutionSegments for a single time window. Core feeds BlockPlans to AIR; AIR executes them frame-accurately. See [BlockPlanFeedingContract](../../docs/contracts/core/BlockPlanFeedingContract.md).
 
 **AsRun**
-Observed ground truth — what actually aired during playout execution. Records what was observed during playout, including actual timestamps from MasterClock. AsRun can be compared to the planned PlaylistEvents to identify discrepancies between planned and actual playout.
+Observed ground truth — what actually aired during playout execution. Records what was observed during playout, including actual timestamps from MasterClock. AsRun can be compared to the Playlog Plan and **runtime playlog** to identify discrepancies between planned and actual playout.
 
 ## Channel & Runtime
 
@@ -91,10 +96,10 @@ A human configuring Sources, Collections, Channels, Producers, and Enrichers usi
 SchedulePlan → ScheduleRevision → ScheduleItem → PlaylistEvent → ExecutionSegment → BlockPlan → AIR → AsRun
 ```
 
-**Tier 1 (Editorial)**
+**Program schedule (Editorial)**
 The planning layer that operates days in advance: [SchedulePlan](domain/SchedulePlan.md) → [ScheduleRevision](../../docs/domains/scheduling/ScheduleRevision.md) → [ScheduleItem](#scheduleitem). ScheduleDay is a derived grouping of ScheduleItems by broadcast_day, not an authority. Contains editorial intent. Frozen and immutable once generated.
 
-**Tier 2 (Execution)**
+**Playlog Plan (Execution)**
 The resolution layer that operates hours ahead: [PlaylistEvent](#playlistevent) → [ExecutionSegment](#executionsegment) → [BlockPlan](#blockplan). Resolves editorial intent into concrete playout instructions. Immutable once inside the locked execution window.
 
 **Runtime**

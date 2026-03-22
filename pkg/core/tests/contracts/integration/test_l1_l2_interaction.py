@@ -1,6 +1,6 @@
 # pkg/core/tests/contracts/integration/test_l1_l2_interaction.py
 #
-# Integration contract tests: L1 (Tier 1 Scheduler) ↔ L2 (Tier 2 Director).
+# Integration contract tests: L1 (ProgramScheduleScheduler) ↔ L2 (Tier 2 Director).
 #
 # Uses real runtime objects throughout.  No mocking of core logic.
 #
@@ -58,10 +58,10 @@ from retrovue.runtime.template_runtime import (
     TemplateSegment,
     WindowKey,
 )
-from retrovue.runtime.scheduler_tier1 import (
+from retrovue.runtime.program_schedule_scheduler import (
     ScheduleEntrySpec,
     SchedulerError,
-    Tier1Scheduler,
+    ProgramScheduleScheduler,
     _index_insert,
 )
 
@@ -189,7 +189,7 @@ def _add_template(
 
 
 def _commit_one(
-    scheduler: Tier1Scheduler,
+    scheduler: ProgramScheduleScheduler,
     template_id: str,
     start_offset_s: int = 0,
     duration_s: int = WINDOW_DURATION_S,
@@ -524,7 +524,7 @@ class TestRebuildWhilePending:
         PENDING PlaylogWindow and produces a new one carrying the new uuid."""
         state     = _make_channel_state()
         _add_template(state, "tmpl_a")
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
         director  = _Tier2Director(state)
 
         key           = _commit_one(scheduler, "tmpl_a")
@@ -561,7 +561,7 @@ class TestRebuildWhilePending:
         """extend_horizon twice with no Tier 1 rebuild → same PlaylogWindow object."""
         state     = _make_channel_state()
         _add_template(state, "tmpl_a")
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
         director  = _Tier2Director(state)
 
         key = _commit_one(scheduler, "tmpl_a")
@@ -578,7 +578,7 @@ class TestRebuildWhilePending:
         template_id after a rebuild-while-pending (same template referenced)."""
         state     = _make_channel_state()
         _add_template(state, "tmpl_a")
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
         director  = _Tier2Director(state)
 
         key = _commit_one(scheduler, "tmpl_a")
@@ -595,7 +595,7 @@ class TestRebuildWhilePending:
         (except for the permitted BLOCKED state transition fields)."""
         state     = _make_channel_state()
         _add_template(state, "tmpl_a")
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
         director  = _Tier2Director(state)
 
         key          = _commit_one(scheduler, "tmpl_a")
@@ -624,7 +624,7 @@ class TestRebuildWhileActive:
         """extend_horizon skips a stale ACTIVE window — freeze boundary holds."""
         state     = _make_channel_state()
         _add_template(state, "tmpl_a")
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
         director  = _Tier2Director(state)
 
         key = _commit_one(scheduler, "tmpl_a")
@@ -658,7 +658,7 @@ class TestRebuildWhileActive:
         Tier 1 rebuild (stale EXPIRED) and produces a fresh PENDING window."""
         state     = _make_channel_state()
         _add_template(state, "tmpl_a")
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
         director  = _Tier2Director(state)
 
         key      = _commit_one(scheduler, "tmpl_a")
@@ -697,7 +697,7 @@ class TestRebuildWhileActive:
         entry is not replaced — it is retained for as-run lineage."""
         state     = _make_channel_state()
         _add_template(state, "tmpl_a")
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
         director  = _Tier2Director(state)
 
         key = _commit_one(scheduler, "tmpl_a")
@@ -720,7 +720,7 @@ class TestRebuildWhileActive:
         ChannelManager expires the window."""
         state     = _make_channel_state()
         _add_template(state, "tmpl_a")
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
         director  = _Tier2Director(state)
 
         key = _commit_one(scheduler, "tmpl_a")
@@ -756,7 +756,7 @@ class TestTemplateDeletionWhileBlocked:
 
         state     = _make_channel_state(catalog)
         _add_template(state, "tmpl_empty", pool_id=POOL_EMPTY)
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
         director  = _Tier2Director(state)
 
         key = _commit_one(scheduler, "tmpl_empty")
@@ -792,7 +792,7 @@ class TestTemplateDeletionWhileBlocked:
         state     = _make_channel_state(catalog)
         _add_template(state, "tmpl_empty", pool_id=POOL_EMPTY)
         _add_template(state, "tmpl_main",  pool_id=POOL_MAIN)
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
         director  = _Tier2Director(state)
 
         key = _commit_one(scheduler, "tmpl_empty")
@@ -830,7 +830,7 @@ class TestTemplateDeletionWhileBlocked:
         state     = _make_channel_state(catalog)
         _add_template(state, "tmpl_empty", pool_id=POOL_EMPTY)
         _add_template(state, "tmpl_main",  pool_id=POOL_MAIN)
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
         director  = _Tier2Director(state)
 
         key = _commit_one(scheduler, "tmpl_empty")
@@ -921,7 +921,7 @@ class TestColdRestartBehavior:
         before shutdown.  The first extend_horizon rebuilds the horizon."""
         state_before = _make_channel_state()
         _add_template(state_before, "tmpl_a")
-        scheduler_before = Tier1Scheduler(state_before)
+        scheduler_before = ProgramScheduleScheduler(state_before)
         director_before  = _Tier2Director(state_before)
 
         key = _commit_one(scheduler_before, "tmpl_a")
@@ -939,7 +939,7 @@ class TestColdRestartBehavior:
         """window_uuid on ScheduledEntry is restored exactly from Postgres."""
         state_before     = _make_channel_state()
         _add_template(state_before, "tmpl_a")
-        scheduler_before = Tier1Scheduler(state_before)
+        scheduler_before = ProgramScheduleScheduler(state_before)
 
         key           = _commit_one(scheduler_before, "tmpl_a")
         original_uuid = state_before.schedule_registry._windows[key].window_uuid
@@ -956,7 +956,7 @@ class TestColdRestartBehavior:
         and contains the same entries it held before shutdown."""
         state_before     = _make_channel_state()
         _add_template(state_before, "tmpl_a")
-        scheduler_before = Tier1Scheduler(state_before)
+        scheduler_before = ProgramScheduleScheduler(state_before)
 
         key = _commit_one(scheduler_before, "tmpl_a")
 
@@ -971,7 +971,7 @@ class TestColdRestartBehavior:
         carrying the same window_uuid that was persisted before shutdown."""
         state_before     = _make_channel_state()
         _add_template(state_before, "tmpl_a")
-        scheduler_before = Tier1Scheduler(state_before)
+        scheduler_before = ProgramScheduleScheduler(state_before)
 
         key           = _commit_one(scheduler_before, "tmpl_a")
         original_uuid = state_before.schedule_registry._windows[key].window_uuid
@@ -993,7 +993,7 @@ class TestColdRestartBehavior:
         extend_horizon skips them; TemplateReferenceIndex still contains them."""
         state_before     = _make_channel_state()
         _add_template(state_before, "tmpl_a")
-        scheduler_before = Tier1Scheduler(state_before)
+        scheduler_before = ProgramScheduleScheduler(state_before)
 
         key = _commit_one(scheduler_before, "tmpl_a")
 
@@ -1038,7 +1038,7 @@ class TestSeedBehavior:
         PlaylogWindow object with the same build_seed."""
         state     = _make_channel_state()
         _add_template(state, "tmpl_a")
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
         director  = _Tier2Director(state)
 
         key = _commit_one(scheduler, "tmpl_a")
@@ -1061,7 +1061,7 @@ class TestSeedBehavior:
         new build_seed drawn (statistically distinct from the prior seed)."""
         state     = _make_channel_state()
         _add_template(state, "tmpl_a")
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
         director  = _Tier2Director(state)
 
         key = _commit_one(scheduler, "tmpl_a")
@@ -1081,7 +1081,7 @@ class TestSeedBehavior:
         draws a new seed — the previous session's seed is not restored."""
         state     = _make_channel_state()
         _add_template(state, "tmpl_a")
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
         director  = _Tier2Director(state)
 
         key = _commit_one(scheduler, "tmpl_a")
@@ -1105,7 +1105,7 @@ class TestSeedBehavior:
         immediately after each extend_horizon completes a build."""
         state     = _make_channel_state()
         _add_template(state, "tmpl_a")
-        scheduler = Tier1Scheduler(state)
+        scheduler = ProgramScheduleScheduler(state)
         director  = _Tier2Director(state)
 
         key = _commit_one(scheduler, "tmpl_a")

@@ -172,7 +172,7 @@ class TestExtendForwardsTraffic:
         mock_db = MagicMock()
 
         with patch.object(
-            daemon, "_load_tier1_blocks", return_value=[fake_block],
+            daemon, "_load_program_schedule_blocks", return_value=[fake_block],
         ), patch.object(
             daemon, "_batch_block_exists_in_txlog", return_value=set(),
         ), patch.object(

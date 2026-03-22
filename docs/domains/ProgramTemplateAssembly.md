@@ -4,7 +4,7 @@
 **Version:** 1.0
 
 **Classification:** Domain (Content Assembly)
-**Authority Level:** Planning (Tier 2 Resolution)
+**Authority Level:** Planning (playlog plan Resolution)
 **Governs:** Template definition, segment composition, template resolution lifecycle, duration enforcement, selection rule evaluation
 **Out of Scope:** Schedule slot assignment, frame timing, ad decisioning, runtime execution
 
@@ -14,41 +14,41 @@
 
 ### Purpose
 
-Program Template Assembly is a declarative content assembly model. It defines the segment composition system applied at Tier 2 (Playlog horizon) to construct ordered playout segments from structural definitions.
+Program Template Assembly is a declarative content assembly model. It defines the segment composition system applied during playlog plan (Playlog horizon) to construct ordered playout segments from structural definitions.
 
 Templates are not a scheduling authority. They do not assign time windows or influence grid geometry. Schedule Manager owns slot boundaries and schedulable entry assignment. Templates operate strictly within those boundaries.
 
 Program Template Assembly is responsible for:
 
 - Declaring the internal structure of a program event as an ordered list of segments.
-- Resolving that list into concrete, ordered playout segments during Tier 2 materialization.
+- Resolving that list into concrete, ordered playout segments during playlog plan materialization.
 - Enforcing duration constraints against the schedule-assigned time window.
 - Surfacing resolution failures explicitly to the operator.
 
 ---
 
-### Tier model
+### Program schedule vs playlog plan
 
-Two tiers govern the lifecycle of a scheduled program event. Templates interact with both but are resolved only at Tier 2.
+Two layers govern the lifecycle of a scheduled program event. Templates interact with both but are resolved only during playlog plan build.
 
-#### Tier 1 — Schedule horizon
+#### Program schedule — schedule horizon
 
 - Commits time windows to the broadcast grid.
 - Commits the schedulable entry type for each scheduled event (template, pool, or asset reference).
-- May commit an EPG title for the event via the `epg_title` property of the schedule entry. If no `epg_title` is declared, EPG identity is deferred to Tier 2 derivation from the resolved primary content asset.
-- Does not resolve template internals. Segment definitions, selection rules, and asset references are opaque at Tier 1.
-- Immutable after build. Tier 1 commitments are not modified unless the operator explicitly triggers a rebuild of the affected schedule window.
+- May commit an EPG title for the event via the `epg_title` property of the schedule entry. If no `epg_title` is declared, EPG identity is deferred to playlog plan derivation from the resolved primary content asset.
+- Does not resolve template internals. Segment definitions, selection rules, and asset references are opaque in the program schedule.
+- Immutable after build. Program schedule commitments are not modified unless the operator explicitly triggers a rebuild of the affected schedule window.
 
-#### Tier 2 — Playlog horizon
+#### Playlog Plan — playlog horizon
 
 - Resolves the referenced schedulable entry into concrete, ordered playout segments.
 - Applies selection rules within each template segment in declared segment order.
 - Resolves each segment to a concrete asset reference.
-- Derives EPG identity from the resolved primary content asset when no EPG title is committed at Tier 1.
-- May re-randomize content selections on each Tier 2 build until the playout window becomes active. Non-determinism is permitted only before activation.
+- Derives EPG identity from the resolved primary content asset when no EPG title is committed in the program schedule.
+- May re-randomize content selections on each playlog plan build until the playout window becomes active. Non-determinism is permitted only before activation.
 - Becomes immutable once the playout window enters the active execution window. No further re-resolution occurs after activation.
 
-The boundary between Tier 1 and Tier 2 is a resolution boundary. Tier 1 stores what will air and when. Tier 2 resolves how the airing is internally structured.
+The boundary between program schedule and playlog plan is a resolution boundary. The program schedule stores what will air and when. Playlog Plan resolves how the airing is internally structured.
 
 ---
 
@@ -83,7 +83,7 @@ Each segment consists of:
 
 Primary content is the segment that resolves to the main content asset of the program event.
 
-Templates MUST resolve exactly one primary content segment per iteration. The primary content segment is the segment whose resolved asset constitutes the program event as a viewing unit — the feature film, episode, or primary editorial asset. Exactly one primary segment is required. It is used for EPG identity derivation when Tier 1 `epg_title` is `None`.
+Templates MUST resolve exactly one primary content segment per iteration. The primary content segment is the segment whose resolved asset constitutes the program event as a viewing unit — the feature film, episode, or primary editorial asset. Exactly one primary segment is required. It is used for EPG identity derivation when program schedule `epg_title` is `None`.
 
 Failure to resolve the primary content segment is a hard resolution failure. There is no fallback and no partial resolution.
 
@@ -101,7 +101,7 @@ Duration validation applies to scheduled slot entries — schedule entries of ty
 
 Underfill is permitted. A resolved template whose total duration is less than the scheduled time window is valid. The difference between resolved duration and slot duration is handled externally. The template does not pad, stretch, or otherwise compensate for underfill.
 
-Duration validation occurs at resolution time (Tier 2). Tier 1 stores only the schedulable entry reference and the slot duration; it does not validate internal segment duration at build time.
+Duration validation occurs at resolution time (playlog plan). The program schedule stores only the schedulable entry reference and the slot duration; it does not validate internal segment duration at build time.
 
 Iterative window entries — schedule entries whose time window accommodates multiple sequential iterations of the same schedulable entry — are not subject to per-iteration slot validation by the template layer. Capacity gating and bleed semantics for iterative windows are governed exclusively by `INV-SCHED-WINDOW-ITERATION-001` at the scheduling layer. Template resolution does not inspect window boundaries, iteration counts, or bleed configuration.
 
@@ -126,7 +126,7 @@ The architecture MUST support future additive rule stacking and compound boolean
 
 ### Resolution lifecycle
 
-Resolution occurs during Tier 2 materialization. When the Playlog horizon extends and a new playout window is generated, each scheduled event's template reference is resolved into concrete, ordered segments.
+Resolution occurs during playlog plan materialization. When the Playlog horizon extends and a new playout window is generated, each scheduled event's template reference is resolved into concrete, ordered segments.
 
 Resolution MUST NOT mutate template definitions. Templates are read-only inputs to the resolution process. Any state produced during resolution (concrete asset references, selection evaluation results) is output state, not modification of the source template.
 
@@ -139,9 +139,9 @@ Resolution processes segments sequentially:
    - Emit the resolved asset reference.
    - Accumulate the resolved asset's duration.
 2. Validate total accumulated duration against the slot duration, when the template is resolved against a fixed scheduled slot entry.
-3. Derive EPG identity from the resolved primary content asset if no EPG title is committed at Tier 1.
+3. Derive EPG identity from the resolved primary content asset if no EPG title is committed in the program schedule.
 
-Resolution is deterministic within a single Tier 2 build session. Given identical inputs (template definition, available assets, channel context), resolution produces identical output. Randomized selection uses a session-scoped seed. The seed MUST be stable for a given scheduled event within a single Tier 2 horizon build. A horizon build is one invocation of the Playlog horizon extension for a specific channel and time window. Daemon restarts or system restarts that trigger a new horizon build produce a new session and a new seed.
+Resolution is deterministic within a single playlog plan build session. Given identical inputs (template definition, available assets, channel context), resolution produces identical output. Randomized selection uses a session-scoped seed. The seed MUST be stable for a given scheduled event within a single playlog plan horizon build. A horizon build is one invocation of the Playlog horizon extension for a specific channel and time window. Daemon restarts or system restarts that trigger a new horizon build produce a new session and a new seed.
 
 Once the playout window becomes active (enters the locked execution window), the resolved output is frozen. No re-resolution, re-randomization, or re-evaluation occurs after activation.
 
@@ -177,7 +177,7 @@ Every schedule entry contains the following fields:
 - **id** — Required when `type` is `asset`. The asset identifier. Not present for `type: template` or `type: pool`.
 - **start** — Required. The start boundary of the scheduled time window in `HH:MM` format.
 - **end** — Required. The end boundary of the scheduled time window in `HH:MM` format. An end value earlier than or equal to start denotes a window that crosses midnight.
-- **epg_title** — Optional. If declared, this string is committed as the EPG identity for the event at Tier 1 and is authoritative. If absent, EPG identity is derived from the resolved primary content asset at Tier 2.
+- **epg_title** — Optional. If declared, this string is committed as the EPG identity for the event in the program schedule and is authoritative. If absent, EPG identity is derived from the resolved primary content asset during playlog plan.
 - **allow_bleed** — Optional. Boolean. Defaults to `false`. Governs whether the final program event begun within the window may complete past the window's end boundary. Evaluated exclusively by the scheduling layer. The template layer has no visibility into this field.
 - **mode** — Optional. Valid only for `type: pool` entries. Declares the asset selection strategy applied to the pool candidate set. MUST NOT appear on `type: template` or `type: asset` entries.
 
@@ -193,7 +193,7 @@ Templates are self-contained. Segment composition, selection rules, and mode str
 
 Templates do not influence slot duration. The schedule layer assigns time windows. Templates operate within those windows. A template cannot request a longer or shorter slot.
 
-The schedule layer owns time boundaries. Slot start time, slot end time, and slot duration are schedule-layer commitments made at Tier 1. Templates have read-only visibility into slot duration for the purpose of duration validation. They have no write access to schedule state.
+The schedule layer owns time boundaries. Slot start time, slot end time, and slot duration are schedule-layer commitments made in the program schedule. Templates have read-only visibility into slot duration for the purpose of duration validation. They have no write access to schedule state.
 
 Templates MUST conform to schedule constraints. A template that cannot produce valid output within the assigned slot duration is a resolution failure, not a schedule modification request.
 
@@ -216,12 +216,12 @@ Bleed evaluation occurs before each candidate iteration begins. The template lay
 
 EPG identity is determined at the schedule entry level using the following precedence:
 
-1. If the schedule entry declares an `epg_title` property, that value is used as the EPG identity for the event. The declared value is authoritative and is committed at Tier 1.
-2. If no `epg_title` is declared, EPG identity is derived from the primary content asset resolved by the entry at Tier 2. The resolved asset's title becomes the EPG identity string for the event.
+1. If the schedule entry declares an `epg_title` property, that value is used as the EPG identity for the event. The declared value is authoritative and is committed in the program schedule.
+2. If no `epg_title` is declared, EPG identity is derived from the primary content asset resolved by the entry during playlog plan. The resolved asset's title becomes the EPG identity string for the event.
 
 Templates do not declare static EPG identity in v1. EPG identity is a schedule-entry or asset-derived property, not a template property.
 
-Single-primary-content templates derive EPG identity from the selected primary content asset. The asset's title, as resolved at Tier 2, is the EPG string committed for that event.
+Single-primary-content templates derive EPG identity from the selected primary content asset. The asset's title, as resolved during playlog plan, is the EPG string committed for that event.
 
 ---
 
@@ -229,13 +229,13 @@ Single-primary-content templates derive EPG identity from the selected primary c
 
 Operators define templates in channel configuration. Templates are authored as part of the channel's programming definition and are available for scheduling once defined.
 
-Schedule entries reference templates by ID. When an operator assigns a program event to a schedule slot as `type: template`, the assignment includes a template ID via the `name` field. The template ID links the schedule commitment (Tier 1) to the structural definition resolved at Tier 2.
+Schedule entries reference templates by ID. When an operator assigns a program event to a schedule slot as `type: template`, the assignment includes a template ID via the `name` field. The template ID links the schedule commitment (program schedule) to the structural definition resolved during playlog plan.
 
-Tier 1 builds the schedule horizon. The schedule compiler produces grid-aligned program blocks with schedulable entry references and, where declared, EPG title strings. These are editorial commitments.
+program schedule builds the schedule horizon. The schedule compiler produces grid-aligned program blocks with schedulable entry references and, where declared, EPG title strings. These are editorial commitments.
 
-Tier 2 resolves structure. When the Playlog horizon extends into a scheduled window, the referenced template is resolved into concrete segments. Resolution applies selection rules and produces the ordered playout sequence.
+Playlog Plan resolution structure. When the Playlog horizon extends into a scheduled window, the referenced template is resolved into concrete segments. Resolution applies selection rules and produces the ordered playout sequence.
 
-Manual rebuild is required to change Tier 1 commitments. Once a schedule window is built at Tier 1, the entry reference and any declared EPG title are locked. Changing the template assignment for a locked window requires an explicit operator-initiated rebuild of the affected schedule window.
+Manual rebuild is required to change program schedule commitments. Once a schedule window is built in the program schedule, the entry reference and any declared EPG title are locked. Changing the template assignment for a locked window requires an explicit operator-initiated rebuild of the affected schedule window.
 
 ---
 
@@ -335,7 +335,7 @@ The window duration (480 minutes) exceeds the duration of any single movie event
 
 #### EPG identity
 
-The schedule entry declares `epg_title: "HBO Feature Presentation"`. This string is committed at Tier 1 as the window-level EPG identity. For each individual movie event resolved within the window, the `hbo_feature_with_intro` template declares no static EPG title. EPG identity for each individual event is therefore derived from the primary content asset resolved at segment 2. The resolved movie asset's title is the EPG string committed for that event. The window-level `epg_title` and the per-event asset-derived title are distinct EPG entries.
+The schedule entry declares `epg_title: "HBO Feature Presentation"`. This string is committed in the program schedule as the window-level EPG identity. For each individual movie event resolved within the window, the `hbo_feature_with_intro` template declares no static EPG title. EPG identity for each individual event is therefore derived from the primary content asset resolved at segment 2. The resolved movie asset's title is the EPG string committed for that event. The window-level `epg_title` and the per-event asset-derived title are distinct EPG entries.
 
 #### Duration validation
 
@@ -346,5 +346,5 @@ Duration management for this window is governed entirely by `INV-SCHED-WINDOW-IT
 ---
 
 **Document version:** 1.0
-**Related:** [ScheduleItem](ScheduleItem.md) · [Schedule Manager Planning Authority (v1.0)](ScheduleManagerPlanningAuthority_v1.0.md) · [Two-Tier Horizon Architecture](../architecture/two-tier-horizon.md) · [Programming DSL & Schedule Compiler](../contracts/core/programming_dsl.md)
+**Related:** [ScheduleItem](ScheduleItem.md) · [Schedule Manager Planning Authority (v1.0)](ScheduleManagerPlanningAuthority_v1.0.md) · [Program schedule & playlog plan horizon](../architecture/program-schedule-playlog-plan-horizon.md) · [Programming DSL & Schedule Compiler](../contracts/core/programming_dsl.md)
 **Governs:** Template definition, segment composition, template resolution lifecycle, duration enforcement, selection rule evaluation

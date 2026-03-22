@@ -10,11 +10,11 @@ Derived From: `LAW-IMMUTABILITY`, `LAW-RUNTIME-AUTHORITY`
 
 ## Guarantee
 
-A reschedule operation (deletion-for-regeneration) on a Tier 1 `ProgramLogDay` or Tier 2 `PlaylistEvent` MUST be rejected when the artifact's coverage window has begun or is in the past.
+A reschedule operation (deletion-for-regeneration) on a program schedule `ProgramLogDay` or playlog plan `PlaylistEvent` MUST be rejected when the artifact's coverage window has begun or is in the past.
 
-- Tier 1: `ProgramLogDay.range_start` MUST be strictly greater than `now()`.
-- Tier 2: `PlaylistEvent.start_utc_ms` MUST be strictly greater than `now_utc_ms`.
-- Tier 1 rows with `range_start IS NULL` MUST be rejected (temporal eligibility cannot be determined).
+- Program schedule: `ProgramLogDay.range_start` MUST be strictly greater than `now()`.
+- Playlog Plan: `PlaylistEvent.start_utc_ms` MUST be strictly greater than `now_utc_ms`.
+- Program schedule rows with `range_start IS NULL` MUST be rejected (temporal eligibility cannot be determined).
 
 ## Preconditions
 

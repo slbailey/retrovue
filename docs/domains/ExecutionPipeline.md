@@ -29,12 +29,12 @@ AsRun
 
 | Stage | Owner | Layer |
 |-------|-------|-------|
-| **SchedulePlan** | Operator (zones, templates, pools) | Tier 1 — Editorial intent |
-| **ScheduleRevision** | Scheduler (DSL compiler) | Tier 1 — Editorial snapshot |
-| **ScheduleItem** | Scheduler (DSL compiler), owned by ScheduleRevision | Tier 1 — Editorial |
-| **PlaylistEvent** | PlaylistBuilderDaemon | Tier 2 — Execution planning |
-| **ExecutionSegment** | Execution planner | Tier 2 — Execution planning |
-| **BlockPlan** | Core → AIR interface (gRPC) | Tier 2 → Runtime handoff |
+| **SchedulePlan** | Operator (zones, templates, pools) | Program schedule — Editorial intent |
+| **ScheduleRevision** | Scheduler (DSL compiler) | Program schedule — Editorial snapshot |
+| **ScheduleItem** | Scheduler (DSL compiler), owned by ScheduleRevision | Program schedule — Editorial |
+| **PlaylistEvent** | PlaylistBuilderDaemon | Playlog Plan — Execution planning |
+| **ExecutionSegment** | Execution planner | Playlog Plan — Execution planning |
+| **BlockPlan** | Core → AIR interface (gRPC) | Playlog Plan → Runtime handoff |
 | **AIR** | Playout engine (C++) | Runtime |
 | **AsRun** | Evidence store | Runtime → Audit |
 
@@ -64,8 +64,8 @@ AsRun
 
 ## Layer Rules
 
-- **Tier 1 (Editorial)** operates days in advance. Frozen and immutable once generated.
-- **Tier 2 (Execution)** operates hours ahead. Immutable once inside the locked execution window.
+- **Program schedule (Editorial)** operates days in advance. Frozen and immutable once generated.
+- **Playlog Plan (Execution)** operates hours ahead. Immutable once inside the locked execution window.
 - **Runtime** renders frames. Aligned to MasterClock.
 - Each stage derives exclusively from the stage above it (`LAW-DERIVATION`).
 - No stage may introduce content absent from its upstream authority (`LAW-CONTENT-AUTHORITY`).

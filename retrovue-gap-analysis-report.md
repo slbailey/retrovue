@@ -82,8 +82,8 @@ The contract defines a **six-stage pipeline**:
 
 | Output | Description |
 |--------|-------------|
-| Program Schedule | Grid-aligned program blocks (Tier 1) |
-| Playlog | Fully segmented timeline with breaks and traffic (Tier 2) |
+| Program Schedule | Grid-aligned program blocks (program_schedule) |
+| Playlog | Fully segmented timeline with breaks and traffic (playlog_plan) |
 | EPG | Viewer-facing program guide derived from resolved schedule |
 | Playout Plan | Frame-accurate segments for AIR execution |
 
@@ -100,8 +100,8 @@ The contract defines a **six-stage pipeline**:
 | `playout_log_expander.py` | Expands a program block into segmented ScheduledBlock (content + filler placeholders) |
 | `traffic_manager.py` | Fills filler placeholders with real interstitials or static filler |
 | `schedule_revision_writer.py` | Persists compiled schedule to relational tables (ScheduleRevision + ScheduleItem) |
-| `schedule_items_reader.py` | Reads Tier-1 relational rows → serialized block dicts for Tier-2 |
-| `playlist_builder_daemon.py` | Background daemon maintaining 2-3h rolling Tier-2 horizon |
+| `schedule_items_reader.py` | Reads program schedule relational rows → serialized block dicts for playlog plan |
+| `playlist_builder_daemon.py` | Background daemon maintaining 2-3h rolling playlog plan horizon |
 | `channel_manager.py` | Per-channel runtime: serves MPEG-TS, consumes ScheduledBlocks |
 | `schedule_types.py` | Canonical data structures (ScheduledBlock, ScheduledSegment, etc.) |
 | `schedule_manager.py` | Phase 1-3 ScheduleManager (legacy, being superseded by DSL pipeline) |
@@ -113,7 +113,7 @@ DslScheduleService
   ├─ load_schedule(channel_id)          # Initial multi-day compile
   ├─ get_block_at(channel_id, utc_ms)   # Serve block for wall-clock time
   ├─ get_playout_plan_now(channel_id, at_station_time)  # Segments for current block
-  ├─ ensure_block_compiled(channel_id, block)  # Synchronous Tier-2 fill
+  ├─ ensure_block_compiled(channel_id, block)  # Synchronous playlog plan fill
   ├─ _build_initial(channel_id)         # Compile HORIZON_DAYS days
   ├─ _compile_day(channel_id, day_str)  # Single broadcast day
   └─ _maybe_extend_horizon(...)         # Rolling horizon extension
@@ -154,12 +154,12 @@ YAML DSL File (config/dsl/*.yaml)
    list[ScheduledBlock]   ← expand_program_block() per block
    (in-memory, content + filler placeholders)
        │
-       ├──▶  Tier 1: In-memory blocks (DslScheduleService._blocks)
+       ├──▶  Program schedule: In-memory blocks (DslScheduleService._blocks)
        │
        ▼  fill_ad_blocks() / PlaylistBuilderDaemon
    ScheduledBlock with real interstitials
        │
-       ├──▶  Tier 2: PlaylistEvent rows (Postgres)
+       ├──▶  Playlog Plan: PlaylistEvent rows (Postgres)
        │
        ▼  ChannelManager.get_block_at()
    ScheduledBlock → BlockPlan → PlayoutSession → AIR → MPEG-TS
@@ -499,7 +499,7 @@ Raw Python dict (channel, pools, schedule, templates, timezone)
 | `pkg/core/src/retrovue/runtime/schedule_manager.py` | Phase 1-3 ScheduleManager — older scheduling path |
 | `pkg/core/src/retrovue/runtime/schedule_manager_service.py` | Service wrapper for legacy ScheduleManager |
 | `pkg/core/src/retrovue/runtime/playlist_backed_schedule_service.py` | Older schedule service backed by playlist |
-| `pkg/core/src/retrovue/runtime/scheduler_tier1.py` | Tier-1 scheduling helpers |
+| `pkg/core/src/retrovue/runtime/program_schedule_scheduler.py` | Program schedule scheduling helpers |
 | `pkg/core/src/retrovue/runtime/mock_schedule.py` | Test schedule mock |
 
 ---

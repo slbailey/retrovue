@@ -885,7 +885,7 @@ Tests in this section exercise the scheduling derivation chain — compiler, exp
 | **Derived Law(s)** | LAW-LIVENESS |
 | **Scenario** | PlaylistBuilderDaemon._extend_to_target() evaluates 4 candidate blocks across a scan-day. Existence checks MUST use a single batched query (_batch_block_exists_in_txlog), not per-block _block_exists_in_txlog calls. |
 | **Clock Setup** | now_ms = 1_000_000. 4 blocks spanning now → now+2h. |
-| **Stimulus / Actions** | 1. Provide 4 Tier 1 blocks via _load_tier1_blocks. 2. Call _extend_to_target(now_ms, target_ms). |
+| **Stimulus / Actions** | 1. Provide 4 program schedule blocks via _load_program_schedule_blocks. 2. Call _extend_to_target(now_ms, target_ms). |
 | **Assertions** | _block_exists_in_txlog MUST NOT be called. _batch_block_exists_in_txlog MUST be called at least once. |
 | **Failure Classification** | Runtime |
 
@@ -899,7 +899,7 @@ Tests in this section exercise the scheduling derivation chain — compiler, exp
 | **Derived Law(s)** | LAW-LIVENESS |
 | **Scenario** | When _extend_to_target() fills 3 blocks, time.sleep() MUST be called after each fill to yield the GIL. |
 | **Clock Setup** | now_ms = 1_000_000. 3 blocks, none in txlog. |
-| **Stimulus / Actions** | 1. Provide 3 unfilled Tier 1 blocks. 2. Call _extend_to_target(now_ms, target_ms). |
+| **Stimulus / Actions** | 1. Provide 3 unfilled program schedule blocks. 2. Call _extend_to_target(now_ms, target_ms). |
 | **Assertions** | time.sleep() called >= 3 times. Each call duration > 0. |
 | **Failure Classification** | Runtime |
 
@@ -1540,17 +1540,17 @@ The following domain tables group tests by functional area. Each test is classif
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|
-| RESCHED-001 | INV-RESCHEDULE-FUTURE-GUARD-001 | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY | Tier 1 reschedule of past ProgramLogDay rejected |
-| RESCHED-002 | INV-RESCHEDULE-FUTURE-GUARD-001 | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY | Tier 1 reschedule of currently-airing ProgramLogDay rejected |
-| RESCHED-003 | INV-RESCHEDULE-FUTURE-GUARD-001 | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY | Tier 1 reschedule of future ProgramLogDay succeeds |
-| RESCHED-004 | INV-RESCHEDULE-FUTURE-GUARD-001 | LAW-IMMUTABILITY | Tier 2 reschedule of past PlaylistEvent rejected |
-| RESCHED-005 | INV-RESCHEDULE-FUTURE-GUARD-001 | LAW-IMMUTABILITY | Tier 2 reschedule of currently-airing PlaylistEvent rejected |
-| RESCHED-006 | INV-RESCHEDULE-FUTURE-GUARD-001 | LAW-IMMUTABILITY | Tier 2 reschedule of future PlaylistEvent succeeds |
-| RESCHED-007 | INV-RESCHEDULE-FUTURE-GUARD-001 | LAW-IMMUTABILITY | Tier 1 reschedule of ProgramLogDay with range_start=None rejected |
-| RESCHED-008 | INV-RESCHEDULE-CASCADE-TIER2-001 | LAW-DERIVATION, LAW-IMMUTABILITY | Tier 1 reschedule cascade-deletes future Tier 2 rows |
-| RESCHED-009 | INV-RESCHEDULE-CASCADE-TIER2-001 | LAW-IMMUTABILITY | Tier 1 reschedule preserves past Tier 2 rows |
-| RESCHED-010 | INV-RESCHEDULE-CASCADE-TIER2-001 | LAW-DERIVATION | Tier 1 reschedule does not cascade to different channel |
-| RESCHED-011 | INV-RESCHEDULE-CASCADE-TIER2-001 | LAW-DERIVATION | Tier 1 reschedule does not cascade to different broadcast_day |
+| RESCHED-001 | INV-RESCHEDULE-FUTURE-GUARD-001 | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY | Program schedule reschedule of past ProgramLogDay rejected |
+| RESCHED-002 | INV-RESCHEDULE-FUTURE-GUARD-001 | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY | Program schedule reschedule of currently-airing ProgramLogDay rejected |
+| RESCHED-003 | INV-RESCHEDULE-FUTURE-GUARD-001 | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY | Program schedule reschedule of future ProgramLogDay succeeds |
+| RESCHED-004 | INV-RESCHEDULE-FUTURE-GUARD-001 | LAW-IMMUTABILITY | Playlog Plan reschedule of past PlaylistEvent rejected |
+| RESCHED-005 | INV-RESCHEDULE-FUTURE-GUARD-001 | LAW-IMMUTABILITY | Playlog Plan reschedule of currently-airing PlaylistEvent rejected |
+| RESCHED-006 | INV-RESCHEDULE-FUTURE-GUARD-001 | LAW-IMMUTABILITY | Playlog Plan reschedule of future PlaylistEvent succeeds |
+| RESCHED-007 | INV-RESCHEDULE-FUTURE-GUARD-001 | LAW-IMMUTABILITY | Program schedule reschedule of ProgramLogDay with range_start=None rejected |
+| RESCHED-008 | INV-RESCHEDULE-CASCADE-TIER2-001 | LAW-DERIVATION, LAW-IMMUTABILITY | Program schedule reschedule cascade-deletes future playlog plan rows |
+| RESCHED-009 | INV-RESCHEDULE-CASCADE-TIER2-001 | LAW-IMMUTABILITY | Program schedule reschedule preserves past playlog plan rows |
+| RESCHED-010 | INV-RESCHEDULE-CASCADE-TIER2-001 | LAW-DERIVATION | Program schedule reschedule does not cascade to different channel |
+| RESCHED-011 | INV-RESCHEDULE-CASCADE-TIER2-001 | LAW-DERIVATION | Program schedule reschedule does not cascade to different broadcast_day |
 
 #### Break Detection (Tier 2)
 
@@ -1899,3 +1899,26 @@ The following domain tables group tests by functional area. Each test is classif
 | SBLOCK-GBM-004 | INV-SBLOCK-PROGRAM-003 | LAW-GRID | Short movie takes fewer blocks than max |
 | SBLOCK-GBM-005 | INV-SBLOCK-PROGRAM-003 | LAW-GRID | Greedy packing fills budget with right-sized slots |
 | SBLOCK-GBM-006 | INV-SBLOCK-PROGRAM-006 | LAW-GRID, LAW-CONTENT-AUTHORITY | Mismatched `grid_blocks_max` in program list rejected |
+
+---
+
+## Block Assembly Tiers
+
+**Contract:** `docs/contracts/block_assembly_tiers.md`
+
+**Test file:** `pkg/core/tests/contracts/test_block_assembly_tiers.py`
+
+| Test ID | Invariant(s) | Law(s) | Scenario |
+|---------|-------------|--------|----------|
+| TIER-DISP-001 | INV-TIER-DISPLACEMENT-001 | LAW-CONTENT-AUTHORITY, LAW-GRID | Adding Tier 2 obligation reduces fill budget, not content duration |
+| TIER-DISP-002 | INV-TIER-DISPLACEMENT-001 | LAW-CONTENT-AUTHORITY, LAW-GRID | When budget insufficient for Tier 2 + Tier 3, Tier 3 dropped and Tier 2 retained |
+| TIER-DISP-003 | INV-TIER-DISPLACEMENT-001 | LAW-CONTENT-AUTHORITY | Tier 2 obligation always present when trigger met, regardless of fill budget |
+| TIER2-YAML-001 | INV-TIER2-OBLIGATION-YAML-ONLY-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Same config + block boundaries produce identical obligations across compilations |
+| TIER2-YAML-002 | INV-TIER2-OBLIGATION-YAML-ONLY-001 | LAW-DERIVATION | Obligation evaluation does not query database |
+| TIER2-COMP-001 | INV-TIER2-OBLIGATION-COMPILE-TIME-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Obligation segments present in compiled_segments after compile_schedule() |
+| TIER3-BUDG-001 | INV-TIER3-BUDGET-CONDITIONAL-001 | LAW-GRID, LAW-CONTENT-AUTHORITY | "Coming up next" present when fill budget exceeds its duration |
+| TIER3-BUDG-002 | INV-TIER3-BUDGET-CONDITIONAL-001 | LAW-GRID | "Coming up next" absent when fill budget too small, no error |
+| TIER3-NEXT-001 | INV-TIER3-NEXT-BLOCK-IDENTITY-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | "Coming up next" references next block's program title |
+| TIER3-NEXT-002 | INV-TIER3-NEXT-BLOCK-IDENTITY-001 | LAW-DERIVATION | Last block of broadcast day has no "coming up next", no error |
+| TIER-SEQ-001 | INV-ASSEMBLY-SEQUENCE-001 | LAW-CONTENT-AUTHORITY, LAW-GRID, LAW-DERIVATION | Segment order: obligation, presentation, content, optional |
+| TIER-CONS-001 | INV-BLOCK-SEGMENT-CONSERVATION-001 | LAW-GRID | Sum of all tier segment durations equals block duration |

@@ -32,8 +32,8 @@ A zero or negative segment duration is always a defect — negative durations ca
 
 This predicate MUST hold:
 
-1. **After Tier 1 construction** (`_expand_blocks_inner`): presentation, content, and filler placeholder durations sum to the block envelope.
-2. **After Tier 2 fill** (`fill_ad_blocks`): filled interstitial durations replace placeholder durations without changing the total.
+1. **After program schedule expansion** (`_expand_blocks_inner`): presentation, content, and filler placeholder durations sum to the block envelope.
+2. **After playlog plan fill** (`fill_ad_blocks`): filled interstitial durations replace placeholder durations without changing the total.
 3. **At persistence** (`ensure_block_compiled`, `PlaylistBuilderDaemon`): the block written to PlaylistEvent satisfies the predicate.
 4. **At deserialization** (`_deserialize_scheduled_block`, `_get_filled_block_by_id`, `ensure_block_compiled` read path): a block read from PlaylistEvent MUST be validated against the predicate. A row that violates it MUST be rejected and recompiled.
 5. **At feed time** (`channel_manager._generate_next_block`): the block converted to a BlockPlan for AIR satisfies the predicate.
@@ -63,7 +63,7 @@ Construct a ScheduledBlock with presentation segments (e.g. 74s intro + 5s ratin
 
 **Generation fault** (stages 1-3): The block was constructed or filled incorrectly. Presentation duration was not deducted from the filler budget, or the fill stage introduced overflow.
 
-**Persistence fault** (stage 4): A stale PlaylistEvent row was written by an older code version that did not enforce the invariant. The deserialization boundary MUST detect and reject this. Rejection triggers synchronous recompilation from the corrected in-memory Tier 1 block.
+**Persistence fault** (stage 4): A stale PlaylistEvent row was written by an older code version that did not enforce the invariant. The deserialization boundary MUST detect and reject this. Rejection triggers synchronous recompilation from the corrected in-memory program schedule block.
 
 **Feed fault** (stage 5): A block that violates the predicate reached the AIR feed path. This is a defense-in-depth check — if stages 1-4 hold, stage 5 never fires.
 

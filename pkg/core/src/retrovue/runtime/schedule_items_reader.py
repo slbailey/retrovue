@@ -1,4 +1,4 @@
-"""Stage 3 reader: Tier-1 editorial rows -> segmented block dicts for PlaylistBuilder.
+"""Stage 3 reader: program schedule editorial rows -> segmented block dicts for PlaylistBuilder.
 
 Reads active ScheduleRevision + ordered ScheduleItems and converts them into the
 same serialized ScheduledBlock dict structure previously sourced from
@@ -44,7 +44,7 @@ def expand_editorial_block(
     policy: Any = None,
     break_config: Any = None,
 ) -> ScheduledBlock:
-    """Canonical Tier-1 → Tier-2 block expansion pipeline.
+    """Canonical program schedule → playlog plan block expansion pipeline.
 
     Deserializes a serialized block dict (as produced by
     load_segmented_blocks_from_active_revision) and applies traffic

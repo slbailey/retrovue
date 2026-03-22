@@ -51,7 +51,7 @@ def _fake_block_dict(block_id: str, start_ms: int, end_ms: int, segments_count: 
 
 
 class TestEnsureTier2CoversNowBackfill:
-    """_ensure_tier2_covers_now backfills the current block when Tier-2 has no row covering now_ms."""
+    """_ensure_playlog_plan_covers_now backfills the current block when Tier-2 has no row covering now_ms."""
 
     def test_backfill_current_block_when_tier2_empty(self):
         """Daemon starts late with empty Tier-2; now is inside a block (now > block.start).
@@ -65,12 +65,12 @@ class TestEnsureTier2CoversNowBackfill:
         block = _fake_block_dict(block_id, block_start, block_end)
 
         with (
-            patch.object(daemon, "_tier2_row_covers_now", return_value=False),
-            patch.object(daemon, "_get_tier1_block_containing", return_value=block),
+            patch.object(daemon, "_playlog_plan_row_covers_now", return_value=False),
+            patch.object(daemon, "_get_program_schedule_block_containing", return_value=block),
             patch.object(daemon, "_write_to_txlog") as mock_write,
             patch("retrovue.runtime.playlist_builder_daemon.expand_editorial_block", side_effect=lambda d, **kw: _deser(d)),
         ):
-            n = daemon._ensure_tier2_covers_now(now_ms)
+            n = daemon._ensure_playlog_plan_covers_now(now_ms)
 
         assert n == 1
         mock_write.assert_called_once()
@@ -86,10 +86,10 @@ class TestEnsureTier2CoversNowBackfill:
         now_ms = 100_000
 
         with (
-            patch.object(daemon, "_tier2_row_covers_now", return_value=True),
+            patch.object(daemon, "_playlog_plan_row_covers_now", return_value=True),
             patch.object(daemon, "_write_to_txlog") as mock_write,
         ):
-            n = daemon._ensure_tier2_covers_now(now_ms)
+            n = daemon._ensure_playlog_plan_covers_now(now_ms)
 
         assert n == 0
         mock_write.assert_not_called()
@@ -103,12 +103,12 @@ class TestEnsureTier2CoversNowBackfill:
         block = _fake_block_dict("blk-hole", 90_000, 120_000)
 
         with (
-            patch.object(daemon, "_tier2_row_covers_now", return_value=False),
-            patch.object(daemon, "_get_tier1_block_containing", return_value=block),
+            patch.object(daemon, "_playlog_plan_row_covers_now", return_value=False),
+            patch.object(daemon, "_get_program_schedule_block_containing", return_value=block),
             patch.object(daemon, "_write_to_txlog") as mock_write,
             patch("retrovue.runtime.playlist_builder_daemon.expand_editorial_block", side_effect=lambda d, **kw: _deser(d)),
         ):
-            n = daemon._ensure_tier2_covers_now(now_ms)
+            n = daemon._ensure_playlog_plan_covers_now(now_ms)
 
         assert n == 1
         mock_write.assert_called_once()
@@ -122,11 +122,11 @@ class TestEnsureTier2CoversNowBackfill:
         block = _fake_block_dict("blk-past", 90_000, 120_000)
 
         with (
-            patch.object(daemon, "_tier2_row_covers_now", return_value=False),
-            patch.object(daemon, "_get_tier1_block_containing", return_value=block),
+            patch.object(daemon, "_playlog_plan_row_covers_now", return_value=False),
+            patch.object(daemon, "_get_program_schedule_block_containing", return_value=block),
             patch.object(daemon, "_write_to_txlog") as mock_write,
         ):
-            n = daemon._ensure_tier2_covers_now(now_ms)
+            n = daemon._ensure_playlog_plan_covers_now(now_ms)
 
         assert n == 0
         mock_write.assert_not_called()
@@ -138,11 +138,11 @@ class TestEnsureTier2CoversNowBackfill:
         block = _fake_block_dict("blk-past", 90_000, 120_000)
 
         with (
-            patch.object(daemon, "_tier2_row_covers_now", return_value=False),
-            patch.object(daemon, "_get_tier1_block_containing", return_value=block),
+            patch.object(daemon, "_playlog_plan_row_covers_now", return_value=False),
+            patch.object(daemon, "_get_program_schedule_block_containing", return_value=block),
             patch.object(daemon, "_write_to_txlog") as mock_write,
         ):
-            n = daemon._ensure_tier2_covers_now(now_ms)
+            n = daemon._ensure_playlog_plan_covers_now(now_ms)
 
         assert n == 0
         mock_write.assert_not_called()
@@ -153,11 +153,11 @@ class TestEnsureTier2CoversNowBackfill:
         now_ms = 100_000
 
         with (
-            patch.object(daemon, "_tier2_row_covers_now", return_value=False),
-            patch.object(daemon, "_get_tier1_block_containing", return_value=None),
+            patch.object(daemon, "_playlog_plan_row_covers_now", return_value=False),
+            patch.object(daemon, "_get_program_schedule_block_containing", return_value=None),
             patch.object(daemon, "_write_to_txlog") as mock_write,
         ):
-            n = daemon._ensure_tier2_covers_now(now_ms)
+            n = daemon._ensure_playlog_plan_covers_now(now_ms)
 
         assert n == 0
         mock_write.assert_not_called()
@@ -172,12 +172,12 @@ class TestEnsureTier2CoversNowBackfill:
         block = _fake_block_dict("blk-backfill", 90_000, 120_000)
 
         with (
-            patch.object(daemon, "_tier2_row_covers_now", return_value=False),
-            patch.object(daemon, "_get_tier1_block_containing", return_value=block),
+            patch.object(daemon, "_playlog_plan_row_covers_now", return_value=False),
+            patch.object(daemon, "_get_program_schedule_block_containing", return_value=block),
             patch.object(daemon, "_write_to_txlog"),
             patch("retrovue.runtime.playlist_builder_daemon.expand_editorial_block", side_effect=lambda d, **kw: _deser(d)),
         ):
-            daemon._ensure_tier2_covers_now(now_ms)
+            daemon._ensure_playlog_plan_covers_now(now_ms)
 
         assert "INV-PLAYLOG-COVERAGE-HOLE-001" in caplog.text
         assert "now_ms=100000" in caplog.text

@@ -10,7 +10,7 @@ Pipeline:
     program assembly → break detection → traffic → playlog events
 
 No breaks, no commercials, no bumpers, no station IDs.
-The Program Schedule is Tier 1; Playout Log expansion is handled
+The output is the Program Schedule; playout log expansion is handled
 separately by playout_log_expander.py.
 
 No database writes. No global state. Receives an AssetResolver instance.

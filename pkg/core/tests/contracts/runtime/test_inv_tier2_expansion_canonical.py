@@ -6,11 +6,11 @@ filler. Omitting break_config causes legacy flat-fill instead of structured
 break expansion.
 
 Rules:
-1. rebuild_tier2() MUST pass asset_library to expand_editorial_block().
+1. rebuild_playlog_plan() MUST pass asset_library to expand_editorial_block().
 2. PlaylistBuilderDaemon._extend_to_target() MUST pass asset_library to
    expand_editorial_block().
 3. Both writers MUST produce identical Tier-2 output for the same input.
-4. rebuild_tier2() MUST pass break_config to expand_editorial_block().
+4. rebuild_playlog_plan() MUST pass break_config to expand_editorial_block().
 """
 
 from __future__ import annotations
@@ -46,36 +46,36 @@ def _find_expand_editorial_block_calls(source: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Rule 1: rebuild_tier2 MUST pass asset_library
+# Rule 1: rebuild_playlog_plan MUST pass asset_library
 # ---------------------------------------------------------------------------
 
 class TestRule1RebuildPassesAssetLibrary:
-    """Rule 1: rebuild_tier2() MUST pass asset_library to expand_editorial_block()."""
+    """Rule 1: rebuild_playlog_plan() MUST pass asset_library to expand_editorial_block()."""
 
     # Tier: 2 | Scheduling logic invariant
-    def test_rebuild_tier2_passes_asset_library(self):
-        """Inspect rebuild_tier2 source to verify expand_editorial_block()
+    def test_rebuild_playlog_plan_passes_asset_library(self):
+        """Inspect rebuild_playlog_plan source to verify expand_editorial_block()
         is called with asset_library keyword argument.
 
-        VIOLATION: rebuild_tier2() calls expand_editorial_block() with only
+        VIOLATION: rebuild_playlog_plan() calls expand_editorial_block() with only
         filler_uri and filler_duration_ms, omitting asset_library. This causes
         fill_ad_blocks() to fall back to static filler.mp4 instead of using
         real interstitials from the DatabaseAssetLibrary.
         """
-        from retrovue.usecases.schedule_rebuild import rebuild_tier2
+        from retrovue.usecases.schedule_rebuild import rebuild_playlog_plan
 
-        source = textwrap.dedent(inspect.getsource(rebuild_tier2))
+        source = textwrap.dedent(inspect.getsource(rebuild_playlog_plan))
         calls = _find_expand_editorial_block_calls(source)
 
         assert calls, (
             "INV-TIER2-EXPANSION-CANONICAL-001 Rule 1: "
-            "rebuild_tier2() does not call expand_editorial_block() at all."
+            "rebuild_playlog_plan() does not call expand_editorial_block() at all."
         )
 
         for call in calls:
             assert "asset_library" in call["kwargs"], (
                 f"INV-TIER2-EXPANSION-CANONICAL-001 Rule 1: "
-                f"rebuild_tier2() calls expand_editorial_block() at line {call['line']} "
+                f"rebuild_playlog_plan() calls expand_editorial_block() at line {call['line']} "
                 f"WITHOUT asset_library kwarg. Found kwargs: {call['kwargs']}. "
                 f"All Tier-2 writers MUST pass asset_library to prevent "
                 f"silent fallback to static filler."
@@ -123,7 +123,7 @@ class TestRule3ExpansionEquivalence:
 
     # Tier: 2 | Scheduling logic invariant
     def test_both_writers_use_same_function(self):
-        """Both rebuild_tier2 and daemon MUST import expand_editorial_block
+        """Both rebuild_playlog_plan and daemon MUST import expand_editorial_block
         from the same module (retrovue.runtime.schedule_items_reader)."""
         import retrovue.usecases.schedule_rebuild as rebuild_mod
         import retrovue.runtime.playlist_builder_daemon as daemon_mod
@@ -148,35 +148,35 @@ class TestRule3ExpansionEquivalence:
 
 
 # ---------------------------------------------------------------------------
-# Rule 4: rebuild_tier2 MUST pass break_config
+# Rule 4: rebuild_playlog_plan MUST pass break_config
 # ---------------------------------------------------------------------------
 
 class TestRule4RebuildPassesBreakConfig:
-    """Rule 4: rebuild_tier2() MUST pass break_config to expand_editorial_block()."""
+    """Rule 4: rebuild_playlog_plan() MUST pass break_config to expand_editorial_block()."""
 
     # Tier: 2 | Scheduling logic invariant
-    def test_rebuild_tier2_passes_break_config(self):
-        """Inspect rebuild_tier2 source to verify expand_editorial_block()
+    def test_rebuild_playlog_plan_passes_break_config(self):
+        """Inspect rebuild_playlog_plan source to verify expand_editorial_block()
         is called with break_config keyword argument.
 
-        VIOLATION: rebuild_tier2() calls expand_editorial_block() without
+        VIOLATION: rebuild_playlog_plan() calls expand_editorial_block() without
         break_config, causing fill_ad_blocks() to use legacy flat-fill
         instead of structured break expansion.
         """
-        from retrovue.usecases.schedule_rebuild import rebuild_tier2
+        from retrovue.usecases.schedule_rebuild import rebuild_playlog_plan
 
-        source = textwrap.dedent(inspect.getsource(rebuild_tier2))
+        source = textwrap.dedent(inspect.getsource(rebuild_playlog_plan))
         calls = _find_expand_editorial_block_calls(source)
 
         assert calls, (
             "INV-TIER2-EXPANSION-CANONICAL-001 Rule 4: "
-            "rebuild_tier2() does not call expand_editorial_block() at all."
+            "rebuild_playlog_plan() does not call expand_editorial_block() at all."
         )
 
         for call in calls:
             assert "break_config" in call["kwargs"], (
                 f"INV-TIER2-EXPANSION-CANONICAL-001 Rule 4: "
-                f"rebuild_tier2() calls expand_editorial_block() at line {call['line']} "
+                f"rebuild_playlog_plan() calls expand_editorial_block() at line {call['line']} "
                 f"WITHOUT break_config kwarg. Found kwargs: {call['kwargs']}. "
                 f"All Tier-2 writers MUST pass break_config to produce "
                 f"structured breaks matching the runtime path."

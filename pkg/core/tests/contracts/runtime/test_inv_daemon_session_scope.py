@@ -146,8 +146,8 @@ class TestRule1SingleSessionPerCycle:
         the total number of session checkouts MUST be at most 1.
 
         VIOLATION (before fix): Each helper (_get_frontier_utc_ms,
-        _tier2_row_covers_now, _load_tier1_blocks, _batch_block_exists_in_txlog,
-        _get_asset_library, _write_to_txlog, _purge_expired_tier2) opens its own session.
+        _playlog_plan_row_covers_now, _load_program_schedule_blocks, _batch_block_exists_in_txlog,
+        _get_asset_library, _write_to_txlog, _purge_expired_playlog_plan) opens its own session.
         With 4 blocks to fill, this results in 10+ checkouts per cycle.
         """
         daemon = _make_daemon()
@@ -170,7 +170,7 @@ class TestRule1SingleSessionPerCycle:
                 "retrovue.infra.uow.session",
                 counter,
             ),
-            patch.object(daemon, "_load_tier1_blocks", return_value=blocks),
+            patch.object(daemon, "_load_program_schedule_blocks", return_value=blocks),
             patch.object(daemon, "_batch_block_exists_in_txlog", return_value=set()),
             patch("retrovue.runtime.playlist_builder_daemon.expand_editorial_block", side_effect=_deser),
             patch.object(daemon, "_write_to_txlog"),
@@ -195,13 +195,13 @@ class TestRule2HelpersAcceptDbParam:
     """Rule 2: DB helpers MUST accept an optional `db` parameter."""
 
     @pytest.mark.parametrize("method_name", [
-        "_tier2_row_covers_now",
+        "_playlog_plan_row_covers_now",
         "_get_frontier_utc_ms",
-        "_load_tier1_blocks",
+        "_load_program_schedule_blocks",
         "_batch_block_exists_in_txlog",
         "_get_asset_library",
         "_write_to_txlog",
-        "_purge_expired_tier2",
+        "_purge_expired_playlog_plan",
     ])
     # Tier: 2 | Scheduling logic invariant
     def test_method_accepts_db_param(self, method_name):
@@ -329,7 +329,7 @@ class TestRule4BoundedConcurrentConnections:
                     "retrovue.infra.uow.session",
                     counter,
                 ),
-                patch.object(daemon, "_load_tier1_blocks", return_value=blocks),
+                patch.object(daemon, "_load_program_schedule_blocks", return_value=blocks),
                 patch.object(daemon, "_batch_block_exists_in_txlog", return_value=set()),
                 patch("retrovue.runtime.playlist_builder_daemon.expand_editorial_block", side_effect=_deser),
                 patch.object(daemon, "_write_to_txlog"),

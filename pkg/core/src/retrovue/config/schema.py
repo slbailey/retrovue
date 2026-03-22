@@ -264,7 +264,7 @@ class SystemTraffic(_Strict):
     max_plays_per_day: int
 
 class SystemPlaylistBuilder(_Strict):
-    warn_on_first_missing_tier2_only: bool
+    warn_on_first_missing_playlog_plan_only: bool
 
 class SystemSchema(_Strict):
     ports: SystemPorts

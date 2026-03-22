@@ -9,7 +9,7 @@
 
 ## Purpose
 
-A **PlaylistEvent** defines the execution plan for a single scheduled program block. It represents the fully expanded playout structure for a **ScheduleItem**, including content acts, filler segments, transitions, and padding. PlaylistEvents are created lazily -- they are only instantiated when playout requires a block. A PlaylistEvent is **immutable** once created.
+A **PlaylistEvent** is one row of the **Playlog Plan** (`playlog_plan`): persisted, ahead-of-air materialization for a scheduled block, including content acts, filler, transitions, and padding. It is **not** the **runtime playlog** (the join-aware segment sequence Core builds for AIR at wall-clock now). See `INV-PLAYLOG-PLAN-VS-RUNTIME-001` and [GLOSSARY](../../../core/GLOSSARY.md). PlaylistEvents are created lazily when the horizon needs a block. A PlaylistEvent is **immutable** once created.
 
 For the conceptual execution model, semantic boundary rules, and layer authority definitions, see [PlayoutExecutionModel](PlayoutExecutionModel.md).
 

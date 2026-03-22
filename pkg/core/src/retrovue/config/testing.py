@@ -240,7 +240,7 @@ def make_test_config(**overrides: Any) -> MappingProxyType[str, Any]:
                 "max_plays_per_day": 0,
             },
             "playlist_builder": {
-                "warn_on_first_missing_tier2_only": True,
+                "warn_on_first_missing_playlog_plan_only": True,
             },
         },
         "integrations": {

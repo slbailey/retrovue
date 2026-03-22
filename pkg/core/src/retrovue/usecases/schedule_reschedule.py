@@ -1,6 +1,6 @@
 """Schedule listing and rescheduling operations.
 
-Stage 4: Tier-1 authority is ScheduleRevision + ScheduleItems.
+Stage 4: program_schedule authority is ScheduleRevision + ScheduleItems.
 """
 
 from __future__ import annotations
@@ -18,6 +18,25 @@ class RescheduleRejectedError(ValueError):
     """Raised when a reschedule operation is rejected by the future guard."""
 
 
+def _schedule_layer_filter(
+    tier: str | None,
+) -> tuple[bool, bool]:
+    """Return (include_program_schedule, include_playlog_plan).
+
+    Accepts ``\"1\"`` / ``\"2\"`` or ``program_schedule`` / ``playlog_plan``
+    (alias: ``compiled_playlog``, deprecated).
+    Unknown values include neither list (empty result for both).
+    """
+    if tier is None:
+        return True, True
+    t = str(tier).strip().lower().replace("-", "_")
+    if t in ("1", "program_schedule"):
+        return True, False
+    if t in ("2", "playlog_plan", "compiled_playlog"):
+        return False, True
+    return False, False
+
+
 def list_reschedulable(
     db: Session,
     *,
@@ -26,9 +45,15 @@ def list_reschedulable(
     tier: str | None = None,
 ) -> dict[str, Any]:
     now_utc_ms = int(now.timestamp() * 1000)
-    result: dict[str, Any] = {"status": "ok", "tier1": [], "tier2": []}
+    result: dict[str, Any] = {
+        "status": "ok",
+        "program_schedule": [],
+        "playlog_plan": [],
+    }
 
-    if tier is None or tier == "1":
+    inc_ps, inc_cpl = _schedule_layer_filter(tier)
+
+    if inc_ps:
         q = db.query(ScheduleRevision).filter(ScheduleRevision.status == "active")
         if channel_id:
             q = q.join(ScheduleRevision.channel).filter_by(slug=channel_id)
@@ -54,6 +79,7 @@ def list_reschedulable(
             range_end = last_item.start_time.replace() if last_item else first_item.start_time
             if last_item:
                 from datetime import timedelta
+
                 range_end = last_item.start_time + timedelta(seconds=last_item.duration_sec)
 
             rows.append(
@@ -66,14 +92,14 @@ def list_reschedulable(
                     "status": rev.status,
                 }
             )
-        result["tier1"] = rows
+        result["program_schedule"] = rows
 
-    if tier is None or tier == "2":
+    if inc_cpl:
         query = db.query(PlaylistEvent).filter(PlaylistEvent.start_utc_ms > now_utc_ms)
         if channel_id:
             query = query.filter(PlaylistEvent.channel_slug == channel_id)
         query = query.order_by(PlaylistEvent.channel_slug, PlaylistEvent.start_utc_ms)
-        result["tier2"] = [
+        result["playlog_plan"] = [
             {
                 "block_id": row.block_id,
                 "channel_slug": row.channel_slug,
@@ -93,11 +119,11 @@ def reschedule_by_id(db: Session, *, identifier: str, now: datetime) -> dict[str
     try:
         parsed_uuid = uuid_module.UUID(identifier)
     except ValueError:
-        return _reschedule_tier2(db, identifier, now_utc_ms=now_utc_ms)
-    return _reschedule_tier1(db, parsed_uuid, now=now, now_utc_ms=now_utc_ms)
+        return _reschedule_playlog_plan(db, identifier, now_utc_ms=now_utc_ms)
+    return _reschedule_program_schedule(db, parsed_uuid, now=now, now_utc_ms=now_utc_ms)
 
 
-def _reschedule_tier1(
+def _reschedule_program_schedule(
     db: Session,
     revision_id: uuid_module.UUID,
     *,
@@ -148,7 +174,7 @@ def _reschedule_tier1(
                 start_time=it.start_time,
                 duration_sec=it.duration_sec,
                 asset_id=it.asset_id,
-                collection_id=it.container_id,
+                container_id=it.container_id,
                 content_type=it.content_type,
                 window_uuid=it.window_uuid,
                 slot_index=it.slot_index,
@@ -157,7 +183,7 @@ def _reschedule_tier1(
         )
 
     channel_slug = row.channel.slug if row.channel else ""
-    tier2_deleted = db.query(PlaylistEvent).filter(
+    cpl_deleted = db.query(PlaylistEvent).filter(
         PlaylistEvent.channel_slug == channel_slug,
         PlaylistEvent.broadcast_day == row.broadcast_day,
         PlaylistEvent.start_utc_ms > now_utc_ms,
@@ -165,16 +191,16 @@ def _reschedule_tier1(
 
     return {
         "status": "ok",
-        "tier": "1",
+        "layer": "program_schedule",
         "id": str(revision_id),
         "channel_id": channel_slug,
         "broadcast_day": row.broadcast_day.isoformat(),
-        "deleted_tier1": 0,
-        "deleted_tier2": tier2_deleted,
+        "deleted_program_schedule": 0,
+        "deleted_playlog_plan": cpl_deleted,
     }
 
 
-def _reschedule_tier2(db: Session, block_id: str, *, now_utc_ms: int) -> dict[str, Any]:
+def _reschedule_playlog_plan(db: Session, block_id: str, *, now_utc_ms: int) -> dict[str, Any]:
     row = db.query(PlaylistEvent).filter(PlaylistEvent.block_id == block_id).first()
     if row is None:
         raise ValueError(f"PlaylistEvent block_id={block_id!r} not found.")
@@ -185,12 +211,12 @@ def _reschedule_tier2(db: Session, block_id: str, *, now_utc_ms: int) -> dict[st
     db.delete(row)
     return {
         "status": "ok",
-        "tier": "2",
+        "layer": "playlog_plan",
         "block_id": block_id,
         "channel_slug": row.channel_slug,
         "broadcast_day": row.broadcast_day.isoformat(),
-        "deleted_tier1": 0,
-        "deleted_tier2": 1,
+        "deleted_program_schedule": 0,
+        "deleted_playlog_plan": 1,
     }
 
 

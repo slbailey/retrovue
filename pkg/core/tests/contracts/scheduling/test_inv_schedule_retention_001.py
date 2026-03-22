@@ -12,7 +12,7 @@ def _build_service_for_purge() -> DslScheduleService:
     svc._compiled_days = set()
     svc._extending = False
     svc._channel_slug = "test-channel"
-    svc._last_tier1_purge_utc_ms = 0
+    svc._last_program_schedule_purge_utc_ms = 0
     return svc
 
 
@@ -25,7 +25,7 @@ class TestPurgeExpiredTier1:
         with patch("retrovue.runtime.dsl_schedule_service.session") as mock_session:
             mock_session.return_value.__enter__ = MagicMock(return_value=mock_db)
             mock_session.return_value.__exit__ = MagicMock(return_value=False)
-            count = svc._purge_expired_tier1()
+            count = svc._purge_expired_program_schedule()
         assert count == 5
 
 
@@ -35,7 +35,7 @@ class TestPurgeExpiredTier2:
         from retrovue.runtime.playlist_builder_daemon import PlaylistBuilderDaemon
         daemon = PlaylistBuilderDaemon.__new__(PlaylistBuilderDaemon)
         daemon._channel_id = "test-channel"
-        daemon._last_tier2_purge_utc_ms = 0
+        daemon._last_playlog_plan_purge_utc_ms = 0
         daemon._lock = threading.Lock()
         daemon._clock = None
 
@@ -44,7 +44,7 @@ class TestPurgeExpiredTier2:
         with patch("retrovue.infra.uow.session") as mock_session:
             mock_session.return_value.__enter__ = MagicMock(return_value=mock_db)
             mock_session.return_value.__exit__ = MagicMock(return_value=False)
-            count = daemon._purge_expired_tier2()
+            count = daemon._purge_expired_playlog_plan()
         assert count == 10
 
 

@@ -12,7 +12,7 @@
 # condition for template deletion (VAL-T1-004) and rename (VAL-T1-005).
 #
 # ── Expected failure mode ────────────────────────────────────────────────────
-# All tests in this file FAIL (NotImplementedError) until Tier1Scheduler
+# All tests in this file FAIL (NotImplementedError) until ProgramScheduleScheduler
 # methods are implemented.  That failure is correct and expected.
 
 from __future__ import annotations
@@ -32,9 +32,9 @@ from retrovue.runtime.template_runtime import (
     TemplateSegment,
     WindowKey,
 )
-from retrovue.runtime.scheduler_tier1 import (
+from retrovue.runtime.program_schedule_scheduler import (
     ScheduleEntrySpec,
-    Tier1Scheduler,
+    ProgramScheduleScheduler,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -129,7 +129,7 @@ def test_commit_template_window_populates_index():
     """
     state = _make_channel_state()
     _add_template(state, "tmpl_a")
-    scheduler = Tier1Scheduler(state)
+    scheduler = ProgramScheduleScheduler(state)
 
     committed = scheduler.build_horizon([_template_entry("tmpl_a", 0)])
 
@@ -153,7 +153,7 @@ def test_rebuild_to_different_template_swaps_index_entry():
     state = _make_channel_state()
     _add_template(state, "tmpl_a")
     _add_template(state, "tmpl_b")
-    scheduler = Tier1Scheduler(state)
+    scheduler = ProgramScheduleScheduler(state)
 
     committed = scheduler.build_horizon([_template_entry("tmpl_a", 0)])
     key = committed[0]
@@ -191,7 +191,7 @@ def test_committed_to_blocked_transition_preserves_index_entry():
     """
     state = _make_channel_state()
     _add_template(state, "tmpl_a")
-    scheduler = Tier1Scheduler(state)
+    scheduler = ProgramScheduleScheduler(state)
 
     committed = scheduler.build_horizon([_template_entry("tmpl_a", 0)])
     key = committed[0]
@@ -218,7 +218,7 @@ def test_rebuild_to_pool_type_removes_from_index():
     """
     state = _make_channel_state()
     _add_template(state, "tmpl_a")
-    scheduler = Tier1Scheduler(state)
+    scheduler = ProgramScheduleScheduler(state)
 
     committed = scheduler.build_horizon([_template_entry("tmpl_a", 0)])
     key = committed[0]
@@ -247,7 +247,7 @@ def test_index_list_sorted_ascending_by_wall_start_ms():
     """
     state = _make_channel_state()
     _add_template(state, "tmpl_a")
-    scheduler = Tier1Scheduler(state)
+    scheduler = ProgramScheduleScheduler(state)
 
     # Commit three windows in intentionally non-ascending order
     entries = [

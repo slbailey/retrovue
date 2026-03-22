@@ -1,16 +1,16 @@
-"""Playlist Builder Daemon — Tier 2 of the Two-Tier Horizon Architecture.
+"""Playlist Builder Daemon — maintains the Playlog Plan horizon.
 
-Maintains a rolling window of fully-filled playlist events 2–3+ hours
+Maintains a rolling window of fully-filled PlaylistEvent rows (the playlog plan) 2–3+ hours
 ahead of the current wall-clock time. Consumes pre-segmented blocks from
-Tier 1 (active ScheduleRevision/ScheduleItems), fills ad break placeholders
+program schedule (active ScheduleRevision/ScheduleItems), fills ad break placeholders
 via the traffic manager, and writes the result to PlaylistEvent (Postgres).
 
 ChannelManager reads PlaylistEvent directly — no ad fill or schedule
 compilation at feed time.
 
-See: docs/architecture/two-tier-horizon.md
-     INV-PLAYLOG-HORIZON-001: Tier 2 maintains ≥2 hours coverage
-     INV-PLAYLOG-PREFILL-001: Ad fill at Tier 2 generation, never at feed time
+See: docs/architecture/program-schedule-playlog-plan-horizon.md
+     INV-PLAYLOG-HORIZON-001: playlog plan maintains ≥2 hours coverage
+     INV-PLAYLOG-PREFILL-001: Ad fill at playlog plan generation, never at feed time
      INV-CHANNEL-NO-COMPILE-001: ChannelManager never compiles or fills ads
 
 Lifecycle: start()/stop() run a background daemon thread.
@@ -33,7 +33,7 @@ from retrovue.runtime.schedule_items_reader import expand_editorial_block
 logger = logging.getLogger(__name__)
 
 # Log INV-PLAYLOG-HORIZON-002 at WARNING only on first consecutive zero; later repeats at DEBUG.
-# When Tier 1 has no next-day blocks (e.g. compile not run yet), 0 blocks filled every tick.
+# When the program schedule has no next-day blocks (e.g. compile not run yet), 0 blocks filled every tick.
 PLAYLOG_HORIZON_002_WARN_ON_FIRST_ONLY = True
 
 
@@ -51,10 +51,10 @@ class PlaylistBuilderHealthReport:
 
 
 class PlaylistBuilderDaemon:
-    """Rolling Tier 2 horizon: pre-filled playlist events in Postgres.
+    """Rolling playlog plan horizon: pre-filled playlist events in Postgres.
 
     Write path:
-        evaluate_once() → reads Tier 1, fills ads, writes PlaylistEvent
+        evaluate_once() → reads program schedule blocks, fills ads, writes PlaylistEvent
 
     Read path (ChannelManager):
         SELECT FROM playlist_event WHERE channel_slug=? AND start_utc_ms <= ? AND end_utc_ms > ?
@@ -75,7 +75,7 @@ class PlaylistBuilderDaemon:
         master_clock=None,
         channel_tz: str = "UTC",
         dsl_path: str | None = None,
-        tier1_extend_callback: Any = None,
+        program_schedule_extend_callback: Any = None,
     ):
         self._channel_id = channel_id
         self._min_hours = min_hours
@@ -86,9 +86,9 @@ class PlaylistBuilderDaemon:
         self._filler_duration_ms = filler_duration_ms
         self._clock = master_clock
         self._channel_tz = ZoneInfo(channel_tz)
-        # INV-EPG-VIEWER-INDEPENDENT-001: Callback to extend Tier 1 horizon
+        # INV-EPG-VIEWER-INDEPENDENT-001: Callback to extend program schedule horizon
         # when the daemon discovers missing days. Signature: (channel_id, now_utc_ms) -> None
-        self._tier1_extend = tier1_extend_callback
+        self._program_schedule_extend = program_schedule_extend_callback
 
         # Traffic policy + break config resolved from channel DSL
         self._traffic_policy: Any = None
@@ -122,7 +122,7 @@ class PlaylistBuilderDaemon:
         self._warned_stale_days: set[date] = set()
 
         # INV-SCHEDULE-RETENTION-001: throttle DB purge to at most once/hour
-        self._last_tier2_purge_utc_ms: int = 0
+        self._last_playlog_plan_purge_utc_ms: int = 0
 
         # Lifecycle
         self._stop_event = threading.Event()
@@ -134,9 +134,9 @@ class PlaylistBuilderDaemon:
     # ------------------------------------------------------------------
 
     def evaluate_once(self) -> int:
-        """Evaluate Tier 2 depth and extend if below threshold.
+        """Evaluate playlog plan depth and extend if below threshold.
 
-        INV-PLAYLOG-COVERAGE-HOLE-001: Ensures Tier 2 always covers the block
+        INV-PLAYLOG-COVERAGE-HOLE-001: Ensures playlog plan always covers the block
         containing now_ms (backfill current block if missing) before forward fill.
 
         INV-DAEMON-SESSION-SCOPE-001: Opens at most one database session per
@@ -149,22 +149,22 @@ class PlaylistBuilderDaemon:
         now_ms = self._now_utc_ms()
         self._last_evaluation_utc_ms = now_ms
 
-        # INV-EPG-VIEWER-INDEPENDENT-001: Proactively extend Tier 1 horizon
+        # INV-EPG-VIEWER-INDEPENDENT-001: Proactively extend program schedule horizon
         # so EPG data stays fresh even when no viewers are connected.
-        if self._tier1_extend is not None:
+        if self._program_schedule_extend is not None:
             try:
-                self._tier1_extend(self._channel_id, now_ms)
+                self._program_schedule_extend(self._channel_id, now_ms)
             except Exception as e:
                 logger.debug(
-                    "PlaylistBuilder[%s]: Tier 1 extend callback failed: %s",
+                    "PlaylistBuilder[%s]: program schedule extend callback failed: %s",
                     self._channel_id, e,
                 )
 
         with db_session_factory() as db:
-            # Pre-step: ensure Tier 2 covers the block containing now (backfill if hole)
-            backfill_count = self._ensure_tier2_covers_now(now_ms, db=db)
+            # Pre-step: ensure playlog plan covers the block containing now (backfill if hole)
+            backfill_count = self._ensure_playlog_plan_covers_now(now_ms, db=db)
 
-            # Discover current Tier 2 frontier
+            # Discover current playlog plan frontier
             frontier_ms = self._get_frontier_utc_ms(db=db)
             if frontier_ms > self._farthest_end_utc_ms:
                 self._farthest_end_utc_ms = frontier_ms
@@ -180,7 +180,7 @@ class PlaylistBuilderDaemon:
                 )
                 return backfill_count
 
-            # Need to extend: find blocks from Tier 1 that don't yet have Tier 2 entries
+            # Need to extend: find program schedule blocks that don't yet have playlog plan entries
             blocks_filled = backfill_count + self._extend_to_target(now_ms, target_ms, db=db)
 
             if blocks_filled > 0:
@@ -216,8 +216,8 @@ class PlaylistBuilderDaemon:
                     self._fill_errors,
                 )
 
-            # INV-SCHEDULE-RETENTION-001: purge expired Tier 2 DB rows
-            self._purge_expired_tier2(now_ms, db=db)
+            # INV-SCHEDULE-RETENTION-001: purge expired playlog plan DB rows
+            self._purge_expired_playlog_plan(now_ms, db=db)
 
         return blocks_filled
 
@@ -266,10 +266,10 @@ class PlaylistBuilderDaemon:
     # Internal: retention
     # ------------------------------------------------------------------
 
-    def _purge_expired_tier2(self, now_utc_ms: int = 0, *, db=None) -> int:
+    def _purge_expired_playlog_plan(self, now_utc_ms: int = 0, *, db=None) -> int:
         """Delete PlaylistEvent rows with end_utc_ms <= now - 4 hours.
 
-        INV-SCHEDULE-RETENTION-001: Tier 2 retains only rows where
+        INV-SCHEDULE-RETENTION-001: playlog plan retains only rows where
         end_utc_ms > now - 4h. Throttled to at most once per hour.
 
         INV-DAEMON-SESSION-SCOPE-001: Accepts optional db session to avoid
@@ -281,7 +281,7 @@ class PlaylistBuilderDaemon:
             now_utc_ms = self._now_utc_ms()
 
         # Hourly throttle
-        if (now_utc_ms - self._last_tier2_purge_utc_ms) < 3_600_000:
+        if (now_utc_ms - self._last_playlog_plan_purge_utc_ms) < 3_600_000:
             return 0
 
         from retrovue.domain.entities import PlaylistEvent
@@ -301,10 +301,10 @@ class PlaylistBuilderDaemon:
                         PlaylistEvent.channel_slug == self._channel_id,
                         PlaylistEvent.end_utc_ms <= cutoff_ms,
                     ).delete()
-            self._last_tier2_purge_utc_ms = now_utc_ms
+            self._last_playlog_plan_purge_utc_ms = now_utc_ms
             if count > 0:
                 logger.info(
-                    "INV-SCHEDULE-RETENTION-001: Purged %d expired Tier 2 rows "
+                    "INV-SCHEDULE-RETENTION-001: Purged %d expired playlog plan rows "
                     "for channel=%s (end_utc_ms <= %d)",
                     count, self._channel_id, cutoff_ms,
                 )
@@ -318,7 +318,7 @@ class PlaylistBuilderDaemon:
                 except Exception:
                     pass
             logger.warning(
-                "INV-SCHEDULE-RETENTION-001: Tier 2 purge failed for channel=%s: %s",
+                "INV-SCHEDULE-RETENTION-001: playlog plan purge failed for channel=%s: %s",
                 self._channel_id, e,
             )
             return 0
@@ -328,7 +328,7 @@ class PlaylistBuilderDaemon:
     # ------------------------------------------------------------------
 
     def _extend_to_target(self, now_ms: int, target_ms: int, *, db=None) -> int:
-        """Fill blocks from Tier 1 until Tier 2 depth reaches target.
+        """Fill from program schedule until playlog plan depth reaches target.
 
         INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001:
         - Rule 1: Batch PlaylistEvent existence checks per scan-day.
@@ -354,11 +354,11 @@ class PlaylistBuilderDaemon:
         end_date = self._broadcast_date_for(target_dt) + timedelta(days=1)
 
         while scan_date <= end_date and cursor_ms < target_end_ms:
-            # Load Tier 1 segmented blocks for this day
-            segmented_blocks = self._load_tier1_blocks(scan_date, db=db)
+            # Load program schedule segmented blocks for this day
+            segmented_blocks = self._load_program_schedule_blocks(scan_date, db=db)
             if segmented_blocks is None:
                 logger.debug(
-                    "PlaylistBuilder[%s]: No Tier 1 data for %s — cannot extend",
+                    "PlaylistBuilder[%s]: No program schedule data for %s — cannot extend",
                     self._channel_id, scan_date.isoformat(),
                 )
                 scan_date += timedelta(days=1)
@@ -443,19 +443,19 @@ class PlaylistBuilderDaemon:
 
         return blocks_filled
 
-    def _ensure_tier2_covers_now(self, now_ms: int, *, db=None) -> int:
-        """Backfill the Tier-1 block containing now_ms if Tier-2 has no row covering it.
+    def _ensure_playlog_plan_covers_now(self, now_ms: int, *, db=None) -> int:
+        """Backfill the program schedule block containing now_ms if playlog plan has no row covering it.
 
-        INV-PLAYLOG-COVERAGE-HOLE-001: Ensures Tier 2 always covers the block that
-        contains now_ms (e.g. daemon started late or Tier-2 was empty). Backfill
+        INV-PLAYLOG-COVERAGE-HOLE-001: Ensures playlog plan always covers the block that
+        contains now_ms (e.g. daemon started late or playlog plan was empty). Backfill
         allowed only if now_ms < block_end (do not backfill wholly-past blocks).
 
         Returns 1 if a block was filled, 0 otherwise.
         """
-        if self._tier2_row_covers_now(now_ms, db=db):
+        if self._playlog_plan_row_covers_now(now_ms, db=db):
             return 0
 
-        block = self._get_tier1_block_containing(now_ms, db=db)
+        block = self._get_program_schedule_block_containing(now_ms, db=db)
         if block is None:
             return 0
 
@@ -465,7 +465,7 @@ class PlaylistBuilderDaemon:
 
         block_id = block["block_id"]
         logger.warning(
-            "INV-PLAYLOG-COVERAGE-HOLE-001: missing Tier2 coverage for now_ms=%d "
+            "INV-PLAYLOG-COVERAGE-HOLE-001: missing playlog plan coverage for now_ms=%d "
             "backfilling block_id=%s",
             now_ms, block_id,
         )
@@ -507,7 +507,7 @@ class PlaylistBuilderDaemon:
             )
             return 0
 
-    def _tier2_row_covers_now(self, now_ms: int, *, db=None) -> bool:
+    def _playlog_plan_row_covers_now(self, now_ms: int, *, db=None) -> bool:
         """True if PlaylistEvent has a row covering now_ms (by time window).
 
         INV-DAEMON-SESSION-SCOPE-001: Accepts optional db session.
@@ -540,15 +540,15 @@ class PlaylistBuilderDaemon:
                     pass
             return False
 
-    def _get_tier1_block_containing(self, now_ms: int, *, db=None) -> dict | None:
-        """Return the Tier-1 segmented block dict that contains now_ms, or None.
+    def _get_program_schedule_block_containing(self, now_ms: int, *, db=None) -> dict | None:
+        """Return the program schedule segmented block dict that contains now_ms, or None.
 
         Checks broadcast_date(now) and broadcast_date(now)-1 for day-boundary blocks.
         """
         now_dt = datetime.fromtimestamp(now_ms / 1000.0, tz=timezone.utc)
         bd = self._broadcast_date_for(now_dt)
         for scan_date in (bd - timedelta(days=1), bd):
-            blocks = self._load_tier1_blocks(scan_date, db=db)
+            blocks = self._load_program_schedule_blocks(scan_date, db=db)
             if blocks is None:
                 continue
             for sb_dict in blocks:
@@ -556,8 +556,8 @@ class PlaylistBuilderDaemon:
                     return sb_dict
         return None
 
-    def _load_tier1_blocks(self, broadcast_day: date, *, db=None) -> list[dict] | None:
-        """Load Tier-1 segmented blocks from active ScheduleRevision only.
+    def _load_program_schedule_blocks(self, broadcast_day: date, *, db=None) -> list[dict] | None:
+        """Load program schedule segmented blocks from active ScheduleRevision only.
 
         Stage 4: ProgramLogDay JSON fallback removed.
 
@@ -587,7 +587,7 @@ class PlaylistBuilderDaemon:
                 except Exception:
                     pass
             logger.error(
-                "PlaylistBuilder[%s]: DB error loading Tier 1 for %s: %s",
+                "PlaylistBuilder[%s]: DB error loading program schedule for %s: %s",
                 self._channel_id, broadcast_day.isoformat(), e,
             )
             return None
@@ -609,7 +609,7 @@ class PlaylistBuilderDaemon:
         """Batch-check which block_ids already have PlaylistEvent entries.
 
         INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 Rule 3:
-        Returns set[str] of block_ids that already have Tier 2 entries.
+        Returns set[str] of block_ids that already have playlog plan entries.
         Single query per call: SELECT block_id ... WHERE block_id IN (...).
 
         INV-DAEMON-SESSION-SCOPE-001: Accepts optional db session.
@@ -644,7 +644,7 @@ class PlaylistBuilderDaemon:
     def _get_asset_library(self, *, db=None):
         """Create a DatabaseAssetLibrary for interstitial selection.
 
-        INV-PLAYLOG-PREFILL-001: Ad fill happens at Tier 2 generation.
+        INV-PLAYLOG-PREFILL-001: Ad fill happens at playlog plan generation.
         INV-DAEMON-SESSION-SCOPE-001: Accepts optional db session.
         """
         try:
@@ -676,10 +676,10 @@ class PlaylistBuilderDaemon:
     ) -> None:
         """Write a filled block to PlaylistEvent.
 
-        INV-PLAYLOG-PREFILL-001: Canonical Tier 2 write path.
+        INV-PLAYLOG-PREFILL-001: Canonical playlog plan write path.
         INV-DAEMON-SESSION-SCOPE-001: Accepts optional db session.
         INV-TIER2-WINDOW-UUID-PROPAGATION-001: Sets PlaylistEvent.window_uuid
-        column from Tier 1 block dict when present.
+        column from program schedule block dict when present.
         """
         from retrovue.domain.entities import PlaylistEvent
 

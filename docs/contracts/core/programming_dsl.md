@@ -1,13 +1,13 @@
 # Contract: Programming DSL & Schedule Compiler
 
-**Status:** Draft v2 – Two-tier architecture
+**Status:** Draft v2 – Program schedule + playlog plan architecture
 
 ## Purpose
-Define the human-editable YAML language for describing channel programming grids and the two-tier schedule architecture that transforms DSL into playout instructions.
+Define the human-editable YAML language for describing channel programming grids and the architecture that transforms DSL into playout instructions (program_schedule then playlog_plan).
 
-## Two-Tier Schedule Architecture
+## Program schedule and playlog plan
 
-### Tier 1: Program Schedule (compiled from DSL)
+### Program schedule (compiled from DSL)
 - **Rolling horizon:** 3–4 calendar days
 - **Content:** Grid-aligned program block assignments ONLY
 - **Grid alignment:** Episodes MUST start on grid boundaries
@@ -16,7 +16,7 @@ Define the human-editable YAML language for describing channel programming grids
 - **No breaks, no commercials, no bumpers** — this is what an EPG would show
 - **Produced by:** `schedule_compiler.py`
 
-### Tier 2: Playout Log (expanded from program schedule)
+### Playlog Plan (expanded from program schedule)
 - **Rolling horizon:** 3–4 program blocks ahead of "now"
 - **Content:** Acts (from chapter markers) interleaved with empty ad block slots
 - **Produced by:** `playout_log_expander.py` (Schedule Manager calls this)

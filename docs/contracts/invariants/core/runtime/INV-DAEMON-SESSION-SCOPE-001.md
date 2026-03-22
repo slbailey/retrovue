@@ -6,12 +6,12 @@ Each `PlaylistBuilderDaemon.evaluate_once()` cycle MUST acquire at most **one** 
 
 ## Authority Model
 
-PlaylistBuilderDaemon owns the Tier 2 write path and is the sole background consumer of database sessions for horizon extension. Connection pool capacity is a shared resource across all daemon threads, HTTP handlers, and auxiliary tasks (loudness measurement, resolver rebuilds). Each daemon MUST minimize its pool footprint to at most one concurrent connection.
+PlaylistBuilderDaemon owns the playlog plan write path and is the sole background consumer of database sessions for horizon extension. Connection pool capacity is a shared resource across all daemon threads, HTTP handlers, and auxiliary tasks (loudness measurement, resolver rebuilds). Each daemon MUST minimize its pool footprint to at most one concurrent connection.
 
 ## Boundary / Constraint
 
 1. `evaluate_once()` MUST open at most one database session and pass it to all sub-methods that require database access within that cycle.
-2. All database helper methods (`_tier2_row_covers_now`, `_get_frontier_utc_ms`, `_load_tier1_blocks`, `_batch_block_exists_in_txlog`, `_get_asset_library`, `_write_to_txlog`, `_purge_expired_tier2`) MUST accept an optional `db` parameter. When provided, they MUST reuse it instead of opening a new session.
+2. All database helper methods (`_playlog_plan_row_covers_now`, `_get_frontier_utc_ms`, `_load_program_schedule_blocks`, `_batch_block_exists_in_txlog`, `_get_asset_library`, `_write_to_txlog`, `_purge_expired_playlog_plan`) MUST accept an optional `db` parameter. When provided, they MUST reuse it instead of opening a new session.
 3. `_extend_to_target()` MUST NOT open any sessions internally; it MUST receive the session from `evaluate_once()`.
 4. With N active channels, peak daemon connection demand MUST be at most N (one per daemon thread), not `N * sessions_per_iteration`.
 

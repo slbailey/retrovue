@@ -2,8 +2,8 @@
 Schedule listing, rescheduling, rebuild, and introspection CLI commands.
 
 Provides `list`, `reschedule`, `rebuild`, `explain`, and `preview` subcommands
-for inspecting and mutating Tier 1 (ScheduleRevision) and Tier 2 (PlaylistEvent)
-schedule blocks.
+for inspecting and mutating program schedule (ScheduleRevision) and playlog plan
+(PlaylistEvent) blocks.
 """
 
 from __future__ import annotations
@@ -80,10 +80,15 @@ def _load_channel_dsl(channel_slug: str) -> dict | None:
 @app.command("list")
 def list_cmd(
     channel_id: str = typer.Option(None, "--channel", "-c", help="Filter by channel ID"),
-    tier: str = typer.Option(None, "--tier", "-t", help="Filter by tier (1 or 2)"),
+    tier: str = typer.Option(
+        None,
+        "--tier",
+        "-t",
+        help="Filter: 1 or program_schedule | 2 or playlog_plan (alias: compiled_playlog)",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
 ) -> None:
-    """List Tier 1 and Tier 2 blocks eligible for rescheduling (future blocks only)."""
+    """List program schedule and playlog plan blocks eligible for rescheduling (future only)."""
     from datetime import datetime, timezone
 
     from retrovue.infra.uow import session
@@ -102,50 +107,50 @@ def list_cmd(
         typer.echo(json.dumps(result, indent=2, default=str))
         return
 
-    tier1 = result.get("tier1", [])
-    tier2 = result.get("tier2", [])
+    ps_rows = result.get("program_schedule", [])
+    cpl_rows = result.get("playlog_plan", [])
 
-    if not tier1 and not tier2:
+    if not ps_rows and not cpl_rows:
         typer.echo("No reschedulable blocks found.")
         return
 
-    if tier1:
-        typer.echo("=== Tier 1 (ScheduleRevision) ===")
+    if ps_rows:
+        typer.echo("=== Program schedule (ScheduleRevision) ===")
         typer.echo(
             f"{'UUID':<38} {'CHANNEL':<20} {'BROADCAST_DAY':<14} "
             f"{'START':<24} {'END':<24}"
         )
-        for row in tier1:
+        for row in ps_rows:
             typer.echo(
                 f"{row['id']:<38} {row['channel_id']:<20} {row['broadcast_day']:<14} "
                 f"{_iso_to_local(row['range_start']):<24} "
                 f"{_iso_to_local(row['range_end']):<24}"
             )
-        typer.echo(f"\n{len(tier1)} Tier 1 row(s)")
+        typer.echo(f"\n{len(ps_rows)} program schedule row(s)")
 
-    if tier1 and tier2:
+    if ps_rows and cpl_rows:
         typer.echo("")
 
-    if tier2:
-        typer.echo("=== Tier 2 (PlaylistEvent) ===")
+    if cpl_rows:
+        typer.echo("=== Playlog Plan (PlaylistEvent) ===")
         typer.echo(
             f"{'BLOCK_ID':<44} {'CHANNEL':<20} {'BROADCAST_DAY':<14} "
             f"{'START':<24} {'END':<24}"
         )
-        for row in tier2:
+        for row in cpl_rows:
             typer.echo(
                 f"{row['block_id']:<44} {row['channel_slug']:<20} "
                 f"{row['broadcast_day']:<14} "
                 f"{_ms_to_local(row['start_utc_ms']):<24} "
                 f"{_ms_to_local(row['end_utc_ms']):<24}"
             )
-        typer.echo(f"\n{len(tier2)} Tier 2 row(s)")
+        typer.echo(f"\n{len(cpl_rows)} playlog plan row(s)")
 
 
 @app.command("reschedule")
 def reschedule_cmd(
     identifier: str = typer.Argument(
-        ..., help="Revision UUID (Tier 1) or block_id (Tier 2) to reschedule"
+        ..., help="Revision UUID (program schedule) or block_id (playlog plan)"
     ),
     force: bool = typer.Option(
         False, "--force", "-f", help="Skip confirmation prompt"
@@ -180,9 +185,9 @@ def reschedule_cmd(
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
 
-    typer.echo(f"Rescheduled Tier {result['tier']} block.")
-    typer.echo(f"  Tier 1 rows deleted: {result['deleted_tier1']}")
-    typer.echo(f"  Tier 2 rows deleted: {result['deleted_tier2']}")
+    typer.echo(f"Rescheduled {result['layer']} block.")
+    typer.echo(f"  Program schedule rows deleted: {result['deleted_program_schedule']}")
+    typer.echo(f"  Playlog Plan rows deleted: {result['deleted_playlog_plan']}")
     typer.echo("Block(s) will regenerate on next daemon cycle (~30s) or viewer tune-in.")
 
 
@@ -202,19 +207,28 @@ def _parse_time_arg(value: str) -> datetime:
 @app.command("rebuild")
 def rebuild_cmd(
     channel: str = typer.Option(..., "--channel", "-c", help="Channel slug"),
-    tier: int = typer.Option(..., "--tier", "-t", help="Tier to rebuild (1 or 2)"),
+    tier: int = typer.Option(
+        ...,
+        "--tier",
+        "-t",
+        help="Layer to rebuild: 1=program schedule (not implemented), 2=playlog plan",
+    ),
     from_time: str = typer.Option("now", "--from", help="Start time: 'now' or ISO-8601 timestamp"),
     to_time: str = typer.Option("horizon", "--to", help="End time: 'horizon' or ISO-8601 timestamp"),
     live_safe: bool = typer.Option(False, "--live-safe", help="Skip the currently playing block"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview changes without writing"),
 ) -> None:
-    """Rebuild scheduling tiers for a channel without restarting daemons."""
+    """Rebuild scheduling layers for a channel without restarting daemons."""
     if tier not in (1, 2):
         typer.echo("Error: --tier must be 1 or 2", err=True)
         raise typer.Exit(1)
 
     if tier == 1:
-        typer.echo("Error: Tier-1 rebuild is not yet implemented. Use 'retrovue programming rebuild' to supersede revisions.", err=True)
+        typer.echo(
+            "Error: program schedule rebuild is not yet implemented. "
+            "Use 'retrovue programming rebuild' to supersede revisions.",
+            err=True,
+        )
         raise typer.Exit(1)
 
     # Resolve start time
@@ -223,7 +237,7 @@ def rebuild_cmd(
 
     # Resolve end time
     if to_time.lower() == "horizon":
-        # Default Tier-2 horizon: 3 hours from start
+        # Default playlog plan horizon: 3 hours from start
         end_dt = start_dt + timedelta(hours=3)
     else:
         end_dt = _parse_time_arg(to_time)
@@ -234,12 +248,12 @@ def rebuild_cmd(
         raise typer.Exit(1)
 
     from retrovue.infra.uow import session
-    from retrovue.usecases.schedule_rebuild import rebuild_tier2
+    from retrovue.usecases.schedule_rebuild import rebuild_playlog_plan
 
     if dry_run:
-        typer.echo(f"DRY RUN: Tier-2 rebuild for {channel}")
+        typer.echo(f"DRY RUN: playlog plan rebuild for {channel}")
     else:
-        typer.echo(f"Rebuilding Tier-2 for {channel}")
+        typer.echo(f"Rebuilding playlog plan for {channel}")
 
     typer.echo(f"  Window: {start_dt.isoformat()} -> {end_dt.isoformat()}")
     if live_safe:
@@ -250,7 +264,7 @@ def rebuild_cmd(
 
     try:
         with session() as db:
-            result = rebuild_tier2(
+            result = rebuild_playlog_plan(
                 db,
                 channel_slug=channel,
                 start_utc_ms=start_utc_ms,
@@ -266,12 +280,12 @@ def rebuild_cmd(
         raise typer.Exit(1)
 
     if dry_run:
-        typer.echo(f"  Would delete: {result.deleted} Tier-2 block(s)")
+        typer.echo(f"  Would delete: {result.deleted} playlog plan block(s)")
         typer.echo("  No changes written.")
         return
 
-    typer.echo(f"  Deleted: {result.deleted} Tier-2 block(s)")
-    typer.echo(f"  Rebuilt: {result.rebuilt} Tier-2 block(s)")
+    typer.echo(f"  Deleted: {result.deleted} playlog plan block(s)")
+    typer.echo(f"  Rebuilt: {result.rebuilt} playlog plan block(s)")
     if result.live_safe_skipped:
         typer.echo("  Live-safe: start shifted past currently playing block")
     if result.errors:
@@ -310,8 +324,8 @@ def explain_cmd(
     # Human-readable output
     typer.echo(f"=== Schedule Explain: {channel} at {at.isoformat()} ===\n")
 
-    t1 = result["tier1"]
-    typer.echo("Tier 1 (ScheduleRevision)")
+    t1 = result["program_schedule"]
+    typer.echo("Program schedule (ScheduleRevision)")
     typer.echo(f"  Revision ID:    {t1['revision_id']}")
     typer.echo(f"  Broadcast day:  {t1['broadcast_day']}")
     typer.echo(f"  Status:         {t1['revision_status']}")
@@ -355,7 +369,7 @@ def preview_cmd(
     time_str: str = typer.Option(..., "--time", help="Time to preview: 'now' or ISO-8601 timestamp"),
     json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
 ) -> None:
-    """Preview the Tier-2 playout segments for the block at a given time."""
+    """Preview playlog plan playout segments for the block at a given time."""
     at = _parse_time_arg(time_str)
 
     from retrovue.infra.uow import session

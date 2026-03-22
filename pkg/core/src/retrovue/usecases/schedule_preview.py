@@ -1,7 +1,7 @@
-"""Preview Tier-2 playout segments for a schedule block.
+"""Preview playlog plan playout segments for a schedule block.
 
 Read-only — reads pre-filled PlaylistEvent rows from the database.
-Shows exactly what the daemon wrote (or will write) to Tier-2.
+Shows exactly what the daemon wrote (or will write) to the playlog plan.
 """
 
 from __future__ import annotations
@@ -20,9 +20,9 @@ def preview_at(
     channel_slug: str,
     at: datetime,
 ) -> dict[str, Any]:
-    """Return Tier-2 segments for the block covering `at`.
+    """Return playlog plan segments for the block covering `at`.
 
-    Read-only — reads directly from PlaylistEvent (Tier-2 truth).
+    Read-only — reads directly from PlaylistEvent (playlog plan truth).
     This shows exactly what the daemon produced, including real
     interstitials from the traffic manager.
     """
@@ -41,7 +41,7 @@ def preview_at(
 
     if row is None:
         return {
-            "error": "No Tier-2 block covers this time",
+            "error": "No playlog plan block covers this time",
             "channel": channel_slug,
             "time": at.isoformat(),
         }

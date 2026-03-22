@@ -4,7 +4,7 @@
 **Owner:** Core / ChannelManager + ProgramDirector
 **Last revised:** 2026-03-02
 **Related documents:**
-- `docs/domains/SchedulerTier1Authority_v1.0.md` — Tier 1 commitment rules
+- `docs/domains/ProgramScheduleAuthority_v1.0.md` — program schedule commitment rules
 - `docs/domains/ProgramTemplateAssembly.md` — template DSL and segment resolution
 - `pkg/core/src/retrovue/runtime/template_runtime.py` — canonical runtime structure definitions
 
@@ -58,7 +58,7 @@ TemplateRegistry is rebuilt from the channel config file on every startup. It is
 
 **Persistence:** Postgres.
 
-`ScheduledEntry` records are the canonical durable form of Tier 1 commitments. Each `ScheduledEntry` (including its `window_uuid`, `state`, and all `blocked_*` fields) is persisted to Postgres at commit time and updated on any state transition (COMMITTED → BLOCKED).
+`ScheduledEntry` records are the canonical durable form of program schedule commitments. Each `ScheduledEntry` (including its `window_uuid`, `state`, and all `blocked_*` fields) is persisted to Postgres at commit time and updated on any state transition (COMMITTED → BLOCKED).
 
 **After restart:** `ScheduleRegistry._windows` is rebuilt by loading all persisted `ScheduledEntry` records for the channel from Postgres. The in-memory objects are reconstructed; object identity is new but all field values — including `window_uuid` and `state` — are restored exactly.
 
@@ -76,7 +76,7 @@ TemplateRegistry is rebuilt from the channel config file on every startup. It is
 
 **Persistence:** Not persisted. Rebuilt on demand.
 
-`PlaylogRegistry._windows` is an in-memory cache of Tier 2 resolution outputs. It contains `PlaylogWindow` and `PlaylogEvent` objects produced by `ProgramDirector` from the current `TemplateDef` and `AssetCatalog` state. These objects are not written to Postgres.
+`PlaylogRegistry._windows` is an in-memory cache of playlog plan resolution outputs. It contains `PlaylogWindow` and `PlaylogEvent` objects produced by `ProgramDirector` from the current `TemplateDef` and `AssetCatalog` state. These objects are not written to Postgres.
 
 **After restart:** `PlaylogRegistry._windows` starts empty. ProgramDirector rebuilds the playlog horizon lazily as needed for upcoming windows. There is no recovery path from a pre-restart playlog state.
 
@@ -94,7 +94,7 @@ TemplateRegistry is rebuilt from the channel config file on every startup. It is
 
 `ScheduleWindowState.BLOCKED` is part of `ScheduledEntry` and is persisted to Postgres along with the full entry.
 
-**After restart:** BLOCKED windows are fully restored. `blocked_reason_code`, `blocked_at_ms`, and `blocked_details` are all present in the reconstructed `ScheduledEntry`. The window remains BLOCKED and is excluded from automatic Tier 2 resolution until an explicit operator `rebuild_window` action issues a new `window_uuid` and resets the state to COMMITTED.
+**After restart:** BLOCKED windows are fully restored. `blocked_reason_code`, `blocked_at_ms`, and `blocked_details` are all present in the reconstructed `ScheduledEntry`. The window remains BLOCKED and is excluded from automatic playlog plan resolution until an explicit operator `rebuild_window` action issues a new `window_uuid` and resets the state to COMMITTED.
 
 **Consequence:** If a channel was shut down while a window was BLOCKED, the restart does not clear that state. The BLOCKED entry continues to occupy its `window_key` in `ScheduleRegistry`, and subsequent `build_schedule_horizon` calls (additive) will skip it. Operator intervention is required to resolve BLOCKED windows, exactly as before the restart.
 
@@ -106,7 +106,7 @@ TemplateRegistry is rebuilt from the channel config file on every startup. It is
 
 **After restart:** `window_uuid` values are fully restored. Every `ScheduledEntry` has the same `window_uuid` it had before the restart.
 
-**Consequence for Tier 2:** If ProgramDirector had built a `PlaylogWindow` before the restart, that window is gone (PlaylogRegistry is not persisted). On the first post-restart `extend_horizon` call, ProgramDirector finds no `PlaylogWindow` for the restored `ScheduledEntry` (existing is `None`). `_decide_build_action` returns `BUILD_NEW`. ProgramDirector builds a fresh `PlaylogWindow` from the current template definition and records the restored `window_uuid` as `source_window_uuid`. This is semantically correct: the `window_uuid` has not changed, so the new `PlaylogWindow` correctly represents the current Tier 1 commit.
+**Consequence for playlog plan:** If ProgramDirector had built a `PlaylogWindow` before the restart, that window is gone (PlaylogRegistry is not persisted). On the first post-restart `extend_horizon` call, ProgramDirector finds no `PlaylogWindow` for the restored `ScheduledEntry` (existing is `None`). `_decide_build_action` returns `BUILD_NEW`. ProgramDirector builds a fresh `PlaylogWindow` from the current template definition and records the restored `window_uuid` as `source_window_uuid`. This is semantically correct: the `window_uuid` has not changed, so the new `PlaylogWindow` correctly represents the current program schedule commit.
 
 There is no `window_uuid` collision risk on restart because `window_uuid` values are UUID4 strings assigned once at commit time and never regenerated unless `rebuild_window` is explicitly called.
 
@@ -122,7 +122,7 @@ Before shutdown, a channel may have been actively executing a `PlaylogWindow` (s
 
 **Resolution behavior:**
 
-When the first viewer arrives or when ProgramDirector runs its post-restart horizon extension, it determines which window should be airing at wall-clock "now" by consulting the restored `ScheduleRegistry`. It then resolves that window's `ScheduledEntry` through the normal Tier 2 build path. The resulting `PlaylogWindow` starts in `PENDING` state and is immediately activated.
+When the first viewer arrives or when ProgramDirector runs its post-restart horizon extension, it determines which window should be airing at wall-clock "now" by consulting the restored `ScheduleRegistry`. It then resolves that window's `ScheduledEntry` through the normal playlog plan build path. The resulting `PlaylogWindow` starts in `PENDING` state and is immediately activated.
 
 **Mid-program restart:** If the restart occurred in the middle of a movie or program, the resumed playout does NOT seek to the mid-program position. The channel advances to the point that should be airing at the current wall-clock time, as determined by the schedule and the total duration of resolved events. Viewers experience a "tuning in mid-stream" join, which is normal behavior for a linear broadcast model.
 
@@ -155,13 +155,13 @@ The following sequence governs channel runtime initialization after process rest
 
 1. **Config load:** Config loader reads the channel YAML. Constructs `TemplateRegistry` for the channel.
 
-2. **Tier 1 restore:** Scheduler reads `ScheduledEntry` records for the channel from Postgres. Populates `ScheduleRegistry._windows`.
+2. **Program schedule restore:** Scheduler reads `ScheduledEntry` records for the channel from Postgres. Populates `ScheduleRegistry._windows`.
 
 3. **Index rebuild:** Scheduler reconstructs `TemplateReferenceIndex._index` by scanning all entries in `ScheduleRegistry._windows` with `type == "template"`, inserting each `window_key` under the appropriate `template_id` in ascending `wall_start_ms` order.
 
 4. **Active state init:** ChannelManager initializes `ChannelActiveState` with `active_window_key = None`.
 
-5. **Tier 2 horizon extension:** ProgramDirector runs `extend_horizon` for the channel, building `PlaylogWindow` objects for the time range `[now, now + lookahead]`. BLOCKED windows are skipped (as they are in normal operation). Completed windows prior to `now` are not built.
+5. **Playlog Plan horizon extension:** ProgramDirector runs `extend_horizon` for the channel, building `PlaylogWindow` objects for the time range `[now, now + lookahead]`. BLOCKED windows are skipped (as they are in normal operation). Completed windows prior to `now` are not built.
 
 6. **Activation:** ChannelManager activates the first PENDING `PlaylogWindow` whose `wall_start_ms <= now`. If `now` falls within a window, the first qualifying `PlaylogEvent` is determined by consulting the resolved event durations against wall-clock position.
 
@@ -187,7 +187,7 @@ This document does not define:
 
 - **Postgres schema** for `ScheduledEntry` persistence. Schema definition is owned by the Core persistence layer.
 - **TemplateReferenceIndex persistence.** The index is always derived from `ScheduleRegistry` and is never independently stored or checkpointed.
-- **PlaylogWindow or PlaylogEvent persistence.** These are Tier 2 resolution outputs and are always rebuilt from the current template and asset state.
+- **PlaylogWindow or PlaylogEvent persistence.** These are playlog plan resolution outputs and are always rebuilt from the current template and asset state.
 - **DVR, rewind, or catch-up playback.** Restarting mid-program resumes from the current schedule position, not from where playback stopped.
 - **AIR process lifecycle.** AIR is a separate playout subprocess. Its startup and teardown are governed by `pkg/air/CLAUDE.md` and are out of scope here.
 - **Multi-channel coordinator startup ordering.** Whether channels are started sequentially or concurrently is an orchestration concern, not a lifecycle authority concern.

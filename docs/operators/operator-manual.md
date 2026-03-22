@@ -6,17 +6,17 @@ RetroVue is a linear television simulation platform that operates multi-channel 
 
 The `retrovue` CLI is the primary tool for operators to inspect, diagnose, and correct scheduling behavior across all channels.
 
-### Scheduling Tier Model
+### Scheduling layers
 
-RetroVue processes schedules through three tiers. Each tier transforms editorial intent into progressively more concrete playout instructions.
+RetroVue processes schedules through three layers. Each layer transforms editorial intent into progressively more concrete playout instructions.
 
-| Tier | Name | Description |
+| Layer | Name | Description |
 |------|------|-------------|
-| **Tier-1** | Editorial Schedule | The compiled broadcast schedule for a channel and broadcast day. Defines what airs, when, and for how long. Produced from channel programming definitions. |
-| **Tier-2** | Playout Segments | The fully segmented, playout-ready block list. Each editorial slot is expanded into ordered segments (intros, content, filler) with resolved asset paths and durations. |
-| **Tier-3** | Runtime Execution | The real-time byte stream delivered to viewers. The playout engine reads Tier-2 segments and emits MPEG-TS frames at the correct offsets and timing. |
+| **Program schedule** | Editorial Schedule | The compiled broadcast schedule for a channel and broadcast day. Defines what airs, when, and for how long. Produced from channel programming definitions. |
+| **Playlog Plan** | Playout Segments | The fully segmented, playout-ready block list. Each editorial slot is expanded into ordered segments (intros, content, filler) with resolved asset paths and durations. |
+| **Runtime execution** | Runtime Execution | The real-time byte stream delivered to viewers. The playout engine reads playlog plan segments and emits MPEG-TS frames at the correct offsets and timing. |
 
-Operators primarily interact with Tier-1 and Tier-2. Tier-3 is managed by the playout engine and requires no direct operator intervention under normal conditions.
+Operators primarily interact with program schedule and playlog plan. Runtime execution is managed by the playout engine and requires no direct operator intervention under normal conditions.
 
 ---
 
@@ -26,7 +26,7 @@ The standard troubleshooting workflow follows three steps:
 
 1. **Explain** the scheduling decision for a channel at a specific time.
 2. **Preview** the playout segments that will be generated for that time slot.
-3. **Rebuild** Tier-2 segments if the preview reveals incorrect behavior.
+3. **Rebuild** playlog plan segments if the preview reveals incorrect behavior.
 
 This sequence allows operators to diagnose issues without modifying any state (steps 1 and 2 are read-only), and to apply targeted corrections only when necessary (step 3).
 
@@ -35,7 +35,7 @@ Investigate              Validate                 Correct
 +-----------------+      +-----------------+      +-----------------+
 | schedule explain| ---> | schedule preview| ---> | schedule rebuild |
 +-----------------+      +-----------------+      +-----------------+
-   (read-only)              (read-only)             (writes Tier-2)
+   (read-only)              (read-only)             (writes playlog plan)
 ```
 
 ---
@@ -46,7 +46,7 @@ Investigate              Validate                 Correct
 
 #### Purpose
 
-Displays the editorial scheduling decision for a channel at a specific time. Shows which Tier-1 schedule revision is active, which slot covers the requested time, and how the block will be expanded into playout segments.
+Displays the editorial scheduling decision for a channel at a specific time. Shows which program schedule revision is active, which slot covers the requested time, and how the block will be expanded into playout segments.
 
 This is the first command to use when investigating unexpected scheduling behavior.
 
@@ -94,7 +94,7 @@ retrovue schedule explain --channel hbo-classics --time now --json
 ```
 === Schedule Explain: hbo-classics at 2026-03-06T20:15:00+00:00 ===
 
-Tier 1 (ScheduleRevision)
+Program schedule (ScheduleRevision)
   Revision ID:    a3f8c912-44b1-4e7a-9c2d-18e5f3a7b6d0
   Broadcast day:  2026-03-06
   Status:         active
@@ -120,7 +120,7 @@ Compiled segments (2):
 ```
 === Schedule Explain: cheers-24-7 at 2026-03-06T14:30:00+00:00 ===
 
-Tier 1 (ScheduleRevision)
+Program schedule (ScheduleRevision)
   Revision ID:    f1d2e3c4-5a6b-7c8d-9e0f-1a2b3c4d5e6f
   Broadcast day:  2026-03-06
   Status:         active
@@ -152,7 +152,7 @@ Legacy expansion info:
 
 #### Purpose
 
-Generates and displays the Tier-2 playout segments for the block covering a specified time, without writing anything to the database. This shows exactly what the playout engine will receive for a given time slot.
+Generates and displays the playlog plan playout segments for the block covering a specified time, without writing anything to the database. This shows exactly what the playout engine will receive for a given time slot.
 
 #### Syntax
 
@@ -213,9 +213,9 @@ IDX   TYPE         START                      DURATION     ASSET
 
 #### Purpose
 
-Regenerates Tier-2 playout segments for a channel within a specified time window. This replaces existing Tier-2 data with freshly computed segments derived from the current Tier-1 editorial schedule.
+Regenerates playlog plan playout segments for a channel within a specified time window. This replaces existing playlog plan data with freshly computed segments derived from the current program schedule.
 
-Tier-2 rebuilds are the primary mechanism for applying scheduling logic fixes (such as template compilation corrections) to channels that are already running, without restarting any services or modifying the editorial schedule.
+playlog plan rebuilds are the primary mechanism for applying scheduling logic fixes (such as template compilation corrections) to channels that are already running, without restarting any services or modifying the editorial schedule.
 
 #### Syntax
 
@@ -242,7 +242,7 @@ retrovue schedule rebuild \
 
 #### The Rebuild Window
 
-The rebuild window defines the range of Tier-2 blocks that will be deleted and regenerated. Only blocks whose start time falls within `[--from, --to)` are affected. Blocks before the window (including past blocks) and blocks after the window are untouched.
+The rebuild window defines the range of playlog plan blocks that will be deleted and regenerated. Only blocks whose start time falls within `[--from, --to)` are affected. Blocks before the window (including past blocks) and blocks after the window are untouched.
 
 ```
 Past                Now          Rebuild Window              Future
@@ -255,7 +255,7 @@ When `--to` is set to `horizon` (the default), the rebuild window extends 3 hour
 
 #### Examples
 
-Rebuild Tier-2 segments from now forward (default 3-hour horizon):
+Rebuild playlog plan segments from now forward (default 3-hour horizon):
 
 ```
 retrovue schedule rebuild --channel hbo-classics --tier 2 --from now
@@ -296,37 +296,37 @@ retrovue schedule rebuild \
 **Standard rebuild:**
 
 ```
-Rebuilding Tier-2 for hbo-classics
+Rebuilding playlog plan for hbo-classics
   Window: 2026-03-06T16:44:45.517371+00:00 -> 2026-03-06T19:44:45.517371+00:00
-  Deleted: 4 Tier-2 block(s)
-  Rebuilt: 4 Tier-2 block(s)
+  Deleted: 4 playlog plan block(s)
+  Rebuilt: 4 playlog plan block(s)
 ```
 
 **Dry run:**
 
 ```
-DRY RUN: Tier-2 rebuild for hbo-classics
+DRY RUN: playlog plan rebuild for hbo-classics
   Window: 2026-03-06T16:44:45.517371+00:00 -> 2026-03-06T19:44:45.517371+00:00
-  Would delete: 4 Tier-2 block(s)
+  Would delete: 4 playlog plan block(s)
   No changes written.
 ```
 
 **Live-safe with active playout:**
 
 ```
-Rebuilding Tier-2 for hbo-classics
+Rebuilding playlog plan for hbo-classics
   Window: 2026-03-06T16:44:45.517371+00:00 -> 2026-03-06T19:44:45.517371+00:00
   Live-safe: enabled (will skip currently playing block)
-  Deleted: 3 Tier-2 block(s)
-  Rebuilt: 3 Tier-2 block(s)
+  Deleted: 3 playlog plan block(s)
+  Rebuilt: 3 playlog plan block(s)
   Live-safe: start shifted past currently playing block
 ```
 
 #### Operational Importance
 
-`schedule rebuild` is the corrective action tool. After confirming a scheduling issue with `explain` and `preview`, operators use `rebuild` to regenerate the affected Tier-2 segments. The key properties are:
+`schedule rebuild` is the corrective action tool. After confirming a scheduling issue with `explain` and `preview`, operators use `rebuild` to regenerate the affected playlog plan segments. The key properties are:
 
-- **Non-disruptive**: Tier-1 editorial data is never modified. Only Tier-2 playout segments are replaced.
+- **Non-disruptive**: program schedule editorial data is never modified. Only playlog plan playout segments are replaced.
 - **Targeted**: Only blocks within the specified window are affected. Past blocks and unrelated channels are untouched.
 - **Safe**: The `--live-safe` flag prevents modification of a block that is currently being streamed to viewers. The `--dry-run` flag allows previewing the impact before committing.
 - **Instant**: Rebuilds only process blocks within the specified window, not the entire schedule. Completion is near-instant even for channels with large schedules.
@@ -348,7 +348,7 @@ retrovue schedule explain --channel hbo-classics --time now
 ```
 === Schedule Explain: hbo-classics at 2026-03-06T20:45:00+00:00 ===
 
-Tier 1 (ScheduleRevision)
+Program schedule (ScheduleRevision)
   Revision ID:    a3f8c912-44b1-4e7a-9c2d-18e5f3a7b6d0
   Broadcast day:  2026-03-06
   Status:         active
@@ -369,7 +369,7 @@ Compiled segments (2):
   1: [content] movie-002  dur=5880000ms  source=pool:hbo_movies  [PRIMARY]
 ```
 
-**Finding**: The Tier-1 schedule is correct. The block uses the `hbo_feature_with_intro` template with two compiled segments (intro + content). There should be no commercial breaks.
+**Finding**: The program schedule is correct. The block uses the `hbo_feature_with_intro` template with two compiled segments (intro + content). There should be no commercial breaks.
 
 #### Step 2: Preview the playout segments
 
@@ -395,9 +395,9 @@ IDX   TYPE         START                      DURATION     ASSET
 ...
 ```
 
-**Finding**: The Tier-2 segments show the movie broken into 74 segments with commercial breaks every few minutes. This indicates the Tier-2 data was generated before the template compilation fix was applied. The stale Tier-2 data is using the legacy expansion path (which treats movies as network episodes with ad breaks) instead of honoring the compiled template segments.
+**Finding**: The playlog plan segments show the movie broken into 74 segments with commercial breaks every few minutes. This indicates the playlog plan data was generated before the template compilation fix was applied. The stale playlog plan data is using the legacy expansion path (which treats movies as network episodes with ad breaks) instead of honoring the compiled template segments.
 
-#### Step 3: Rebuild Tier-2 segments
+#### Step 3: Rebuild playlog plan segments
 
 First, preview the rebuild to confirm scope:
 
@@ -410,9 +410,9 @@ retrovue schedule rebuild \
 ```
 
 ```
-DRY RUN: Tier-2 rebuild for hbo-classics
+DRY RUN: playlog plan rebuild for hbo-classics
   Window: 2026-03-06T20:45:00+00:00 -> 2026-03-06T23:45:00+00:00
-  Would delete: 3 Tier-2 block(s)
+  Would delete: 3 playlog plan block(s)
   No changes written.
 ```
 
@@ -427,11 +427,11 @@ retrovue schedule rebuild \
 ```
 
 ```
-Rebuilding Tier-2 for hbo-classics
+Rebuilding playlog plan for hbo-classics
   Window: 2026-03-06T20:45:00+00:00 -> 2026-03-06T23:45:00+00:00
   Live-safe: enabled (will skip currently playing block)
-  Deleted: 2 Tier-2 block(s)
-  Rebuilt: 2 Tier-2 block(s)
+  Deleted: 2 playlog plan block(s)
+  Rebuilt: 2 playlog plan block(s)
   Live-safe: start shifted past currently playing block
 ```
 
@@ -469,7 +469,7 @@ IDX   TYPE         START                      DURATION     ASSET
 
 **Use `preview` to validate template changes before rebuilding.** After making changes to channel programming definitions, run `schedule preview` on a few representative time slots to confirm the segments are structured correctly before triggering a rebuild.
 
-**Investigate before rebuilding.** Always run `schedule explain` first. If the Tier-1 editorial data is wrong (incorrect asset, wrong time slot), a Tier-2 rebuild will reproduce the same error. Tier-1 issues require recompilation of the channel programming definition, not a Tier-2 rebuild.
+**Investigate before rebuilding.** Always run `schedule explain` first. If the program schedule editorial data is wrong (incorrect asset, wrong time slot), a playlog plan rebuild will reproduce the same error. Program schedule issues require recompilation of the channel programming definition, not a playlog plan rebuild.
 
 **Rebuild the smallest necessary window.** Use `--from` and `--to` to target only the affected time range. The default 3-hour horizon is appropriate for most corrections. Expanding the window unnecessarily increases the number of blocks processed and replaced.
 
@@ -485,9 +485,9 @@ IDX   TYPE         START                      DURATION     ASSET
 | **Block** | A contiguous time slot in the schedule, typically 30 minutes to 3 hours. Each block contains one or more segments. |
 | **Segment** | An individual playout unit within a block. Segments have a type (intro, content, filler), an asset reference, a duration, and a start offset. |
 | **Template** | A reusable segment structure that defines the composition of a block (e.g., "intro followed by movie"). Templates are resolved at compile time into explicit segment lists. |
-| **Tier-1** | The editorial schedule. Defines what airs on each channel for each broadcast day. Produced by compiling channel programming definitions. |
-| **Tier-2** | The playout segment list. Each Tier-1 slot is expanded into an ordered sequence of segments with resolved assets and precise durations. Tier-2 is what the playout engine reads. |
-| **Tier-3** | Runtime playout execution. The playout engine reads Tier-2 segments and emits MPEG-TS frames to viewers in real time. |
-| **Playout horizon** | The amount of Tier-2 data maintained ahead of the current time. The system continuously ensures at least 3 hours of Tier-2 coverage for each active channel. |
+| **Program schedule** | The editorial schedule. Defines what airs on each channel for each broadcast day. Produced by compiling channel programming definitions. |
+| **Playlog Plan** | The playout segment list. Each program schedule slot is expanded into an ordered sequence of segments with resolved assets and precise durations. Playlog Plan is what the playout engine reads. |
+| **Runtime execution** | Runtime playout execution. The playout engine reads playlog plan segments and emits MPEG-TS frames to viewers in real time. |
+| **Playout horizon** | The amount of playlog plan data maintained ahead of the current time. The system continuously ensures at least 3 hours of playlog plan coverage for each active channel. |
 | **Broadcast day** | A logical scheduling day, typically starting at 06:00 local time. Programs airing between midnight and 06:00 belong to the previous broadcast day. |
-| **Compiled segments** | A pre-resolved segment list attached to template-derived blocks at Tier-1 compile time. Compiled segments bypass runtime heuristic expansion and are used directly by Tier-2 generation. |
+| **Compiled segments** | A pre-resolved segment list attached to template-derived blocks at program schedule compile time. Compiled segments bypass runtime heuristic expansion and are used directly by playlog plan generation. |
