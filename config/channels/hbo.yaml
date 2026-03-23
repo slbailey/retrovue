@@ -15,125 +15,186 @@ format:
 
 pools:
 
+  traffic_trailers:
+    select:
+      where:
+        type:
+          eq: trailer
+
+  traffic_teasers:
+    select:
+      where:
+        type:
+          eq: teaser
+
   intros:
-    match:
-      type: bumper
-      tags: [hbo,presentation,intros]
+    select:
+      where:
+        type:
+          eq: bumper
+        tags:
+          contains_all: [hbo, presentation, intros]
 
-  G_ratings_cards:
-    match:
-      type: bumper
-      tags: [hbo,presentation,ratings_cards,G]
+  ratings_cards:
+    select:
+      where:
+        type:
+          eq: bumper
+        tags:
+          contains_all: [hbo, presentation, ratings_cards]
 
-  PG_ratings_cards:
-    match:
-      type: bumper
-      tags: [hbo,presentation,ratings_cards,PG]
+  # NEW (T2/T3 support)
+  station_ids:
+    select:
+      where:
+        type:
+          eq: bumper
+        tags:
+          contains_all: [hbo, station_id]
 
-  PG13_ratings_cards:
-    match:
-      type: bumper
-      tags: [hbo,presentation,ratings_cards,PG13]
+  coming_up_next_promos:
+    select:
+      where:
+        type:
+          eq: promo
+        tags:
+          contains_all: [hbo, coming_up_next]
 
-  R_ratings_cards:
-    match:
-      type: bumper
-      tags: [hbo,presentation,ratings_cards,R]
+  late_night_intros:
+    select:
+      where:
+        type:
+          eq: bumper
+        tags:
+          contains_all: [hbo, presentation, late_night_intros]
 
-  movies_g:
-    match:
-      type: movie
-      rating: G
+  movies:
+    select:
+      where:
+        type:
+          eq: movie
 
-  movies_pg:
-    match:
-      type: movie
-      rating: PG
-
-  movies_pg13:
-    match:
-      type: movie
-      rating: PG-13
-
-  movies_r:
-    match:
-      type: movie
-      rating: R
-
-  scifi_movies:
-    match:
-      type: movie
-      genres: "Science Fiction"
 
 # -----------------------------
-# PROGRAM DEFINITIONS
+# PROGRAM DEFINITIONS (T0 + T1)
 # -----------------------------
 
 programs:
 
   hbo_movies_g:
-    pool: movies_g
+    pool: movies
+    select:
+      where:
+        rating:
+          eq: "G"
     grid_blocks_max: 5
     fill_mode: single
-    presentation:
-      - pool: intros
-      - pool: G_ratings_cards
+    presentation: movies
 
   hbo_movies_pg:
-    pool: movies_pg
+    pool: movies
+    select:
+      where:
+        rating:
+          eq: "PG"
     grid_blocks_max: 5
     fill_mode: single
-    presentation:
-      - pool: intros
-      - pool: PG_ratings_cards
+    presentation: movies
 
   hbo_movies_pg13:
-    pool: movies_pg13
+    pool: movies
+    select:
+      where:
+        rating:
+          eq: "PG-13"
     grid_blocks_max: 5
     fill_mode: single
-    presentation:
-      - pool: intros
-      - pool: PG13_ratings_cards
+    presentation: movies
 
   hbo_movies_r:
-    pool: movies_r
+    pool: movies
+    select:
+      where:
+        rating:
+          eq: "R"
     grid_blocks_max: 5
     fill_mode: single
-    presentation:
-      - pool: intros
-      - pool: R_ratings_cards
+    presentation: movies
 
   hbo_scifi_movies:
-    pool: scifi_movies
+    pool: movies
+    select:
+      where:
+        genres:
+          in: ["Science Fiction", "Fantasy"]
+        rating:
+          in: ["PG", "PG-13", "R"]
     grid_blocks_max: 5
     fill_mode: single
-    presentation:
-      - pool: intros
+    presentation: movies
 
 # -----------------------------
-# TRAFFIC CONFIG
+# CHANNEL-LEVEL PRESENTATION (T2 + T3)  ← NEW
+# -----------------------------
+
+presentation:
+
+  # -------------------------
+  # PROGRAM-LEVEL (by type)
+  # -------------------------
+  programs:
+
+    movies:
+
+      preroll:
+        - pool: intros
+        - pool: ratings_cards
+          select:
+            where:
+              rating:
+                eq: program.rating
+              year:
+                lte: program.release_year
+
+      postroll:
+        - pool: coming_up_next_promos
+        - type: traffic
+          profile: hbo_premium
+          fill: remaining
+        - pool: station_ids
+
+
+  # -------------------------
+  # DAYPART-LEVEL (by id)
+  # -------------------------
+  dayparts:
+
+    late_night:
+
+      preroll:
+        - pool: late_night_intros
+          
+
+# -----------------------------
+# TRAFFIC CONFIG (T4)
 # -----------------------------
 
 traffic:
 
-  inventories:
-    trailers:
-      match:
-        type: trailer
-      asset_type: trailer
-
-    teasers:
-      match:
-        type: teaser
-      asset_type: teaser
-
-  default_profile: hbo_premium
-
   profiles:
     hbo_premium:
-      allowed_types: [trailer, teaser]
+      allowed_pools: [traffic_trailers, traffic_teasers]
+      weights:
+        traffic_trailers: 3
+        traffic_teasers: 1
+      rotation:
+        strategy: weighted
+      duration_strategy: pack
       default_cooldown_seconds: 3600
       max_plays_per_day: 0
+
+  default: hbo_premium
+
 
 # -----------------------------
 # SCHEDULE
@@ -147,12 +208,15 @@ schedule:
       program: [hbo_movies_g]
       progression: random
       bleed: true
+
     - start: "10:00"
       slots: 20
       program: [hbo_movies_pg, hbo_movies_pg13]
       progression: random
       bleed: true
+
     - start: "20:00"
+      daypart: late_night   # ← THIS defines the daypart
       slots: 20
       program: [hbo_movies_pg, hbo_movies_pg13, hbo_movies_r]
       progression: random
@@ -164,4 +228,3 @@ schedule:
       program: hbo_scifi_movies
       progression: random
       bleed: true
-

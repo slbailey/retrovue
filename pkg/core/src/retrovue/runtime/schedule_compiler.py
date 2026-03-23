@@ -236,6 +236,48 @@ def _expand_to_compiled_segments(
     return compiled
 
 
+def _resolve_presentation_ref(
+    prog_def: dict[str, Any],
+    presentation_defs: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Resolve a presentation string reference to inline entries.
+
+    If prog_def["presentation"] is a string (e.g., "movies"), look it up
+    in presentation_defs["programs"]["movies"]["preroll"] and replace
+    the string with the resolved list of entries.
+
+    If it's already a list (old inline format), return prog_def unchanged.
+    If presentation_defs is None or the reference doesn't resolve, clear it.
+    """
+    pres = prog_def.get("presentation")
+    if pres is None or isinstance(pres, list):
+        return prog_def  # already inline or absent
+
+    if not isinstance(pres, str):
+        return prog_def
+
+    # It's a string reference — resolve from presentation_defs
+    if presentation_defs is None:
+        # No presentation section in DSL — drop the reference
+        resolved = dict(prog_def)
+        resolved.pop("presentation", None)
+        return resolved
+
+    program_presentations = presentation_defs.get("programs", {})
+    pres_block = program_presentations.get(pres, {})
+    preroll = pres_block.get("preroll", [])
+
+    if preroll:
+        resolved = dict(prog_def)
+        resolved["presentation"] = preroll
+        return resolved
+
+    # Reference didn't resolve to any preroll entries
+    resolved = dict(prog_def)
+    resolved.pop("presentation", None)
+    return resolved
+
+
 # ---------------------------------------------------------------------------
 # Grid alignment
 # ---------------------------------------------------------------------------
@@ -459,6 +501,7 @@ def _compile_program_block(
     prior_same_day_emissions: int = 0,
     broadcast_day_start_hour: int = 6,
     channel_type: str = "network",
+    presentation_defs: dict[str, Any] | None = None,
 ) -> list[ProgramBlockOutput]:
     """Compile a V2 schedule block into program blocks.
 
@@ -557,7 +600,7 @@ def _compile_program_block(
 
         while remaining_slots > 0:
             chosen_ref = rng.choice(program_refs) if len(program_refs) > 1 else program_refs[0]
-            prog_def = programs[chosen_ref]
+            prog_def = _resolve_presentation_ref(programs[chosen_ref], presentation_defs)
             pool = prog_def.get("pool", chosen_ref)
 
             assembly_results = assemble_schedule_block(
@@ -634,7 +677,7 @@ def _compile_program_block(
 
         for exec_idx in range(executions):
             chosen_ref = rng.choice(program_refs) if len(program_refs) > 1 else program_refs[0]
-            prog_def = programs[chosen_ref]
+            prog_def = _resolve_presentation_ref(programs[chosen_ref], presentation_defs)
             pool = prog_def.get("pool", chosen_ref)
 
             assembly_results = assemble_schedule_block(
@@ -943,6 +986,7 @@ def compile_schedule(
                 prior_same_day_emissions=prior,
                 broadcast_day_start_hour=_bd_start_hour,
                 channel_type=dsl.get("channel_type", "network"),
+                presentation_defs=dsl.get("presentation"),
             )
             all_blocks.extend(blocks)
 
