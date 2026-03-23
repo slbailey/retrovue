@@ -648,6 +648,12 @@ class ScheduledSegment:
     gain_db: float = 0.0
     # INV-MOVIE-PRIMARY-ATOMIC: Primary content segment (must never be split)
     is_primary: bool = False
+    # INV-PAD-SPOT-AFFINITY-001 / INV-PAD-ONLY-TRAFFIC-001:
+    # Core-only traffic pick association (0-based within break).
+    # Traffic-generated segments: spot_index != None.
+    # All other origins (content, JIP, DSL): spot_index == None.
+    # NOT serialized to proto (INV-PAD-PROTO-INVISIBLE-001).
+    spot_index: int | None = None
 
     def __post_init__(self):
         # INV-TIME-TYPE-001: Hard type enforcement at construction boundary.

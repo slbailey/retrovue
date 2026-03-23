@@ -440,6 +440,67 @@ def _fill_interstitial_pool(
 
 
 # ---------------------------------------------------------------------------
+# Pad invariant enforcement (post-assembly)
+# ---------------------------------------------------------------------------
+
+
+def _assert_pad_invariants(segments: list[ScheduledSegment]) -> None:
+    """Enforce pad structural invariants after break fill assembly.
+
+    INV-PAD-SPOT-AFFINITY-001: pad.spot_index == predecessor.spot_index
+    INV-PAD-NEVER-ORPHAN-001: pad never first; predecessor has spot_index != None
+    INV-PAD-SPOT-UNIQUE-001: each spot_index → exactly 1 asset + at most 1 pad
+    INV-PAD-ONLY-TRAFFIC-001: traffic pads have spot_index != None
+    No adjacent pad segments.
+    """
+    from collections import Counter
+
+    spot_assets: Counter[int] = Counter()
+    spot_pads: Counter[int] = Counter()
+
+    for i, seg in enumerate(segments):
+        if seg.segment_type == "pad":
+            # INV-PAD-ONLY-TRAFFIC-001: traffic pad must have spot_index
+            assert seg.spot_index is not None, (
+                f"INV-PAD-ONLY-TRAFFIC-001 violated: pad at index {i} has spot_index=None"
+            )
+            # INV-PAD-NEVER-ORPHAN-001: pad must not be first
+            assert i > 0, (
+                f"INV-PAD-NEVER-ORPHAN-001 violated: pad at index 0"
+            )
+            pred = segments[i - 1]
+            # INV-PAD-NEVER-ORPHAN-001: predecessor must be a traffic pick
+            assert pred.spot_index is not None, (
+                f"INV-PAD-NEVER-ORPHAN-001 violated: pad at index {i} "
+                f"follows segment with spot_index=None (type={pred.segment_type!r})"
+            )
+            # INV-PAD-SPOT-AFFINITY-001: same spot_index as predecessor
+            assert seg.spot_index == pred.spot_index, (
+                f"INV-PAD-SPOT-AFFINITY-001 violated: pad at index {i} "
+                f"has spot_index={seg.spot_index} but predecessor has "
+                f"spot_index={pred.spot_index}"
+            )
+            # No adjacent pads
+            assert pred.segment_type != "pad", (
+                f"Adjacent pad segments at indices {i-1} and {i}"
+            )
+            spot_pads[seg.spot_index] += 1
+        elif seg.spot_index is not None:
+            spot_assets[seg.spot_index] += 1
+
+    # INV-PAD-SPOT-UNIQUE-001: each spot_index → 1 asset, ≤1 pad
+    for si in set(spot_assets) | set(spot_pads):
+        assert spot_assets[si] == 1, (
+            f"INV-PAD-SPOT-UNIQUE-001 violated: spot_index={si} "
+            f"has {spot_assets[si]} asset segments (expected 1)"
+        )
+        assert spot_pads[si] <= 1, (
+            f"INV-PAD-SPOT-UNIQUE-001 violated: spot_index={si} "
+            f"has {spot_pads[si]} pad segments (expected ≤1)"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Legacy flat fill (no BreakStructure)
 # ---------------------------------------------------------------------------
 
@@ -536,7 +597,8 @@ def _fill_break_with_interstitials(
     if not picks:
         return None
 
-    # Calculate gap and distribute evenly (INV-BREAK-PAD-DISTRIBUTED-001)
+    # Calculate gap and distribute (INV-PAD-FRAME-DISTRIBUTION-001)
+    # Base allocation per spot; ALL remainder goes to final spot only.
     filled_ms = sum(d for _, d, _ in picks)
     gap_ms = break_duration_ms - filled_ms
     num_items = len(picks)
@@ -545,12 +607,14 @@ def _fill_break_with_interstitials(
         base_pad = gap_ms // num_items
         extra = gap_ms % num_items
         pad_sizes = [base_pad] * num_items
-        for r in range(extra):
-            pad_sizes[num_items - 1 - r] += 1
+        # INV-PAD-FRAME-DISTRIBUTION-001: remainder to final spot only
+        pad_sizes[-1] += extra
     else:
         pad_sizes = [0] * num_items
 
-    # Build segments: [spot, pad, spot, pad, ...]
+    # Build segments: [spot, pad?, spot, pad?, ...]
+    # INV-PAD-SPOT-AFFINITY-001: pad gets same spot_index as its asset
+    # INV-PAD-ONLY-TRAFFIC-001: traffic pads have spot_index != None
     segments: list[ScheduledSegment] = []
     for i, (uri, duration_ms, asset_type) in enumerate(picks):
         seg_type = asset_type if asset_type in ("filler", "promo", "ad", "commercial") else "filler"
@@ -559,6 +623,7 @@ def _fill_break_with_interstitials(
             asset_uri=uri,
             asset_start_offset_ms=0,
             segment_duration_ms=duration_ms,
+            spot_index=i,
         ))
         if pad_sizes[i] > 0:
             segments.append(ScheduledSegment(
@@ -566,6 +631,7 @@ def _fill_break_with_interstitials(
                 asset_uri="",
                 asset_start_offset_ms=0,
                 segment_duration_ms=pad_sizes[i],
+                spot_index=i,
             ))
 
     # Verify invariant: total must equal break duration
@@ -573,5 +639,8 @@ def _fill_break_with_interstitials(
     assert total == break_duration_ms, (
         f"INV-BREAK-PAD-EXACT-001 violated: {total}ms != {break_duration_ms}ms"
     )
+
+    # --- Post-assembly invariant checks ---
+    _assert_pad_invariants(segments)
 
     return segments

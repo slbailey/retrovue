@@ -168,13 +168,15 @@ def _apply_jip_to_segments(
             remaining = 0
         result.append(seg)
     # Extend pad to fill block
+    # INV-PAD-ONLY-TRAFFIC-001: JIP pads have spot_index=None (corrective, not traffic)
     placed = sum(s["segment_duration_ms"] for s in result)
     gap = block_dur_ms - placed
     if gap > 0:
-        if result and result[-1].get("segment_type") == "pad":
+        if result and result[-1].get("segment_type") == "pad" and result[-1].get("spot_index") is None:
+            # Only extend an existing JIP/non-traffic pad; do not extend a traffic pad
             result[-1]["segment_duration_ms"] += gap
         else:
-            result.append({"segment_type": "pad", "segment_duration_ms": gap})
+            result.append({"segment_type": "pad", "segment_duration_ms": gap, "spot_index": None})
     return result
 
 

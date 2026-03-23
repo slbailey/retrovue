@@ -323,6 +323,17 @@ class AsRunWriter:
         self._jsonl_fh.flush()
         os.fsync(self._jsonl_fh.fileno())
 
+    def write_jsonl_only(self, jsonl_record: dict) -> None:
+        """Write to .jsonl only, skipping .asrun text.
+
+        INV-PAD-ASRUN-SUPPRESS-001: Used for pad segments that must be
+        preserved in the structured evidence trail but suppressed from
+        the human-readable .asrun text artifact.
+        """
+        self._jsonl_fh.write(json.dumps(jsonl_record, separators=(",", ":")) + "\n")
+        self._jsonl_fh.flush()
+        os.fsync(self._jsonl_fh.fileno())
+
 
 class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
     """Evidence stream handler with durable ACK semantics.
@@ -560,7 +571,15 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
             if ss.join_in_progress:
                 jsonl_rec["join_in_progress"] = True
                 join_in_progress_by_event[ss.event_id or ss.block_id] = True
-            writer.write_and_flush(asrun_line, jsonl_rec)
+            # INV-PAD-ASRUN-SUPPRESS-001: Suppress pad from .asrun text.
+            # INV-PAD-ASRUN-JSONL-PRESERVED-001: Preserve in .jsonl.
+            # INV-PAD-ASRUN-SCOPE-001: Option A — suppress all pad.
+            # When DSL explicit pad is introduced, narrow to spot_index != None
+            # via segment cache enrichment (Option B).
+            if seg_type_name == "pad":
+                writer.write_jsonl_only(jsonl_rec)
+            else:
+                writer.write_and_flush(asrun_line, jsonl_rec)
 
         elif payload_name == "segment_end":
             se = msg.segment_end
@@ -652,7 +671,12 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
                     )
             last_asset_end_frame_by_block[se.block_id] = se.asset_end_frame
 
-            writer.write_and_flush(asrun_line, jsonl_rec)
+            # INV-PAD-ASRUN-SUPPRESS-001: Suppress pad terminal from .asrun text.
+            # INV-PAD-ASRUN-JSONL-PRESERVED-001: Preserve in .jsonl.
+            if seg_type_name == "pad":
+                writer.write_jsonl_only(jsonl_rec)
+            else:
+                writer.write_and_flush(asrun_line, jsonl_rec)
             emitted_terminals.add(dedup_key)
 
         elif payload_name == "block_fence":

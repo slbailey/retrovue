@@ -92,6 +92,25 @@ def _fmt_ms(ms: int) -> str:
     return f"{s}s"
 
 
+def _format_pad_frames(pad_frames: int, fps: int = 30) -> str:
+    """Format pad duration in frames as a compact frame-aware string.
+
+    Returns empty string if pad_frames == 0.
+    Sub-second: +{frames}f  (e.g., +12f)
+    Full seconds: +{seconds}s{frames}f  (e.g., +1s12f)
+    Exact seconds: +{seconds}s  (e.g., +2s)
+    """
+    if pad_frames <= 0:
+        return ""
+    if pad_frames < fps:
+        return f"+{pad_frames}f"
+    seconds = pad_frames // fps
+    frames = pad_frames % fps
+    if frames == 0:
+        return f"+{seconds}s"
+    return f"+{seconds}s{frames}f"
+
+
 def _fmt_time(iso_str: str) -> str:
     """Format ISO datetime to short local time."""
     dt = datetime.fromisoformat(iso_str)
@@ -273,17 +292,23 @@ def inspect_cmd(
                         typer.echo(f"              -> profile: {profile_name}  pools: {pools_str}")
 
                         # Show actual assets that would fill this break
+                        # INV-PAD-SPOT-AFFINITY-001: pad displayed inline with spot
                         channel_slug = plan.get("channel_id", "")
                         packed = _preview_break_fill(dur, channel_slug)
                         if packed:
-                            filled_ms = 0
+                            fps = 30
+                            num_spots = len(packed)
+                            gap_total = dur - sum(s["duration_ms"] for s in packed)
+                            base_pad = gap_total // num_spots if num_spots > 0 and gap_total > 0 else 0
+                            extra_pad = gap_total % num_spots if num_spots > 0 and gap_total > 0 else 0
                             for k, spot in enumerate(packed):
-                                typer.echo(f"              -> [{k+1}] {spot['filename']}  "
-                                           f"{_fmt_ms(spot['duration_ms'])}  ({spot['type']})")
-                                filled_ms += spot["duration_ms"]
-                            gap = dur - filled_ms
-                            if gap > 0:
-                                typer.echo(f"              -> [{len(packed)+1}] (pad) {_fmt_ms(gap)}")
+                                # INV-PAD-FRAME-DISTRIBUTION-001: remainder to final spot
+                                spot_pad_ms = base_pad + (extra_pad if k == num_spots - 1 else 0)
+                                pad_frames = (spot_pad_ms * fps + 999) // 1000  # ceil ms→frames
+                                pad_str = _format_pad_frames(pad_frames, fps)
+                                pad_suffix = f"  {pad_str}" if pad_str else ""
+                                typer.echo(f"              -> [spot {k}] {spot['filename']}  "
+                                           f"{_fmt_ms(spot['duration_ms'])}  ({spot['type']}){pad_suffix}")
                         else:
                             typer.echo(f"              -> (no traffic assets available — would use filler.mp4)")
                     else:

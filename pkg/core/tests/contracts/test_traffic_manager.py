@@ -253,7 +253,10 @@ class TestPadDistribution:
 
     # Tier: 2 | Scheduling logic invariant
     def test_pad_distributed_evenly(self):
-        """3 spots with 2000ms gap → ~667ms pads between spots."""
+        """3 spots with 2000ms gap → base per spot, remainder to final.
+
+        INV-PAD-FRAME-DISTRIBUTION-001: remainder goes to final spot only.
+        """
         break_ms = 92_000  # 3×30s spots = 90s, 2000ms leftover
         lib = _make_library(
             ("a.ts", "promo", 30_000),
@@ -273,17 +276,17 @@ class TestPadDistribution:
         )
         pads = [s for s in result.segments if s.segment_type == "pad"]
         assert len(pads) == 3  # one pad per spot
-        # Even distribution: 2000 // 3 = 666, remainder 2
+        # INV-PAD-FRAME-DISTRIBUTION-001: 2000 // 3 = 666 base, 2 remainder → final
         pad_durations = [p.segment_duration_ms for p in pads]
         assert sum(pad_durations) == 2000
-        # No single pad should differ from base by more than 1ms
-        base = 2000 // 3
-        for d in pad_durations:
-            assert d in (base, base + 1)
+        assert pad_durations == [666, 666, 668]
 
     # Tier: 2 | Scheduling logic invariant
     def test_pad_remainder_to_last(self):
-        """Indivisible gap: extra ms applied to last items first."""
+        """Indivisible gap: ALL remainder ms applied to final spot only.
+
+        INV-PAD-FRAME-DISTRIBUTION-001: remainder concentrated on final spot.
+        """
         break_ms = 92_000
         lib = _make_library(
             ("a.ts", "promo", 30_000),
@@ -303,11 +306,10 @@ class TestPadDistribution:
         )
         pads = [s for s in result.segments if s.segment_type == "pad"]
         assert len(pads) == 3
-        # 2000ms / 3 spots = 666 base, 2 remainder
-        # Remainder goes to LAST items: pad[2]=667, pad[1]=667, pad[0]=666
+        # 2000ms / 3 spots = 666 base, 2 remainder → all to final spot
         assert pads[0].segment_duration_ms == 666
-        assert pads[1].segment_duration_ms == 667
-        assert pads[2].segment_duration_ms == 667
+        assert pads[1].segment_duration_ms == 666
+        assert pads[2].segment_duration_ms == 668
 
 
 # ===========================================================================
