@@ -174,8 +174,13 @@ class TestPresentationTier1Expansion:
         assert content_segs[0].asset_uri == "/mnt/data/movies/notebook.mkv"
 
     # Tier: 1 | Structural invariant
-    def test_blocks_without_compiled_segments_unchanged(self):
-        """Blocks without compiled_segments must still expand normally."""
+    def test_blocks_without_compiled_segments_skipped(self):
+        """Blocks without compiled_segments are skipped with a warning.
+
+        INV-EXPANSION-NON-MUTATION-001: Expansion is hydration-only.
+        Blocks without compiled_segments cannot be hydrated — they require
+        recompilation to populate compiled_segments.
+        """
         from retrovue.runtime.dsl_schedule_service import DslScheduleService
 
         schedule = {
@@ -197,9 +202,9 @@ class TestPresentationTier1Expansion:
         svc._enqueue_loudness_measurement = lambda *a: None
 
         blocks = svc._expand_blocks_inner(schedule, resolver)
-        assert len(blocks) == 1
-        seg_types = [s.segment_type for s in blocks[0].segments]
-        assert "presentation" not in seg_types
+        assert len(blocks) == 0, (
+            "Blocks without compiled_segments must be skipped"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -251,12 +256,13 @@ class TestBlockFrameConservation:
     def test_segment_sum_equals_block_duration_with_presentation(self):
         """Movie block with presentation segments: sum must match block duration.
 
-        Uses a movie (5400s) shorter than the slot (7200s) so there IS filler
-        budget for the presentation to consume from.  (Bleed movies that exceed
-        the slot are extended by the schedule compiler before reaching this code.)
+        Uses a movie (5400s) shorter than the slot (7200s). compiled_segments
+        from the compiler include presentation + content + filler, summing
+        to exactly slot_duration.
         """
         from retrovue.runtime.dsl_schedule_service import DslScheduleService
 
+        # 74000 + 5000 + 5400000 + 1721000 = 7200000 = slot_duration_sec * 1000
         schedule = {
             "program_blocks": [{
                 "title": "Taken",
@@ -267,7 +273,8 @@ class TestBlockFrameConservation:
                 "compiled_segments": [
                     {"segment_type": "presentation", "asset_id": "intro-uuid-001", "duration_ms": 74000},
                     {"segment_type": "presentation", "asset_id": "rating-uuid-001", "duration_ms": 5000},
-                    {"segment_type": "content", "asset_id": "movie-uuid-001", "duration_ms": 5400000},
+                    {"segment_type": "content", "asset_id": "movie-uuid-001", "duration_ms": 5400000, "is_primary": True},
+                    {"segment_type": "filler", "duration_ms": 1721000},
                 ],
             }],
         }
@@ -292,9 +299,13 @@ class TestBlockFrameConservation:
 
     # Tier: 1 | Structural invariant
     def test_segment_sum_equals_block_duration_no_presentation(self):
-        """Movie block without presentation: sum must still match block duration."""
+        """Movie block without presentation: sum must still match block duration.
+
+        compiled_segments from the compiler include content + filler.
+        """
         from retrovue.runtime.dsl_schedule_service import DslScheduleService
 
+        # 5400000 + 1800000 = 7200000 = slot_duration_sec * 1000
         schedule = {
             "program_blocks": [{
                 "title": "Taken",
@@ -302,6 +313,10 @@ class TestBlockFrameConservation:
                 "start_at": "2026-03-09T06:00:00+00:00",
                 "slot_duration_sec": 7200,
                 "episode_duration_sec": 5400,
+                "compiled_segments": [
+                    {"segment_type": "content", "asset_id": "movie-uuid-001", "duration_ms": 5400000, "is_primary": True},
+                    {"segment_type": "filler", "duration_ms": 1800000},
+                ],
             }],
         }
         resolver = _make_resolver()
@@ -324,11 +339,15 @@ class TestBlockFrameConservation:
 
     # Tier: 1 | Structural invariant
     def test_presentation_reduces_filler_not_content(self):
-        """Presentation time must come from filler budget, not movie content."""
+        """Presentation time must come from filler budget, not movie content.
+
+        compiled_segments from the compiler already reflect this: filler
+        is 7200 - 5400 - 79 = 1721s (presentation consumed filler budget).
+        Expansion hydrates without changing durations.
+        """
         from retrovue.runtime.dsl_schedule_service import DslScheduleService
 
-        # Movie (5400s) in 7200s slot with 79s presentation → filler should be
-        # 7200 - 5400 - 79 = 1721s, not 1800s.
+        # 74000 + 5000 + 5400000 + 1721000 = 7200000
         schedule = {
             "program_blocks": [{
                 "title": "Taken",
@@ -339,7 +358,8 @@ class TestBlockFrameConservation:
                 "compiled_segments": [
                     {"segment_type": "presentation", "asset_id": "intro-uuid-001", "duration_ms": 74000},
                     {"segment_type": "presentation", "asset_id": "rating-uuid-001", "duration_ms": 5000},
-                    {"segment_type": "content", "asset_id": "movie-uuid-001", "duration_ms": 5400000},
+                    {"segment_type": "content", "asset_id": "movie-uuid-001", "duration_ms": 5400000, "is_primary": True},
+                    {"segment_type": "filler", "duration_ms": 1721000},
                 ],
             }],
         }

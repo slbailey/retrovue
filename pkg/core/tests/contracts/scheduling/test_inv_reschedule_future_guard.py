@@ -82,7 +82,7 @@ class TestInvRescheduleFutureGuard001:
         db = _mock_db(tier1_revision=rev, tier1_items=items)
         result = reschedule_by_id(db, identifier=str(rev.id), now=NOW)
         assert result["status"] == "ok"
-        assert result["tier"] == "1"
+        assert result["layer"] == "program_schedule"
 
     # Tier: 2 | Scheduling logic invariant
     def test_tier1_missing_items_rejected(self):
@@ -110,4 +110,4 @@ class TestInvRescheduleFutureGuard001:
         db = _mock_db(tier2_row=row)
         result = reschedule_by_id(db, identifier="b2", now=NOW)
         assert result["status"] == "ok"
-        assert result["tier"] == "2"
+        assert result["layer"] == "playlog_plan"

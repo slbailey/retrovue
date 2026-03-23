@@ -329,6 +329,4 @@ See: [Virtual Assets Contract](virtual_assets.md)
 ## Next Steps
 - [ ] Review with Steve
 - [ ] Finalize match criteria fields (which are v1 vs future)
-- [ ] Update programming_dsl.md to reference this contract
-- [ ] Update programming_dsl.schema.json with pools schema
 - [ ] Implement

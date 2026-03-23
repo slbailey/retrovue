@@ -8,44 +8,33 @@ Derived From: `LAW-CONTENT-AUTHORITY`, `LAW-ELIGIBILITY`, `LAW-DERIVATION`
 
 ## Overview
 
-The Traffic DSL defines how channel configuration declaratively expresses traffic behavior. Traffic behavior encompasses three distinct concerns: what interstitial assets exist (inventory), how those assets are filtered and selected (policy), and where they are placed in the program timeline (placement).
+The Traffic DSL defines how channel configuration declaratively expresses traffic fill behavior. Traffic is Tier 4: it fills time remaining after structural segments (Tiers 0–3) are placed. Traffic behavior encompasses two concerns: how fill assets are filtered and selected (policy), and where they are placed in the block timeline (placement).
 
-The Channel DSL MUST express all three concerns in YAML. The runtime traffic engine consumes the resolved configuration — it MUST NOT hardcode traffic rules, infer policy from content type, or invent placement logic.
+The Channel DSL expresses both concerns in YAML. The runtime traffic engine consumes the resolved configuration — it MUST NOT hardcode traffic rules, infer policy from content type, or invent placement logic.
 
-This contract governs traffic configuration declared in the Channel DSL. The declared TrafficProfiles resolve to runtime TrafficPolicy objects defined in `traffic_policy.md`. Break placement is not defined here and is governed by `break_detection.md`.
+This contract governs traffic configuration declared under the `traffic` section of a channel YAML file. The declared TrafficProfiles resolve to runtime TrafficPolicy objects defined in `traffic_policy.md`. Break placement is governed by `break_detection.md`. Fill allocation is governed by `INV-DSL-UNIFIED-FILL-001` in `channel_dsl.md`.
 
-This contract does not define candidate evaluation rules — runtime filtering, cooldown enforcement, rotation semantics, and cap evaluation are governed exclusively by `traffic_policy.md`. The three contracts are complementary and MUST NOT overlap in authority.
+This contract does not define candidate evaluation rules — runtime filtering, cooldown enforcement, rotation semantics, and cap evaluation are governed exclusively by `traffic_policy.md`.
 
 ### Authority Boundary
 
 This contract owns:
-- YAML schema for `traffic.inventories`, `traffic.profiles`, `traffic.default_profile`, and `traffic.break_config`
+- YAML schema for `traffic.profiles`, `traffic.default`, and `traffic.break_config`
 - Profile resolution order (block override → channel default)
 - Break config resolution (YAML → `BreakConfig` domain object)
-- Inventory resolution timing (planning-time only)
 - TrafficProfile-to-TrafficPolicy mapping rules
-- Validation of profile references and inventory types at load time
+- Validation of profile references and pool references at load time
 
 This contract does NOT own:
+- Asset set definitions (pools — governed by `channel_dsl.md` and `query_dsl.md`)
 - Runtime candidate filtering, cooldown enforcement, rotation, or cap evaluation (`traffic_policy.md`)
 - Break opportunity identification or placement (`break_detection.md`)
-- Traffic fill orchestration (`traffic_manager` — consumes both contracts)
+- Traffic fill orchestration (consumes this contract and `traffic_policy.md`)
+- Fill allocation model (`INV-DSL-UNIFIED-FILL-001` in `channel_dsl.md`)
 
 ---
 
 ## Domain Objects
-
-### TrafficInventory
-
-A named set of interstitial assets available to a channel for break fill.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `name` | string | Inventory identifier, unique per channel. |
-| `match` | dict | Asset query filter (same schema as pool `match`). |
-| `asset_type` | string | Interstitial classification: `"commercial"`, `"promo"`, `"trailer"`, `"station_id"`, `"psa"`, `"stinger"`, `"bumper"`, `"filler"`. |
-
-TrafficInventory is the traffic analogue of a content pool. It defines which assets are candidates for traffic fill. It does not define selection rules — that is the policy's concern.
 
 ### TrafficProfile
 
@@ -54,12 +43,15 @@ A named, reusable traffic policy configuration declared in the channel DSL.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `name` | string | — | Profile identifier, unique per channel. |
-| `allowed_types` | list[str] | union of `asset_type` values from channel inventories | Interstitial types permitted under this profile. |
-| `default_cooldown_seconds` | int | `3_600` | Minimum seconds between re-plays of the same asset. |
-| `type_cooldowns_seconds` | dict[str, int] | `{}` | Per-type cooldown overrides in seconds. |
+| `allowed_pools` | list[str] | — | Pool names eligible for traffic fill under this profile. Each name MUST reference a pool defined in the channel's `pools` section. |
+| `weights` | dict[str, int] | equal | Relative selection weight per pool. Keys MUST be a subset of `allowed_pools`. |
+| `rotation.strategy` | string | `weighted` | Asset rotation strategy: `weighted` (pool weights drive selection probability) or `round_robin` (cycle through pools sequentially). |
+| `duration_strategy` | string | `pack` | `pack` (fill break to capacity with multiple assets) or `single` (one asset per break opportunity). |
+| `default_cooldown_seconds` | int | `3600` | Minimum seconds between re-plays of the same asset. |
+| `type_cooldowns_seconds` | dict[str, int] | `{}` | Per-pool cooldown overrides in seconds. Keys MUST be a subset of `allowed_pools`. |
 | `max_plays_per_day` | int | `0` | Max plays per asset per channel per traffic day. `0` = unlimited. |
 
-A TrafficProfile is the declarative form of a `TrafficPolicy` runtime object (defined in `traffic_policy.md`). Each resolved TrafficProfile is instantiated as a `TrafficPolicy` with identical field names and semantics. The DSL declares the configuration; `traffic_policy.md` defines how the runtime object evaluates candidates against that configuration.
+A TrafficProfile is the declarative form of a `TrafficPolicy` runtime object (defined in `traffic_policy.md`). Each resolved TrafficProfile is instantiated as a `TrafficPolicy`. The DSL declares the configuration; `traffic_policy.md` defines how the runtime object evaluates candidates against that configuration.
 
 ### TrafficAssignment
 
@@ -74,48 +66,29 @@ The binding between a schedule block (or channel default) and a TrafficProfile.
 
 ## YAML Structure
 
-### Traffic Inventory Declaration
-
-```yaml
-traffic:
-  inventories:
-    promos:
-      match:
-        type: promo
-        tags: [network]
-      asset_type: promo
-
-    station_ids:
-      match:
-        type: station_id
-      asset_type: station_id
-
-    bumpers:
-      match:
-        type: bumper
-        tags: [cheers]
-      asset_type: bumper
-```
-
-Each inventory declares a query filter and an interstitial type classification. The `asset_type` field MUST be one of the types recognized by `TrafficPolicy.allowed_types`.
-
 ### Traffic Profile Declaration
 
 ```yaml
 traffic:
   profiles:
-    default:
-      allowed_types: [promo, station_id, bumper]
+    hbo_premium:
+      allowed_pools: [traffic_trailers, traffic_teasers]
+      weights:
+        traffic_trailers: 3
+        traffic_teasers: 1
+      rotation:
+        strategy: weighted
+      duration_strategy: pack
       default_cooldown_seconds: 3600
-      max_plays_per_day: 8
+      max_plays_per_day: 0
 
     primetime:
-      allowed_types: [promo, station_id]
+      allowed_pools: [traffic_trailers]
       default_cooldown_seconds: 1800
-      type_cooldowns_seconds:
-        station_id: 900
       max_plays_per_day: 12
 ```
+
+Traffic profiles reference pools by name. The referenced pools are defined in the channel's top-level `pools` section using `select.where` syntax. Traffic profiles do not define asset queries — pools do.
 
 ### Break Config Declaration
 
@@ -127,7 +100,7 @@ traffic:
     station_id_ms: 5000
 ```
 
-The `break_config` section declares the channel's break structure configuration. When present, it is resolved to a `BreakConfig` domain object (defined in `break_structure.md`) and passed to the traffic manager for structured break expansion. When absent, the traffic manager uses legacy flat-fill behavior.
+The `break_config` section declares the channel's break structure configuration. When present, it is resolved to a `BreakConfig` domain object (defined in `break_structure.md`). When absent, flat-fill behavior applies.
 
 All fields are optional and default to `0` (meaning the corresponding structural slot is omitted):
 
@@ -141,10 +114,10 @@ All fields are optional and default to `0` (meaning the corresponding structural
 
 ```yaml
 traffic:
-  default_profile: default
+  default: hbo_premium
 ```
 
-The `default_profile` field names the TrafficProfile applied to all schedule blocks that do not specify an override. Every channel MUST declare a `default_profile`.
+The `default` field names the TrafficProfile applied to all schedule blocks that do not specify an override. Every channel that declares a `traffic` section MUST declare a `default`.
 
 ### Schedule Block Override
 
@@ -166,22 +139,22 @@ A schedule block MAY include a `traffic_profile` field to override the channel d
 
 ### Profile Resolution Order
 
-When the runtime resolves traffic policy for a schedule block:
+When resolving traffic policy for a schedule block:
 
 1. If the block declares `traffic_profile`, use that profile.
-2. Otherwise, use `traffic.default_profile`.
+2. Otherwise, use `traffic.default`.
 
 There are exactly two levels. There is no program-level traffic configuration. Programs are content assembly recipes — they do not carry traffic policy. Traffic policy is an editorial scheduling concern, not a content concern.
 
-### Inventory Resolution
+### Pool Resolution
 
-At channel load time, all declared inventories are resolved against the asset catalog. The resolved asset lists are passed to the traffic manager as the candidate pool. Inventory resolution is a planning-time operation — it MUST NOT occur during playout.
+Traffic profiles reference pools by name. At fill time, each referenced pool is resolved against the asset catalog to produce a candidate set. Pool resolution uses the same `select.where` query mechanism as content and presentation pools.
 
 ### Profile-to-Policy Mapping
 
-Each TrafficProfile in the DSL maps 1:1 to a `TrafficPolicy` domain object at runtime. Field names and semantics are identical. The DSL is the declaration; the runtime object is the instantiation.
+Each TrafficProfile in the DSL maps 1:1 to a `TrafficPolicy` domain object at runtime. The DSL is the declaration; the runtime object is the instantiation.
 
-When `allowed_types` is omitted from a profile, the resolved `TrafficPolicy` receives the union of all `asset_type` values declared across the channel's `traffic.inventories`. This DSL-level default takes precedence over the structural default defined in `traffic_policy.md`.
+When `allowed_pools` is omitted from a profile, no pools are eligible. An empty `allowed_pools` is equivalent to no traffic fill.
 
 ---
 
@@ -193,21 +166,21 @@ Status: Invariant
 Authority Level: Planning
 Derived From: `LAW-CONTENT-AUTHORITY`, `LAW-ELIGIBILITY`
 
-**Guarantee:** Every channel configuration that declares a `traffic` section MUST include a `default_profile` that references a named profile in `traffic.profiles`. A channel with traffic inventories but no default profile is invalid.
+**Guarantee:** Every channel configuration that declares a `traffic` section MUST include a `traffic.default` that references a named profile in `traffic.profiles`. A channel with traffic profiles but no default is invalid.
 
-**Violation:** A channel YAML with `traffic.inventories` but no `traffic.default_profile`; a `default_profile` that references a profile name not present in `traffic.profiles`.
+**Violation:** A channel YAML with `traffic.profiles` but no `traffic.default`; a `traffic.default` that references a profile name not present in `traffic.profiles`.
 
 ---
 
-### INV-TRAFFIC-DSL-INVENTORY-TYPE-001 — Inventory asset_type must be a recognized type
+### INV-TRAFFIC-DSL-POOL-REF-VALID-001 — Traffic pool references must resolve
 
 Status: Invariant
 Authority Level: Planning
-Derived From: `LAW-ELIGIBILITY`
+Derived From: `LAW-DERIVATION`, `LAW-ELIGIBILITY`
 
-**Guarantee:** Every `traffic.inventories` entry MUST declare an `asset_type` whose value is one of the recognized interstitial types: `"commercial"`, `"promo"`, `"trailer"`, `"station_id"`, `"psa"`, `"stinger"`, `"bumper"`, `"filler"`. Unrecognized types MUST be rejected at configuration load time.
+**Guarantee:** Every pool name in a traffic profile's `allowed_pools` MUST reference a pool defined in the channel's top-level `pools` section. Every pool name in `weights` or `type_cooldowns_seconds` MUST be a member of that profile's `allowed_pools`. Dangling references MUST be rejected at configuration load time.
 
-**Violation:** An inventory entry with `asset_type: "unknown"` that is accepted without error.
+**Violation:** A profile with `allowed_pools: [nonexistent_pool]` when no pool named `nonexistent_pool` exists; a `weights` key that is not in `allowed_pools`.
 
 ---
 
@@ -217,7 +190,7 @@ Status: Invariant
 Authority Level: Planning
 Derived From: `LAW-DERIVATION`, `LAW-CONTENT-AUTHORITY`
 
-**Guarantee:** Every `traffic_profile` reference on a schedule block MUST name a profile that exists in `traffic.profiles`. Every `default_profile` reference MUST name a profile that exists in `traffic.profiles`. Dangling references MUST be rejected at configuration load time.
+**Guarantee:** Every `traffic_profile` reference on a schedule block MUST name a profile that exists in `traffic.profiles`. Every `traffic.default` reference MUST name a profile that exists in `traffic.profiles`. Dangling references MUST be rejected at configuration load time.
 
 **Violation:** A schedule block with `traffic_profile: primetime` when no profile named `primetime` exists in `traffic.profiles`; a load-time pass that silently ignores an unresolvable reference.
 
@@ -229,21 +202,21 @@ Status: Invariant
 Authority Level: Planning
 Derived From: `LAW-CONTENT-AUTHORITY`, `LAW-DERIVATION`
 
-**Guarantee:** Program definitions MUST NOT include traffic policy fields (`allowed_types`, `cooldown`, `max_plays_per_day`, `traffic_profile`). Traffic policy is bound to schedule blocks or the channel default. Programs define content assembly only.
+**Guarantee:** Program definitions MUST NOT include traffic policy fields (`allowed_pools`, `cooldown`, `max_plays_per_day`, `traffic_profile`). Traffic policy is bound to schedule blocks or the channel default. Programs define content assembly only.
 
 **Violation:** A program definition in the DSL that includes any traffic policy field; a runtime path that reads traffic configuration from a program object.
 
 ---
 
-### INV-TRAFFIC-DSL-PLACEMENT-FROM-BREAKS-001 — Traffic placement must come from break detection
+### INV-TRAFFIC-DSL-PLACEMENT-FROM-BREAKS-001 — Traffic placement uses break opportunities
 
 Status: Invariant
 Authority Level: Planning
 Derived From: `LAW-CONTENT-AUTHORITY`, `LAW-DERIVATION`
 
-**Guarantee:** The DSL MUST NOT declare break positions, break counts, or break timing. Traffic placement is determined exclusively by break detection at assembly time. The DSL controls what fills breaks (via profiles) and what assets are available (via inventories), never where breaks occur.
+**Guarantee:** The DSL MUST NOT declare break positions, break counts, or break timing. Break opportunities are determined at compile time by break detection. The DSL controls what fills breaks (via profiles) and what assets are available (via pools), never where breaks occur. Break opportunities are advisory inputs to traffic allocation, not guaranteed insertion points.
 
-**Violation:** A channel YAML field that specifies break positions, break intervals, or number of breaks per program; a runtime path that reads break placement from configuration instead of from a `BreakPlan`.
+**Violation:** A channel YAML field that specifies break positions, break intervals, or number of breaks per program.
 
 ---
 
@@ -253,21 +226,9 @@ Status: Invariant
 Authority Level: Planning
 Derived From: `LAW-CONTENT-AUTHORITY`, `LAW-DERIVATION`
 
-**Guarantee:** When `traffic.break_config` is present in the channel YAML, `resolve_break_config()` MUST return a `BreakConfig` instance with field values matching the YAML declaration. When `traffic.break_config` is absent, `resolve_break_config()` MUST return `None`. When `traffic.break_config` is present but empty (all fields omitted), `resolve_break_config()` MUST return a `BreakConfig` with all fields defaulting to `0`.
+**Guarantee:** When `traffic.break_config` is present in the channel YAML, resolution MUST produce a `BreakConfig` instance with field values matching the YAML declaration. When `traffic.break_config` is absent, resolution MUST produce `None`. When `traffic.break_config` is present but empty (all fields omitted), resolution MUST produce a `BreakConfig` with all fields defaulting to `0`.
 
-**Violation:** A channel YAML with `traffic.break_config.to_break_bumper_ms: 3000` that produces a `BreakConfig` with `to_break_bumper_ms != 3000`; a channel YAML without `traffic.break_config` that produces a non-None `BreakConfig`; a channel YAML with an empty `traffic.break_config` that returns `None` instead of `BreakConfig(0, 0, 0)`.
-
----
-
-### INV-TRAFFIC-DSL-INVENTORY-PLANNING-ONLY-001 — Inventory resolution is a planning-time operation
-
-Status: Invariant
-Authority Level: Planning
-Derived From: `LAW-ELIGIBILITY`, `LAW-RUNTIME-AUTHORITY`
-
-**Guarantee:** Traffic inventories MUST be resolved against the asset catalog at planning time (channel load or schedule compilation). Inventory resolution MUST NOT occur during playout block execution. The resolved candidate list is passed to the traffic manager as a materialized set.
-
-**Violation:** An inventory `match` query that executes during `on_block_started` or within the playout callback path; a traffic manager that queries the asset catalog directly instead of consuming a pre-resolved candidate list.
+**Violation:** A channel YAML with `traffic.break_config.to_break_bumper_ms: 3000` that produces a `BreakConfig` with `to_break_bumper_ms != 3000`; a channel YAML without `traffic.break_config` that produces a non-None `BreakConfig`.
 
 ---
 
@@ -276,19 +237,19 @@ Derived From: `LAW-ELIGIBILITY`, `LAW-RUNTIME-AUTHORITY`
 ```
 Channel YAML
      │
-     ├── traffic.inventories  ──→  Asset catalog query (planning time)
+     ├── pools (top-level)      ──→  Asset catalog queries (planning time)
      │                                    │
      │                                    ▼
-     │                              Resolved candidate lists
+     │                              Pool candidate sets
      │                                    │
-     ├── traffic.profiles     ──→  TrafficPolicy instantiation
+     ├── traffic.profiles       ──→  TrafficPolicy instantiation
      │                                    │
-     ├── traffic.default_profile          │
+     ├── traffic.default                  │
      │        │                           │
      │        ▼                           │
      │   Schedule block resolution        │
      │   (block.traffic_profile           │
-     │    or default_profile)             │
+     │    or traffic.default)             │
      │        │                           │
      │        ▼                           │
      │   Resolved TrafficPolicy    ◄──────┘
@@ -296,11 +257,12 @@ Channel YAML
      ├── traffic.break_config ──→  BreakConfig instantiation
      │        │                           │
      │        ▼                           ▼
-     │   Break Detection (BreakPlan)
+     │   Break Detection (advisory BreakPlan)
      │        │
      │        ▼
      │   Traffic Fill
-     │   (policy + candidates + break plan
+     │   (policy + pool candidates
+     │    + advisory break plan
      │    + break config)
      │        │
      │        ▼
@@ -314,23 +276,45 @@ Channel YAML
 ```yaml
 channel: cheers-24-7
 name: "Cheers 24/7"
+number: 101
 channel_type: network
+timezone: America/New_York
 
 format:
+  video: { width: 968, height: 720, frame_rate: "30000/1001" }
+  audio: { sample_rate: 48000, channels: 2 }
   grid_minutes: 30
 
 pools:
   cheers:
-    match:
-      type: episode
-      series_title: Cheers
+    select:
+      where:
+        type:
+          eq: episode
+        series_title:
+          eq: Cheers
+
+  traffic_promos:
+    select:
+      where:
+        type:
+          eq: promo
+        tags:
+          contains_all: [nbc, cheers]
+
+  traffic_bumpers:
+    select:
+      where:
+        type:
+          eq: bumper
+        tags:
+          contains_all: [cheers]
 
 programs:
   cheers_30:
     pool: cheers
     grid_blocks: 1
     fill_mode: single
-    bleed: false
 
 traffic:
   break_config:
@@ -338,32 +322,13 @@ traffic:
     from_break_bumper_ms: 3000
     station_id_ms: 5000
 
-  inventories:
-    promos:
-      match:
-        type: promo
-        tags: [nbc, cheers]
-      asset_type: promo
-
-    station_ids:
-      match:
-        type: station_id
-        tags: [nbc]
-      asset_type: station_id
-
-    bumpers:
-      match:
-        type: bumper
-        tags: [cheers]
-      asset_type: bumper
-
   profiles:
     default:
-      allowed_types: [promo]
+      allowed_pools: [traffic_promos]
       default_cooldown_seconds: 3600
       max_plays_per_day: 8
 
-  default_profile: default
+  default: default
 
 schedule:
   all_day:
@@ -378,6 +343,19 @@ schedule:
 ## Required Tests
 
 - `pkg/core/tests/contracts/test_traffic_dsl.py`
+
+| Test | Invariant | Scenario |
+|---|---|---|
+| `test_default_profile_required` | INV-TRAFFIC-DSL-DEFAULT-REQUIRED-001 | Channel with `traffic.profiles` but no `traffic.default` is rejected. |
+| `test_default_profile_resolves` | INV-TRAFFIC-DSL-DEFAULT-REQUIRED-001 | `traffic.default` references existing profile. |
+| `test_pool_ref_valid` | INV-TRAFFIC-DSL-POOL-REF-VALID-001 | Profile `allowed_pools` entry referencing nonexistent pool is rejected. |
+| `test_weights_subset_of_allowed` | INV-TRAFFIC-DSL-POOL-REF-VALID-001 | `weights` key not in `allowed_pools` is rejected. |
+| `test_profile_ref_valid` | INV-TRAFFIC-DSL-PROFILE-REF-VALID-001 | Schedule block `traffic_profile` referencing nonexistent profile is rejected. |
+| `test_no_program_policy` | INV-TRAFFIC-DSL-NO-PROGRAM-POLICY-001 | Program with traffic policy fields is rejected. |
+| `test_no_declared_breaks` | INV-TRAFFIC-DSL-PLACEMENT-FROM-BREAKS-001 | Channel YAML with break position fields is rejected. |
+| `test_break_config_present` | INV-TRAFFIC-DSL-BREAK-CONFIG-001 | `traffic.break_config` produces matching `BreakConfig`. |
+| `test_break_config_absent` | INV-TRAFFIC-DSL-BREAK-CONFIG-001 | Missing `traffic.break_config` produces `None`. |
+| `test_break_config_empty` | INV-TRAFFIC-DSL-BREAK-CONFIG-001 | Empty `traffic.break_config` produces `BreakConfig(0, 0, 0)`. |
 
 ---
 

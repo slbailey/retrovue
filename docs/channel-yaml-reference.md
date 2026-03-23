@@ -736,7 +736,7 @@ traffic:
 
 ## Related Documents
 
-- `docs/contracts/core/programming_dsl.md` — Two-tier architecture and compiler contract
+- `docs/contracts/channel_dsl.md` — Authoritative channel DSL contract
 - `docs/contracts/core/programming_pools.md` — Pool definition and match criteria details
 - `docs/contracts/core/channel_types.md` — Channel type and break placement contract
-- `docs/contracts/core/programming_dsl.schema.json` — JSON schema for compiled output
+- `docs/contracts/block_assembly_tiers.md` — Block assembly tiers and compiled_segments schema

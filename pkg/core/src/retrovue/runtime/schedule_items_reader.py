@@ -15,8 +15,11 @@ time — their presence indicates stale data that must be purged and recompiled.
 from __future__ import annotations
 
 import hashlib
+import logging
 from datetime import date
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from retrovue.domain.entities import (
     Channel,
@@ -205,59 +208,31 @@ def load_segmented_blocks_from_active_revision(
         start_utc_ms = int(item.start_time.timestamp() * 1000)
         slot_duration_ms = int(item.duration_sec) * 1000
 
-        # INV-TEMPLATE-BLOCKS-COMPILE-TO-EXPLICIT-SEGMENTS:
-        # Template-derived blocks carry compiled_segments.
+        # INV-STRUCTURAL-RESOLUTION-001: compiled_segments from the compiler
+        # contain the complete structural representation (break-aware content
+        # acts, filler placeholders, presentation, transitions, offsets).
+        # All blocks with compiled_segments hydrate through the same path.
+        #
+        # INV-EXPANSION-NON-MUTATION-001: Hydration resolves asset_id → file
+        # URI only. It MUST NOT re-derive content structure or detect breaks.
         compiled_segments = meta.get("compiled_segments")
         if compiled_segments:
-            # INV-BREAK-V2-SINGLE-CHAPTER-001: single-content blocks without
-            # intro/outro wrappers MUST route through expand_program_block()
-            # so chapter markers from the catalog produce mid-content breaks
-            # via the dedicated break detection stage (INV-BREAK-008).
-            content_segs = [
-                s for s in compiled_segments if s.get("segment_type") == "content"
-            ]
-            structural_segs = [
-                s for s in compiled_segments
-                if s.get("segment_type") in ("intro", "outro", "presentation")
-            ]
-
-            if len(content_segs) == 1 and not structural_segs:
-                cs = content_segs[0]
-                seg_asset_id = cs.get("asset_id", raw_asset_id)
-                asset_meta = resolver.lookup(seg_asset_id)
-
-                chapter_ms = None
-                if asset_meta.chapter_markers_sec:
-                    chapter_ms = tuple(
-                        int(c * 1000)
-                        for c in asset_meta.chapter_markers_sec
-                        if c > 0
-                    )
-
-                channel_type = "movie" if item.content_type == "movie" else "network"
-
-                expanded = expand_program_block(
-                    asset_id=seg_asset_id,
-                    asset_uri=asset_meta.file_uri or "",
-                    start_utc_ms=start_utc_ms,
-                    slot_duration_ms=slot_duration_ms,
-                    episode_duration_ms=int(cs["duration_ms"]),
-                    chapter_markers_ms=chapter_ms,
-                    channel_type=channel_type,
-                    gain_db=asset_meta.loudness_gain_db,
-                )
-            else:
-                # Multi-segment blocks (accumulate, intro/outro): the segment
-                # structure itself defines break opportunities (INV-BREAK-004).
-                expanded = _hydrate_compiled_segments(
-                    compiled_segments=compiled_segments,
-                    asset_id=raw_asset_id,
-                    start_utc_ms=start_utc_ms,
-                    slot_duration_ms=slot_duration_ms,
-                    resolver=resolver,
-                )
+            expanded = _hydrate_compiled_segments(
+                compiled_segments=compiled_segments,
+                asset_id=raw_asset_id,
+                start_utc_ms=start_utc_ms,
+                slot_duration_ms=slot_duration_ms,
+                resolver=resolver,
+            )
         else:
-            # Legacy path: heuristic expansion for non-template items
+            # Legacy path: blocks without compiled_segments (pre-V2 data).
+            # Deprecated — recompile the schedule to populate compiled_segments.
+            logger.warning(
+                "Legacy block expansion path used — deprecated. "
+                "Block '%s' at slot_index=%d has no compiled_segments. "
+                "Recompile the schedule to use the structural compiler.",
+                raw_asset_id, item.slot_index,
+            )
             asset_meta = resolver.lookup(raw_asset_id)
             chapter_ms = None
             if asset_meta.chapter_markers_sec:

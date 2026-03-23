@@ -145,17 +145,24 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | INV-TRAFFIC-EMPTY-001 | [traffic_policy.md](traffic_policy.md) | LAW-ELIGIBILITY |
 | INV-TRAFFIC-NONE-001 | [traffic_policy.md](traffic_policy.md) | LAW-ELIGIBILITY, LAW-CONTENT-AUTHORITY |
 
+### Scheduling — DSL Vocabulary
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-DSL-VOCABULARY-001 | [dsl_vocabulary.md](dsl_vocabulary.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+
+Canonical contract: [dsl_vocabulary.md](dsl_vocabulary.md)
+
 ### Scheduling — Traffic DSL
 
 | Invariant | File | Derived From |
 |-----------|------|--------------|
 | INV-TRAFFIC-DSL-DEFAULT-REQUIRED-001 | [traffic_dsl.md](traffic_dsl.md) | LAW-CONTENT-AUTHORITY, LAW-ELIGIBILITY |
-| INV-TRAFFIC-DSL-INVENTORY-TYPE-001 | [traffic_dsl.md](traffic_dsl.md) | LAW-ELIGIBILITY |
+| INV-TRAFFIC-DSL-POOL-REF-VALID-001 | [traffic_dsl.md](traffic_dsl.md) | LAW-DERIVATION, LAW-ELIGIBILITY |
 | INV-TRAFFIC-DSL-PROFILE-REF-VALID-001 | [traffic_dsl.md](traffic_dsl.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
 | INV-TRAFFIC-DSL-NO-PROGRAM-POLICY-001 | [traffic_dsl.md](traffic_dsl.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
 | INV-TRAFFIC-DSL-PLACEMENT-FROM-BREAKS-001 | [traffic_dsl.md](traffic_dsl.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
 | INV-TRAFFIC-DSL-BREAK-CONFIG-001 | [traffic_dsl.md](traffic_dsl.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
-| INV-TRAFFIC-DSL-INVENTORY-PLANNING-ONLY-001 | [traffic_dsl.md](traffic_dsl.md) | LAW-ELIGIBILITY, LAW-RUNTIME-AUTHORITY |
 
 ### Scheduling — Traffic Manager
 
@@ -208,9 +215,12 @@ Canonical contract: [program_presentation.md](program_presentation.md)
 |-----------|------|--------------|
 | INV-TIER-DISPLACEMENT-001 | [block_assembly_tiers.md](block_assembly_tiers.md) | LAW-CONTENT-AUTHORITY, LAW-GRID |
 | INV-TIER2-OBLIGATION-YAML-ONLY-001 | [block_assembly_tiers.md](block_assembly_tiers.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
-| INV-TIER2-OBLIGATION-COMPILE-TIME-001 | [block_assembly_tiers.md](block_assembly_tiers.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
-| INV-TIER3-BUDGET-CONDITIONAL-001 | [block_assembly_tiers.md](block_assembly_tiers.md) | LAW-GRID, LAW-CONTENT-AUTHORITY |
+| INV-STRUCTURAL-RESOLUTION-001 | [invariants/core/block-assembly-tiers/INV-STRUCTURAL-RESOLUTION-001.md](invariants/core/block-assembly-tiers/INV-STRUCTURAL-RESOLUTION-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-GRID-SIZING-STRUCTURAL-001 | [invariants/core/block-assembly-tiers/INV-GRID-SIZING-STRUCTURAL-001.md](invariants/core/block-assembly-tiers/INV-GRID-SIZING-STRUCTURAL-001.md) | LAW-GRID, LAW-CONTENT-AUTHORITY |
+| INV-EXPANSION-NON-MUTATION-001 | [invariants/core/block-assembly-tiers/INV-EXPANSION-NON-MUTATION-001.md](invariants/core/block-assembly-tiers/INV-EXPANSION-NON-MUTATION-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-TIER3-COMPILE-RESOLUTION-001 | [block_assembly_tiers.md](block_assembly_tiers.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
 | INV-TIER3-NEXT-BLOCK-IDENTITY-001 | [block_assembly_tiers.md](block_assembly_tiers.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-STRUCTURAL-TIER-UNIFICATION-001 | [invariants/core/block-assembly-tiers/INV-STRUCTURAL-TIER-UNIFICATION-001.md](invariants/core/block-assembly-tiers/INV-STRUCTURAL-TIER-UNIFICATION-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
 | INV-ASSEMBLY-SEQUENCE-001 | [block_assembly_tiers.md](block_assembly_tiers.md) | LAW-CONTENT-AUTHORITY, LAW-GRID, LAW-DERIVATION |
 
 Canonical contract: [block_assembly_tiers.md](block_assembly_tiers.md)

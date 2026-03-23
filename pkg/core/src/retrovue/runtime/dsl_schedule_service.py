@@ -1478,93 +1478,112 @@ class DslScheduleService:
         return self._expand_blocks_inner(schedule, resolver)
 
     def _expand_blocks_inner(self, schedule: dict, resolver: CatalogAssetResolver) -> list[ScheduledBlock]:
-        """Inner expand loop -- produces program schedule blocks with EMPTY filler placeholders.
+        """Hydrate compiled_segments into ScheduledBlocks.
 
-        Filler placeholders (segment_type=filler, asset_uri="") are filled by
-        PlaylistBuilderDaemon at playlog plan generation time and written to
-        PlaylistEvent. ChannelManager reads filled blocks from PlaylistEvent.
+        INV-EXPANSION-NON-MUTATION-001: Structural segments (T0–T3) from
+        compiled_segments are treated as read-only editorial truth. This
+        method hydrates asset_id → asset_uri (path resolution) and sequences
+        segments into tier order. It MUST NOT re-derive content structure,
+        detect breaks, or modify segment durations.
 
-        INV-PLAYLOG-PREFILL-001: Ad selection at playlog plan generation, not compile time or feed time.
-        INV-PRESENTATION-PRECEDES-PRIMARY-001: When compiled_segments contains
-        presentation entries, they are hydrated and prepended to the expanded block.
+        Filler placeholders (segment_type=filler, asset_uri="") are carried
+        through from compiled_segments. They are filled by
+        PlaylistBuilderDaemon at playlog plan generation time.
         """
+        # STRUCTURAL INVARIANT:
+        # All structural segmentation must occur at compile time.
+        # Expansion is hydration-only.
+        _real_expand = expand_program_block
+
+        def _guarded_expand(*args, **kwargs):
+            raise RuntimeError(
+                "expand_program_block must not be called during expansion"
+            )
+
+        # Temporarily shadow the module-level import so any accidental call
+        # inside this method (or anything it delegates to) is caught.
+        import retrovue.runtime.dsl_schedule_service as _self_mod
+        _prev = getattr(_self_mod, "expand_program_block", _real_expand)
+        _self_mod.expand_program_block = _guarded_expand
+        try:
+            return self._expand_blocks_hydrate(schedule, resolver)
+        finally:
+            _self_mod.expand_program_block = _prev
+
+    def _expand_blocks_hydrate(self, schedule: dict, resolver: CatalogAssetResolver) -> list[ScheduledBlock]:
+        """Inner hydration loop — called by _expand_blocks_inner under the
+        expand_program_block guard."""
         blocks: list[ScheduledBlock] = []
         for block_def in schedule["program_blocks"]:
             asset_id = block_def["asset_id"]
-            meta = resolver.lookup(asset_id)
-
             dt = datetime.fromisoformat(block_def["start_at"])
             start_utc_ms = int(dt.timestamp() * 1000)
-
-            # Get chapter markers, filter out 0
-            chapter_ms = None
-            if meta.chapter_markers_sec:
-                chapter_ms = tuple(
-                    int(c * 1000) for c in meta.chapter_markers_sec if c > 0
-                )
-
-            # Resolve asset URI to local path
-            asset_uri = self._resolve_uri(meta.file_uri)
-
-            # INV-LOUDNESS-NORMALIZED-001: propagate per-asset loudness gain
-            gain_db = meta.loudness_gain_db
-            # Rule 5: enqueue background measurement for unmeasured assets
-            # Only measure locally-accessible files (absolute paths).
-            if (
-                gain_db == 0.0
-                and asset_uri.startswith("/")
-                and resolver.asset_needs_loudness_measurement(asset_id)
-            ):
-                self._enqueue_loudness_measurement(asset_id, asset_uri)
-
-            # INV-PRESENTATION-PRECEDES-PRIMARY-001: Hydrate presentation segments
-            # from compiled_segments and prepend them to the expanded block.
-            presentation_segs: list[ScheduledSegment] = []
-            compiled_segments = block_def.get("compiled_segments")
-            if compiled_segments:
-                for cs in compiled_segments:
-                    if cs.get("segment_type") == "presentation":
-                        pres_id = cs.get("asset_id", "")
-                        pres_meta = resolver.lookup(pres_id)
-                        pres_uri = self._resolve_uri(pres_meta.file_uri)
-                        presentation_segs.append(ScheduledSegment(
-                            segment_type="presentation",
-                            asset_uri=pres_uri,
-                            asset_start_offset_ms=0,
-                            segment_duration_ms=int(cs["duration_ms"]),
-                        ))
-
-            # INV-BLOCK-SEGMENT-CONSERVATION-001: Presentation segments consume
-            # block time.  Subtract their total from the slot budget so
-            # content + filler + presentation sums to exactly block_duration_ms.
             full_slot_ms = int(block_def["slot_duration_sec"] * 1000)
-            presentation_total_ms = sum(
-                s.segment_duration_ms for s in presentation_segs
-            )
-            content_slot_ms = full_slot_ms - presentation_total_ms
+            end_utc_ms = start_utc_ms + full_slot_ms
 
-            # Expand into acts + ad breaks (empty filler placeholders — program schedule data).
-            # INV-PLAYLOG-PREFILL-001: Ad fill happens at playlog plan generation (PlaylistBuilderDaemon),
-            # not here at compile time and not at feed time.
-            expanded = expand_program_block(
-                asset_id=asset_id,
-                asset_uri=asset_uri,
-                start_utc_ms=start_utc_ms,
-                slot_duration_ms=content_slot_ms,
-                episode_duration_ms=int(block_def["episode_duration_sec"] * 1000),
-                chapter_markers_ms=chapter_ms,
-                channel_type=self._channel_type,
-                gain_db=gain_db,
-            )
-
-            # Prepend presentation segments and restore full block duration.
-            if presentation_segs:
-                from dataclasses import replace
-                expanded = replace(
-                    expanded,
-                    segments=tuple(presentation_segs) + expanded.segments,
-                    end_utc_ms=start_utc_ms + full_slot_ms,
+            compiled_segments = block_def.get("compiled_segments")
+            if not compiled_segments:
+                # Legacy block without compiled_segments — skip.
+                # These should not exist after the compiler refactor.
+                logger.warning(
+                    "Block '%s' at %s has no compiled_segments — skipping. "
+                    "Recompile the schedule to populate compiled_segments.",
+                    block_def.get("title", "?"), block_def.get("start_at", "?"),
                 )
+                continue
+
+            # INV-EXPANSION-NON-MUTATION-001: Hydrate each compiled segment.
+            # Resolve asset_id → asset_uri via catalog. Preserve all other
+            # fields (duration, offsets, transitions, gain_db, is_primary)
+            # exactly as the compiler produced them.
+            segments: list[ScheduledSegment] = []
+            for cs in compiled_segments:
+                seg_type = cs.get("segment_type", "content")
+                seg_asset_id = cs.get("asset_id", "")
+
+                # Hydrate: resolve asset_id → file path + loudness gain
+                asset_uri = ""
+                gain_db = cs.get("gain_db", 0.0)
+                if seg_asset_id:
+                    try:
+                        seg_meta = resolver.lookup(seg_asset_id)
+                        asset_uri = self._resolve_uri(seg_meta.file_uri)
+                        # Enqueue loudness measurement for unmeasured assets
+                        if (
+                            gain_db == 0.0
+                            and asset_uri.startswith("/")
+                            and resolver.asset_needs_loudness_measurement(seg_asset_id)
+                        ):
+                            self._enqueue_loudness_measurement(seg_asset_id, asset_uri)
+                    except (KeyError, AttributeError):
+                        logger.warning(
+                            "Failed to resolve asset_id '%s' in block '%s'",
+                            seg_asset_id, block_def.get("title", "?"),
+                        )
+
+                segments.append(ScheduledSegment(
+                    segment_type=seg_type,
+                    asset_uri=asset_uri,
+                    asset_start_offset_ms=int(cs.get("asset_start_offset_ms", 0)),
+                    segment_duration_ms=int(cs["duration_ms"]),
+                    transition_in=cs.get("transition_in", "TRANSITION_NONE"),
+                    transition_in_duration_ms=int(cs.get("transition_in_duration_ms", 0)),
+                    transition_out=cs.get("transition_out", "TRANSITION_NONE"),
+                    transition_out_duration_ms=int(cs.get("transition_out_duration_ms", 0)),
+                    gain_db=gain_db,
+                    is_primary=cs.get("is_primary", False),
+                ))
+
+            # Build block ID (deterministic from asset + start time)
+            raw = f"{asset_id}:{start_utc_ms}"
+            block_id = f"blk-{hashlib.sha256(raw.encode()).hexdigest()[:12]}"
+
+            expanded = ScheduledBlock(
+                block_id=block_id,
+                start_utc_ms=start_utc_ms,
+                end_utc_ms=end_utc_ms,
+                segments=tuple(segments),
+            )
 
             # Carry block-level traffic_profile from DSL through to ScheduledBlock
             tp = block_def.get("traffic_profile")
@@ -1582,9 +1601,9 @@ class DslScheduleService:
                 logger.error(
                     "INV-BLOCK-SEGMENT-CONSERVATION-001 VIOLATION: "
                     "block_id=%s sum_segment_ms=%d block_duration_ms=%d "
-                    "delta_ms=%d presentation_ms=%d",
+                    "delta_ms=%d",
                     expanded.block_id, sum_segment_ms, block_duration_ms,
-                    delta_ms, presentation_total_ms,
+                    delta_ms,
                 )
             else:
                 logger.debug(

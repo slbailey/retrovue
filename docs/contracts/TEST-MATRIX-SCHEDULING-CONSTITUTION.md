@@ -1910,14 +1910,22 @@ The following domain tables group tests by functional area. Each test is classif
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|
-| TIER-DISP-001 | INV-TIER-DISPLACEMENT-001 | LAW-CONTENT-AUTHORITY, LAW-GRID | Adding Tier 2 obligation reduces fill budget, not content duration |
-| TIER-DISP-002 | INV-TIER-DISPLACEMENT-001 | LAW-CONTENT-AUTHORITY, LAW-GRID | When budget insufficient for Tier 2 + Tier 3, Tier 3 dropped and Tier 2 retained |
-| TIER-DISP-003 | INV-TIER-DISPLACEMENT-001 | LAW-CONTENT-AUTHORITY | Tier 2 obligation always present when trigger met, regardless of fill budget |
+| TIER-DISP-001 | INV-TIER-DISPLACEMENT-001 | LAW-CONTENT-AUTHORITY, LAW-GRID | T2/T3 segments increase grid block count when structural total exceeds slot |
+| TIER-DISP-002 | INV-TIER-DISPLACEMENT-001 | LAW-GRID | Fill budget is residual: `slot_ms - structural_ms`, consequence of grid sizing |
+| TIER-DISP-003 | INV-TIER-DISPLACEMENT-001 | LAW-CONTENT-AUTHORITY | T0–T3 segments all present after compilation, never dropped for fill budget |
 | TIER2-YAML-001 | INV-TIER2-OBLIGATION-YAML-ONLY-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Same config + block boundaries produce identical obligations across compilations |
 | TIER2-YAML-002 | INV-TIER2-OBLIGATION-YAML-ONLY-001 | LAW-DERIVATION | Obligation evaluation does not query database |
-| TIER2-COMP-001 | INV-TIER2-OBLIGATION-COMPILE-TIME-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Obligation segments present in compiled_segments after compile_schedule() |
-| TIER3-BUDG-001 | INV-TIER3-BUDGET-CONDITIONAL-001 | LAW-GRID, LAW-CONTENT-AUTHORITY | "Coming up next" present when fill budget exceeds its duration |
-| TIER3-BUDG-002 | INV-TIER3-BUDGET-CONDITIONAL-001 | LAW-GRID | "Coming up next" absent when fill budget too small, no error |
+| STRUCT-RES-001 | INV-STRUCTURAL-RESOLUTION-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | All T0–T3 segments have non-empty asset_id and duration_ms > 0 after compile_schedule() |
+| STRUCT-RES-002 | INV-STRUCTURAL-RESOLUTION-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | No compiled_segments entry has empty asset_id or zero duration_ms |
+| GRID-STRUCT-001 | INV-GRID-SIZING-STRUCTURAL-001 | LAW-GRID, LAW-CONTENT-AUTHORITY | slot_duration_sec * 1000 >= sum(structural segment durations) |
+| GRID-STRUCT-002 | INV-GRID-SIZING-STRUCTURAL-001 | LAW-GRID | T1–T3 durations pushing total across grid boundary cause extra block allocation |
+| EXPAND-NM-001 | INV-EXPANSION-NON-MUTATION-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Expanded ScheduledBlock structural segments match compiled_segments source in type, asset, duration |
+| EXPAND-NM-002 | INV-EXPANSION-NON-MUTATION-001 | LAW-DERIVATION | No structural segment added by expansion that was not in compiled_segments |
+| EXPAND-NM-003 | INV-EXPANSION-NON-MUTATION-001 | LAW-DERIVATION | No structural segment from compiled_segments absent from expanded block |
+| TIER3-COMP-001 | INV-TIER3-COMPILE-RESOLUTION-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Tier 3 segments resolved with asset_id and duration_ms at compile time |
+| TIER3-COMP-002 | INV-TIER3-COMPILE-RESOLUTION-001 | LAW-CONTENT-AUTHORITY | Tier 3 duration included in structural total for grid sizing |
+| TIER3-COMP-003 | INV-TIER3-COMPILE-RESOLUTION-001 | LAW-DERIVATION | Tier 3 segments immutable during expansion |
+| TIER-UNIF-001 | INV-STRUCTURAL-TIER-UNIFICATION-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | All T0–T3 tiers: asset selected at compile, duration known, immutable in expansion |
 | TIER3-NEXT-001 | INV-TIER3-NEXT-BLOCK-IDENTITY-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | "Coming up next" references next block's program title |
 | TIER3-NEXT-002 | INV-TIER3-NEXT-BLOCK-IDENTITY-001 | LAW-DERIVATION | Last block of broadcast day has no "coming up next", no error |
 | TIER-SEQ-001 | INV-ASSEMBLY-SEQUENCE-001 | LAW-CONTENT-AUTHORITY, LAW-GRID, LAW-DERIVATION | Segment order: obligation, presentation, content, optional |

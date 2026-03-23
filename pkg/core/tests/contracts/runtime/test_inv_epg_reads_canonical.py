@@ -9,7 +9,7 @@ MUST NOT call compile_schedule() directly.
 from __future__ import annotations
 
 import ast
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -217,8 +217,10 @@ class TestInvEpgReadsCanonical001:
 
         rev1 = MagicMock()
         rev1.id = 1
+        rev1.broadcast_day = date(2026, 2, 28)  # carry-in from previous day
         rev2 = MagicMock()
         rev2.id = 2
+        rev2.broadcast_day = date(2026, 3, 1)
 
         # We need items to be returned for each revision query.
         # Since the mock dispatches all ScheduleItem queries the same way,

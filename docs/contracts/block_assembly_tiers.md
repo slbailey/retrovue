@@ -72,7 +72,7 @@ Content triggered by time-of-day rules rather than program identity: station ID 
 - Tier 2 obligations are derived from channel YAML configuration.
 - Tier 2 obligations MUST be evaluated at compile time against block boundaries.
 - When an obligation's trigger time falls within a block's time range, the obligation MUST be honored in that block.
-- Tier 2 duration MUST be deducted from fill budget (Tier 4), never from primary content (Tier 0).
+- Tier 2 duration is structural and is included in grid sizing. It displaces fill time, never primary content.
 - Tier 2 segments MUST appear before Tier 0 content in the block's segment sequence.
 - Multiple obligations MAY stack within a single block.
 - Obligation evaluation MUST be deterministic: same (config + block boundaries) produces same obligations.
@@ -88,19 +88,20 @@ Content triggered by time-of-day rules rather than program identity: station ID 
 
 ### Tier 3 — Optional Presentation
 
-Content included when budget allows: "coming up next" promo, channel ident, network branding.
+Content that enriches the viewing experience: "coming up next" promo, channel ident, network branding.
 
 **Rules:**
-- Tier 3 segments are included only when remaining fill budget after Tiers 0–2 is sufficient.
-- Tier 3 segments MAY be dropped without violating any invariant.
-- Tier 3 asset selection occurs at compile time.
+- Tier 3 inclusion is a compile-time decision, made BEFORE grid sizing.
+- Tier 3 duration is part of the structural total that drives grid block allocation. If Tier 3 causes the structural total to exceed the current grid slot, the grid grows — Tier 3 is NOT dropped to fit.
+- Once included, Tier 3 segments are structural — they MUST NOT be added, removed, or modified during expansion. See `INV-TIER3-COMPILE-RESOLUTION-001`.
+- Tier 3 asset selection MUST use deterministic selection rules (longest-fitting from pool, no uncontrolled RNG).
 - "Coming up next" requires next-block program identity, available only after all blocks in a broadcast day are compiled.
 - Tier 3 segments MUST NOT displace Tier 0, Tier 1, or Tier 2 content.
 
-**Existing implementation:** None. No concept of optional or budget-conditional presentation exists.
+**Existing implementation:** None. No concept of optional presentation exists.
 
 **Delta from current code:**
-- New: budget-conditional segment injection.
+- New: compile-time conditional segment injection with deterministic asset selection.
 - New: next-block lookahead for "coming up next" via second pass in `compile_schedule()`.
 - New: Tier 3 segment types (e.g., `segment_type="coming_up_next"`, `segment_type="channel_ident"`).
 
@@ -126,17 +127,17 @@ Promos, commercials, and other interstitial content that fills remaining time.
 
 ### INV-TIER-DISPLACEMENT-001
 
-Higher-numbered tiers MUST NOT displace lower-numbered tiers. When block time is insufficient for all tiers, displacement occurs bottom-up:
+Higher-numbered tiers MUST NOT displace lower-numbered tiers. Tiers 0–3 are all structural and are resolved before grid sizing. Grid block allocation accommodates the total structural runtime.
 
-1. Tier 4 (fill) budget is reduced first.
-2. Tier 3 (optional presentation) is dropped next.
-3. Tier 2 (obligations) is never dropped. If an obligation cannot fit after Tier 0 and Tier 1 are placed, this is a planning fault.
-4. Tier 1 (mandatory presentation) is never dropped.
-5. Tier 0 (primary content) is never cut or shifted.
+1. Tier 0 (primary content) is never cut or shifted.
+2. Tier 1 (mandatory presentation) is never dropped.
+3. Tier 2 (obligations) is never dropped. If the structural total exceeds grid capacity, grid blocks increase.
+4. Tier 3 (optional presentation), once included at compile time, is structural. Grid grows to fit.
+5. Tier 4 (fill) occupies remaining time after all structural tiers are placed. Fill budget is a consequence of grid sizing, not an input to it.
 
 This rule is partially enforced today: `INV-PRESENTATION-GRID-BUDGET-001` deducts Tier 1 from the slot budget before break detection, which means Tier 1 displaces Tier 4 fill. `INV-MOVIE-PRIMARY-ATOMIC` prevents Tier 4 from splitting Tier 0.
 
-**Delta:** Formalized as a cross-tier rule. Tiers 2 and 3 displacement behavior is new.
+**Delta:** Formalized as a cross-tier rule. Tiers 2–3 as structural (grid-sizing inputs, not fill-budget consumers) is new.
 
 ---
 
@@ -148,25 +149,42 @@ Block assembly produces a segment sequence in this order:
 [Tier 2: obligations]  [Tier 1: presentation]  [Tier 0: content ± breaks(Tier 4)]  [Tier 3: optional]
 ```
 
-The assembly sequence maps to the current pipeline as follows:
+The assembly sequence is split across two stages with a strict boundary:
 
-| Step | What | Current owner | Status |
-|---|---|---|---|
-| 1. Resolve Tier 1 assets | Intro, rating card from program definition | `assemble_program()` in `program_definition.py` | Implemented |
-| 2. Resolve Tier 2 obligations | Clock-triggered segments from config | — | **Not implemented** |
-| 3. Resolve Tier 3 candidates | "Coming up next" from adjacent block identity | — | **Not implemented** |
-| 4. Compute fill budget | `slot_ms - tier0_ms - tier1_ms - tier2_ms - tier3_ms` | `dsl_schedule_service.py:1544` (Tier 1 only) | Partial |
-| 5. Expand Tier 0 with breaks | Content + empty filler placeholders | `expand_program_block()` | Implemented |
-| 6. Prepend Tier 1 + Tier 2 | Presentation and obligation segments before content | `dsl_schedule_service.py:1561` (Tier 1 only) | Partial |
-| 7. Append Tier 3 | Optional segments after content, before trailing filler | — | **Not implemented** |
-| 8. Fill Tier 4 | Replace empty filler with traffic assets | `fill_ad_blocks()` | Implemented |
+### Stage 1: Compilation (`compile_schedule()`) — resolves structural segments
 
-### Where each step executes
+`INV-STRUCTURAL-RESOLUTION-001`: All T0–T3 segments fully resolved here.
 
-- Steps 1, 5: Inside `_compile_program_block()` via `assemble_schedule_block()` → `expand_program_block()`. Single-block scope.
-- Steps 2, 3: Requires a second pass in `compile_schedule()` after all blocks are compiled and compacted. `all_blocks: list[ProgramBlockOutput]` is available at `schedule_compiler.py:856` with full program identity (`title`, `selector["program"]`, `asset_id`) on each block. Next-block identity for "coming up next" is `all_blocks[i+1]`.
-- Steps 4, 6, 7: During expansion in `_expand_blocks_inner()`. `schedule["program_blocks"]` is the full day's block list. `block_def["compiled_segments"]` carries Tier 1–3 segments from the compiler.
-- Step 8: At playlog plan generation time via `PlaylistBuilderDaemon` or synchronous `ensure_block_compiled()`.
+| Step | What | Status |
+|---|---|---|
+| 1. Resolve Tier 0 content | Episode/movie selection via assembly (first pass) | Implemented |
+| 2. Resolve Tier 1 presentation | Intro, rating card from program definition (first pass) | Implemented |
+| 3. Resolve Tier 2 obligations | Clock-triggered segments from config (second pass) | **Not implemented** |
+| 4. Resolve Tier 3 candidates | "Coming up next" from adjacent block (second pass) | **Not implemented** |
+| 5. Size grid allocation | Based on total T0–T3 structural runtime (`INV-GRID-SIZING-STRUCTURAL-001`) | Partial (T0–T1 only) |
+
+Grid sizing is the LAST step of compilation. All structural tiers (T0–T3) MUST be resolved before grid block count is computed. T2/T3 durations that push the structural total past a grid boundary cause additional grid blocks — they are never dropped to fit.
+
+Output: `ProgramBlockOutput` with `compiled_segments` containing all structural segments, `slot_duration_sec` sized to fit them.
+
+### Stage 2: Expansion (`_expand_blocks_inner()`) — sequences and fills
+
+`INV-EXPANSION-NON-MUTATION-001`: Structural segments are read-only. Expansion adds fill only.
+
+| Step | What | Status |
+|---|---|---|
+| 7. Hydrate structural segments | Resolve `asset_id` to `asset_uri` (file path) | Implemented (Tier 1 only) |
+| 8. Compute fill budget | `slot_ms - structural_ms` | Partial (Tier 1 only) |
+| 9. Expand Tier 0 with breaks | Content + empty filler placeholders | Implemented |
+| 10. Sequence all tiers | Tier-ordered assembly into `ScheduledBlock` | Partial (Tier 1 + 0 only) |
+| 11. Fill Tier 4 | Replace empty filler with traffic assets | Implemented |
+
+### Compilation/expansion boundary
+
+- `compile_schedule()` owns WHAT airs and HOW LONG each segment is (editorial authority).
+- `_expand_blocks_inner()` owns WHERE segments go in the sequence and WHAT FILLS the remaining time (sequencing + traffic).
+- Expansion MUST NOT change asset identity, segment type, or duration of any T0–T3 segment.
+- Expansion MAY hydrate `asset_id` to `asset_uri` (path resolution is not editorial).
 
 ---
 
@@ -208,10 +226,10 @@ ChannelManager executes all tiers identically. It has no tier awareness. `INV-CH
 |---|---|---|
 | Tier 2 obligation evaluation | Second pass in `compile_schedule()` after compaction, before serialization (`schedule_compiler.py:858–871`) | All block boundaries and program identities are known. Obligation config from channel YAML. Pure function, deterministic. |
 | Tier 2 `obligations` YAML schema | Channel YAML `obligations:` section | Follows `traffic.break_config` pattern: frozen dataclass from YAML, consumed by pure functions. |
-| Tier 2 obligation hydration | `_expand_blocks_inner()` alongside existing presentation hydration | Obligation segments in `compiled_segments` are hydrated identically to presentation segments. Budget deduction extends the existing pattern at line 1544. |
+| Tier 2 obligation hydration | `_expand_blocks_inner()` alongside existing presentation hydration | Obligation segments in `compiled_segments` are hydrated (asset_id → asset_uri path resolution only, per `INV-EXPANSION-NON-MUTATION-001`). Budget deduction extends the existing pattern at line 1544. |
 | Tier 3 "coming up next" injection | Second pass in `compile_schedule()`, accessing `all_blocks[i+1]` | Next-block program identity is only available after all blocks are compiled and compacted. Cannot be done in the first pass. |
-| Tier 3 budget-conditional inclusion | Second pass in `compile_schedule()` | Must compute remaining budget after Tiers 0–2 to decide whether Tier 3 fits. |
-| Tier 3 hydration and placement | `_expand_blocks_inner()` | Optional segments in `compiled_segments` are hydrated and placed after content, before trailing filler. |
+| Tier 3 compile-time resolution | Second pass in `compile_schedule()` | Tier 3 resolved before grid sizing. Asset selected deterministically from pool. Grid grows to fit. |
+| Tier 3 hydration and placement | `_expand_blocks_inner()` | Optional segments in `compiled_segments` are hydrated (path resolution only, per `INV-EXPANSION-NON-MUTATION-001`) and placed after content, before trailing filler. |
 | Cross-day "coming up next" | `_build_initial()` post-merge pass or omission for day-boundary blocks | Last block of a broadcast day cannot see next day's first block during single-day compilation. Three options: omit, post-merge pass, or query next day's cached ProgramLogDay. |
 
 ---
@@ -226,17 +244,29 @@ Defined in the Displacement Rule section above.
 
 Obligation evaluation MUST be deterministic from (channel YAML config + block boundaries). No database state, no fulfillment tracking, no cross-compilation memory is required. The compiler recomputes obligations identically on every compilation of the same broadcast day.
 
-### INV-TIER2-OBLIGATION-COMPILE-TIME-001 — Obligations resolved at compile time
+### INV-STRUCTURAL-RESOLUTION-001 — Structural segments fully resolved at compilation
 
-Tier 2 obligation segments MUST be resolved during schedule compilation and stored in `compiled_segments`. Obligation resolution MUST NOT occur at playlog plan generation time, feed time, or runtime.
+All non-fill segments (Tiers 0–3) MUST be fully resolved during `compile_schedule()`, including asset selection and final duration. `compiled_segments` on each `ProgramBlockOutput` MUST contain the complete, ordered set of structural segments with resolved `asset_id` and `duration_ms` values. Supersedes `INV-TIER2-OBLIGATION-COMPILE-TIME-001`.
 
-### INV-TIER3-BUDGET-CONDITIONAL-001 — Optional presentation is budget-conditional
+### INV-GRID-SIZING-STRUCTURAL-001 — Grid allocation based on total structural runtime
 
-Tier 3 segments MUST be included only when fill budget remaining after Tiers 0–2 exceeds the segment's duration. When budget is insufficient, the segment MUST be omitted without error.
+Grid block allocation MUST be based on the total runtime of all structural segments (Tiers 0–3). The grid slot duration MUST satisfy: `slot_duration_ms >= sum(segment.duration_ms for segment in compiled_segments)`. Generalizes `INV-PRESENTATION-GRID-BUDGET-001` to all structural tiers.
+
+### INV-EXPANSION-NON-MUTATION-001 — Expansion must not modify structural segments
+
+Expansion MUST NOT modify, re-resolve, reorder, or remove structural segments (Tiers 0–3) produced by `compile_schedule()`. Expansion MAY: hydrate `asset_id` to `asset_uri` (file path resolution), insert fill segments (Tier 4), and sequence structural segments into tier-ordered positions. Expansion MUST NOT change `segment_type`, `asset_id`, or `duration_ms` of any structural segment.
+
+### INV-TIER3-COMPILE-RESOLUTION-001 — Tier 3 segments resolved at compilation
+
+Tier 3 segments, when enabled, MUST be resolved during `compile_schedule()`, including asset selection and duration, using deterministic selection rules. Tier 3 inclusion is decided BEFORE grid sizing — Tier 3 duration is part of the structural total that drives grid block allocation. Once included in `compiled_segments`, Tier 3 segments MUST be treated as structural and MUST NOT be added, removed, or modified during expansion.
 
 ### INV-TIER3-NEXT-BLOCK-IDENTITY-001 — "Coming up next" uses compiled block identity
 
 "Coming up next" MUST reference the next block's program identity as determined by the compiled, compacted block sequence. The identity MUST be resolved during a second pass over `all_blocks` in `compile_schedule()`, after all blocks are compiled and compacted.
+
+### INV-STRUCTURAL-TIER-UNIFICATION-001 — All structural tiers follow the same compilation model
+
+All structural tiers (T0–T3) MUST follow the same compilation model: asset selection occurs during `compile_schedule()`, durations are known at compile time, and segments are immutable during expansion. No structural tier receives special treatment. The distinction between tiers governs ordering and editorial intent, not the compilation/expansion boundary.
 
 ### INV-ASSEMBLY-SEQUENCE-001 — Segment ordering follows tier precedence
 
@@ -253,14 +283,22 @@ Within a block's segment sequence, segments MUST appear in this order: Tier 2 ob
 | `test_tier0_never_cut_by_presentation` | `INV-MOVIE-PRIMARY-ATOMIC` | Primary content duration unchanged when Tier 1 presentation is added. |
 | `test_tier1_precedes_content` | `INV-PRESENTATION-PRECEDES-PRIMARY-001` | Presentation segments appear before first content segment. |
 | `test_tier1_deducted_from_budget` | `INV-PRESENTATION-GRID-BUDGET-001` | Fill budget is slot_ms minus presentation_ms minus content_ms. |
-| `test_displacement_tier4_reduced_first` | `INV-TIER-DISPLACEMENT-001` | Adding Tier 2 obligation reduces fill budget, not content duration. |
-| `test_displacement_tier3_dropped_before_tier2` | `INV-TIER-DISPLACEMENT-001` | When budget insufficient for both Tier 2 and Tier 3, Tier 3 is omitted and Tier 2 is retained. |
-| `test_displacement_tier2_never_dropped` | `INV-TIER-DISPLACEMENT-001` | Tier 2 obligation always present when trigger condition is met, regardless of fill budget. |
+| `test_structural_tiers_grow_grid` | `INV-TIER-DISPLACEMENT-001` | Adding T2/T3 segments increases grid block count when structural total exceeds slot. |
+| `test_fill_is_residual` | `INV-TIER-DISPLACEMENT-001` | Tier 4 fill budget is `slot_ms - structural_ms` — a consequence of grid sizing, not an input to it. |
+| `test_structural_tiers_never_dropped` | `INV-TIER-DISPLACEMENT-001` | T0–T3 segments are all present after compilation regardless of fill budget. |
 | `test_obligation_yaml_only_deterministic` | `INV-TIER2-OBLIGATION-YAML-ONLY-001` | Same config + same block boundaries produce identical obligations across compilations. |
 | `test_obligation_no_db_state` | `INV-TIER2-OBLIGATION-YAML-ONLY-001` | Obligation evaluation does not query database or require prior compilation output. |
-| `test_obligation_resolved_at_compile_time` | `INV-TIER2-OBLIGATION-COMPILE-TIME-001` | Obligation segments appear in `compiled_segments` after `compile_schedule()` returns. |
-| `test_tier3_included_when_budget_sufficient` | `INV-TIER3-BUDGET-CONDITIONAL-001` | "Coming up next" segment present when fill budget exceeds its duration. |
-| `test_tier3_omitted_when_budget_insufficient` | `INV-TIER3-BUDGET-CONDITIONAL-001` | "Coming up next" segment absent when fill budget is too small, no error raised. |
+| `test_all_structural_segments_resolved_at_compile` | `INV-STRUCTURAL-RESOLUTION-001` | All T0–T3 segments in `compiled_segments` have non-empty `asset_id` and `duration_ms > 0` after `compile_schedule()`. |
+| `test_no_structural_placeholder_survives_compile` | `INV-STRUCTURAL-RESOLUTION-001` | No `compiled_segments` entry has empty `asset_id` or zero `duration_ms`. |
+| `test_grid_sized_for_structural_total` | `INV-GRID-SIZING-STRUCTURAL-001` | `slot_duration_sec * 1000 >= sum(cs["duration_ms"])` for all structural segments. |
+| `test_grid_boundary_push_from_structural` | `INV-GRID-SIZING-STRUCTURAL-001` | T1–T3 durations that push total across grid boundary cause extra grid block allocation. |
+| `test_expansion_preserves_structural_identity` | `INV-EXPANSION-NON-MUTATION-001` | After expansion, every structural segment in `ScheduledBlock` matches its `compiled_segments` source in type, asset, and duration. |
+| `test_expansion_does_not_add_structural` | `INV-EXPANSION-NON-MUTATION-001` | No structural segment appears in expanded block that was not in `compiled_segments`. |
+| `test_expansion_does_not_drop_structural` | `INV-EXPANSION-NON-MUTATION-001` | Every structural segment in `compiled_segments` appears in the expanded block. |
+| `test_tier3_resolved_at_compile_time` | `INV-TIER3-COMPILE-RESOLUTION-001` | Tier 3 segments have resolved `asset_id` and `duration_ms > 0` in `compiled_segments` after `compile_schedule()`. |
+| `test_tier3_included_in_grid_sizing` | `INV-TIER3-COMPILE-RESOLUTION-001` | Tier 3 duration is part of structural total used for grid block allocation. |
+| `test_tier3_immutable_during_expansion` | `INV-TIER3-COMPILE-RESOLUTION-001` | Tier 3 segments in expanded `ScheduledBlock` match source `compiled_segments` exactly. |
+| `test_structural_unification_all_tiers` | `INV-STRUCTURAL-TIER-UNIFICATION-001` | T0–T3 all follow same model: asset selected at compile, duration known, immutable in expansion. |
 | `test_coming_up_next_uses_next_block_title` | `INV-TIER3-NEXT-BLOCK-IDENTITY-001` | "Coming up next" segment references `all_blocks[i+1].title`. |
 | `test_coming_up_next_last_block_no_error` | `INV-TIER3-NEXT-BLOCK-IDENTITY-001` | Last block of broadcast day has no "coming up next" segment, no error. |
 | `test_segment_order_tiers` | `INV-ASSEMBLY-SEQUENCE-001` | Segment sequence is: obligation, presentation, content, optional. |

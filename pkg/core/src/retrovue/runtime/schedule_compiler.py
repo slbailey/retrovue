@@ -27,6 +27,7 @@ from typing import Any
 import yaml
 
 from retrovue.runtime.asset_resolver import AssetResolver
+from retrovue.runtime.playout_log_expander import expand_program_block
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -112,6 +113,127 @@ class ProgramBlockOutput:
         if self.traffic_profile:
             d["traffic_profile"] = self.traffic_profile
         return d
+
+
+# ---------------------------------------------------------------------------
+# Compiled segment serialization
+# ---------------------------------------------------------------------------
+
+
+def _serialize_assembly_segment(
+    seg: Any,
+    resolver: "AssetResolver",
+    *,
+    is_primary: bool = False,
+) -> dict[str, Any]:
+    """Serialize an AssemblySegment into the expanded compiled_segments schema.
+
+    INV-STRUCTURAL-RESOLUTION-001: compiled_segments must carry all
+    structural fields needed for expansion without re-derivation.
+
+    Fields beyond the assembly output (gain_db, is_primary) are resolved
+    from the catalog here. Break-aware fields (asset_start_offset_ms,
+    transitions) use safe defaults — break detection will populate them
+    in a future step.
+    """
+    # Resolve gain_db from catalog for asset-backed segments
+    gain_db = 0.0
+    if seg.asset_id:
+        try:
+            meta = resolver.lookup(seg.asset_id)
+            gain_db = getattr(meta, "loudness_gain_db", 0.0)
+        except (KeyError, AttributeError):
+            pass
+
+    return {
+        "segment_type": seg.segment_type,
+        "asset_id": seg.asset_id,
+        "duration_ms": seg.duration_ms,
+        "asset_start_offset_ms": 0,
+        "transition_in": "TRANSITION_NONE",
+        "transition_in_duration_ms": 0,
+        "transition_out": "TRANSITION_NONE",
+        "transition_out_duration_ms": 0,
+        "gain_db": gain_db,
+        "is_primary": is_primary and seg.segment_type == "content",
+    }
+
+
+def _expand_to_compiled_segments(
+    result: Any,
+    resolver: "AssetResolver",
+    *,
+    slot_duration_ms: int,
+    start_utc_ms: int,
+    channel_type: str,
+) -> list[dict[str, Any]]:
+    """Expand an AssemblyResult into break-aware compiled_segments.
+
+    INV-STRUCTURAL-RESOLUTION-001: Break detection runs at compile time.
+    The returned list contains content acts (with offsets and transitions),
+    filler placeholders, and any presentation/intro/outro segments from
+    the assembly.
+
+    For the primary content asset, expand_program_block() is called to
+    produce break-aware content acts and filler. Non-content segments
+    (presentation, intro, outro) are serialized with safe defaults.
+    """
+    content_segs = [s for s in result.segments if s.segment_type == "content"]
+    non_content_segs = [s for s in result.segments if s.segment_type != "content"]
+
+    compiled: list[dict[str, Any]] = []
+
+    # Serialize non-content segments (T1 presentation, intro, outro) first.
+    # These keep their assembly-level representation — no break detection.
+    for s in non_content_segs:
+        compiled.append(_serialize_assembly_segment(s, resolver, is_primary=False))
+
+    if not content_segs:
+        return compiled
+
+    # For content: run expand_program_block() to get break-aware segments.
+    # This handles both network (mid-content breaks) and movie (single content + filler).
+    primary = content_segs[0]
+    ep_meta = resolver.lookup(primary.asset_id)
+
+    # Compute content slot: slot minus non-content structural durations
+    non_content_ms = sum(s.duration_ms for s in non_content_segs)
+    content_slot_ms = slot_duration_ms - non_content_ms
+
+    # Resolve chapter markers from catalog
+    chapter_ms = None
+    if ep_meta.chapter_markers_sec:
+        chapter_ms = tuple(
+            int(c * 1000) for c in ep_meta.chapter_markers_sec if c > 0
+        )
+
+    expanded_block = expand_program_block(
+        asset_id=primary.asset_id,
+        asset_uri=ep_meta.file_uri or "",
+        start_utc_ms=start_utc_ms,
+        slot_duration_ms=content_slot_ms,
+        episode_duration_ms=primary.duration_ms,
+        chapter_markers_ms=chapter_ms,
+        channel_type=channel_type,
+        gain_db=ep_meta.loudness_gain_db,
+    )
+
+    # Serialize the expanded ScheduledSegments into compiled_segments dicts
+    for seg in expanded_block.segments:
+        compiled.append({
+            "segment_type": seg.segment_type,
+            "asset_id": primary.asset_id if seg.segment_type == "content" else "",
+            "duration_ms": seg.segment_duration_ms,
+            "asset_start_offset_ms": seg.asset_start_offset_ms,
+            "transition_in": seg.transition_in,
+            "transition_in_duration_ms": seg.transition_in_duration_ms,
+            "transition_out": seg.transition_out,
+            "transition_out_duration_ms": seg.transition_out_duration_ms,
+            "gain_db": seg.gain_db,
+            "is_primary": seg.is_primary,
+        })
+
+    return compiled
 
 
 # ---------------------------------------------------------------------------
@@ -336,6 +458,7 @@ def _compile_program_block(
     emissions_per_occurrence: int = 1,
     prior_same_day_emissions: int = 0,
     broadcast_day_start_hour: int = 6,
+    channel_type: str = "network",
 ) -> list[ProgramBlockOutput]:
     """Compile a V2 schedule block into program blocks.
 
@@ -491,14 +614,12 @@ def _compile_program_block(
                         "program": chosen_ref,
                         "fill_mode": prog_def.get("fill_mode", "single"),
                     },
-                    compiled_segments=[
-                        {
-                            "segment_type": s.segment_type,
-                            "asset_id": s.asset_id,
-                            "duration_ms": s.duration_ms,
-                        }
-                        for s in result.segments
-                    ],
+                    compiled_segments=_expand_to_compiled_segments(
+                        result, resolver,
+                        slot_duration_ms=slot_duration * 1000,
+                        start_utc_ms=int(current_time.timestamp() * 1000),
+                        channel_type=channel_type,
+                    ),
                     traffic_profile=block_def.get("traffic_profile"),
                 )
                 blocks.append(block)
@@ -566,14 +687,12 @@ def _compile_program_block(
                         "program": chosen_ref,
                         "fill_mode": prog_def.get("fill_mode", "single"),
                     },
-                    compiled_segments=[
-                        {
-                            "segment_type": s.segment_type,
-                            "asset_id": s.asset_id,
-                            "duration_ms": s.duration_ms,
-                        }
-                        for s in result.segments
-                    ],
+                    compiled_segments=_expand_to_compiled_segments(
+                        result, resolver,
+                        slot_duration_ms=slot_duration * 1000,
+                        start_utc_ms=int(current_time.timestamp() * 1000),
+                        channel_type=channel_type,
+                    ),
                     traffic_profile=block_def.get("traffic_profile"),
                 )
                 blocks.append(block)
@@ -823,6 +942,7 @@ def compile_schedule(
                 emissions_per_occurrence=epo,
                 prior_same_day_emissions=prior,
                 broadcast_day_start_hour=_bd_start_hour,
+                channel_type=dsl.get("channel_type", "network"),
             )
             all_blocks.extend(blocks)
 

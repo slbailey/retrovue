@@ -103,5 +103,5 @@ CONTENT (what types of assets fill the breaks). These are orthogonal:
 ## See Also
 
 - `docs/contracts/resources/TrafficManagementContract.md` — traffic policy (break content)
-- `docs/contracts/core/programming_dsl.md` — DSL syntax and schedule architecture
+- `docs/contracts/channel_dsl.md` — Channel DSL contract
 - `docs/roadmap/` — ads & packaging roadmap

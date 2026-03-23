@@ -279,19 +279,17 @@ class TestNoBreaksInOutput:
 
 
 class TestOutputSchema:
-    def test_weeknight_matches_schema(self):
-        dsl = parse_dsl((FIXTURES_DIR / "weeknight_sitcom.yaml").read_text())
-        resolver = make_sitcom_resolver()
-        plan = compile_schedule(dsl, resolver, seed=42, resolved_config=TEST_RESOLVED_CONFIG)
-        schema = json.loads(SCHEMA_PATH.read_text())
-        jsonschema.validate(instance=plan, schema=schema)
+    """Schema validation tests removed — programming_dsl.schema.json was deleted
+    as part of DSL consolidation (see dsl_consolidation_plan.md).
 
-    def test_weekend_movie_matches_schema(self):
-        dsl = parse_dsl((FIXTURES_DIR / "weekend_movie.yaml").read_text())
-        resolver = make_movie_resolver()
-        plan = compile_schedule(dsl, resolver, seed=42, resolved_config=TEST_RESOLVED_CONFIG)
-        schema = json.loads(SCHEMA_PATH.read_text())
-        jsonschema.validate(instance=plan, schema=schema)
+    The compiled_segments schema is now defined by contracts:
+    - docs/contracts/block_assembly_tiers.md
+    - docs/contracts/channel_dsl.md
+
+    Structural validation is enforced by contract tests in
+    tests/contracts/playlog_compiler/.
+    """
+    pass
 
 
 # ---------------------------------------------------------------------------
