@@ -82,13 +82,15 @@ def detect_breaks(
     if not chapter_opps and not boundary_opps:
         algo_opps = _compute_algorithmic_breaks(segments, program_runtime_ms)
 
-    # Combine, sort by position, assign weights
+    # Combine, sort by position, assign equal weights
     all_opps = chapter_opps + boundary_opps + algo_opps
     all_opps.sort(key=lambda o: o.position_ms)
 
-    # Assign monotonically increasing weights by position order
-    for i, opp in enumerate(all_opps):
-        opp.weight = float(i + 1)
+    # INV-BREAK-BUDGET-EQUAL-001: Equal weights by default.
+    # Weighted distribution requires explicit DSL declaration
+    # via placement.fallback.weights — not applied here.
+    for opp in all_opps:
+        opp.weight = 1.0
 
     return BreakPlan(
         opportunities=all_opps,

@@ -227,7 +227,12 @@ def assemble_program(
         INV-PRESENTATION-GRID-BUDGET-001 — presentation deducted from grid.
         INV-PRESENTATION-PRECEDES-PRIMARY-001 — presentation before content.
     """
-    grid_ms = program.grid_duration_ms(grid_minutes)
+    # For dynamic grid programs (grid_blocks_max), use the max allocation
+    # as the eligibility ceiling. grid_blocks=0 is a sentinel for dynamic mode.
+    if program.is_dynamic_grid and program.grid_blocks_max is not None:
+        grid_ms = program.grid_blocks_max * grid_minutes * 60 * 1000
+    else:
+        grid_ms = program.grid_duration_ms(grid_minutes)
 
     # INV-PROGRAM-ASSEMBLY-ELIGIBLE-001: check intro/outro eligibility
     if intro_asset is not None and not _is_eligible(intro_asset):

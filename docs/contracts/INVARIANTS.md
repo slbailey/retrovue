@@ -108,6 +108,11 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | INV-BREAK-010 | [break_detection.md](break_detection.md) | LAW-CONTENT-AUTHORITY |
 | INV-BREAK-011 | [break_detection.md](break_detection.md) | LAW-GRID, LAW-CONTENT-AUTHORITY |
 | INV-BREAK-012 | [break_detection.md](break_detection.md) | LAW-CONTENT-AUTHORITY |
+| INV-BREAK-PLACEMENT-FALLBACK-001 | [break_detection.md](break_detection.md) | LAW-CONTENT-AUTHORITY |
+| INV-BREAK-BUDGET-EQUAL-001 | [break_detection.md](break_detection.md) | LAW-CONTENT-AUTHORITY, LAW-GRID |
+| INV-PLACEMENT-STRUCTURE-001 | [placement_dsl.md](placement_dsl.md) | LAW-CONTENT-AUTHORITY, LAW-GRID |
+| INV-PLACEMENT-COUNT-001 | [placement_dsl.md](placement_dsl.md) | LAW-CONTENT-AUTHORITY |
+| INV-PLACEMENT-BOUNDS-001 | [placement_dsl.md](placement_dsl.md) | LAW-CONTENT-AUTHORITY |
 
 ### Scheduling — BreakPlan
 

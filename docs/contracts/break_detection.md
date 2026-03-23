@@ -379,6 +379,30 @@ Derived From: `LAW-CONTENT-AUTHORITY`
 
 ---
 
+### INV-BREAK-PLACEMENT-FALLBACK-001 — Chapter markers suppress fallback placement
+
+Status: Invariant
+Authority Level: Planning
+Derived From: `LAW-CONTENT-AUTHORITY`
+
+**Guarantee:** If chapter markers exist for a content asset, algorithmic and heuristic placement strategies MUST NOT generate break opportunities. Chapter markers are the sole source of break positions. If chapter markers do not exist, fallback placement (algorithmic or boundary) MUST be used. No asset may receive both chapter-derived and algorithmic break opportunities.
+
+**Violation:** An asset with chapter markers that also has `source: "algorithmic"` break opportunities in its BreakPlan; an asset without chapter markers that has no break opportunities when break budget is positive and the program is not primary/bleeding.
+
+---
+
+### INV-BREAK-BUDGET-EQUAL-001 — Break budget distributed equally by default
+
+Status: Invariant
+Authority Level: Planning
+Derived From: `LAW-CONTENT-AUTHORITY`, `LAW-GRID`
+
+**Guarantee:** Break budget MUST be distributed equally across all break opportunities by default. Each break opportunity receives `floor(break_budget_ms / num_opportunities)` with remainder distributed one millisecond at a time. Weighted or non-uniform distribution MUST only occur when explicitly declared in the channel DSL. Undeclared weighting is prohibited.
+
+**Violation:** A BreakPlan where break durations differ by more than 1ms without an explicit weight declaration in the channel configuration; monotonically increasing weights applied without operator configuration.
+
+---
+
 ## Required Tests
 
 All tests live under:
@@ -413,3 +437,8 @@ pkg/core/tests/contracts/test_break_detection.py
 | `test_weight_increases_toward_end` | INV-BREAK-007 | Algorithmic break weights increase monotonically from first to last. |
 | `test_no_break_in_primary_segment` | INV-BREAK-012 | Primary segment present — no opportunity falls within its timeline range. |
 | `test_breaks_only_after_primary` | INV-BREAK-012 | All opportunities have position_ms outside the primary segment range. |
+| `test_chapter_markers_suppress_algorithmic` | INV-BREAK-PLACEMENT-FALLBACK-001 | Asset with chapter markers produces zero algorithmic opportunities. |
+| `test_no_chapters_uses_fallback` | INV-BREAK-PLACEMENT-FALLBACK-001 | Asset without chapter markers produces algorithmic opportunities when budget > 0. |
+| `test_no_mixed_chapter_and_algorithmic` | INV-BREAK-PLACEMENT-FALLBACK-001 | No BreakPlan contains both chapter and algorithmic opportunities for the same asset. |
+| `test_equal_budget_default` | INV-BREAK-BUDGET-EQUAL-001 | Two breaks with no weight config: durations differ by at most 1ms. |
+| `test_weighted_budget_requires_config` | INV-BREAK-BUDGET-EQUAL-001 | Break durations that differ by >1ms without explicit weight declaration are rejected. |

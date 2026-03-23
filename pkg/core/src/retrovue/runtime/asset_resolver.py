@@ -11,6 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from retrovue.runtime.pool_dsl_normalize import normalize_pool_definition
+
 
 @dataclass(frozen=True)
 class AssetMetadata:
@@ -87,7 +89,9 @@ class StubAssetResolver:
         self._assets[asset_id] = meta
 
     def register_pools(self, pools: dict[str, dict[str, Any]]) -> None:
-        self._pools.update(pools)
+        self._pools.update(
+            {k: normalize_pool_definition(v) for k, v in pools.items()}
+        )
 
     def register_collection(self, collection_name: str, asset_ids: list[str]) -> None:
         """Register assets as belonging to a named collection."""

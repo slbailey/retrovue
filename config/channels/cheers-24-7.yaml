@@ -10,14 +10,36 @@ format:
   grid_minutes: 30
 
 # -----------------------------
-# CONTENT POOLS
+# CONTENT POOLS (select.where — normalized to match at compile time)
 # -----------------------------
 
 pools:
+
   cheers:
-    match:
-      type: episode
-      series_title: Cheers
+    select:
+      where:
+        type:
+          eq: episode
+        series_title:
+          eq: Cheers
+
+  commercials:
+    select:
+      where:
+        type:
+          eq: commercial
+
+  promos:
+    select:
+      where:
+        type:
+          eq: promo
+
+  bumpers:
+    select:
+      where:
+        type:
+          eq: bumper
 
 # -----------------------------
 # PROGRAM DEFINITIONS
@@ -25,10 +47,23 @@ pools:
 
 programs:
 
-  cheers_30:
+  cheers:
     pool: cheers
-    grid_blocks: 1
+    grid_blocks_max: 1
     fill_mode: single
+
+presentation:
+
+  sitcom_30:
+    midroll:
+      - type: traffic
+        profile: sitcom
+        fill: remaining
+        placement:
+          fallback:
+            strategy: weighted_positions
+            positions: [0.30, 0.72]
+            weights:   [1,    1]
 
 # -----------------------------
 # TRAFFIC CONFIG
@@ -36,59 +71,20 @@ programs:
 
 traffic:
 
-  break_config:
-    to_break_bumper_ms: 3000
-    from_break_bumper_ms: 3000
-    station_id_ms: 5000
-
-  default_profile: sitcom_standard
-
-  inventories:
-
-    commercials:
-      match:
-        type: commercial
-      asset_type: commercial
-
-    promos:
-      match:
-        type: promo
-      asset_type: promo
-
-    trailers:
-      match:
-        type: trailer
-      asset_type: trailer
-
-    bumpers:
-      match:
-        type: bumper
-      asset_type: bumper
-
-    station_ids:
-      match:
-        type: station_id
-      asset_type: station_id
-
-  # ---------------------------
-  # TRAFFIC PROFILES
-  # ---------------------------
-
   profiles:
-
-    sitcom_standard:
-
-      allowed_types:
-        - commercial
-        - promo
-        - trailer
-
+    sitcom:
+      allowed_pools: [commercials, promos, bumpers]
+      weights:
+        commercials: 1
+        promos: 1
+        bumpers: 1
+      rotation:
+        strategy: weighted
+      duration_strategy: pack
       default_cooldown_seconds: 3600
-
-      type_cooldowns_seconds:
-        trailer: 7200
-
       max_plays_per_day: 0
+
+  default: sitcom
 
 # -----------------------------
 # SCHEDULE
@@ -99,5 +95,5 @@ schedule:
   all_day:
     - start: "06:00"
       slots: 48
-      program: cheers_30
+      program: [cheers]
       progression: sequential

@@ -458,23 +458,18 @@ class TestInvBreak007:
             )
 
     # Tier: 2 | Scheduling logic invariant
-    def test_weight_increases_toward_end(self):
-        # INV-BREAK-007 — algorithmic break weights increase monotonically
+    def test_weights_are_equal_by_default(self):
+        # INV-BREAK-BUDGET-EQUAL-001 — all weights 1.0 by default
         assembly = _single_content(duration_ms=2_400_000)  # 40 min
 
         plan = detect_breaks(assembly_result=assembly, grid_duration_ms=GRID_60_MIN_MS)
 
-        algo_opps = sorted(
-            [o for o in plan.opportunities if o.source == "algorithmic"],
-            key=lambda o: o.position_ms,
-        )
-        if len(algo_opps) >= 2:
-            weights = [o.weight for o in algo_opps]
-            for i in range(1, len(weights)):
-                assert weights[i] > weights[i - 1], (
-                    f"INV-BREAK-007: weights must increase monotonically. "
-                    f"weight[{i-1}]={weights[i-1]}, weight[{i}]={weights[i]}"
-                )
+        if plan.opportunities:
+            weights = [o.weight for o in plan.opportunities]
+            assert all(w == 1.0 for w in weights), (
+                f"INV-BREAK-BUDGET-EQUAL-001: all weights must be 1.0 by default, "
+                f"got {weights}"
+            )
 
 
 # ===========================================================================

@@ -23,6 +23,15 @@ from ._ops.planning_session import PlanningSession
 
 app = typer.Typer(name="channel", help="Broadcast channel management operations")
 
+# Register DSL subcommands (compile, inspect, simulate).
+from .channel_dsl import compile_cmd as _compile_cmd
+from .channel_dsl import inspect_cmd as _inspect_cmd
+from .channel_dsl import simulate_cmd as _simulate_cmd
+
+app.command("compile", help="Compile channel YAML to program schedule JSON")(_compile_cmd)
+app.command("inspect", help="Inspect compiled schedule in human-readable form")(_inspect_cmd)
+app.command("simulate", help="Simulate what is playing at a given time")(_simulate_cmd)
+
 
 def _get_db_context(test_db: bool):
     if not test_db:

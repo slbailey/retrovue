@@ -101,8 +101,8 @@ class TestAlgorithmicBreaks:
 
 class TestAdBlockDurations:
     # Tier: 2 | Scheduling logic invariant
-    def test_weighted_ad_block_split(self):
-        """INV-BREAK-WEIGHT-001: filler durations proportional to weights."""
+    def test_equal_ad_block_split(self):
+        """INV-BREAK-BUDGET-EQUAL-001: filler durations equal by default."""
         block = expand_program_block(
             asset_id="ep1", asset_uri="/shows/ep1.mp4",
             start_utc_ms=START_MS, slot_duration_ms=1_800_000,
@@ -110,8 +110,8 @@ class TestAdBlockDurations:
             chapter_markers_ms=(330_000, 660_000, 990_000),
         )
         fillers = [s for s in block.segments if s.segment_type == "filler"]
-        # 480_000ms budget, weights [1,2,3] → [80_000, 160_000, 240_000]
-        assert [f.segment_duration_ms for f in fillers] == [80_000, 160_000, 240_000]
+        # 480_000ms budget, 3 breaks, equal weights → [160_000, 160_000, 160_000]
+        assert [f.segment_duration_ms for f in fillers] == [160_000, 160_000, 160_000]
 
     # Tier: 2 | Scheduling logic invariant
     def test_no_ad_time_when_episode_fills_slot(self):

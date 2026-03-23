@@ -182,6 +182,20 @@ presentation:
 
 A `{ type: traffic }` entry is a Tier 4 fill directive, not a structural segment. It is NOT resolved at compile time. It produces a filler placeholder whose duration is the residual after all structural segments are accounted for. See "Fill Allocation Model" below.
 
+**Traffic fill with placement (midroll):**
+```yaml
+- type: traffic
+  profile: sitcom_standard
+  fill: remaining
+  placement:
+    fallback:
+      strategy: weighted_positions
+      positions: [0.30, 0.72]
+      weights: [1, 1]
+```
+
+A midroll traffic entry with `placement` defines WHERE breaks are inserted within content. If the content asset has chapter markers, they are used and the fallback is ignored. If no chapter markers exist, the fallback strategy generates synthetic break positions. See `placement_dsl.md`.
+
 **Explicit asset (by ID):**
 ```yaml
 - asset: hbo_station_id_winter_2024

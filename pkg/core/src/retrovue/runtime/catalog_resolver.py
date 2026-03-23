@@ -5,6 +5,10 @@ Supports two resolution modes:
   1. lookup(asset_id) — resolve a single asset by UUID, URI, or slug
   2. query(match) — evaluate pool match criteria against the catalog
 
+Pool definitions may use legacy ``match:`` or canonical ``select.where`` (see
+``pool_dsl_normalize``); the latter is normalized to ``match`` at
+``register_pools`` time.
+
 Pool match criteria (from the Programming Pools contract):
   - type: episode | movie
   - series_title: str | list[str]
@@ -32,6 +36,7 @@ from sqlalchemy.orm import Session
 from ..domain.entities import Asset, AssetEditorial, AssetProbed, AssetTag, Container, Marker
 from ..adapters.enrichers.loudness_enricher import get_gain_db_from_probed, needs_loudness_measurement
 from .asset_resolver import AssetMetadata
+from .pool_dsl_normalize import normalize_pool_definition
 
 logger = logging.getLogger(__name__)
 
@@ -318,7 +323,8 @@ class CatalogAssetResolver:
         Args:
             pools: Dict of pool_name → {"match": {...}, "order": "sequential"|"random"}
         """
-        self._pools.update(pools)
+        normalized = {k: normalize_pool_definition(v) for k, v in pools.items()}
+        self._pools.update(normalized)
         logger.debug(f"Registered {len(pools)} pools")
 
     def lookup(self, asset_id: str) -> AssetMetadata:
