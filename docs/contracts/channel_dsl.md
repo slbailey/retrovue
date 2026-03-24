@@ -83,8 +83,18 @@ All asset selection in the DSL MUST use `select.where` syntax with explicit oper
 | `eq` | Exact equality | `type: { eq: movie }` |
 | `in` | Value is one of set | `rating: { in: ["PG", "PG-13"] }` |
 | `contains_all` | All specified values present | `tags: { contains_all: [hbo, intros] }` |
+| `contains_any` | At least one specified value present | `tags: { contains_any: [action, comedy] }` |
+| `excludes_any` | None of specified values present | `tags: { excludes_any: [anime] }` |
 | `lte` | Less than or equal | `year: { lte: 1995 }` |
 | `gte` | Greater than or equal | `duration_sec: { gte: 3600 }` |
+
+The three tag operators (`contains_all`, `contains_any`, `excludes_any`) may be combined on the same field. All are AND-combined: the asset must satisfy every specified operator.
+
+```yaml
+tags:
+  contains_any: [action, comedy, thriller]
+  excludes_any: [anime, adult]
+```
 
 ### Contextual References
 

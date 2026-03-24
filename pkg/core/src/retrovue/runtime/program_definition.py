@@ -45,6 +45,7 @@ class AssemblyResult:
     block_start_ms: int = 0
     next_block_start_offset_ms: int = 0
     actual_end_ms: int = 0
+    pool_diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +62,7 @@ class ProgramDefinition:
     intro: str | None = None
     outro: str | None = None
     presentation: list | None = None
+    presentation_postroll: list | None = None
     grid_blocks_max: int | None = None
 
     def __post_init__(self) -> None:
@@ -208,12 +210,14 @@ def assemble_program(
     intro_asset: Any | None = None,
     outro_asset: Any | None = None,
     presentation_assets: list[Any] | None = None,
+    postroll_resolved: list | None = None,
 ) -> AssemblyResult:
     """Assemble content for a single program execution.
 
     Args:
         bleed: Whether the program may overrun its grid allocation.
             This is a schedule-block-level decision, not a program property.
+        postroll_assets: Resolved postroll presentation assets (after content).
 
     Enforces:
         INV-PROGRAM-FILL-001 — single mode selects exactly one asset.
@@ -226,6 +230,8 @@ def assemble_program(
         INV-PROGRAM-INTRO-OUTRO-001 — intro/outro in runtime calc.
         INV-PRESENTATION-GRID-BUDGET-001 — presentation deducted from grid.
         INV-PRESENTATION-PRECEDES-PRIMARY-001 — presentation before content.
+        INV-PRESENTATION-FOLLOWS-CONTENT-001 — postroll after content.
+        INV-DSL-POSTROLL-STRUCTURAL-RESERVED-001 — postroll in budget.
     """
     # For dynamic grid programs (grid_blocks_max), use the max allocation
     # as the eligibility ceiling. grid_blocks=0 is a sentinel for dynamic mode.
@@ -253,6 +259,17 @@ def assemble_program(
                     f"'{getattr(pa, 'asset_id', '?')}' is not eligible"
                 )
 
+    # INV-PROGRAM-ASSEMBLY-ELIGIBLE-001: check postroll asset eligibility
+    if postroll_resolved:
+        for pa in postroll_resolved:
+            if isinstance(pa, str):
+                continue  # traffic marker, not an asset
+            if not _is_eligible(pa):
+                raise AssemblyFault(
+                    "INV-PROGRAM-ASSEMBLY-ELIGIBLE-001: postroll asset "
+                    f"'{getattr(pa, 'asset_id', '?')}' is not eligible"
+                )
+
     # Get eligible assets from pool
     if hasattr(pool, "eligible_assets"):
         eligible = pool.eligible_assets()
@@ -276,7 +293,16 @@ def assemble_program(
             getattr(pa, "duration_ms", 0) for pa in presentation_assets
         )
 
-    wrapper_ms = intro_ms + outro_ms + presentation_ms
+    # INV-DSL-POSTROLL-STRUCTURAL-RESERVED-001: postroll fixed durations deducted
+    postroll_ms = 0
+    if postroll_resolved:
+        postroll_ms = sum(
+            getattr(pa, "duration_ms", 0)
+            for pa in postroll_resolved
+            if not isinstance(pa, str)  # skip traffic marker
+        )
+
+    wrapper_ms = intro_ms + outro_ms + presentation_ms + postroll_ms
 
     segments: list[AssemblySegment] = []
 
@@ -304,6 +330,32 @@ def assemble_program(
                     segment_type="presentation",
                 ),
             )
+
+    # INV-PRESENTATION-FOLLOWS-CONTENT-001: append postroll after content.
+    # Entries are in declared YAML order. Traffic markers become
+    # postroll_traffic sentinels — _expand_to_compiled_segments places
+    # filler at that position instead of at the end.
+    if postroll_resolved:
+        j = 0
+        for entry in postroll_resolved:
+            if isinstance(entry, str):
+                # Traffic directive marker — filler goes here
+                segments.append(
+                    AssemblySegment(
+                        asset_id="_postroll_traffic_marker",
+                        duration_ms=0,
+                        segment_type="postroll_traffic",
+                    ),
+                )
+            else:
+                segments.append(
+                    AssemblySegment(
+                        asset_id=getattr(entry, "asset_id", f"postroll-{j}"),
+                        duration_ms=getattr(entry, "duration_ms", 0),
+                        segment_type="presentation",
+                    ),
+                )
+                j += 1
 
     # Prepend intro / append outro
     if intro_asset is not None:

@@ -53,6 +53,9 @@ struct FedBlock {
     uint32_t transition_out_duration_ms = 0;
     // INV-LOUDNESS-NORMALIZED-001: Per-asset loudness normalization gain
     float gain_db = 0.0f;
+    // INV-ASRUN-SEMANTIC-FIDELITY-001: Editorial pass-through fields
+    std::string segment_type_name;  // Fine-grained type from Core
+    std::string segment_title;      // Editorial display title
   };
   std::vector<Segment> segments;
 };

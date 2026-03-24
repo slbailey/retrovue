@@ -11,8 +11,16 @@ from __future__ import annotations
 from typing import Any
 
 
-def _where_atom(field: str, spec: Any) -> Any:
-    """Turn one field's select clause into a match-compatible value."""
+_TAG_SET_OPERATORS = {"contains_all", "contains_any", "excludes_any"}
+
+
+def _where_atom(field: str, spec: Any) -> Any | dict[str, Any]:
+    """Turn one field's select clause into match-compatible value(s).
+
+    For tags with set operators (contains_all, contains_any, excludes_any),
+    returns a dict ``{"_tag_ops": True, ...}`` so the caller can split into
+    separate match keys.  All three may coexist on the same field.
+    """
     if spec is None:
         return None
     if not isinstance(spec, dict):
@@ -33,12 +41,14 @@ def _where_atom(field: str, spec: Any) -> Any:
                 "use field 'genre' with eq (substring match) or split pools."
             )
         return vals
-    if keys == {"contains_all"}:
+    # Tag set operators — any subset of {contains_all, contains_any, excludes_any}
+    if keys and keys <= _TAG_SET_OPERATORS:
         if field != "tags":
             raise ValueError(
-                "POOL-DSL: contains_all is only valid under select.where.tags"
+                f"POOL-DSL: {', '.join(sorted(keys))} "
+                f"{'is' if len(keys) == 1 else 'are'} only valid under select.where.tags"
             )
-        return spec["contains_all"]
+        return {"_tag_ops": True, **{k: spec[k] for k in keys}}
     if keys & {"gte", "lte"}:
         raise ValueError(
             f"POOL-DSL: gte/lte not supported for pool field {field!r} "
@@ -53,7 +63,17 @@ def select_where_to_match(where: dict[str, Any]) -> dict[str, Any]:
     for field, spec in where.items():
         if spec is None:
             continue
-        match[field] = _where_atom(field, spec)
+        result = _where_atom(field, spec)
+        # Tag set operators return a dict with _tag_ops sentinel
+        if isinstance(result, dict) and result.get("_tag_ops") and field == "tags":
+            if "contains_all" in result:
+                match["tags"] = result["contains_all"]
+            if "contains_any" in result:
+                match["tags_any"] = result["contains_any"]
+            if "excludes_any" in result:
+                match["tags_exclude"] = result["excludes_any"]
+        else:
+            match[field] = result
     return match
 
 

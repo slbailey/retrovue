@@ -187,6 +187,22 @@ class BlockPlan:
             gain_db = seg.get("gain_db", 0.0)
             if gain_db != 0.0:
                 kwargs["gain_db"] = gain_db
+            # INV-ASRUN-SEMANTIC-FIDELITY-001: Pass original editorial
+            # segment_type and title through to AIR so evidence preserves
+            # the full vocabulary (commercial, presentation, bumper, etc.)
+            # instead of collapsing to the 3-value SegmentType enum.
+            # Always lowercase, never empty.
+            kwargs["segment_type_name"] = (seg_type or "content").lower()
+            seg_title = seg.get("title", "")
+            if not seg_title and seg.get("asset_uri"):
+                import os as _os
+                seg_title = _os.path.splitext(
+                    _os.path.basename(seg["asset_uri"])
+                )[0]
+            if not seg_title and seg_type == "pad":
+                seg_title = "BLACK"
+            if seg_title:
+                kwargs["segment_title"] = seg_title
             pb.segments.append(playout_pb2.BlockSegment(**kwargs))
         return pb
 

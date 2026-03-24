@@ -158,6 +158,14 @@ struct Segment {
   // AIR applies as constant linear scalar: 10^(gain_db/20) to every S16 sample.
   float gain_db = 0.0f;
 
+  // INV-ASRUN-SEMANTIC-FIDELITY-001: Editorial segment metadata passed through
+  // from Core for evidence emission.  AIR MUST NOT alter execution based on
+  // these fields — they are observability-only, echoed in evidence.
+  // segment_type_name: fine-grained type ("commercial", "presentation", "bumper", etc.)
+  // segment_title: editorial display title (from scheduling metadata)
+  std::string segment_type_name;
+  std::string segment_title;
+
   // EXTENSION POINT: Segment metadata (Section 8.2.1)
   // INV-BLOCKPLAN-METADATA-IGNORED: AIR MUST NOT alter execution based on this
   std::optional<std::string> metadata_json;

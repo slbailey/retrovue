@@ -181,22 +181,47 @@ def _expand_to_compiled_segments(
     content_segs = [s for s in result.segments if s.segment_type == "content"]
     non_content_segs = [s for s in result.segments if s.segment_type != "content"]
 
-    compiled: list[dict[str, Any]] = []
-
-    # Serialize non-content segments (T1 presentation, intro, outro) first.
-    # These keep their assembly-level representation — no break detection.
-    for s in non_content_segs:
-        compiled.append(_serialize_assembly_segment(s, resolver, is_primary=False))
-
     if not content_segs:
+        compiled: list[dict[str, Any]] = []
+        for s in non_content_segs:
+            compiled.append(_serialize_assembly_segment(s, resolver, is_primary=False))
         return compiled
 
+    # Split non-content into preroll (before first content) and postroll (after last content)
+    # by walking assembly order. This preserves INV-DSL-SEGMENT-ORDER-DETERMINISTIC-001.
+    first_content_idx = next(
+        i for i, s in enumerate(result.segments) if s.segment_type == "content"
+    )
+    last_content_idx = max(
+        i for i, s in enumerate(result.segments) if s.segment_type == "content"
+    )
+    preroll_segs = [
+        s for i, s in enumerate(result.segments)
+        if s.segment_type not in ("content", "postroll_traffic") and i < first_content_idx
+    ]
+    postroll_segs = [
+        s for i, s in enumerate(result.segments)
+        if i > last_content_idx  # includes postroll_traffic markers
+    ]
+
+    # Check if postroll has a traffic marker — if so, filler goes at
+    # the marker position within the postroll, not as a trailing catch-all.
+    has_postroll_traffic = any(
+        s.segment_type == "postroll_traffic" for s in postroll_segs
+    )
+
+    compiled: list[dict[str, Any]] = []
+
+    # Serialize preroll segments (T1 presentation, intro) first.
+    for s in preroll_segs:
+        compiled.append(_serialize_assembly_segment(s, resolver, is_primary=False))
+
     # For content: run expand_program_block() to get break-aware segments.
-    # This handles both network (mid-content breaks) and movie (single content + filler).
     primary = content_segs[0]
     ep_meta = resolver.lookup(primary.asset_id)
 
-    # Compute content slot: slot minus non-content structural durations
+    # Compute content slot: slot minus ALL non-content structural durations
+    # (excludes postroll_traffic markers which have duration_ms=0)
     non_content_ms = sum(s.duration_ms for s in non_content_segs)
     content_slot_ms = slot_duration_ms - non_content_ms
 
@@ -218,9 +243,11 @@ def _expand_to_compiled_segments(
         gain_db=ep_meta.loudness_gain_db,
     )
 
-    # Serialize the expanded ScheduledSegments into compiled_segments dicts
+    # Separate content segments from filler produced by expand_program_block.
+    expanded_content = []
+    expanded_filler = []
     for seg in expanded_block.segments:
-        compiled.append({
+        entry = {
             "segment_type": seg.segment_type,
             "asset_id": primary.asset_id if seg.segment_type == "content" else "",
             "duration_ms": seg.segment_duration_ms,
@@ -231,7 +258,28 @@ def _expand_to_compiled_segments(
             "transition_out_duration_ms": seg.transition_out_duration_ms,
             "gain_db": seg.gain_db,
             "is_primary": seg.is_primary,
-        })
+        }
+        if seg.segment_type == "filler":
+            expanded_filler.append(entry)
+        else:
+            expanded_content.append(entry)
+
+    # Add content (+ midroll filler for network channels)
+    compiled.extend(expanded_content)
+
+    if has_postroll_traffic:
+        # INV-DSL-UNIFIED-FILL-001: filler goes at the traffic marker's
+        # declared position within the postroll sequence.
+        for s in postroll_segs:
+            if s.segment_type == "postroll_traffic":
+                compiled.extend(expanded_filler)
+            else:
+                compiled.append(_serialize_assembly_segment(s, resolver, is_primary=False))
+    else:
+        # No traffic marker — filler trails content, then postroll after.
+        compiled.extend(expanded_filler)
+        for s in postroll_segs:
+            compiled.append(_serialize_assembly_segment(s, resolver, is_primary=False))
 
     return compiled
 
@@ -240,14 +288,19 @@ def _resolve_presentation_ref(
     prog_def: dict[str, Any],
     presentation_defs: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Resolve a presentation string reference to inline entries.
+    """Resolve a presentation string reference to inline preroll + postroll.
 
     If prog_def["presentation"] is a string (e.g., "movies"), look it up
-    in presentation_defs["programs"]["movies"]["preroll"] and replace
-    the string with the resolved list of entries.
+    in presentation_defs["programs"]["movies"] and resolve both preroll
+    and postroll phases.
 
     If it's already a list (old inline format), return prog_def unchanged.
     If presentation_defs is None or the reference doesn't resolve, clear it.
+
+    Validates:
+        INV-POSTROLL-TRAFFIC-PREROLL-FORBIDDEN-001 — no traffic in preroll.
+        INV-DSL-SINGLE-FILL-DIRECTIVE-001 — at most one traffic directive
+        across preroll + postroll.
     """
     pres = prog_def.get("presentation")
     if pres is None or isinstance(pres, list):
@@ -266,15 +319,35 @@ def _resolve_presentation_ref(
     program_presentations = presentation_defs.get("programs", {})
     pres_block = program_presentations.get(pres, {})
     preroll = pres_block.get("preroll", [])
+    postroll = pres_block.get("postroll", [])
 
-    if preroll:
-        resolved = dict(prog_def)
-        resolved["presentation"] = preroll
-        return resolved
+    # INV-POSTROLL-TRAFFIC-PREROLL-FORBIDDEN-001: no traffic in preroll
+    for entry in preroll:
+        if isinstance(entry, dict) and entry.get("type") == "traffic":
+            raise ValueError(
+                "INV-POSTROLL-TRAFFIC-PREROLL-FORBIDDEN-001: "
+                "traffic directive is forbidden in preroll"
+            )
 
-    # Reference didn't resolve to any preroll entries
+    # INV-DSL-SINGLE-FILL-DIRECTIVE-001: at most one traffic directive total
+    all_entries = list(preroll) + list(postroll)
+    traffic_count = sum(
+        1 for e in all_entries
+        if isinstance(e, dict) and e.get("type") == "traffic"
+    )
+    if traffic_count > 1:
+        raise ValueError(
+            f"INV-DSL-SINGLE-FILL-DIRECTIVE-001: {traffic_count} traffic "
+            f"directives found across preroll+postroll, max 1 allowed"
+        )
+
     resolved = dict(prog_def)
-    resolved.pop("presentation", None)
+    if preroll:
+        resolved["presentation"] = preroll
+    else:
+        resolved.pop("presentation", None)
+    resolved["presentation_postroll"] = postroll
+
     return resolved
 
 

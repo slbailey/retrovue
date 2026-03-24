@@ -719,33 +719,49 @@ class PlaylistBuilderDaemon:
 
             segments_data.append(d)
 
+        # INV-PLAYOUT-WRITE-ONCE-001: Use INSERT ... ON CONFLICT DO NOTHING
+        # so an existing PlaylistEvent row is never overwritten.  The daemon
+        # already checks _batch_block_exists_in_txlog before calling this,
+        # but a race with ensure_block_compiled is possible.  The DO NOTHING
+        # clause makes the write idempotent and preserves the first writer.
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        values = dict(
+            block_id=block.block_id,
+            channel_slug=self._channel_id,
+            broadcast_day=broadcast_day,
+            start_utc_ms=block.start_utc_ms,
+            end_utc_ms=block.end_utc_ms,
+            segments=segments_data,
+            window_uuid=window_uuid,
+        )
+
         try:
             if db is not None:
-                # INV-TIER2-WINDOW-UUID-PROPAGATION-001: top-level column
-                row = PlaylistEvent(
-                    block_id=block.block_id,
-                    channel_slug=self._channel_id,
-                    broadcast_day=broadcast_day,
-                    start_utc_ms=block.start_utc_ms,
-                    end_utc_ms=block.end_utc_ms,
-                    segments=segments_data,
-                    window_uuid=window_uuid,
-                )
-                db.merge(row)
+                stmt = pg_insert(PlaylistEvent.__table__).values(
+                    **values,
+                ).on_conflict_do_nothing(index_elements=["block_id"])
+                result = db.execute(stmt)
                 db.commit()
+                if result.rowcount == 0:
+                    logger.debug(
+                        "INV-PLAYOUT-WRITE-ONCE-001: PlaylistBuilder[%s] "
+                        "block=%s already persisted — skipping",
+                        self._channel_id, block.block_id,
+                    )
             else:
                 from retrovue.infra.uow import session as db_session_factory
-                with db_session_factory() as db:
-                    row = PlaylistEvent(
-                        block_id=block.block_id,
-                        channel_slug=self._channel_id,
-                        broadcast_day=broadcast_day,
-                        start_utc_ms=block.start_utc_ms,
-                        end_utc_ms=block.end_utc_ms,
-                        segments=segments_data,
-                        window_uuid=window_uuid,
-                    )
-                    db.merge(row)
+                with db_session_factory() as s:
+                    stmt = pg_insert(PlaylistEvent.__table__).values(
+                        **values,
+                    ).on_conflict_do_nothing(index_elements=["block_id"])
+                    result = s.execute(stmt)
+                    if result.rowcount == 0:
+                        logger.debug(
+                            "INV-PLAYOUT-WRITE-ONCE-001: PlaylistBuilder[%s] "
+                            "block=%s already persisted — skipping",
+                            self._channel_id, block.block_id,
+                        )
         except Exception as e:
             if db is not None:
                 try:

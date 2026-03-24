@@ -167,6 +167,7 @@ proto::EvidenceFromAir GrpcEvidenceClient::ToProto(const EvidenceFromAir& m) {
     if (ExtractString(j, "asset_uuid", &s_val)) ss->set_asset_uuid(s_val);
     if (ExtractString(j, "segment_type_name", &s_val)) ss->set_segment_type_name(s_val);
     if (ExtractString(j, "asset_uri", &s_val)) ss->set_asset_uri(s_val);
+    if (ExtractString(j, "segment_title", &s_val)) ss->set_segment_title(s_val);
 
   } else if (m.payload_type == "SEGMENT_END") {
     auto* se = p.mutable_segment_end();

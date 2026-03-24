@@ -17,6 +17,7 @@ import retrovue.adapters.importers  # noqa: F401
 
 from .commands import asset as asset_cmd
 from .commands import (
+    asrun,
     channel,
     channel_manager,
     collection,
@@ -135,6 +136,12 @@ router.register(
     worker.app,
     help_text="Processor job queue worker",
     doc_path="worker.md",
+)
+
+router.register(
+    "asrun",
+    asrun.app,
+    help_text="As-run log inspection and validation",
 )
 
 

@@ -172,15 +172,19 @@ class TestPresentationPoolEntry:
         assert pres_segs[1].asset_id in ("g-card-1", "g-card-2")
 
     # Tier: 2 | Scheduling logic invariant
-    def test_empty_pool_raises(self):
-        # Empty presentation pool must raise AssemblyFault, not IndexError.
+    def test_empty_pool_omitted_gracefully(self):
+        # INV-DSL-MISSING-ASSET-NONFATAL-001: Empty presentation pool must
+        # be omitted gracefully (not crash). The segment is skipped.
         resolver = _make_resolver()
         resolver.register_pools({
             "empty_pool": {"match": {"type": "bumper", "tags": ["nonexistent"]}},
         })
 
-        with pytest.raises((AssemblyFault, KeyError)):
-            _assemble(resolver, [{"pool": "empty_pool"}])
+        results = _assemble(resolver, [{"pool": "empty_pool"}])
+        assert len(results) >= 1
+        # No presentation segments — the empty pool was skipped
+        pres_segs = [s for s in results[0].segments if s.segment_type == "presentation"]
+        assert len(pres_segs) == 0
 
     # Tier: 2 | Scheduling logic invariant
     def test_content_segment_follows_presentation(self):

@@ -35,6 +35,7 @@ __all__ = [
     "ProcessorResult",
     "ExecutionContext",
     "ProcessingContext",
+    "EnricherConstructionError",
     "item_to_processor_result",
     "validate_processor_result",
     "execute_job",
@@ -165,7 +166,30 @@ def _extract_label(labels: list[str], key: str) -> str | None:
     return None
 
 
+class EnricherConstructionError(Exception):
+    """Raised when an enricher cannot be constructed.
+
+    INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001: enricher failures MUST be
+    visible, never silently swallowed.
+    """
+
+    def __init__(self, processor_id: str, reason: str) -> None:
+        self.processor_id = processor_id
+        self.reason = reason
+        super().__init__(
+            f"INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001: "
+            f"enricher '{processor_id}' cannot be constructed: {reason}"
+        )
+
+
 def _enricher_instance(processor_id: str, collection_name: str = "") -> Any:
+    """Construct an enricher instance.
+
+    INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001: raises EnricherConstructionError
+    on failure instead of silently returning None.  Returns None ONLY when
+    the processor_id is not registered in ENRICHERS (legitimate skip for
+    processors handled outside the enricher registry).
+    """
     cls = ENRICHERS.get(processor_id)
     if cls is None:
         return None
@@ -173,8 +197,8 @@ def _enricher_instance(processor_id: str, collection_name: str = "") -> Any:
         if processor_id == "interstitial-type":
             return cls(collection_name=collection_name)
         return cls()
-    except Exception:
-        return None
+    except Exception as exc:
+        raise EnricherConstructionError(processor_id, str(exc)) from exc
 
 
 def _context_to_item(ctx: ProcessingContext, path_uri: str, collection_name: str = "") -> DiscoveredItem:
@@ -207,6 +231,29 @@ def _compute_input_fingerprint(asset: Asset) -> str:
         str(getattr(asset, "file_mtime", "")),
     ]
     return "|".join(parts)
+
+
+def _finalize_asset_state(asset: Any) -> None:
+    """Evaluate and apply the asset state transition after processor execution.
+
+    INV-ASSET-LIFECYCLE-COMPLETION-001: this function MUST execute on every
+    code path through execute_job — success AND exception — so that the
+    asset never remains in "enriching".
+
+    State machine:
+        enriching + duration_ms > 0  → ready
+        enriching + no duration_ms   → new  (awaits re-enrichment or operator)
+        any other state              → unchanged
+    """
+    if getattr(asset, "state", None) != "enriching":
+        return
+    from ..domain.entities import validate_state_transition
+    if asset.duration_ms and asset.duration_ms > 0:
+        validate_state_transition("enriching", "ready")
+        asset.state = "ready"
+    else:
+        validate_state_transition("enriching", "new")
+        asset.state = "new"
 
 
 def execute_job(db: Session, job: Any) -> None:
@@ -273,8 +320,38 @@ def execute_job(db: Session, job: Any) -> None:
     )
 
     for processor_id in processor_ids:
-        enricher = _enricher_instance(processor_id, collection_name)
+        # INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001: enricher construction
+        # failures produce a visible error (logged + recorded as failed run),
+        # never a silent skip.
+        try:
+            enricher = _enricher_instance(processor_id, collection_name)
+        except EnricherConstructionError as exc:
+            _started = datetime.now(UTC)
+            _run_id = uuid.uuid4()
+            logger.error(
+                "enricher_construction_failed",
+                processor_id=processor_id,
+                target_id=str(job.target_id),
+                collection=collection_name or None,
+                reason=exc.reason,
+            )
+            run_records.append({
+                "run_id": _run_id,
+                "job_id": job.id,
+                "processor_id": processor_id,
+                "target_type": job.target_type,
+                "target_id": job.target_id,
+                "processor_version": DEFAULT_PROCESSOR_VERSION,
+                "input_fingerprint": input_fingerprint,
+                "status": RUN_STATUS_FAILED,
+                "started_at": _started,
+                "completed_at": _started,
+                "error_message": str(exc),
+            })
+            continue
         if enricher is None:
+            # Processor not in ENRICHERS registry — legitimate skip
+            # (e.g. processor handled by a different subsystem).
             continue
 
         started_at = datetime.now(UTC)
@@ -365,6 +442,9 @@ def execute_job(db: Session, job: Any) -> None:
                         error_message=rec.get("error_message"),
                     )
                 )
+            # INV-ASSET-LIFECYCLE-COMPLETION-001: evaluate state transition
+            # on the exception path so the asset does not remain "enriching".
+            _finalize_asset_state(ctx.target_entity)
             db.commit()
             raise
         run_records.append(run_record)
@@ -393,14 +473,8 @@ def execute_job(db: Session, job: Any) -> None:
         else:
             db.add(AssetEditorial(asset_uuid=asset.uuid, payload=editorial_to_persist))
 
-    if getattr(asset, "state", None) == "enriching":
-        from ..domain.entities import validate_state_transition
-        if asset.duration_ms and asset.duration_ms > 0:
-            validate_state_transition("enriching", "ready")
-            asset.state = "ready"
-        else:
-            validate_state_transition("enriching", "new")
-            asset.state = "new"
+    # INV-ASSET-LIFECYCLE-COMPLETION-001: evaluate state on the happy path too.
+    _finalize_asset_state(asset)
 
     for rec in run_records:
         db.add(

@@ -1861,6 +1861,52 @@ The following domain tables group tests by functional area. Each test is classif
 
 ---
 
+#### Programming Pool — Resolution Visibility (Tier 2)
+
+**Test file:** `pkg/core/tests/contracts/test_pool_resolution_visibility.py`
+
+| Test ID | Invariant(s) | Law(s) | Scenario |
+|---------|-------------|--------|----------|
+| POOL-VIS-001 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | PoolDiagnostics exposes all required fields |
+| POOL-VIS-002 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | PoolDiagnostics is immutable (frozen dataclass) |
+| POOL-VIS-003 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | Empty pool reports total_considered > 0 |
+| POOL-VIS-004 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | Sum of exclusion buckets + matched == total_considered |
+| POOL-VIS-005 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | Every excluded asset has >=1 entry in exclusion_reasons |
+| POOL-VIS-006 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | Missing single tag names the specific tag |
+| POOL-VIS-007 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | All missing tags reported when asset has zero tags |
+| POOL-VIS-008 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | excluded_by_tags count >=2 for tag-deficient assets |
+| POOL-VIS-009 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | Type mismatch reports expected and actual type |
+| POOL-VIS-010 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | Type mismatch counted in excluded_by_type bucket |
+| POOL-VIS-011 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | Movies excluded from bumper pool with type mismatch reason |
+| POOL-VIS-012 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | Duration exceeding max reports actual and limit values |
+| POOL-VIS-013 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | Wrong rating reported with rating excluded reason |
+| POOL-VIS-014 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | query_with_diagnostics returns same IDs as query |
+| POOL-VIS-015 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | Matched assets not in exclusion_reasons |
+| POOL-VIS-016 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | Accounting identity holds for all pools |
+| POOL-VIS-017 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | Asset failing type AND tags has reasons for both |
+
+---
+
+#### Programming Pool — Resolution Visibility Integration (Tier 2)
+
+**Test file:** `pkg/core/tests/contracts/test_pool_diagnostics_integration.py`
+
+| Test ID | Invariant(s) | Law(s) | Scenario |
+|---------|-------------|--------|----------|
+| POOL-VIS-INT-001 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | Empty presentation pool emits logger.warning with INV-POOL-RESOLUTION-VISIBILITY-001 |
+| POOL-VIS-INT-002 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | Empty presentation pool attaches PoolDiagnostics to AssemblyResult |
+| POOL-VIS-INT-003 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | Empty postroll pool attaches PoolDiagnostics to AssemblyResult |
+| POOL-VIS-INT-004 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | Empty content pool logs diagnostics before AssemblyFault |
+| POOL-VIS-INT-005 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | Empty content pool logger output includes pool name and counts |
+| POOL-VIS-INT-006 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | Populated pools produce no INV-POOL-RESOLUTION-VISIBILITY-001 warnings |
+| POOL-VIS-INT-007 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | Populated pools produce empty pool_diagnostics dict |
+| POOL-VIS-INT-008 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | AssemblyResult.pool_diagnostics field exists and is dict |
+| POOL-VIS-INT-009 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | Attached diagnostics are PoolDiagnostics instances |
+| POOL-VIS-INT-010 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | Attached diagnostics have populated exclusion_reasons |
+| POOL-VIS-INT-011 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | Assembly still succeeds with empty presentation pool (graceful degradation) |
+
+---
+
 #### Presentation Pool Entry Resolution (Tier 2)
 
 **Contract:** `docs/contracts/program_presentation.md`
@@ -1899,6 +1945,115 @@ The following domain tables group tests by functional area. Each test is classif
 | SBLOCK-GBM-004 | INV-SBLOCK-PROGRAM-003 | LAW-GRID | Short movie takes fewer blocks than max |
 | SBLOCK-GBM-005 | INV-SBLOCK-PROGRAM-003 | LAW-GRID | Greedy packing fills budget with right-sized slots |
 | SBLOCK-GBM-006 | INV-SBLOCK-PROGRAM-006 | LAW-GRID, LAW-CONTENT-AUTHORITY | Mismatched `grid_blocks_max` in program list rejected |
+
+---
+
+## Ingest — Interstitial Type Persistence
+
+**Test file:** `pkg/core/tests/contracts/test_inv_interstitial_type_persisted.py`
+
+| Test ID | Invariant(s) | Law(s) | Scenario |
+|---------|-------------|--------|----------|
+| ITYPE-001 | INV-ASSET-INTERSTITIAL-TYPE-PERSISTED-001 | LAW-DERIVATION | station_ids collection stamps station_id type |
+| ITYPE-002 | INV-ASSET-INTERSTITIAL-TYPE-PERSISTED-001 | LAW-DERIVATION | All COLLECTION_TYPE_MAP keys produce valid stamp |
+| ITYPE-003 | INV-ASSET-INTERSTITIAL-TYPE-PERSISTED-001 | LAW-CONTENT-AUTHORITY | Enricher merges with existing editorial, does not overwrite |
+| ITYPE-004 | INV-ASSET-INTERSTITIAL-TYPE-PERSISTED-001 | LAW-DERIVATION | Full editorial dict preserves all fields in persist |
+| ITYPE-005 | INV-ASSET-INTERSTITIAL-TYPE-PERSISTED-001 | LAW-DERIVATION | Partial editorial merges with existing (ROOT CAUSE FIX) |
+| ITYPE-006 | INV-ASSET-INTERSTITIAL-TYPE-PERSISTED-001 | LAW-DERIVATION | None editorial does not touch existing |
+| ITYPE-007 | INV-ASSET-INTERSTITIAL-TYPE-PERSISTED-001 | LAW-DERIVATION | State transition to ready does not clear editorial |
+| ITYPE-008 | INV-ASSET-INTERSTITIAL-TYPE-PERSISTED-001, INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001 | LAW-DERIVATION | Empty collection_name raises EnricherConstructionError |
+| ITYPE-009 | INV-ASSET-INTERSTITIAL-TYPE-PERSISTED-001, INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001 | LAW-DERIVATION | Unknown collection_name raises EnricherConstructionError |
+| ITYPE-010 | INV-ASSET-INTERSTITIAL-TYPE-PERSISTED-001 | LAW-DERIVATION | Valid collection_name produces enricher instance |
+| ITYPE-011 | INV-ASSET-INTERSTITIAL-TYPE-PERSISTED-001 | LAW-DERIVATION | Merge pattern preserves existing when mutable is empty |
+| ITYPE-012 | INV-ASSET-INTERSTITIAL-TYPE-PERSISTED-001 | LAW-DERIVATION | Merge pattern allows enricher to update interstitial_type |
+| ITYPE-013 | INV-ASSET-INTERSTITIAL-TYPE-PERSISTED-001 | LAW-DERIVATION | End-to-end: enrich → persist → probed update preserves type |
+
+---
+
+## Ingest — Enricher Must Execute or Fail
+
+**Test file:** `pkg/core/tests/contracts/test_inv_enricher_must_execute_or_fail.py`
+
+| Test ID | Invariant(s) | Law(s) | Scenario |
+|---------|-------------|--------|----------|
+| ENRICH-FAIL-001 | INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001 | LAW-DERIVATION | Empty collection_name → EnricherConstructionError raised |
+| ENRICH-FAIL-002 | INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001 | LAW-DERIVATION | Unknown collection_name → EnricherConstructionError raised |
+| ENRICH-FAIL-003 | INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001 | LAW-DERIVATION | Valid collection_name → enricher constructed successfully |
+| ENRICH-FAIL-004 | INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001 | LAW-DERIVATION | Unregistered processor_id → returns None (legitimate skip) |
+| ENRICH-FAIL-005 | INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001 | LAW-DERIVATION | Error message contains invariant ID for traceability |
+| ENRICH-FAIL-006 | INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001 | LAW-DERIVATION | EnricherConstructionError chains original exception |
+| ENRICH-FAIL-007 | INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001 | LAW-CONTENT-AUTHORITY | Construction failure → failed ProcessorRun recorded |
+| ENRICH-FAIL-008 | INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001 | LAW-CONTENT-AUTHORITY | Construction failure → enricher_construction_failed logged |
+| ENRICH-FAIL-009 | INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001 | LAW-CONTENT-AUTHORITY | Runtime enricher exception → failed ProcessorRun recorded |
+| ENRICH-FAIL-010 | INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001 | LAW-CONTENT-AUTHORITY | Construction-failed enricher not absent from run records |
+
+---
+
+## Ingest — Tag Persistence Correctness
+
+**Test file:** `pkg/core/tests/contracts/test_inv_asset_tags_persisted_correctly.py`
+
+| Test ID | Invariant(s) | Law(s) | Scenario |
+|---------|-------------|--------|----------|
+| TAGS-001 | INV-ASSET-TAGS-PERSISTED-CORRECTLY-001 | LAW-DERIVATION | N segments → N tags for N=1..5 (parametrized) |
+| TAGS-002 | INV-ASSET-TAGS-PERSISTED-CORRECTLY-001 | LAW-DERIVATION | Realistic 3-deep interstitial path |
+| TAGS-003 | INV-ASSET-TAGS-PERSISTED-CORRECTLY-001 | LAW-DERIVATION | 5-deep commercial path |
+| TAGS-004 | INV-ASSET-TAGS-PERSISTED-CORRECTLY-001 | LAW-DERIVATION | All tags survive normalize + namespace pipeline for N=1..5 |
+| TAGS-005 | INV-ASSET-TAGS-PERSISTED-CORRECTLY-001 | LAW-DERIVATION | Case normalization deduplicates correctly |
+| TAGS-006 | INV-ASSET-TAGS-PERSISTED-CORRECTLY-001 | LAW-DERIVATION | Mixed raw_labels: tag: prefixed labels extracted correctly |
+| TAGS-007 | INV-ASSET-TAGS-PERSISTED-CORRECTLY-001 | LAW-DERIVATION | persist_asset_metadata has no tags parameter (structural guarantee) |
+| TAGS-008 | INV-ASSET-TAGS-PERSISTED-CORRECTLY-001 | LAW-DERIVATION | Editorial update does not create AssetTag rows |
+| TAGS-009 | INV-ASSET-TAGS-PERSISTED-CORRECTLY-001 | LAW-CONTENT-AUTHORITY | Pool matches asset with all path-derived tags |
+| TAGS-010 | INV-ASSET-TAGS-PERSISTED-CORRECTLY-001 | LAW-CONTENT-AUTHORITY | Pool matches asset with 5 tags |
+| TAGS-011 | INV-ASSET-TAGS-PERSISTED-CORRECTLY-001 | LAW-CONTENT-AUTHORITY | Missing one tag excludes from pool |
+| TAGS-012 | INV-ASSET-TAGS-PERSISTED-CORRECTLY-001 | LAW-DERIVATION | expand_tag_match_set covers namespaced and plain forms |
+| TAGS-013 | INV-ASSET-TAGS-PERSISTED-CORRECTLY-001 | LAW-DERIVATION | Generation order is deepest-first |
+| TAGS-014 | INV-ASSET-TAGS-PERSISTED-CORRECTLY-001 | LAW-DERIVATION | Persistence order is sorted |
+| TAGS-015 | INV-ASSET-TAGS-PERSISTED-CORRECTLY-001 | LAW-DERIVATION | Duplicate segment names at different depths → correct deduplication |
+| TAGS-016 | INV-ASSET-TAGS-PERSISTED-CORRECTLY-001 | LAW-DERIVATION | Empty/whitespace segment discarded |
+
+---
+
+## Ingest — Asset Lifecycle Completion
+
+**Test file:** `pkg/core/tests/contracts/test_inv_asset_lifecycle_completion.py`
+
+| Test ID | Invariant(s) | Law(s) | Scenario |
+|---------|-------------|--------|----------|
+| LIFECYCLE-001 | INV-ASSET-LIFECYCLE-COMPLETION-001 | LAW-CONTENT-AUTHORITY | Enriching + duration_ms → state = ready |
+| LIFECYCLE-002 | INV-ASSET-LIFECYCLE-COMPLETION-001 | LAW-CONTENT-AUTHORITY | Processor exception → state != enriching (ROOT CAUSE) |
+| LIFECYCLE-003 | INV-ASSET-LIFECYCLE-COMPLETION-001 | LAW-CONTENT-AUTHORITY | Exception with duration_ms → state = ready |
+| LIFECYCLE-004 | INV-ASSET-LIFECYCLE-COMPLETION-001 | LAW-DERIVATION | Success without duration_ms → state != enriching |
+| LIFECYCLE-005 | INV-ASSET-LIFECYCLE-COMPLETION-001 | LAW-DERIVATION | Success with duration_ms → state = ready |
+| LIFECYCLE-006 | INV-ASSET-LIFECYCLE-COMPLETION-001 | LAW-DERIVATION | No duration_ms → state = new (not enriching) |
+| LIFECYCLE-007 | INV-ASSET-LIFECYCLE-COMPLETION-001 | LAW-DERIVATION | Ready asset stays ready after execute_job |
+| LIFECYCLE-008 | INV-ASSET-LIFECYCLE-COMPLETION-001 | LAW-DERIVATION | New asset stays new after execute_job |
+
+---
+
+## Timeline Authority Invariants
+
+**Test file:** `pkg/core/tests/contracts/test_inv_timeline_authority.py`
+
+| Test ID | Invariant(s) | Law(s) | Scenario |
+|---------|-------------|--------|----------|
+| TL-AUTH-001 | INV-TIMELINE-SINGLE-AUTHORITY-001 | LAW-CONTENT-AUTHORITY, LAW-CLOCK | Playback, EPG, and playlog plan return same program for same T |
+| TL-RESTART-001 | INV-TIMELINE-RESTART-IDENTICAL-001 | LAW-IMMUTABILITY | Pre-restart timeline identical to post-restart timeline for all covered T |
+| TL-APPEND-001 | INV-TIMELINE-APPEND-ONLY-001 | LAW-IMMUTABILITY | Subsequent compilation does not modify content in [T₀, T₁) |
+| TL-APPEND-002 | INV-TIMELINE-APPEND-ONLY-001 | LAW-IMMUTABILITY | Subsequent compilation only produces blocks for times ≥ T₁ |
+| TL-LONG-001 | INV-TIMELINE-LONGFORM-INVIOLATE-001 | LAW-CONTENT-AUTHORITY, LAW-TIMELINE | Longform program present at all T within [Tₛ, Tₑ) after restart |
+| TL-LONG-002 | INV-TIMELINE-LONGFORM-INVIOLATE-001 | LAW-CONTENT-AUTHORITY, LAW-TIMELINE | Longform program present at all T within [Tₛ, Tₑ) across day boundary |
+| TL-CARRY-001 | INV-TIMELINE-CARRY-IN-PRESERVED-001 | LAW-GRID, LAW-CONTENT-AUTHORITY | Day D+1 first block starts ≥ carry-in end from day D |
+| TL-CARRY-002 | INV-TIMELINE-CARRY-IN-PRESERVED-001 | LAW-GRID | Carry-in preserved when D and D+1 compiled in separate operations |
+| TL-CONT-001 | INV-TIMELINE-CONTINUITY-001 | LAW-GRID, LAW-LIVENESS | Adjacent blocks: A.end == B.start for all pairs |
+| TL-CONT-002 | INV-TIMELINE-CONTINUITY-001 | LAW-GRID | No uncovered time between first block start and last block end |
+| TL-EPG-001 | INV-TIMELINE-EPG-PLAYOUT-AGREE-001 | LAW-CONTENT-AUTHORITY | EPG program title matches playout block content at same T |
+| TL-EPG-002 | INV-TIMELINE-EPG-PLAYOUT-AGREE-001 | LAW-CONTENT-AUTHORITY | EPG start time matches playout block start time at same T |
+| TL-BOUND-001 | INV-TIMELINE-BOUNDARY-IMMUTABLE-001 | LAW-IMMUTABILITY | Timeline entries with start < T₍boundary₎ unchanged after scheduling operation |
+| TL-BOUND-002 | INV-TIMELINE-BOUNDARY-IMMUTABLE-001 | LAW-IMMUTABILITY | Boundary established before scheduling operation begins |
+| TL-JIP-001 | INV-TIMELINE-RESTART-IDENTICAL-001, INV-TIMELINE-LONGFORM-INVIOLATE-001 | LAW-CONTENT-AUTHORITY, LAW-TIMELINE | JIP offset (T₂ - Tₛ) consistent across restart for same program |
+
+**Scenario document:** `docs/contracts/test-scenarios/TIMELINE-INVARIANT-TEST-SCENARIOS.md`
 
 ---
 

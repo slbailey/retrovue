@@ -291,6 +291,8 @@ message BlockSegment {
   string segment_uuid = 12;          // INV-AIR-SEGMENT-ID-001: execution identity UUID (generated at feed time)
   string asset_uuid = 13;            // INV-AIR-SEGMENT-ID-002: asset identity (null for PAD)
   float gain_db = 14;               // INV-LOUDNESS-NORMALIZED-001: per-asset loudness normalization gain (0.0 = unity)
+  string segment_type_name = 15;    // Editorial segment type pass-through ("content", "commercial", "presentation", etc.)
+  string segment_title = 16;        // Editorial display title (from scheduling metadata)
 }
 
 // StartBlockPlanSessionRequest initializes BlockPlan mode with 2 seed blocks.

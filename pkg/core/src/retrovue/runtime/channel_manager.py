@@ -2392,22 +2392,11 @@ class BlockPlanProducer(Producer):
             self._advance_cursor(block)
             self._pending_block = None
             self._feed_credits = max(0, self._feed_credits - 1)
-            # INV-ASRUN-JIP-ATTR-001: Pre-populate evidence cache with
-            # JIP-renumbered segments so AsRun attribution uses the correct
-            # segment metadata (not stale pre-JIP DB indices).
-            from retrovue.runtime.evidence_server import prepopulate_block_segment_cache
-            fed_segments = [
-                {
-                    "segment_index": seg.get("segment_index", idx),
-                    "segment_type": seg.get("segment_type", "content"),
-                    "asset_uri": seg.get("asset_uri", ""),
-                    "asset_start_offset_ms": seg.get("asset_start_offset_ms", 0),
-                    "segment_duration_ms": seg.get("segment_duration_ms", 0),
-                    "title": seg.get("title", ""),
-                }
-                for idx, seg in enumerate(block.segments)
-            ]
-            prepopulate_block_segment_cache(block.block_id, fed_segments)
+            # INV-AIR-SEGMENT-ID-001: As-run enrichment uses AIR-authoritative
+            # fields from the evidence proto (segment_type_name, asset_uri,
+            # segment_title).  The DB segment cache (prepopulate_block_segment_cache)
+            # is no longer consulted at runtime — removed per cleanup of dead
+            # enrichment fallback path.
             # INV-WALLCLOCK-FENCE-002: Track fed block as active
             self._in_flight_block_ids.add(block.block_id)
             self._in_flight_block_meta[block.block_id] = (block.start_utc_ms, block.end_utc_ms)

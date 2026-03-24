@@ -443,13 +443,32 @@ class CatalogAssetResolver:
 
         # Filter: tags (INV-POOL-TAGS-FILTER-001)
         # Backward-compatible: plain DSL tags match namespaced DB tags
+        from retrovue.domain.tag_normalization import expand_tag_match_set
+
         tags_cfg = match.get("tags")
         if tags_cfg:
-            from retrovue.domain.tag_normalization import expand_tag_match_set
             required = _normalize_tags_match(tags_cfg)
             results = [
                 e for e in results
                 if all(t in expand_tag_match_set(set(e.meta.tags)) for t in required)
+            ]
+
+        # Filter: tags_any (contains_any — require at least one of the specified tags)
+        tags_any_cfg = match.get("tags_any")
+        if tags_any_cfg:
+            wanted = set(_normalize_tags_match(tags_any_cfg))
+            results = [
+                e for e in results
+                if wanted & expand_tag_match_set(set(e.meta.tags))
+            ]
+
+        # Filter: tags_exclude (excludes_any — reject assets with any forbidden tag)
+        tags_exclude_cfg = match.get("tags_exclude")
+        if tags_exclude_cfg:
+            forbidden = set(_normalize_tags_match(tags_exclude_cfg))
+            results = [
+                e for e in results
+                if not (forbidden & expand_tag_match_set(set(e.meta.tags)))
             ]
 
         # Sort: episodes by series/season/episode, default stable
@@ -460,6 +479,172 @@ class CatalogAssetResolver:
         ))
 
         return [e.canonical_id for e in results]
+
+    def query_with_diagnostics(
+        self, match: dict[str, Any],
+    ) -> tuple[list[str], "PoolDiagnostics"]:
+        """Query with per-filter exclusion diagnostics.
+
+        INV-POOL-RESOLUTION-VISIBILITY-001: returns both matched IDs and a
+        PoolDiagnostics breakdown explaining every exclusion.
+        """
+        from retrovue.domain.tag_normalization import expand_tag_match_set
+        from .asset_resolver import PoolDiagnostics
+
+        all_entries = list(self._catalog)
+        total_considered = len(all_entries)
+
+        excluded_by_type = 0
+        excluded_by_tags = 0
+        excluded_by_rating = 0
+        excluded_by_duration = 0
+        excluded_by_editorial = 0
+        exclusion_reasons: dict[str, list[str]] = {}
+        results: list[_CatalogEntry] = []
+
+        asset_type = match.get("type")
+        series_title = match.get("series_title")
+        if series_title is not None:
+            if isinstance(series_title, str):
+                series_title = [series_title]
+            series_title = [t.lower() for t in series_title]
+
+        season_set = _expand_range_value(match.get("season"))
+        episode_set = _expand_range_value(match.get("episode"))
+        max_dur = match.get("max_duration_sec")
+        min_dur = match.get("min_duration_sec")
+        rating_cfg = match.get("rating")
+        if rating_cfg:
+            rating_cfg = _normalize_rating_match(rating_cfg)
+        source = match.get("source")
+        collection = match.get("collection")
+        genre = match.get("genre")
+        tags_cfg = match.get("tags")
+        required_tags = _normalize_tags_match(tags_cfg) if tags_cfg else None
+        tags_any_cfg = match.get("tags_any")
+        wanted_tags = set(_normalize_tags_match(tags_any_cfg)) if tags_any_cfg else None
+        tags_exclude_cfg = match.get("tags_exclude")
+        forbidden_tags = set(_normalize_tags_match(tags_exclude_cfg)) if tags_exclude_cfg else None
+
+        for entry in all_entries:
+            reasons: list[str] = []
+
+            if asset_type and entry.asset_type != asset_type:
+                reasons.append(
+                    f"type mismatch: expected '{asset_type}', got '{entry.asset_type}'"
+                )
+
+            if series_title is not None and entry.series_title.lower() not in series_title:
+                reasons.append(
+                    f"missing editorial field: series_title (got '{entry.series_title}')"
+                )
+
+            if season_set is not None and (entry.season is None or entry.season not in season_set):
+                reasons.append(
+                    f"missing editorial field: season (got {entry.season})"
+                )
+
+            if episode_set is not None and (entry.episode is None or entry.episode not in episode_set):
+                reasons.append(
+                    f"missing editorial field: episode (got {entry.episode})"
+                )
+
+            if max_dur is not None and entry.duration_sec > int(max_dur):
+                reasons.append(
+                    f"duration too long: {entry.duration_sec}s > max {max_dur}s"
+                )
+
+            if min_dur is not None and entry.duration_sec < int(min_dur):
+                reasons.append(
+                    f"duration too short: {entry.duration_sec}s < min {min_dur}s"
+                )
+
+            if rating_cfg:
+                include = rating_cfg.get("include")
+                exclude = rating_cfg.get("exclude")
+                if include and entry.rating not in include:
+                    reasons.append(
+                        f"rating excluded: '{entry.rating}' not in {include}"
+                    )
+                if exclude and entry.rating in exclude:
+                    reasons.append(
+                        f"rating excluded: '{entry.rating}' in exclude list {exclude}"
+                    )
+
+            if source and entry.source_name.lower() != source.lower():
+                reasons.append(
+                    f"source mismatch: expected '{source}', got '{entry.source_name}'"
+                )
+
+            if collection and entry.collection_name.lower() != collection.lower():
+                reasons.append(
+                    f"collection mismatch: expected '{collection}', got '{entry.collection_name}'"
+                )
+
+            if genre:
+                if genre.lower() not in entry.genres:
+                    reasons.append(
+                        f"genre mismatch: '{genre}' not in {entry.genres}"
+                    )
+
+            if required_tags or wanted_tags or forbidden_tags:
+                expanded = expand_tag_match_set(set(entry.meta.tags))
+                if required_tags:
+                    missing = [t for t in required_tags if t not in expanded]
+                    if missing:
+                        reasons.append(
+                            f"missing required tags: {sorted(missing)}"
+                        )
+                if wanted_tags and not (wanted_tags & expanded):
+                    reasons.append(
+                        f"none of required tags_any present: {sorted(wanted_tags)}"
+                    )
+                if forbidden_tags:
+                    present_forbidden = sorted(forbidden_tags & expanded)
+                    if present_forbidden:
+                        reasons.append(
+                            f"excluded tag present: {present_forbidden}"
+                        )
+
+            if reasons:
+                exclusion_reasons[entry.canonical_id] = reasons
+                # Classify first applicable reason into summary bucket
+                first = reasons[0]
+                if first.startswith("type mismatch"):
+                    excluded_by_type += 1
+                elif first.startswith("missing required tags"):
+                    excluded_by_tags += 1
+                elif first.startswith("rating excluded"):
+                    excluded_by_rating += 1
+                elif first.startswith("duration too"):
+                    excluded_by_duration += 1
+                elif first.startswith("missing editorial"):
+                    excluded_by_editorial += 1
+                else:
+                    # source/collection/genre mismatches don't have a dedicated
+                    # bucket — count as editorial for summary purposes
+                    excluded_by_editorial += 1
+            else:
+                results.append(entry)
+
+        results.sort(key=lambda e: (
+            e.series_title.lower(),
+            e.season if e.season is not None else 0,
+            e.episode if e.episode is not None else 0,
+        ))
+
+        matched_ids = [e.canonical_id for e in results]
+        diagnostics = PoolDiagnostics(
+            total_considered=total_considered,
+            excluded_by_type=excluded_by_type,
+            excluded_by_tags=excluded_by_tags,
+            excluded_by_rating=excluded_by_rating,
+            excluded_by_duration=excluded_by_duration,
+            excluded_by_editorial=excluded_by_editorial,
+            matched=len(matched_ids),
+            exclusion_reasons=exclusion_reasons,
+        )
+        return matched_ids, diagnostics
 
     def resolve_pool(self, pool_name: str) -> list[str]:
         """

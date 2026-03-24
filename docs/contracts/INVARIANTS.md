@@ -236,8 +236,18 @@ Canonical contract: [block_assembly_tiers.md](block_assembly_tiers.md)
 |-----------|------|--------------|
 | INV-POOL-RATING-NORMALIZE-001 | [invariants/core/programming-pools/INV-POOL-RATING-NORMALIZE-001.md](invariants/core/programming-pools/INV-POOL-RATING-NORMALIZE-001.md) | LAW-DERIVATION |
 | INV-POOL-TAGS-FILTER-001 | [invariants/core/programming-pools/INV-POOL-TAGS-FILTER-001.md](invariants/core/programming-pools/INV-POOL-TAGS-FILTER-001.md) | LAW-DERIVATION |
+| INV-POOL-RESOLUTION-VISIBILITY-001 | [invariants/core/programming-pools/INV-POOL-RESOLUTION-VISIBILITY-001.md](invariants/core/programming-pools/INV-POOL-RESOLUTION-VISIBILITY-001.md) | LAW-DERIVATION |
 
 Canonical contract: [core/programming_pools.md](core/programming_pools.md)
+
+### Ingest — Interstitial Type Persistence
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-ASSET-INTERSTITIAL-TYPE-PERSISTED-001 | [invariants/core/ingest/INV-ASSET-INTERSTITIAL-TYPE-PERSISTED-001.md](invariants/core/ingest/INV-ASSET-INTERSTITIAL-TYPE-PERSISTED-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
+| INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001 | [invariants/core/ingest/INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001.md](invariants/core/ingest/INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
+| INV-ASSET-TAGS-PERSISTED-CORRECTLY-001 | [invariants/core/ingest/INV-ASSET-TAGS-PERSISTED-CORRECTLY-001.md](invariants/core/ingest/INV-ASSET-TAGS-PERSISTED-CORRECTLY-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
+| INV-ASSET-LIFECYCLE-COMPLETION-001 | [invariants/core/ingest/INV-ASSET-LIFECYCLE-COMPLETION-001.md](invariants/core/ingest/INV-ASSET-LIFECYCLE-COMPLETION-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
 
 ### Scheduling — Schedule Block Program Reference
 
@@ -261,6 +271,15 @@ Canonical contract: [schedule_block_program_reference.md](schedule_block_program
 | INV-RESCHEDULE-FUTURE-GUARD-001 | [invariants/core/scheduling/INV-RESCHEDULE-FUTURE-GUARD-001.md](invariants/core/scheduling/INV-RESCHEDULE-FUTURE-GUARD-001.md) | LAW-IMMUTABILITY, LAW-RUNTIME-AUTHORITY |
 | INV-RESCHEDULE-CASCADE-TIER2-001 | [invariants/core/scheduling/INV-RESCHEDULE-CASCADE-TIER2-001.md](invariants/core/scheduling/INV-RESCHEDULE-CASCADE-TIER2-001.md) | LAW-DERIVATION, LAW-IMMUTABILITY |
 | INV-CROSS-DAY-CARRY-IN-001 | [invariants/core/scheduling/INV-CROSS-DAY-CARRY-IN-001.md](invariants/core/scheduling/INV-CROSS-DAY-CARRY-IN-001.md) | LAW-GRID, LAW-CONTENT-AUTHORITY, LAW-LIVENESS |
+| INV-CROSS-DAY-CARRY-IN-SURVIVES-RESTART-001 | [invariants/core/scheduling/INV-CROSS-DAY-CARRY-IN-SURVIVES-RESTART-001.md](invariants/core/scheduling/INV-CROSS-DAY-CARRY-IN-SURVIVES-RESTART-001.md) | LAW-CONTENT-AUTHORITY, LAW-GRID |
+| INV-TIMELINE-SINGLE-AUTHORITY-001 | [invariants/core/scheduling/INV-TIMELINE-SINGLE-AUTHORITY-001.md](invariants/core/scheduling/INV-TIMELINE-SINGLE-AUTHORITY-001.md) | LAW-CONTENT-AUTHORITY, LAW-CLOCK, LAW-DERIVATION |
+| INV-TIMELINE-RESTART-IDENTICAL-001 | [invariants/core/scheduling/INV-TIMELINE-RESTART-IDENTICAL-001.md](invariants/core/scheduling/INV-TIMELINE-RESTART-IDENTICAL-001.md) | LAW-IMMUTABILITY, LAW-CONTENT-AUTHORITY |
+| INV-TIMELINE-APPEND-ONLY-001 | [invariants/core/scheduling/INV-TIMELINE-APPEND-ONLY-001.md](invariants/core/scheduling/INV-TIMELINE-APPEND-ONLY-001.md) | LAW-IMMUTABILITY, LAW-CONTENT-AUTHORITY |
+| INV-TIMELINE-LONGFORM-INVIOLATE-001 | [invariants/core/scheduling/INV-TIMELINE-LONGFORM-INVIOLATE-001.md](invariants/core/scheduling/INV-TIMELINE-LONGFORM-INVIOLATE-001.md) | LAW-CONTENT-AUTHORITY, LAW-TIMELINE, LAW-GRID |
+| INV-TIMELINE-CARRY-IN-PRESERVED-001 | [invariants/core/scheduling/INV-TIMELINE-CARRY-IN-PRESERVED-001.md](invariants/core/scheduling/INV-TIMELINE-CARRY-IN-PRESERVED-001.md) | LAW-GRID, LAW-CONTENT-AUTHORITY, LAW-TIMELINE |
+| INV-TIMELINE-CONTINUITY-001 | [invariants/core/scheduling/INV-TIMELINE-CONTINUITY-001.md](invariants/core/scheduling/INV-TIMELINE-CONTINUITY-001.md) | LAW-GRID, LAW-LIVENESS, LAW-TIMELINE |
+| INV-TIMELINE-EPG-PLAYOUT-AGREE-001 | [invariants/core/scheduling/INV-TIMELINE-EPG-PLAYOUT-AGREE-001.md](invariants/core/scheduling/INV-TIMELINE-EPG-PLAYOUT-AGREE-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-TIMELINE-BOUNDARY-IMMUTABLE-001 | [invariants/core/scheduling/INV-TIMELINE-BOUNDARY-IMMUTABLE-001.md](invariants/core/scheduling/INV-TIMELINE-BOUNDARY-IMMUTABLE-001.md) | LAW-IMMUTABILITY, LAW-CONTENT-AUTHORITY, LAW-TIMELINE |
 
 ### EPG
 

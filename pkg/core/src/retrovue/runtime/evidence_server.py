@@ -96,11 +96,21 @@ def _format_asrun_line(
 # ---------------------------------------------------------------------------
 # DB-backed segment lookup (replaces SegmentLookup singleton)
 # Contract: docs/contracts/runtime/AsRunEnrichmentContract.md
-# INV-ASRUN-ENRICH-SOURCE-001
+# ---------------------------------------------------------------------------
+# DEPRECATED: DB-based segment enrichment cache
+#
+# INV-AIR-SEGMENT-ID-001/003 superseded this path.  As-run enrichment now
+# reads segment_type_name, asset_uri, and segment_title directly from the
+# AIR evidence proto (see _process_evidence → segment_start handling).
+#
+# The functions below (_lookup_segment_from_db, prepopulate_block_segment_cache,
+# _clear_block_segment_cache) and the module-level cache state are retained
+# for contract test coverage (test_asrun_jip_segment_attribution.py) and as
+# fallback infrastructure if a future AIR proto change requires DB enrichment.
+#
+# NO RUNTIME CODE PATH CALLS THESE FUNCTIONS.
 # ---------------------------------------------------------------------------
 
-# In-memory cache: block_id -> list of segment dicts
-# Cleared on block completion (INV-ASRUN-ENRICH-CACHE-001).
 _block_segment_cache: dict = {}
 _block_segment_cache_lock = __import__("threading").Lock()
 _BLOCK_SEGMENT_CACHE_MAX = 10
@@ -109,11 +119,15 @@ _BLOCK_SEGMENT_CACHE_MAX = 10
 def _lookup_segment_from_db(block_id: str, segment_index: int) -> object | None:
     """Look up segment metadata from playlist_event.
 
+    .. deprecated::
+        Not called at runtime.  As-run enrichment uses AIR-authoritative
+        proto fields (INV-AIR-SEGMENT-ID-001/003).  Retained for contract
+        test coverage and as fallback infrastructure.
+
     Returns a simple namespace with .title, .segment_type, .asset_uri,
     .segment_duration_ms, .asset_start_offset_ms attributes, or None if not found.
 
     Gracefully degrades (returns None) on any error (DB unavailable, missing row, etc.)
-    INV-ASRUN-ENRICH-DEGRADE-001: Never raises; always degrades to None.
     """
     import types as _types
 
@@ -174,14 +188,12 @@ def _lookup_segment_from_db(block_id: str, segment_index: int) -> object | None:
 
 
 def prepopulate_block_segment_cache(block_id: str, segments: list) -> None:
-    """Pre-populate segment cache with JIP-renumbered segments from the fed block.
+    """Pre-populate segment cache with JIP-renumbered segments.
 
-    INV-ASRUN-JIP-ENRICH-001: When a block is fed to AIR after JIP renumbering,
-    the segment_index values in the fed block may differ from the original
-    PlaylistEvent. Pre-populating ensures evidence_server uses the correct
-    (renumbered) segment metadata for AsRun attribution.
-
-    Called from BlockPlanProducer._try_feed_block() after successful feed.
+    .. deprecated::
+        No longer called from runtime code.  As-run enrichment uses
+        AIR-authoritative proto fields (INV-AIR-SEGMENT-ID-001/003).
+        Retained for contract test coverage.
     """
     with _block_segment_cache_lock:
         if len(_block_segment_cache) >= _BLOCK_SEGMENT_CACHE_MAX:
@@ -192,7 +204,9 @@ def prepopulate_block_segment_cache(block_id: str, segments: list) -> None:
 def _clear_block_segment_cache(block_id: str) -> None:
     """Clear cached segments for a completed block.
 
-    INV-ASRUN-ENRICH-CACHE-001: Prevents stale data after block completion.
+    .. deprecated::
+        No longer called from any code path.  Retained for contract test
+        cleanup (test_asrun_jip_segment_attribution.py).
     """
     with _block_segment_cache_lock:
         _block_segment_cache.pop(block_id, None)

@@ -290,19 +290,19 @@ def source_update(
         should_close = True
     
     try:
-        # Get source
-        source = source_get_by_id(source_id)
+        # Get source — must use the same session so the object is bound
+        source = _resolve_source_by_id(db, source_id)
         if not source:
             raise ValueError(f"Source not found: {source_id}")
-        
+
         # Update fields
         for key, value in updates.items():
             if hasattr(source, key):
                 setattr(source, key, value)
-        
+
         db.commit()
         db.refresh(source)
-        
+
         return {
             "id": str(source.id),
             "external_id": source.external_id,
@@ -1110,8 +1110,9 @@ def update_source(
     """
     with session() as db:
         try:
-            # Get current source to determine type
-            current_source = source_get_by_id(source_id)
+            # Get current source to determine type.
+            # Must use the same session so lazy-loaded attributes (config) work.
+            current_source = _resolve_source_by_id(db, source_id)
             if not current_source:
                 typer.echo(f"Error: Source '{source_id}' not found", err=True)
                 raise typer.Exit(1)

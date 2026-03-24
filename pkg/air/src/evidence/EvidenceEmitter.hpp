@@ -37,6 +37,7 @@ struct SegmentStartPayload {
   std::string asset_uuid;
   std::string segment_type_name;    // "content", "filler", "pad", "presentation", etc.
   std::string asset_uri;            // Asset file path (empty for PAD)
+  std::string segment_title;        // INV-ASRUN-SEMANTIC-FIDELITY-001: editorial display title
 };
 
 struct SegmentEndPayload {

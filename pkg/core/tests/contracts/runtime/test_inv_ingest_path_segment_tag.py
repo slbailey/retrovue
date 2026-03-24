@@ -223,20 +223,21 @@ class TestRuleDisabledByDefault:
     """Rule 5: Without tag_from_path_segments=True, the flag is inactive."""
 
     # Tier: 2 | Scheduling logic invariant
-    def test_flag_defaults_to_false(self):
+    def test_flag_defaults_to_true(self):
         """
         INV-INGEST-PATH-SEGMENT-TAG-001 Rule 5:
         FilesystemImporter constructed without tag_from_path_segments
-        must have the attribute set to False.
+        must have the attribute set to True (directory structure is the
+        primary organizational signal for interstitials).
         """
         imp = FilesystemImporter(source_name="test", root_paths=["/tmp"])
         assert hasattr(imp, "tag_from_path_segments"), (
             "INV-INGEST-PATH-SEGMENT-TAG-001 Rule 5: "
             "FilesystemImporter must expose tag_from_path_segments attribute"
         )
-        assert imp.tag_from_path_segments is False, (
+        assert imp.tag_from_path_segments is True, (
             f"INV-INGEST-PATH-SEGMENT-TAG-001 Rule 5: "
-            f"tag_from_path_segments must default to False, got {imp.tag_from_path_segments!r}"
+            f"tag_from_path_segments must default to True, got {imp.tag_from_path_segments!r}"
         )
 
     # Tier: 2 | Scheduling logic invariant

@@ -11,8 +11,11 @@ Entry point: assemble_schedule_block()
 
 from __future__ import annotations
 
+import logging
 import random
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 from datetime import date as _date, timedelta as _timedelta
 from typing import Any
 
@@ -23,7 +26,7 @@ from typing import Any
 # within the first 7 days from this Monday.
 _MIGRATION_EPOCH = _date(2026, 1, 5)
 
-from retrovue.runtime.asset_resolver import AssetResolver
+from retrovue.runtime.asset_resolver import AssetResolver, PoolDiagnostics
 from retrovue.runtime.program_definition import (
     AssemblyFault,
     AssemblyResult,
@@ -115,6 +118,7 @@ def assemble_schedule_block(
     intro_ref = program_def.get("intro")
     outro_ref = program_def.get("outro")
     presentation_refs = program_def.get("presentation")
+    postroll_refs = program_def.get("presentation_postroll")
 
     # INV-PROGRAM-GRID-001: slots must be exact multiple of grid_blocks
     # (only for fixed-grid programs; dynamic uses slots as budget)
@@ -137,6 +141,7 @@ def assemble_schedule_block(
         intro=intro_ref,
         outro=outro_ref,
         presentation=presentation_refs,
+        presentation_postroll=postroll_refs,
         grid_blocks_max=grid_blocks_max,
     )
 
@@ -144,10 +149,18 @@ def assemble_schedule_block(
     intro_asset = _resolve_wrapper_asset(intro_ref, resolver) if intro_ref else None
     outro_asset = _resolve_wrapper_asset(outro_ref, resolver) if outro_ref else None
 
+    # INV-POOL-RESOLUTION-VISIBILITY-001: collect diagnostics for every pool
+    # resolution that occurs during assembly.
+    block_pool_diagnostics: dict[str, PoolDiagnostics] = {}
+
     # Get all pool candidates from the resolver
     pool_meta = resolver.lookup(pool_name)
     all_candidate_ids = list(pool_meta.tags)
     if not all_candidate_ids:
+        # Content pool is empty — emit diagnostics before raising.
+        _emit_pool_diagnostics(
+            pool_name, resolver, block_pool_diagnostics,
+        )
         raise AssemblyFault(
             f"INV-PROGRAM-POOL-002: pool '{pool_name}' has zero assets"
         )
@@ -188,6 +201,17 @@ def assemble_schedule_block(
         if presentation_refs:
             presentation_assets = _resolve_presentation_entries(
                 presentation_refs, resolver, rng,
+                pool_diagnostics=block_pool_diagnostics,
+            )
+
+        # Resolve postroll entries in declared order, preserving the traffic
+        # directive's position as a sentinel marker in the resolved list.
+        # INV-DSL-SEGMENT-ORDER-DETERMINISTIC-001: declared order is visual order.
+        postroll_resolved = None
+        if postroll_refs:
+            postroll_resolved = _resolve_postroll_entries(
+                postroll_refs, resolver, rng,
+                pool_diagnostics=block_pool_diagnostics,
             )
 
         result = assemble_program(
@@ -199,7 +223,11 @@ def assemble_schedule_block(
             intro_asset=intro_asset,
             outro_asset=outro_asset,
             presentation_assets=presentation_assets,
+            postroll_resolved=postroll_resolved,
         )
+
+        # INV-POOL-RESOLUTION-VISIBILITY-001: attach collected diagnostics
+        result.pool_diagnostics = dict(block_pool_diagnostics)
 
         results.append(result)
         running_offset_ms = result.next_block_start_offset_ms
@@ -216,12 +244,17 @@ def _resolve_presentation_entries(
     entries: list,
     resolver: AssetResolver,
     rng: random.Random,
+    *,
+    pool_diagnostics: dict[str, PoolDiagnostics] | None = None,
 ) -> list[_PoolAsset]:
     """Resolve a mixed list of presentation entries to assets.
 
     Each entry is either:
       - str: direct asset reference → resolver.lookup()
       - dict with "pool" key: pool reference → resolver.resolve_pool() + rng.choice()
+
+    INV-DSL-MISSING-ASSET-NONFATAL-001: A pool matching zero assets is
+    skipped with a warning — it does not prevent compilation.
     """
     assets: list[_PoolAsset] = []
     for entry in entries:
@@ -229,11 +262,23 @@ def _resolve_presentation_entries(
             assets.append(_resolve_wrapper_asset(entry, resolver))
         elif isinstance(entry, dict) and "pool" in entry:
             pool_name = entry["pool"]
-            candidates = resolver.resolve_pool(pool_name)
+            try:
+                candidates = resolver.resolve_pool(pool_name)
+            except Exception:
+                # INV-DSL-MISSING-ASSET-NONFATAL-001: degrade gracefully
+                candidates = []
             if not candidates:
-                raise AssemblyFault(
-                    f"Presentation pool '{pool_name}' matched 0 assets"
+                # INV-POOL-RESOLUTION-VISIBILITY-001: emit diagnostics
+                _emit_pool_diagnostics(
+                    pool_name, resolver,
+                    pool_diagnostics if pool_diagnostics is not None else {},
                 )
+                logger.warning(
+                    "INV-DSL-MISSING-ASSET-NONFATAL-001: presentation pool "
+                    "'%s' matched 0 assets — omitting segment",
+                    pool_name,
+                )
+                continue
             chosen_id = rng.choice(candidates)
             assets.append(_resolve_wrapper_asset(chosen_id, resolver))
         else:
@@ -242,6 +287,97 @@ def _resolve_presentation_entries(
                 f"(expected string or {{pool: '...'}})"
             )
     return assets
+
+
+# Sentinel value used in postroll_resolved to mark traffic directive position.
+POSTROLL_TRAFFIC_MARKER = "_traffic_fill_position"
+
+
+def _resolve_postroll_entries(
+    entries: list,
+    resolver: AssetResolver,
+    rng: random.Random,
+    *,
+    pool_diagnostics: dict[str, PoolDiagnostics] | None = None,
+) -> list[_PoolAsset | str]:
+    """Resolve postroll entries in declared order.
+
+    Pool/asset entries become _PoolAsset. Traffic directives become
+    POSTROLL_TRAFFIC_MARKER strings, preserving their declared position.
+    INV-DSL-SEGMENT-ORDER-DETERMINISTIC-001.
+    """
+    result: list[_PoolAsset | str] = []
+    for entry in entries:
+        if isinstance(entry, dict) and entry.get("type") == "traffic":
+            result.append(POSTROLL_TRAFFIC_MARKER)
+        elif isinstance(entry, str):
+            result.append(_resolve_wrapper_asset(entry, resolver))
+        elif isinstance(entry, dict) and "pool" in entry:
+            pool_name = entry["pool"]
+            try:
+                candidates = resolver.resolve_pool(pool_name)
+            except Exception:
+                candidates = []
+            if not candidates:
+                # INV-POOL-RESOLUTION-VISIBILITY-001: emit diagnostics
+                _emit_pool_diagnostics(
+                    pool_name, resolver,
+                    pool_diagnostics if pool_diagnostics is not None else {},
+                )
+                logger.warning(
+                    "INV-DSL-MISSING-ASSET-NONFATAL-001: postroll pool "
+                    "'%s' matched 0 assets — omitting segment",
+                    pool_name,
+                )
+                continue
+            chosen_id = rng.choice(candidates)
+            result.append(_resolve_wrapper_asset(chosen_id, resolver))
+        else:
+            raise AssemblyFault(
+                f"Invalid postroll entry: {entry!r}"
+            )
+    return result
+
+
+def _emit_pool_diagnostics(
+    pool_name: str,
+    resolver: AssetResolver,
+    pool_diagnostics: dict[str, PoolDiagnostics],
+) -> None:
+    """Run query_with_diagnostics for a pool and log + store the result.
+
+    INV-POOL-RESOLUTION-VISIBILITY-001: every empty pool must be explainable.
+    Only calls query_with_diagnostics if the resolver supports it; otherwise
+    falls back to logging without diagnostics (backward compatible).
+    """
+    query_with_diag = getattr(resolver, "query_with_diagnostics", None)
+    if query_with_diag is None:
+        return
+
+    # Retrieve match criteria for this pool
+    pools_dict = getattr(resolver, "_pools", {})
+    if pool_name not in pools_dict:
+        return
+
+    match = pools_dict[pool_name].get("match", {})
+    _, diag = query_with_diag(match)
+
+    pool_diagnostics[pool_name] = diag
+    logger.warning(
+        "INV-POOL-RESOLUTION-VISIBILITY-001: pool_empty | "
+        "pool_name=%s | total_considered=%d | "
+        "excluded_by_type=%d | excluded_by_tags=%d | "
+        "excluded_by_rating=%d | excluded_by_duration=%d | "
+        "excluded_by_editorial=%d | matched=%d",
+        pool_name,
+        diag.total_considered,
+        diag.excluded_by_type,
+        diag.excluded_by_tags,
+        diag.excluded_by_rating,
+        diag.excluded_by_duration,
+        diag.excluded_by_editorial,
+        diag.matched,
+    )
 
 
 def _resolve_wrapper_asset(

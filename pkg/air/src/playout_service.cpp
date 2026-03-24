@@ -200,6 +200,9 @@ namespace retrovue
         s.transition_out_duration_ms = seg.transition_out_duration_ms();
         // INV-LOUDNESS-NORMALIZED-001: Per-asset loudness normalization gain
         s.gain_db = seg.gain_db();
+        // INV-ASRUN-SEMANTIC-FIDELITY-001: Editorial pass-through fields
+        s.segment_type_name = seg.segment_type_name();
+        s.segment_title = seg.segment_title();
         block.segments.push_back(s);
       }
       return block;
@@ -1055,7 +1058,11 @@ namespace retrovue
             ls.start_frame = frame_idx;
             ls.segment_index = to_idx;
             ls.segment_uuid = seg.segment_uuid;
-            ls.segment_type_name = blockplan::SegmentTypeName(seg.segment_type);
+            // INV-ASRUN-SEMANTIC-FIDELITY-001: Prefer editorial pass-through;
+            // fall back to enum-derived name for backward compatibility.
+            ls.segment_type_name = seg.segment_type_name.empty()
+                ? blockplan::SegmentTypeName(seg.segment_type)
+                : seg.segment_type_name;
             ls.asset_uuid = seg.asset_uuid;
             // Asset-relative frame: decoder position within asset at TAKE.
             ls.asset_start_frame = static_cast<int64_t>(std::round(
@@ -1082,8 +1089,12 @@ namespace retrovue
             ss.join_in_progress = join_in_progress;
             ss.segment_uuid = seg.segment_uuid;
             ss.asset_uuid = seg.asset_uuid;
-            ss.segment_type_name = blockplan::SegmentTypeName(seg.segment_type);
+            // INV-ASRUN-SEMANTIC-FIDELITY-001: Prefer editorial pass-through
+            ss.segment_type_name = seg.segment_type_name.empty()
+                ? blockplan::SegmentTypeName(seg.segment_type)
+                : seg.segment_type_name;
             ss.asset_uri = seg.asset_uri;
+            ss.segment_title = seg.segment_title;
             em->EmitSegmentStart(ss);
           }
         };

@@ -88,7 +88,7 @@ class FilesystemImporter(BaseImporter):
         include_hidden: bool = False,
         calculate_hash: bool = False,
         inference_rules: dict[str, list[dict[str, Any]]] | None = None,
-        tag_from_path_segments: bool = False,
+        tag_from_path_segments: bool = True,
     ):
         """
         Initialize the filesystem importer.
@@ -102,9 +102,10 @@ class FilesystemImporter(BaseImporter):
             inference_rules: Optional dict with ``type_rules`` and ``category_rules`` lists,
                              each containing ``{"match": [...], "tag": "..."}`` entries.
                              If omitted, ``DEFAULT_INFERENCE_RULES`` are used.
-            tag_from_path_segments: When True, every directory component between the
+            tag_from_path_segments: Every directory component between the
                 configured root and the file's parent (inclusive) is emitted as a
-                normalized ``tag:{component}`` label. Interstitial inference is skipped.
+                normalized ``tag:{component}`` label. Defaults to True — directory
+                structure is the primary organizational signal for interstitials.
                 See: INV-INGEST-PATH-SEGMENT-TAG-001.
         """
         super().__init__(

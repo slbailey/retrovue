@@ -14,6 +14,29 @@ from typing import Any, Protocol
 from retrovue.runtime.pool_dsl_normalize import normalize_pool_definition
 
 
+# ---------------------------------------------------------------------------
+# Pool resolution diagnostics — INV-POOL-RESOLUTION-VISIBILITY-001
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PoolDiagnostics:
+    """Per-filter exclusion breakdown for a pool query.
+
+    INV-POOL-RESOLUTION-VISIBILITY-001: when a pool resolves to zero assets,
+    the system MUST be able to explain why via this structure.
+    """
+
+    total_considered: int
+    excluded_by_type: int
+    excluded_by_tags: int
+    excluded_by_rating: int
+    excluded_by_duration: int
+    excluded_by_editorial: int
+    matched: int
+    exclusion_reasons: dict[str, list[str]]  # asset_id → [reason, ...]
+
+
 @dataclass(frozen=True)
 class AssetMetadata:
     """Metadata for a resolved asset from the catalog."""
@@ -129,6 +152,21 @@ class StubAssetResolver:
 
     def query(self, match: dict[str, Any]) -> list[str]:
         """Simple query implementation for tests — filters by type, collection, and tags."""
+        matched, _ = self._query_inner(match)
+        return matched
+
+    def query_with_diagnostics(self, match: dict[str, Any]) -> tuple[list[str], PoolDiagnostics]:
+        """Query with per-filter exclusion diagnostics.
+
+        INV-POOL-RESOLUTION-VISIBILITY-001: returns both matched IDs and a
+        PoolDiagnostics breakdown explaining every exclusion.
+        """
+        return self._query_inner(match)
+
+    def _query_inner(self, match: dict[str, Any]) -> tuple[list[str], PoolDiagnostics]:
+        """Shared query engine that tracks per-filter exclusion reasons."""
+        from retrovue.domain.tag_normalization import expand_tag_match_set
+
         # Collection filter: return only assets in the named collection
         collection = match.get("collection")
         if collection and collection in self._collections:
@@ -139,45 +177,120 @@ class StubAssetResolver:
                 if meta.type not in ("collection", "pool")
             ]
 
+        total_considered = len(candidate_ids)
+        excluded_by_type = 0
+        excluded_by_tags = 0
+        excluded_by_rating = 0
+        excluded_by_duration = 0
+        excluded_by_editorial = 0
+        exclusion_reasons: dict[str, list[str]] = {}
         results = []
+
         for asset_id in candidate_ids:
             meta = self._assets.get(asset_id)
             if meta is None:
                 continue
 
+            reasons: list[str] = []
+
             # Filter: type
             if "type" in match and meta.type != match["type"]:
-                continue
+                reasons.append(
+                    f"type mismatch: expected '{match['type']}', got '{meta.type}'"
+                )
 
             # Filter: max_duration_sec
             if "max_duration_sec" in match and meta.duration_sec > match["max_duration_sec"]:
-                continue
+                reasons.append(
+                    f"duration too long: {meta.duration_sec}s > max {match['max_duration_sec']}s"
+                )
 
             # Filter: min_duration_sec
             if "min_duration_sec" in match and meta.duration_sec < match["min_duration_sec"]:
-                continue
+                reasons.append(
+                    f"duration too short: {meta.duration_sec}s < min {match['min_duration_sec']}s"
+                )
 
             # Filter: rating
             rating_cfg = match.get("rating")
             if rating_cfg:
                 if "include" in rating_cfg and meta.rating not in rating_cfg["include"]:
-                    continue
+                    reasons.append(
+                        f"rating excluded: '{meta.rating}' not in {rating_cfg['include']}"
+                    )
                 if "exclude" in rating_cfg and meta.rating in rating_cfg["exclude"]:
-                    continue
+                    reasons.append(
+                        f"rating excluded: '{meta.rating}' in exclude list {rating_cfg['exclude']}"
+                    )
 
-            # Filter: tags (AND-combined, case-insensitive)
-            # Backward-compatible: plain DSL tags match namespaced DB tags
+            # Filter: tags (contains_all, contains_any, excludes_any)
             tags_cfg = match.get("tags")
-            if tags_cfg:
-                from retrovue.domain.tag_normalization import expand_tag_match_set
-                if isinstance(tags_cfg, str):
-                    tags_cfg = [tags_cfg]
-                required = {t.lower() for t in tags_cfg}
+            tags_any_cfg = match.get("tags_any")
+            tags_exclude_cfg = match.get("tags_exclude")
+            if tags_cfg or tags_any_cfg or tags_exclude_cfg:
                 asset_tags_expanded = expand_tag_match_set(set(meta.tags))
-                if not required.issubset(asset_tags_expanded):
-                    continue
 
-            results.append(asset_id)
+                if tags_cfg:
+                    if isinstance(tags_cfg, str):
+                        tags_cfg = [tags_cfg]
+                    required = {t.lower() for t in tags_cfg}
+                    missing = required - asset_tags_expanded
+                    if missing:
+                        reasons.append(
+                            f"missing required tags: {sorted(missing)}"
+                        )
+
+                if tags_any_cfg:
+                    if isinstance(tags_any_cfg, str):
+                        tags_any_cfg = [tags_any_cfg]
+                    wanted = {t.lower() for t in tags_any_cfg}
+                    if not (wanted & asset_tags_expanded):
+                        reasons.append(
+                            f"none of required tags_any present: {sorted(wanted)}"
+                        )
+
+                if tags_exclude_cfg:
+                    if isinstance(tags_exclude_cfg, str):
+                        tags_exclude_cfg = [tags_exclude_cfg]
+                    forbidden = {t.lower() for t in tags_exclude_cfg}
+                    present_forbidden = forbidden & asset_tags_expanded
+                    if present_forbidden:
+                        reasons.append(
+                            f"excluded tag present: {sorted(present_forbidden)}"
+                        )
+
+            if reasons:
+                exclusion_reasons[asset_id] = reasons
+                # Classify into buckets (an asset may fail multiple filters;
+                # count the first for the summary bucket)
+                for reason in reasons:
+                    if reason.startswith("type mismatch"):
+                        excluded_by_type += 1
+                        break
+                    elif reason.startswith("missing required tags"):
+                        excluded_by_tags += 1
+                        break
+                    elif reason.startswith("rating excluded"):
+                        excluded_by_rating += 1
+                        break
+                    elif reason.startswith("duration too"):
+                        excluded_by_duration += 1
+                        break
+                    elif reason.startswith("missing editorial"):
+                        excluded_by_editorial += 1
+                        break
+            else:
+                results.append(asset_id)
 
         results.sort()
-        return results
+        diagnostics = PoolDiagnostics(
+            total_considered=total_considered,
+            excluded_by_type=excluded_by_type,
+            excluded_by_tags=excluded_by_tags,
+            excluded_by_rating=excluded_by_rating,
+            excluded_by_duration=excluded_by_duration,
+            excluded_by_editorial=excluded_by_editorial,
+            matched=len(results),
+            exclusion_reasons=exclusion_reasons,
+        )
+        return results, diagnostics

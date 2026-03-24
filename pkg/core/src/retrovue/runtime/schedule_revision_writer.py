@@ -20,8 +20,14 @@ from retrovue.domain.entities import (
     ScheduleItem,
     ScheduleRevision,
 )
+from retrovue.runtime.clock import MasterClock
 
 logger = logging.getLogger(__name__)
+
+# LAW-CLOCK: Single time authority for all scheduling decisions.
+# Module-level instance — stateless, equivalent to datetime.now(UTC)
+# in production but conformant with the MasterClock protocol.
+_clock = MasterClock()
 
 
 def _parse_uuid(value: Any) -> uuid_mod.UUID | None:
@@ -80,13 +86,24 @@ def write_active_revision_from_compiled_schedule(
 ) -> bool:
     """Write relational schedule rows from compiled schedule output.
 
-    Lifecycle (atomic within caller transaction):
-      1) supersede existing active revision for (channel_slug, broadcast_day)
-      2) insert new active ScheduleRevision
-      3) insert deterministic ScheduleItems from enumerate(program_blocks)
+    INV-TIMELINE-BOUNDARY-IMMUTABLE-001: The wall-clock time at invocation
+    defines an immutable boundary.  If an active revision exists and
+    contains ANY ScheduleItem with start_time before the boundary, the
+    write is refused — those items represent committed (past or in-flight)
+    timeline that MUST NOT be modified.
 
-    Returns True when relational rows were written, False when channel is
-    unknown and write is skipped for backward compatibility.
+    INV-TIMELINE-APPEND-ONLY-001: A revision whose items are ALL in the
+    future (start_time >= boundary) MAY be superseded — the timeline for
+    that day has not yet committed to the viewer.
+
+    Lifecycle (when write is permitted):
+      1) supersede existing future-only revision (if any)
+      2) insert new active ScheduleRevision
+      3) insert deterministic ScheduleItems
+      4) upsert ChannelActiveRevision pointer
+
+    Returns True when relational rows were written, False when the write
+    was skipped.
     """
     channel = db.query(Channel).filter(Channel.slug == channel_slug).first()
     if channel is None:
@@ -96,19 +113,57 @@ def write_active_revision_from_compiled_schedule(
         )
         return False
 
-    now = datetime.now(timezone.utc)
+    # INV-TIMELINE-BOUNDARY-IMMUTABLE-001: Capture the immutable boundary
+    # at the moment this write is attempted.  Everything before this time
+    # is committed history.
+    # LAW-CLOCK: MasterClock is the single time authority.
+    boundary = _clock.now_utc()
 
-    db.query(ScheduleRevision).filter(
+    existing_active = db.query(ScheduleRevision).filter(
         ScheduleRevision.channel_id == channel.id,
         ScheduleRevision.broadcast_day == broadcast_day,
         ScheduleRevision.status == "active",
-    ).update(
-        {
-            ScheduleRevision.status: "superseded",
-            ScheduleRevision.superseded_at: now,
-        },
-        synchronize_session=False,
-    )
+    ).first()
+
+    if existing_active is not None:
+        # Check whether the existing revision has ANY item that starts
+        # before the boundary.  If so, the revision contains committed
+        # timeline and MUST NOT be superseded.
+        has_committed = db.query(ScheduleItem).filter(
+            ScheduleItem.schedule_revision_id == existing_active.id,
+            ScheduleItem.start_time < boundary,
+        ).first()
+
+        if has_committed is not None:
+            logger.info(
+                "INV-TIMELINE-BOUNDARY-IMMUTABLE-001: refusing to modify "
+                "committed timeline — revision %s for %s/%s has items "
+                "before boundary %s (created_by=%s, activated_at=%s)",
+                existing_active.id,
+                channel_slug,
+                broadcast_day,
+                boundary.isoformat(),
+                existing_active.created_by,
+                existing_active.activated_at,
+            )
+            return False
+
+        # All items are in the future — this revision has not committed
+        # to any viewer yet.  Supersede it so the new compilation takes
+        # effect.
+        logger.info(
+            "INV-TIMELINE-BOUNDARY-IMMUTABLE-001: superseding future-only "
+            "revision %s for %s/%s (all items after boundary %s)",
+            existing_active.id,
+            channel_slug,
+            broadcast_day,
+            boundary.isoformat(),
+        )
+        existing_active.status = "superseded"
+        existing_active.superseded_at = boundary
+        db.flush()
+
+    now = _clock.now_utc()
 
     revision = ScheduleRevision(
         channel_id=channel.id,
