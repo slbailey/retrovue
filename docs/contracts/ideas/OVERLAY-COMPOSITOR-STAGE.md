@@ -71,7 +71,7 @@ Without explicit z-ordering: overlapping issues, inconsistent visuals, ordering 
 
 ### OverlayLayer interface
 
-Each layer is an independent behavior:
+Each layer is an independent behavior with context-aware activation:
 
 ```cpp
 class IOverlayLayer {
@@ -79,23 +79,30 @@ public:
     virtual ~IOverlayLayer() = default;
 
     // Called per-frame. Returns true if the layer modified the frame.
+    // MUST NOT hold a pointer to frame beyond this call.
+    // MUST NOT rebuild filter graphs inside Process().
     virtual bool Process(buffer::Frame& frame, const OverlayContext& ctx) = 0;
 
-    // Lifecycle
+    // Context-aware activation — called per frame by compositor.
+    // Layer evaluates its own activation logic against the context.
+    virtual bool IsActive(const OverlayContext& ctx) const = 0;
+
+    // Lifecycle (for segment-driven and session-driven layers)
     virtual void Activate(const OverlayLayerConfig& config) = 0;
     virtual void Deactivate() = 0;
-    virtual bool IsActive() const = 0;
 
-    // Identity
+    // Identity and ordering
     virtual int ZIndex() const = 0;
     virtual OverlayType Type() const = 0;
+    virtual OverlayPriorityGroup Group() const = 0;
 };
 ```
 
 Each layer:
-- Knows when it is active (its own lifecycle, not just segment boundaries)
-- Knows how to render (owns its filter graph or rendering state)
-- Is independently controlled (can be activated/deactivated without affecting other layers)
+- Evaluates its own activation against per-frame context (time, state, segment)
+- Owns its rendering state (filter graph or pixel writer) independently
+- Declares its priority group for suppression enforcement
+- Does not assume frame ownership beyond its `Process()` call
 
 ### OverlayContext (per-frame state)
 
@@ -291,88 +298,135 @@ Last block of broadcast day: omit "Coming Up Next" (simplest). Post-merge pass i
 
 ---
 
-## Unresolved Design Tensions
+## Decided Constraints
 
-These are structural decisions that MUST be resolved before implementation. They are not details — each one constrains the architecture.
+These are locked decisions. They constrain V1 implementation and define the evolution path.
 
-### 1. Independent layer processing vs combined render pass
+### 1. Path A for V1, designed for Path B evolution
 
-**Current design (Path A):** Each layer owns its own filter graph and processes the frame independently. With 3 text layers + 1 image layer active simultaneously, the frame is touched 4 times — 4 filter graph evaluations, potential intermediate copies, memory churn.
+**Decision:** V1 uses independent layer processing (each layer mutates the frame). Path B (collected render instructions, single composite pass) is the known future direction.
 
-**Future direction (Path B):** The compositor collects rendering instructions from all active layers, then executes a single compositing pass. Layers contribute what to draw, not how. One frame touch, one allocation.
+**Constraint on V1:** No layer may assume it owns the full frame. No layer may cache stale frame state. Layers must be composable — the result of layer N processing is the input to layer N+1.
 
-**Decision required:** V1 can ship with Path A (simple, modular). But the `IOverlayLayer` interface must not assume per-layer frame ownership — it must be possible to evolve toward a collected-instruction model without breaking the layer interface. Concretely: `Process()` might need to return a render instruction rather than mutating the frame directly.
+**Design rule:** `IOverlayLayer::Process()` receives a mutable frame reference, not a frame copy. It modifies in place. But the interface must not leak assumptions that prevent a future signature change to returning a render instruction instead of mutating. Concretely: no layer may hold a pointer to the frame beyond its `Process()` call.
 
-### 2. Activation model — context-aware, not boolean
+### 2. Context-aware activation (not boolean state)
 
-**Current design:** `bool IsActive()` — layers are either on or off.
-
-**Problem:** Some overlays are:
-- **Time-based** — fade in/out at segment boundaries
-- **State-based** — debug toggle, emergency flag
-- **Position-relative** — "Coming Up Next" appears in last N seconds of segment
-- **Priority-based** — emergency overrides suppress lower layers
-
-**Required change:** Activation must be context-aware:
+**Decision:** `IsActive()` takes context.
 
 ```cpp
 bool IsActive(const OverlayContext& ctx) const;
 ```
 
-Not just `bool IsActive() const`. The context carries pts, segment elapsed time, session state, and segment metadata. A "Coming Up Next" layer can check `ctx.segment_remaining_ms < 5000` to activate only in the last 5 seconds. An emergency layer checks a runtime flag. The compositor calls `IsActive(ctx)` per frame, not once at segment boundaries.
+Not `bool IsActive() const`. The compositor calls this per frame. Each layer evaluates its own activation logic against the context:
 
-**Impact on OverlayContext:** The context struct must grow to include:
-- `int64_t segment_remaining_ms` — time until segment end
-- `bool is_transition_boundary` — about to switch segments
-- `std::optional<std::string> next_program_title` — for "Now Playing" / "Coming Up Next" overlays that depend on adjacent content identity
+- Time-based: `ctx.segment_remaining_ms < fade_start_ms`
+- State-based: `ctx.emergency_active`
+- Segment-based: `ctx.segment_type == "coming_up_next"`
 
-### 3. Composition model — alpha stacking rules
+**OverlayContext is the contract between playout and graphics.** It must be treated as versioned, stable, and testable. The full struct:
 
-**Current design:** Layers process in z-order. No defined blending model.
+```cpp
+struct OverlayContext {
+    // Timing
+    int64_t pts_90k;
+    int64_t segment_elapsed_ms;
+    int64_t segment_remaining_ms;
+    int64_t session_elapsed_ms;
 
-**Problem:** When a channel bug (opacity 0.8) and a lower third (opacity 1.0) overlap in pixel space:
-- What blending operation applies? Pre-multiplied alpha? Straight alpha? Additive?
-- Does the lower third's opaque region completely occlude the bug, or do they blend?
-- Are all operations in YUV space, or must some layers convert to RGB and back?
+    // Identity
+    int32_t segment_index;
+    std::string block_id;
+    std::string segment_type;
 
-**Rules needed before implementation:**
-- All compositing MUST happen in a single color space (YUV420P or RGB — pick one)
-- If YUV: alpha blending requires careful handling of chroma subsampling at overlay edges
-- If RGB: a colorspace conversion round-trip per frame is required (CPU cost)
-- Pre-multiplied alpha is the correct model for layered compositing (avoids double-multiplication artifacts)
-- The compositor must define: `result = layer_color * layer_alpha + existing_color * (1 - layer_alpha)` explicitly
+    // Boundaries
+    bool is_transition_boundary;
+    bool is_last_segment_in_block;
 
-### 4. Layer exclusivity and suppression rules
+    // Adjacent content (for "Coming Up Next" / "Now Playing")
+    std::optional<std::string> next_program_title;
+    std::optional<std::string> current_program_title;
 
-**Current design:** All active layers render additively. No mutual exclusion.
+    // Runtime state
+    bool emergency_active;
+    bool debug_overlay_enabled;
 
-**Problem:** When an emergency crawl activates:
-- Does it suppress the "Coming Up Next" overlay? (Probably yes — conflicting visual messaging)
-- Does it suppress the channel bug? (Probably no — the bug identifies the channel)
-- Does it suppress the debug overlay? (Depends — debug might be needed during emergency)
+    // Frame geometry
+    int width;
+    int height;
+};
+```
 
-**Required:** An explicit exclusivity model:
+### 3. YUV compositing for V1, RGB as documented future path
 
-| When active | Suppress | Keep |
-|---|---|---|
-| Emergency crawl | Coming Up Next, Lower Third, Promo | Bug, Debug |
-| Coming Up Next | (none) | Bug, Debug |
-| Debug | (none) | All others |
+**Decision:** All compositing happens in YUV420P. No colorspace conversion per frame.
 
-This can be implemented as a suppression mask per layer type, or as priority groups where higher-priority groups suppress lower ones within the same group.
+**Why:** AIR is already in YUV. Conversion to RGB and back costs ~2ms per frame at 720p — 6% of the frame budget for zero visual benefit at V1 overlay complexity (text, static images).
 
-### 5. Filter graph lifecycle (the performance question)
+**Accepted trade-off:** Alpha blending in YUV requires care at chroma subsampling boundaries. Overlay edges may show minor chroma artifacts (1–2 pixel fringe). Acceptable for text with background boxes. Not acceptable for feathered transparency — that requires RGB and is a future capability.
 
-**Current design:** Filter graph built on `Activate()`, torn down on `Deactivate()`.
+**Blending formula (YUV, straight alpha):**
+```
+Y_out  = Y_overlay * alpha + Y_base * (1 - alpha)
+Cb_out = Cb_overlay * alpha + Cb_base * (1 - alpha)
+Cr_out = Cr_overlay * alpha + Cr_base * (1 - alpha)
+```
 
-**Hidden cost:** A text overlay layer that changes text (e.g., "Coming Up Next: Movie A" → "Coming Up Next: Movie B" on the next block) must tear down and rebuild its drawtext filter graph because the text parameter is baked into the graph at creation time.
+Chroma planes are half-resolution (4:2:0). Overlay alpha must be downsampled to chroma resolution before blending. Nearest-neighbor downsampling is sufficient for rectangular overlays (text boxes). Bilinear downsampling needed for non-rectangular alpha (future).
 
-**Options:**
-- **Rebuild on text change:** Acceptable if text changes happen at segment boundaries (every 30–120 minutes). Cost: ~5ms graph rebuild, happens once, amortized over thousands of frames.
-- **Parameterized graph:** `drawtext` supports `textfile` parameter that reads text from a file each frame. Avoids rebuild but adds file I/O per frame.
-- **Expression-based text:** `drawtext` supports `text` as an expression with runtime variables. Limited but avoids both rebuild and file I/O.
+**Documented future path:** When GPU offload or complex transparency is needed, introduce an RGB compositing stage with a single YUV→RGB→composite→RGB→YUV round-trip. The layer interface does not change — only the compositor's internal pipeline.
 
-**Decision required:** For V1, rebuild on text change is acceptable. Document the cost so it's not mistaken for a bug when profiling.
+### 4. Suppression via priority groups (enforced, not documented)
+
+**Decision:** Layers belong to priority groups. Higher-priority groups suppress specified lower groups when active.
+
+```cpp
+enum class OverlayPriorityGroup {
+    kPersistent = 0,   // Bug, Debug — never suppressed
+    kContent    = 1,   // Coming Up Next, Lower Third, Promo
+    kEmergency  = 2,   // Emergency crawl — suppresses kContent
+};
+```
+
+Each layer declares its group. The compositor enforces:
+- When any layer in `kEmergency` is active, all layers in `kContent` are suppressed (their `Process()` is not called, regardless of what `IsActive()` returns)
+- `kPersistent` layers are never suppressed by any group
+- Within a group, all active layers render (no intra-group suppression)
+
+**Enforcement is in the compositor, not in the layers.** Layers do not call `Suppresses()` on each other. The compositor iterates groups in priority order and skips suppressed groups entirely.
+
+```cpp
+void OverlayCompositor::Apply(Frame& frame, const OverlayContext& ctx) {
+    // Determine which groups are suppressed
+    bool suppress_content = false;
+    for (auto& layer : layers_) {
+        if (layer->Group() == OverlayPriorityGroup::kEmergency
+            && layer->IsActive(ctx)) {
+            suppress_content = true;
+        }
+    }
+
+    for (auto& layer : layers_) {  // sorted by z_index
+        if (suppress_content
+            && layer->Group() == OverlayPriorityGroup::kContent) {
+            continue;  // suppressed
+        }
+        if (layer->IsActive(ctx)) {
+            layer->Process(frame, ctx);
+        }
+    }
+}
+```
+
+### 5. Filter graph rebuild on text change (V1 accepted cost)
+
+**Decision:** Filter graph is rebuilt when overlay text changes. This happens at segment boundaries (every 30–120 minutes for movies, every 22–44 minutes for sitcoms). Cost: ~5ms per rebuild, amortized over thousands of frames. Acceptable.
+
+**Constraint:** No layer may rebuild its filter graph mid-frame or mid-tick. Rebuilds happen only in `Activate()` or `OnSegmentStart()` — never in `Process()`.
+
+**Filter graph ownership rule:** Each layer owns exactly one filter graph (or zero, for the debug layer which uses direct pixel writes). No layer shares a filter graph with another layer. This avoids coupling between layers at the cost of slightly higher total memory. Acceptable at the overlay counts we're targeting (2–4 simultaneous layers).
+
+**No layer assumes it owns the full frame.** The frame has already been processed by all lower-z layers before reaching this layer. The frame will be processed by all higher-z layers after this layer returns.
 
 ---
 
