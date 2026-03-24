@@ -291,14 +291,99 @@ Last block of broadcast day: omit "Coming Up Next" (simplest). Post-merge pass i
 
 ---
 
-## Open Questions
+## Unresolved Design Tensions
+
+These are structural decisions that MUST be resolved before implementation. They are not details — each one constrains the architecture.
+
+### 1. Independent layer processing vs combined render pass
+
+**Current design (Path A):** Each layer owns its own filter graph and processes the frame independently. With 3 text layers + 1 image layer active simultaneously, the frame is touched 4 times — 4 filter graph evaluations, potential intermediate copies, memory churn.
+
+**Future direction (Path B):** The compositor collects rendering instructions from all active layers, then executes a single compositing pass. Layers contribute what to draw, not how. One frame touch, one allocation.
+
+**Decision required:** V1 can ship with Path A (simple, modular). But the `IOverlayLayer` interface must not assume per-layer frame ownership — it must be possible to evolve toward a collected-instruction model without breaking the layer interface. Concretely: `Process()` might need to return a render instruction rather than mutating the frame directly.
+
+### 2. Activation model — context-aware, not boolean
+
+**Current design:** `bool IsActive()` — layers are either on or off.
+
+**Problem:** Some overlays are:
+- **Time-based** — fade in/out at segment boundaries
+- **State-based** — debug toggle, emergency flag
+- **Position-relative** — "Coming Up Next" appears in last N seconds of segment
+- **Priority-based** — emergency overrides suppress lower layers
+
+**Required change:** Activation must be context-aware:
+
+```cpp
+bool IsActive(const OverlayContext& ctx) const;
+```
+
+Not just `bool IsActive() const`. The context carries pts, segment elapsed time, session state, and segment metadata. A "Coming Up Next" layer can check `ctx.segment_remaining_ms < 5000` to activate only in the last 5 seconds. An emergency layer checks a runtime flag. The compositor calls `IsActive(ctx)` per frame, not once at segment boundaries.
+
+**Impact on OverlayContext:** The context struct must grow to include:
+- `int64_t segment_remaining_ms` — time until segment end
+- `bool is_transition_boundary` — about to switch segments
+- `std::optional<std::string> next_program_title` — for "Now Playing" / "Coming Up Next" overlays that depend on adjacent content identity
+
+### 3. Composition model — alpha stacking rules
+
+**Current design:** Layers process in z-order. No defined blending model.
+
+**Problem:** When a channel bug (opacity 0.8) and a lower third (opacity 1.0) overlap in pixel space:
+- What blending operation applies? Pre-multiplied alpha? Straight alpha? Additive?
+- Does the lower third's opaque region completely occlude the bug, or do they blend?
+- Are all operations in YUV space, or must some layers convert to RGB and back?
+
+**Rules needed before implementation:**
+- All compositing MUST happen in a single color space (YUV420P or RGB — pick one)
+- If YUV: alpha blending requires careful handling of chroma subsampling at overlay edges
+- If RGB: a colorspace conversion round-trip per frame is required (CPU cost)
+- Pre-multiplied alpha is the correct model for layered compositing (avoids double-multiplication artifacts)
+- The compositor must define: `result = layer_color * layer_alpha + existing_color * (1 - layer_alpha)` explicitly
+
+### 4. Layer exclusivity and suppression rules
+
+**Current design:** All active layers render additively. No mutual exclusion.
+
+**Problem:** When an emergency crawl activates:
+- Does it suppress the "Coming Up Next" overlay? (Probably yes — conflicting visual messaging)
+- Does it suppress the channel bug? (Probably no — the bug identifies the channel)
+- Does it suppress the debug overlay? (Depends — debug might be needed during emergency)
+
+**Required:** An explicit exclusivity model:
+
+| When active | Suppress | Keep |
+|---|---|---|
+| Emergency crawl | Coming Up Next, Lower Third, Promo | Bug, Debug |
+| Coming Up Next | (none) | Bug, Debug |
+| Debug | (none) | All others |
+
+This can be implemented as a suppression mask per layer type, or as priority groups where higher-priority groups suppress lower ones within the same group.
+
+### 5. Filter graph lifecycle (the performance question)
+
+**Current design:** Filter graph built on `Activate()`, torn down on `Deactivate()`.
+
+**Hidden cost:** A text overlay layer that changes text (e.g., "Coming Up Next: Movie A" → "Coming Up Next: Movie B" on the next block) must tear down and rebuild its drawtext filter graph because the text parameter is baked into the graph at creation time.
+
+**Options:**
+- **Rebuild on text change:** Acceptable if text changes happen at segment boundaries (every 30–120 minutes). Cost: ~5ms graph rebuild, happens once, amortized over thousands of frames.
+- **Parameterized graph:** `drawtext` supports `textfile` parameter that reads text from a file each frame. Avoids rebuild but adds file I/O per frame.
+- **Expression-based text:** `drawtext` supports `text` as an expression with runtime variables. Limited but avoids both rebuild and file I/O.
+
+**Decision required:** For V1, rebuild on text change is acceptable. Document the cost so it's not mistaken for a bug when profiling.
+
+---
+
+## Open Questions (operational)
 
 1. **Font distribution**: Bundle a default TTF with AIR? Configurable per channel?
-2. **Performance budget**: drawtext at 720p30 adds ~1ms/frame. With 3 active layers?
-3. **Image format**: PNG with alpha for bugs? SVG? Pre-scaled to output resolution?
-4. **Filter graph sharing**: Can two text layers share a single avfilter graph, or must each own its own?
-5. **Emergency overlay protocol**: gRPC call to AIR? Or a signal from Core via block metadata?
-6. **Crawl/scroll text**: Emergency crawl needs horizontal scrolling text. Drawtext supports this via `x` expression with `t` (time), but testing is needed.
+2. **Performance budget**: drawtext at 720p30 adds ~1ms/frame per layer. With 3 active layers, that's ~3ms of the 33ms frame budget (9%). Acceptable?
+3. **Image format**: PNG with alpha for bugs? Pre-scaled to output resolution at session start?
+4. **Emergency overlay protocol**: gRPC call to AIR? Runtime signal? Core-initiated via special block metadata?
+5. **Crawl/scroll text**: Drawtext supports horizontal scrolling via `x` expression with `t` (time). Needs testing for smoothness at 30fps.
+6. **Testing**: How to test overlay rendering without a full AIR session? Headless frame-capture mode? Golden-image comparison?
 
 ## Existing Contract References
 
