@@ -20,12 +20,16 @@ pools:
       where:
         type:
           eq: trailer
+        tags:
+          excludes_any: [anime]
 
   traffic_teasers:
     select:
       where:
         type:
           eq: teaser
+        tags:
+          excludes_any: [anime]
 
   intros:
     select:
@@ -48,9 +52,9 @@ pools:
     select:
       where:
         type:
-          eq: bumper
+          eq: station_id
         tags:
-          contains_all: [hbo, station_id]
+          contains_all: [hbo, station_ids]
 
   coming_up_next_promos:
     select:
