@@ -15,7 +15,7 @@ import pytest
 from retrovue.catalog.processor_runtime import execute_job
 from retrovue.domain.entities import (
     Asset,
-    Collection,
+    Container,
     ProcessorJob,
     ProcessorOutput,
     Source,
@@ -31,7 +31,7 @@ def _make_source_and_collection(db):
     )
     db.add(src)
     db.flush()
-    coll = Collection(
+    coll = Container(
         source_id=src.id,
         external_id=f"test-coll-{uuid.uuid4().hex[:12]}",
         name="Test Container",

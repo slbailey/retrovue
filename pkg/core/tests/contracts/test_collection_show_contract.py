@@ -14,7 +14,7 @@ class TestCollectionShowContract:
 
     def test_show_collection_json_includes_enrichers_and_config(self):
         with patch("retrovue.cli.commands.collection._get_db_context") as get_ctx, patch(
-            "retrovue.cli.commands.collection.resolve_collection_selector"
+            "retrovue.cli.commands.collection.resolve_container_selector"
         ) as resolve:
             fake_cm = MagicMock()
             fake_db = MagicMock()
@@ -68,7 +68,7 @@ class TestCollectionShowContract:
             ]
 
             result = self.runner.invoke(
-                app, ["collection", "show", "TV Shows", "--json"]
+                app, ["container", "show", "TV Shows", "--json"]
             )
 
         assert result.exit_code == 0
@@ -87,7 +87,7 @@ class TestCollectionShowContract:
 
     def test_show_collection_human_mentions_enricher(self):
         with patch("retrovue.cli.commands.collection._get_db_context") as get_ctx, patch(
-            "retrovue.cli.commands.collection.resolve_collection_selector"
+            "retrovue.cli.commands.collection.resolve_container_selector"
         ) as resolve:
             fake_cm = MagicMock()
             fake_db = MagicMock()
@@ -113,7 +113,7 @@ class TestCollectionShowContract:
             enr_row.name = "FFprobe"
             fake_db.query.return_value.filter.return_value.first.return_value = enr_row
 
-            result = self.runner.invoke(app, ["collection", "show", "Movies"])
+            result = self.runner.invoke(app, ["container", "show", "Movies"])
 
         assert result.exit_code == 0
         assert "Movies" in result.stdout
@@ -121,7 +121,7 @@ class TestCollectionShowContract:
 
     def test_show_collection_supports_test_db(self):
         with patch("retrovue.cli.commands.collection._get_db_context") as get_ctx, patch(
-            "retrovue.cli.commands.collection.resolve_collection_selector"
+            "retrovue.cli.commands.collection.resolve_container_selector"
         ) as resolve:
             fake_cm = MagicMock()
             fake_db = MagicMock()
@@ -141,7 +141,7 @@ class TestCollectionShowContract:
             fake_db.query.return_value.filter.return_value.all.return_value = []
             fake_db.query.return_value.filter.return_value.first.return_value = None
 
-            result = self.runner.invoke(app, ["collection", "show", "Docs", "--test-db", "--json"])
+            result = self.runner.invoke(app, ["container", "show", "Docs", "--test-db", "--json"])
 
         assert result.exit_code == 0
         get_ctx.assert_called_once()

@@ -21,7 +21,7 @@ def list_sources(db: Session, *, source_type: str | None = None) -> list[dict[st
     for src in sources:
         try:
             enabled = (
-                db.query(Collection)
+                db.query(Container)
                 .filter(
                     Container.source_id == src.id,
                     Container.sync_enabled.is_(True),
@@ -29,7 +29,7 @@ def list_sources(db: Session, *, source_type: str | None = None) -> list[dict[st
                 .count()
             )
             ingestible = (
-                db.query(Collection)
+                db.query(Container)
                 .filter(
                     Container.source_id == src.id,
                     Container.ingestible.is_(True),

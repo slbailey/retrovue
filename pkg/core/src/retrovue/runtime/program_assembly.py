@@ -196,12 +196,34 @@ def assemble_schedule_block(
         pool_assets = _build_pool_assets(ordered_ids, resolver)
         pool = _ProgressionPool(name=pool_name, assets=pool_assets)
 
+        # INV-PRESENTATION-CONTEXTUAL-SELECT-001: peek at content selection
+        # to build program context BEFORE resolving presentation entries.
+        program_ctx = None
+        if presentation_refs or postroll_refs:
+            # Approximate wrapper overhead for eligibility check (intro/outro only;
+            # presentation overhead is what we're resolving, so excluded here).
+            intro_ms = getattr(intro_asset, "duration_ms", 0) if intro_asset else 0
+            outro_ms = getattr(outro_asset, "duration_ms", 0) if outro_asset else 0
+            peek_wrapper_ms = intro_ms + outro_ms
+
+            if is_dynamic and grid_blocks_max is not None:
+                peek_grid_ms = grid_blocks_max * grid_minutes * 60 * 1000
+            else:
+                peek_grid_ms = prog.grid_duration_ms(grid_minutes)
+
+            content_id = _peek_content_selection(
+                pool_assets, fill_mode, peek_grid_ms, peek_wrapper_ms, bleed,
+            )
+            if content_id:
+                program_ctx = _resolve_program_context(content_id, resolver)
+
         # Resolve presentation entries per execution (pool entries may vary)
         presentation_assets = None
         if presentation_refs:
             presentation_assets = _resolve_presentation_entries(
                 presentation_refs, resolver, rng,
                 pool_diagnostics=block_pool_diagnostics,
+                program_context=program_ctx,
             )
 
         # Resolve postroll entries in declared order, preserving the traffic
@@ -212,6 +234,7 @@ def assemble_schedule_block(
             postroll_resolved = _resolve_postroll_entries(
                 postroll_refs, resolver, rng,
                 pool_diagnostics=block_pool_diagnostics,
+                program_context=program_ctx,
             )
 
         result = assemble_program(
@@ -240,18 +263,119 @@ def assemble_schedule_block(
 # ---------------------------------------------------------------------------
 
 
+def _resolve_program_context(
+    content_asset_id: str,
+    resolver: AssetResolver,
+) -> dict[str, Any]:
+    """Extract program context from selected content for presentation filtering.
+
+    INV-PRESENTATION-CONTEXTUAL-SELECT-001: builds the context dict used to
+    resolve ``program.*`` references in presentation pool entries.
+    """
+    meta = resolver.lookup(content_asset_id)
+    return {
+        "program.rating": meta.rating,
+    }
+
+
+def _apply_contextual_select(
+    entry: dict,
+    candidates: list[str],
+    resolver: AssetResolver,
+    program_ctx: dict[str, Any],
+) -> list[str]:
+    """Filter pool candidates using entry-level select.where with program.* refs.
+
+    INV-PRESENTATION-CONTEXTUAL-SELECT-001: resolves ``program.*`` references
+    against the selected primary content's metadata, then filters candidates.
+
+    Returns the filtered list.  If a ``program.*`` reference resolves to None
+    (missing metadata), that filter clause is skipped — graceful degradation.
+    """
+    select = entry.get("select")
+    if not select or "where" not in select:
+        return candidates  # no entry-level filter
+
+    where = select["where"]
+    filtered = list(candidates)
+    for field, spec in where.items():
+        if not isinstance(spec, dict):
+            continue
+        for op, val in spec.items():
+            # Resolve program.* references
+            if isinstance(val, str) and val.startswith("program."):
+                resolved_val = program_ctx.get(val)
+            else:
+                resolved_val = val
+
+            if resolved_val is None:
+                # Missing metadata — skip this filter clause (graceful)
+                continue
+
+            if op == "eq":
+                filtered = [
+                    c for c in filtered
+                    if _asset_field(resolver, c, field) == resolved_val
+                ]
+    return filtered
+
+
+def _asset_field(resolver: AssetResolver, asset_id: str, field: str) -> Any:
+    """Look up a single metadata field for an asset by ID."""
+    meta = resolver.lookup(asset_id)
+    return getattr(meta, field, None)
+
+
+def _peek_content_selection(
+    pool_assets: list[_PoolAsset],
+    fill_mode: str,
+    grid_ms: int,
+    wrapper_ms: int,
+    bleed: bool,
+) -> str | None:
+    """Determine which content asset will be selected without consuming it.
+
+    Mirrors the selection logic of ``_assemble_single`` / ``_assemble_accumulate``
+    to identify the primary content asset before presentation resolution.
+
+    Returns the asset_id of the first eligible asset, or None if no content
+    can be determined (assembly will raise later).
+    """
+    eligible = [a for a in pool_assets if getattr(a, "state", "ready") == "ready"
+                and getattr(a, "approved_for_broadcast", True)]
+    if not eligible:
+        return None
+
+    if fill_mode == "single":
+        for asset in eligible:
+            duration = getattr(asset, "duration_ms", 0)
+            total = duration + wrapper_ms
+            if not bleed and total > grid_ms:
+                continue
+            return asset.asset_id
+        return None
+    else:
+        # accumulate: first eligible is always taken
+        return eligible[0].asset_id if eligible else None
+
+
 def _resolve_presentation_entries(
     entries: list,
     resolver: AssetResolver,
     rng: random.Random,
     *,
     pool_diagnostics: dict[str, PoolDiagnostics] | None = None,
+    program_context: dict[str, Any] | None = None,
 ) -> list[_PoolAsset]:
     """Resolve a mixed list of presentation entries to assets.
 
     Each entry is either:
       - str: direct asset reference → resolver.lookup()
       - dict with "pool" key: pool reference → resolver.resolve_pool() + rng.choice()
+
+    INV-PRESENTATION-CONTEXTUAL-SELECT-001: when ``program_context`` is provided
+    and an entry has a ``select.where`` clause with ``program.*`` references,
+    the pool candidates are filtered against the resolved content metadata.
 
     INV-DSL-MISSING-ASSET-NONFATAL-001: A pool matching zero assets is
     skipped with a warning — it does not prevent compilation.
@@ -267,6 +391,14 @@ def _resolve_presentation_entries(
             except Exception:
                 # INV-DSL-MISSING-ASSET-NONFATAL-001: degrade gracefully
                 candidates = []
+
+            # INV-PRESENTATION-CONTEXTUAL-SELECT-001: apply entry-level
+            # contextual filters when program context is available.
+            if candidates and program_context and "select" in entry:
+                candidates = _apply_contextual_select(
+                    entry, candidates, resolver, program_context,
+                )
+
             if not candidates:
                 # INV-POOL-RESOLUTION-VISIBILITY-001: emit diagnostics
                 _emit_pool_diagnostics(
@@ -299,12 +431,16 @@ def _resolve_postroll_entries(
     rng: random.Random,
     *,
     pool_diagnostics: dict[str, PoolDiagnostics] | None = None,
+    program_context: dict[str, Any] | None = None,
 ) -> list[_PoolAsset | str]:
     """Resolve postroll entries in declared order.
 
     Pool/asset entries become _PoolAsset. Traffic directives become
     POSTROLL_TRAFFIC_MARKER strings, preserving their declared position.
     INV-DSL-SEGMENT-ORDER-DETERMINISTIC-001.
+
+    INV-PRESENTATION-CONTEXTUAL-SELECT-001: when ``program_context`` is
+    provided, entry-level ``select.where`` with ``program.*`` refs is applied.
     """
     result: list[_PoolAsset | str] = []
     for entry in entries:
@@ -318,6 +454,13 @@ def _resolve_postroll_entries(
                 candidates = resolver.resolve_pool(pool_name)
             except Exception:
                 candidates = []
+
+            # INV-PRESENTATION-CONTEXTUAL-SELECT-001
+            if candidates and program_context and "select" in entry:
+                candidates = _apply_contextual_select(
+                    entry, candidates, resolver, program_context,
+                )
+
             if not candidates:
                 # INV-POOL-RESOLUTION-VISIBILITY-001: emit diagnostics
                 _emit_pool_diagnostics(

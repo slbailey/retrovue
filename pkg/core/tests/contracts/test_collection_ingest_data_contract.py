@@ -114,7 +114,7 @@ class TestCollectionIngestDataContract:
             
             # Verify ingest_container was called with the correct collection
             call_args = mock_service.return_value.ingest_container.call_args
-            assert call_args[0][0].id == collection_id  # First positional arg is collection
+            assert call_args.kwargs["container"].uuid == collection_id
 
     # D-3: Full Collection Prerequisites
     def test_d3_full_collection_validates_sync_enabled_and_ingestible(self):
@@ -814,7 +814,7 @@ class TestCollectionIngestDuplicateHandlingDataContract:
         mock_result = ContainerIngestResult(
             container_id=self.collection_id,
             container_name=self.collection.name,
-            scope="collection",
+            scope="container",
             stats=IngestStats(
                 assets_discovered=10,
                 assets_ingested=0,  # No new assets
@@ -862,7 +862,7 @@ class TestCollectionIngestDuplicateHandlingDataContract:
         mock_result = ContainerIngestResult(
             container_id=self.collection_id,
             container_name=self.collection.name,
-            scope="collection",
+            scope="container",
             stats=IngestStats(
                 assets_discovered=15,
                 assets_ingested=0,  # No new assets
@@ -911,7 +911,7 @@ class TestCollectionIngestDuplicateHandlingDataContract:
         mock_result = ContainerIngestResult(
             container_id=self.collection_id,
             container_name=self.collection.name,
-            scope="collection",
+            scope="container",
             stats=IngestStats(
                 assets_discovered=20,
                 assets_ingested=0,  # No new assets
@@ -960,7 +960,7 @@ class TestCollectionIngestDuplicateHandlingDataContract:
         mock_result = ContainerIngestResult(
             container_id=self.collection_id,
             container_name=self.collection.name,
-            scope="collection",
+            scope="container",
             stats=IngestStats(
                 assets_discovered=25,
                 assets_ingested=0,  # No new assets
@@ -1009,7 +1009,7 @@ class TestCollectionIngestDuplicateHandlingDataContract:
         mock_result = ContainerIngestResult(
             container_id=self.collection_id,
             container_name=self.collection.name,
-            scope="collection",
+            scope="container",
             stats=IngestStats(
                 assets_discovered=30,
                 assets_ingested=0,  # No new assets
@@ -1094,7 +1094,7 @@ class TestCollectionIngestAssetLifecycleAndTimeTracking:
         mock_result = ContainerIngestResult(
             container_id=self.collection_id,
             container_name=self.collection.name,
-            scope="collection",
+            scope="container",
             stats=IngestStats(
                 assets_discovered=20,
                 assets_ingested=20,  # New assets created
@@ -1145,7 +1145,7 @@ class TestCollectionIngestAssetLifecycleAndTimeTracking:
         mock_result = ContainerIngestResult(
             container_id=self.collection_id,
             container_name=self.collection.name,
-            scope="collection",
+            scope="container",
             stats=IngestStats(
                 assets_discovered=15,
                 assets_ingested=0,  # No new assets
@@ -1200,7 +1200,7 @@ class TestCollectionIngestAssetLifecycleAndTimeTracking:
         mock_result = ContainerIngestResult(
             container_id=self.collection_id,
             container_name=self.collection.name,
-            scope="collection",
+            scope="container",
             stats=IngestStats(
                 assets_discovered=30,
                 assets_ingested=10,
@@ -1253,7 +1253,7 @@ class TestCollectionIngestAssetLifecycleAndTimeTracking:
         mock_result = ContainerIngestResult(
             container_id=self.collection_id,
             container_name=self.collection.name,
-            scope="collection",
+            scope="container",
             stats=IngestStats(
                 assets_discovered=100,
                 assets_ingested=0,  # No new assets
@@ -1304,7 +1304,7 @@ class TestCollectionIngestAssetLifecycleAndTimeTracking:
         mock_result = ContainerIngestResult(
             container_id=self.collection_id,
             container_name=self.collection.name,
-            scope="collection",
+            scope="container",
             stats=IngestStats(
                 assets_discovered=25,
                 assets_ingested=0,  # No new assets

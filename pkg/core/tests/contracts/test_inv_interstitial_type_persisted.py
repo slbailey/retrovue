@@ -102,7 +102,7 @@ class TestEnricherStampsType:
 
     # Tier: 1 | Structural invariant
     def test_station_ids_collection_stamps_station_id(self):
-        """Collection 'station_ids' → interstitial_type = 'station_id'."""
+        """Pool 'station_ids' → interstitial_type = 'station_id'."""
         enricher = InterstitialTypeEnricher(collection_name="station_ids")
         item = _make_discovered_item()
         result = enricher.enrich(item)
@@ -120,7 +120,7 @@ class TestEnricherStampsType:
             )
             result = enricher.enrich(item)
             assert result.editorial["interstitial_type"] == expected_type, (
-                f"Collection '{coll_name}' should stamp '{expected_type}', "
+                f"Pool '{coll_name}' should stamp '{expected_type}', "
                 f"got '{result.editorial.get('interstitial_type')}'"
             )
 

@@ -32,16 +32,12 @@ def make_discover_payload(
 ) -> dict[str, Any]:
     """Build an HDHomeRun /discover.json response.
 
-    INV-HDHOMERUN-COMPAT-001-R1: MUST include Manufacturer, ModelNumber,
-    FirmwareName, FirmwareVersion so Plex identifies the device as a
-    compatible HDHomeRun tuner.
+    INV-PLEX-DISCOVERY-001: MUST NOT include hardware fiction fields
+    (FirmwareName, FirmwareVersion, ModelNumber, HardwareModel).
     """
     return {
         "FriendlyName": friendly_name,
         "Manufacturer": "RetroVue",
-        "ModelNumber": "HDTC-2US",
-        "FirmwareName": "hdhomerun_atsc",
-        "FirmwareVersion": "20200101",
         "DeviceID": device_id,
         "DeviceAuth": "test",
         "BaseURL": base_url.rstrip("/"),

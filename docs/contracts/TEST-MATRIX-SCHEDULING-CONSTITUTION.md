@@ -1823,6 +1823,11 @@ The following domain tables group tests by functional area. Each test is classif
 | PRES-BREAK-002 | INV-PRESENTATION-BREAK-INVISIBLE-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Presentation invisible but content breaks preserved |
 | PRES-REJECT-001 | INV-PRESENTATION-PRECEDES-PRIMARY-001 | LAW-CONTENT-AUTHORITY | Presentation and intro co-existence rejected |
 | PRES-BUDGET-003 | INV-PRESENTATION-GRID-BUDGET-001 | LAW-GRID, LAW-CONTENT-AUTHORITY | Multiple presentation segments — budget sum applies |
+| PRES-CTX-001 | INV-PRESENTATION-CONTEXTUAL-SELECT-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Pool entry with `rating: eq: program.rating` selects asset matching content rating |
+| PRES-CTX-002 | INV-PRESENTATION-CONTEXTUAL-SELECT-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Pool entry with `year: lte: program.release_year` selects era-appropriate asset |
+| PRES-CTX-003 | INV-PRESENTATION-CONTEXTUAL-SELECT-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Missing program metadata degrades gracefully — pool unfiltered, segment still emitted |
+| PRES-CTX-004 | INV-PRESENTATION-CONTEXTUAL-SELECT-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Entry without `select` clause resolves from full pool (backward compatible) |
+| PRES-CTX-005 | INV-PRESENTATION-CONTEXTUAL-SELECT-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Contextual select with zero matches degrades gracefully — segment omitted |
 
 ---
 

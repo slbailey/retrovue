@@ -54,6 +54,11 @@ def _fake_importer() -> Any:
 @pytest.fixture
 def service(monkeypatch: pytest.MonkeyPatch) -> ContainerIngestService:
     # MagicMock Session with add/flush
+    class _NullChain:
+        """Chainable query proxy — all terminal methods return None."""
+        def filter(self, *a, **kw): return self
+        def first(self): return None
+
     class _DB:
         def add(self, _obj: Any) -> None:
             return None
@@ -64,6 +69,9 @@ def service(monkeypatch: pytest.MonkeyPatch) -> ContainerIngestService:
         def scalar(self, _stmt: Any) -> Any:
             # Duplicate detection returns None in these unit tests
             return None
+
+        def query(self, *_a, **_kw) -> "_NullChain":
+            return _NullChain()
 
     # Minimize external touches
     monkeypatch.setattr("retrovue.infra.canonical.canonical_key_for", lambda *a, **k: "canon/key")

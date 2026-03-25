@@ -40,7 +40,7 @@ def test_wipe_dry_run_json_success() -> None:
             "items_to_delete": {"assets": 10, "episodes": 5},
         }
 
-        result = runner.invoke(app, ["collection", "wipe", collection_id, "--dry-run", "--json"])
+        result = runner.invoke(app, ["container", "wipe", collection_id, "--dry-run", "--json"])
 
         assert result.exit_code == 0
         # Ensure wipe execution was attempted and returned a structured payload
@@ -63,7 +63,7 @@ def test_wipe_validation_error_exit_code() -> None:
 
         mock_validate_exists.side_effect = ValidationError("Collection not found")
 
-        result = runner.invoke(app, ["collection", "wipe", collection_id])
+        result = runner.invoke(app, ["container", "wipe", collection_id])
 
         assert result.exit_code == 1
         assert "Validation error" in result.stdout or "Validation error" in result.stderr

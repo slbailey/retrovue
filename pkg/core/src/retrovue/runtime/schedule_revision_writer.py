@@ -119,6 +119,8 @@ def write_active_revision_from_compiled_schedule(
     # LAW-CLOCK: MasterClock is the single time authority.
     boundary = _clock.now_utc()
 
+    # INV-TIMELINE-BOUNDARY-IMMUTABLE-001: Check whether the existing
+    # active revision (if any) has committed items.
     existing_active = db.query(ScheduleRevision).filter(
         ScheduleRevision.channel_id == channel.id,
         ScheduleRevision.broadcast_day == broadcast_day,
@@ -126,9 +128,6 @@ def write_active_revision_from_compiled_schedule(
     ).first()
 
     if existing_active is not None:
-        # Check whether the existing revision has ANY item that starts
-        # before the boundary.  If so, the revision contains committed
-        # timeline and MUST NOT be superseded.
         has_committed = db.query(ScheduleItem).filter(
             ScheduleItem.schedule_revision_id == existing_active.id,
             ScheduleItem.start_time < boundary,
@@ -148,20 +147,17 @@ def write_active_revision_from_compiled_schedule(
             )
             return False
 
-        # All items are in the future — this revision has not committed
-        # to any viewer yet.  Supersede it so the new compilation takes
-        # effect.
-        logger.info(
-            "INV-TIMELINE-BOUNDARY-IMMUTABLE-001: superseding future-only "
-            "revision %s for %s/%s (all items after boundary %s)",
-            existing_active.id,
-            channel_slug,
-            broadcast_day,
-            boundary.isoformat(),
-        )
-        existing_active.status = "superseded"
-        existing_active.superseded_at = boundary
-        db.flush()
+    # Supersede ALL active revisions for this channel+day via bulk update.
+    # This is idempotent — if none exist, zero rows are affected.
+    db.query(ScheduleRevision).filter(
+        ScheduleRevision.channel_id == channel.id,
+        ScheduleRevision.broadcast_day == broadcast_day,
+        ScheduleRevision.status == "active",
+    ).update(
+        {"status": "superseded", "superseded_at": boundary},
+        synchronize_session=False,
+    )
+    db.flush()
 
     now = _clock.now_utc()
 

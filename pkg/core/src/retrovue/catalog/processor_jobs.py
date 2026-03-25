@@ -58,7 +58,8 @@ def enqueue(
         .first()
     )
     if existing is not None:
-        if priority > existing.priority:
+        existing_pri = existing.priority if isinstance(existing.priority, int) else 0
+        if priority > existing_pri:
             existing.priority = priority
         return existing
     job = ProcessorJob(

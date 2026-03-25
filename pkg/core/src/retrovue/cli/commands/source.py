@@ -67,12 +67,12 @@ def source_list(source_type: str | None = None, test_db: bool = False, db_sessio
         for source in sources:
             # Get collection counts - handle case where collections table might not exist
             try:
-                enabled_collections = db.query(Collection).filter(
+                enabled_collections = db.query(Container).filter(
                     Container.source_id == source.id,
                     Container.sync_enabled.is_(True)
                 ).count()
                 
-                ingestible_collections = db.query(Collection).filter(
+                ingestible_collections = db.query(Container).filter(
                     Container.source_id == source.id,
                     Container.ingestible.is_(True)
                 ).count()
@@ -1111,12 +1111,15 @@ def update_source(
     with session() as db:
         try:
             # Get current source to determine type.
-            # Must use the same session so lazy-loaded attributes (config) work.
-            current_source = _resolve_source_by_id(db, source_id)
+            # Try source_get_by_id first (separate session), then
+            # fall back to in-session resolution.
+            current_source = source_get_by_id(source_id)
+            if not current_source:
+                current_source = _resolve_source_by_id(db, source_id)
             if not current_source:
                 typer.echo(f"Error: Source '{source_id}' not found", err=True)
                 raise typer.Exit(1)
-            
+
             # Verify importer interface compliance (B-17, D-7)
             # This check happens BEFORE building updates, BEFORE opening transaction, BEFORE UnitOfWork
             from ...adapters.registry import ALIASES, SOURCES
@@ -1176,37 +1179,27 @@ def update_source(
                     typer.echo(f"Error: Invalid configuration update: {e}", err=True)
                     raise typer.Exit(1)
                 
-                # Merge into new_config, preserving existing structure
                 # Contract D-10: Partial merges apply only to top-level keys.
-                # Nested objects/arrays are treated as atomic values.
-                # However, if stored config has a different format than what importer expects,
-                # we need to map the update fields to the stored format.
-                # 
-                # TODO: Importers should provide methods to convert between storage and runtime formats
-                # For now, we detect if stored config has nested structures and try to map updates
-                # This is a temporary workaround until importers handle their own format conversions
-                
-                # Check if stored config has nested list structures that might need updating
-                # This is generic - we look for any list of dicts that might contain our update keys
-                updated_nested = False
-                for _key, value in new_config.items():
-                    if isinstance(value, list) and len(value) > 0 and isinstance(value[0], dict):
-                        # Check if any update keys exist in the nested dict
-                        nested_dict = value[0]
-                        for update_key, update_value in partial_config.items():
-                            if update_key in nested_dict:
-                                nested_dict[update_key] = update_value
-                                updated_nested = True
-                
-                # If we updated nested structures, don't also do a flat update for those keys
-                if updated_nested:
-                    # Only update keys that weren't handled in nested structures
-                    for key, value in partial_config.items():
-                        if key not in new_config or not (isinstance(new_config.get(key), list) and len(new_config[key]) > 0 and isinstance(new_config[key][0], dict)):
-                            new_config[key] = value
+                # Nested objects/arrays are treated as atomic values —
+                # replaced entirely, never deep-merged.
+                #
+                # Exception: convenience CLI flags (--base-url, --token) map
+                # into the first entry of the ``servers`` list when one exists,
+                # since that is the canonical Plex config shape.
+                _SERVER_KEYS = {"base_url", "token"}
+                server_updates = {k: v for k, v in partial_config.items() if k in _SERVER_KEYS}
+                other_updates = {k: v for k, v in partial_config.items() if k not in _SERVER_KEYS}
+
+                if server_updates and "servers" in new_config and isinstance(new_config["servers"], list) and new_config["servers"]:
+                    for k, v in server_updates.items():
+                        new_config["servers"][0][k] = v
                 else:
-                    # Flat update - standard merge
-                    new_config.update(partial_config)
+                    # No servers list — apply as flat top-level keys
+                    for k, v in server_updates.items():
+                        new_config[k] = v
+
+                for k, v in other_updates.items():
+                    new_config[k] = v
             
             if new_config:
                 updates["config"] = new_config
@@ -1500,7 +1493,7 @@ def discover_collections(
             
             for collection in collections:
                 # Check if collection already exists
-                existing = db.query(Collection).filter(
+                existing = db.query(Container).filter(
                     Container.source_id == source.id,
                     Container.external_id == collection["external_id"]
                 ).first()
@@ -1598,7 +1591,7 @@ def source_ingest(
                 raise typer.Exit(1)
 
             # B-2: Early exit if no eligible collections
-            sync_collections = db.query(Collection).filter(
+            sync_collections = db.query(Container).filter(
                 Container.source_id == source.id,
                 Container.sync_enabled.is_(True),
             ).all()
@@ -1693,7 +1686,7 @@ def source_attach_enricher(
                 raise typer.Exit(1)
             
             # Get all collections for this source
-            collections = db.query(Collection).filter(
+            collections = db.query(Container).filter(
                 Container.source_id == source.id
             ).all()
             
@@ -1771,7 +1764,7 @@ def source_detach_enricher(
                 raise typer.Exit(1)
             
             # Get all collections for this source
-            collections = db.query(Collection).filter(
+            collections = db.query(Container).filter(
                 Container.source_id == source.id
             ).all()
             

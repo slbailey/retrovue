@@ -347,7 +347,7 @@ class TestStatsAccuracy:
         result = ContainerIngestResult(
             container_id="c-1",
             container_name="commercials",
-            scope="collection",
+            scope="container",
             stats=stats,
         )
         d = result.to_dict()

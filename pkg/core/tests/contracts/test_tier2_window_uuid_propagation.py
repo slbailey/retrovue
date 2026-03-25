@@ -55,11 +55,39 @@ def _make_block(block_id: str = "block-001") -> ScheduledBlock:
     )
 
 
+class _MockExecuteResult:
+    """Minimal result object for db.execute() — satisfies .rowcount check."""
+    rowcount = 1
+
+
+class _PlaylistEventProxy:
+    """Lightweight proxy that exposes INSERT values as attributes.
+
+    The writer now uses ``db.execute(pg_insert(...).values(**kw))`` instead
+    of ``db.merge(PlaylistEvent(...))``.  This proxy reads the compiled
+    parameters from the SQLAlchemy Insert statement so that existing test
+    assertions (``row.window_uuid``, ``row.segments``, etc.) keep working.
+    """
+
+    def __init__(self, params: dict) -> None:
+        self.__dict__.update(params)
+
+
 class _MockDB:
-    """Captures PlaylistEvent rows passed to db.merge()."""
+    """Captures PlaylistEvent rows passed to db.execute() / db.merge()."""
 
     def __init__(self) -> None:
         self.merged: list = []
+        self.executed: list = []
+
+    def execute(self, stmt):
+        # Extract bound parameters from the compiled INSERT statement
+        # and expose them as a proxy object in self.merged so existing
+        # test assertions against db.merged[0].window_uuid keep working.
+        params = stmt.compile().params if hasattr(stmt, "compile") else {}
+        self.merged.append(_PlaylistEventProxy(params))
+        self.executed.append(stmt)
+        return _MockExecuteResult()
 
     def merge(self, obj):
         self.merged.append(obj)

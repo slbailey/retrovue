@@ -35,7 +35,7 @@ from retrovue.domain.entities import (
     Asset,
     Channel,
     ChannelActiveRevision,
-    Collection,
+    Container,
     PlaylistEvent,
     Program,
     ProgramLogDay,
@@ -92,9 +92,9 @@ def _make_source(db) -> Source:
     return src
 
 
-def _make_container(db, source: Source) -> Collection:
-    """Create a minimal container (Collection entity) and flush."""
-    coll = Collection(
+def _make_container(db, source: Source) -> Container:
+    """Create a minimal container (Container entity) and flush."""
+    coll = Container(
         source_id=source.id,
         external_id=f"test-coll-{_uid().hex[:8]}",
         name="Test Container",
@@ -104,7 +104,7 @@ def _make_container(db, source: Source) -> Collection:
     return coll
 
 
-def _make_asset(db, container: Collection) -> Asset:
+def _make_asset(db, container: Container) -> Asset:
     """Create a minimal Asset (preserved table) and flush."""
     asset = Asset(
         container_id=container.uuid,

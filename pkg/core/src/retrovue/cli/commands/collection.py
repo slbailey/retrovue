@@ -1516,19 +1516,19 @@ def collection_ingest(
                                 f"Ingesting episode {episode} of season {season} of '{title}' from collection '{collection.name}'"
                             )
 
-                    if hasattr(result, "scope") and result.scope == "collection":
-                        typer.echo(f"Ingesting entire collection '{result.collection_name}'")
+                    if hasattr(result, "scope") and result.scope == "container":
+                        typer.echo(f"Ingesting entire collection '{result.container_name}'")
                     elif hasattr(result, "scope") and result.scope == "title":
                         typer.echo(
-                            f"Ingesting title '{result.title}' from collection '{result.collection_name}'"
+                            f"Ingesting title '{result.title}' from collection '{result.container_name}'"
                         )
                     elif hasattr(result, "scope") and result.scope == "season":
                         typer.echo(
-                            f"Ingesting season {result.season} of '{result.title}' from collection '{result.collection_name}'"
+                            f"Ingesting season {result.season} of '{result.title}' from collection '{result.container_name}'"
                         )
                     elif hasattr(result, "scope") and result.scope == "episode":
                         typer.echo(
-                            f"Ingesting episode {result.episode} of season {result.season} of '{result.title}' from collection '{result.collection_name}'"
+                            f"Ingesting episode {result.episode} of season {result.season} of '{result.title}' from collection '{result.container_name}'"
                         )
 
                     if dry_run:

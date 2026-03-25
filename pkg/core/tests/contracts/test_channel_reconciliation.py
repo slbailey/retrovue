@@ -35,7 +35,7 @@ from retrovue.domain.entities import (
     Asset,
     Channel,
     ChannelActiveRevision,
-    Collection,
+    Container,
     PlaylistEvent,
     Program,
     ProgramLogDay,
@@ -98,9 +98,9 @@ def _make_source(db) -> Source:
     return src
 
 
-def _make_container(db, source: Source) -> Collection:
-    """Create a test container (Collection entity) for the given source."""
-    coll = Collection(
+def _make_container(db, source: Source) -> Container:
+    """Create a test container (Container entity) for the given source."""
+    coll = Container(
         source_id=source.id,
         external_id=f"test-coll-{_uid().hex[:8]}",
         name="Test Container",
@@ -110,7 +110,7 @@ def _make_container(db, source: Source) -> Collection:
     return coll
 
 
-def _make_asset(db, container: Collection) -> Asset:
+def _make_asset(db, container: Container) -> Asset:
     asset = Asset(
         container_id=container.uuid,
         source_id=container.source_id,

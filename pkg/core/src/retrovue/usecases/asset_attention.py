@@ -40,7 +40,6 @@ def list_assets_needing_attention(
         result.append(
             {
                 "uuid": str(a.uuid),
-                "container_id": cid,
                 "collection_uuid": cid,
                 "uri": a.uri,
                 "state": a.state,

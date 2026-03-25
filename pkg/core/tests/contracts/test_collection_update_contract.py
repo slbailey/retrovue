@@ -24,13 +24,13 @@ def test_collection_update_supports_test_db_uses_test_sessionmaker():
         mock_db = MagicMock()
         test_db.__enter__.return_value = mock_db
 
-        # Mock resolve_collection_selector to return a fake collection
+        # Mock resolve_container_selector to return a fake collection
         fake_collection = MagicMock()
         fake_collection.uuid = "col-1"
         fake_collection.name = "Movies"
         fake_collection.sync_enabled = False
         fake_collection.ingestible = False
-        with patch("retrovue.cli.commands.collection.resolve_collection_selector", return_value=fake_collection):
+        with patch("retrovue.cli.commands.collection.resolve_container_selector", return_value=fake_collection):
             # Patch PathMapping query chain
             mock_query = MagicMock()
             mock_db.query.return_value = mock_query
@@ -39,7 +39,7 @@ def test_collection_update_supports_test_db_uses_test_sessionmaker():
             result = runner.invoke(
                 app,
                 [
-                    "collection",
+                    "container",
                     "update",
                     "Movies",
                     "--local-path",

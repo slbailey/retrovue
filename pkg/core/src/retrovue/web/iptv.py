@@ -77,23 +77,30 @@ def _channel_number(ch: dict[str, Any]) -> int:
     return ch.get("number", ch.get("channel_id_int", 0))
 
 
+def _resolve_channel_id(ch: dict[str, Any], mode: str) -> str:
+    """Return the XMLTV channel ID for a channel dict based on mode."""
+    if mode == "guide_number":
+        return str(_channel_number(ch))
+    return ch["channel_id"]  # slug (default)
+
+
 def generate_xmltv(
     channels: list[dict[str, Any]],
     epg_entries: list[dict[str, Any]],
     base_url: str | None = None,
+    channel_id_mode: str = "auto",
 ) -> str:
     """Generate XMLTV guide XML from channel configs and EPG entries.
 
-    Invariant: XMLTV <channel id> and <programme channel> use the same channel number
-    as Plex GuideNumber, so lineup and guide mapping is consistent. Example:
-
-      <channel id="101">
-        <display-name>Cheers 24/7</display-name>
-        <icon src="http://server/art/channel/cheers-24-7.jpg"/>
-      </channel>
-      <programme start="20260314180000 -0400" stop="20260314183000 -0400" channel="101">
-        <icon src="http://server/art/program/{asset_id}.jpg"/>
+    Args:
+        channel_id_mode: "slug" forces channel_id slugs,
+            "guide_number" forces numeric Plex GuideNumber,
+            "auto" (default) uses slug when no ``number`` key is present
+            on any channel, guide_number otherwise.
     """
+    if channel_id_mode == "auto":
+        has_numbers = any("number" in ch for ch in channels)
+        channel_id_mode = "guide_number" if has_numbers else "slug"
     tv = Element("tv", attrib={
         "generator-info-name": "RetroVue",
         "generator-info-url": "",
@@ -101,15 +108,16 @@ def generate_xmltv(
 
     base = (base_url or "").rstrip("/")
 
-    # channel_id -> number for programme channel attribute
-    channel_id_to_number: dict[str, str] = {
-        ch["channel_id"]: str(_channel_number(ch)) for ch in channels
+    # Build channel_id lookup for programme elements
+    ch_id_map: dict[str, str] = {
+        ch["channel_id"]: _resolve_channel_id(ch, channel_id_mode)
+        for ch in channels
     }
 
-    # <channel> elements: id is the external channel number (Plex GuideNumber)
+    # <channel> elements
     for ch in sorted(channels, key=_channel_number):
-        num_str = str(_channel_number(ch))
-        chan_el = SubElement(tv, "channel", attrib={"id": num_str})
+        xmltv_id = _resolve_channel_id(ch, channel_id_mode)
+        chan_el = SubElement(tv, "channel", attrib={"id": xmltv_id})
         dn = SubElement(chan_el, "display-name")
         dn.text = ch["name"]
         if base:
@@ -121,10 +129,9 @@ def generate_xmltv(
         key=lambda e: (e["channel_id"], e["start_time"]),
     )
 
-    # <programme> elements: channel is the external number (matches <channel id>)
+    # <programme> elements: channel matches <channel id>
     for entry in sorted_entries:
-        ch_id = entry["channel_id"]
-        prog_channel = channel_id_to_number.get(ch_id, ch_id)
+        prog_channel = ch_id_map.get(entry["channel_id"], entry["channel_id"])
         prog = SubElement(tv, "programme", attrib={
             "start": _xmltv_timestamp(entry["start_time"]),
             "stop": _xmltv_timestamp(entry["end_time"]),

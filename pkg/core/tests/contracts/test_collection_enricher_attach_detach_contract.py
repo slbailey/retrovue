@@ -13,14 +13,14 @@ class TestCollectionEnricherAttachDetachContract:
         self.runner = CliRunner()
 
     def test_attach_enricher_success_human(self):
-        with patch("retrovue.infra.uow.session") as session_ctx, patch(
+        with patch("retrovue.cli.commands.collection.session") as session_ctx, patch(
             "retrovue.usecases.collection_enrichers.attach_enricher_to_collection"
         ) as attach_fn:
             fake_db = MagicMock()
             session_ctx.return_value.__enter__.return_value = fake_db
             attach_fn.return_value = {
-                "collection_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-                "collection_name": "TV Shows",
+                "container_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "container_name": "TV Shows",
                 "enricher_id": "enricher-ffprobe-1",
                 "priority": 1,
                 "status": "attached",
@@ -29,7 +29,7 @@ class TestCollectionEnricherAttachDetachContract:
             result = self.runner.invoke(
                 app,
                 [
-                    "collection",
+                    "container",
                     "attach-enricher",
                     "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
                     "enricher-ffprobe-1",
@@ -43,14 +43,14 @@ class TestCollectionEnricherAttachDetachContract:
         attach_fn.assert_called_once()
 
     def test_attach_enricher_success_json(self):
-        with patch("retrovue.infra.uow.session") as session_ctx, patch(
+        with patch("retrovue.cli.commands.collection.session") as session_ctx, patch(
             "retrovue.usecases.collection_enrichers.attach_enricher_to_collection"
         ) as attach_fn:
             fake_db = MagicMock()
             session_ctx.return_value.__enter__.return_value = fake_db
             attach_fn.return_value = {
-                "collection_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-                "collection_name": "TV Shows",
+                "container_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "container_name": "TV Shows",
                 "enricher_id": "enricher-ffprobe-1",
                 "priority": 2,
                 "status": "attached",
@@ -59,7 +59,7 @@ class TestCollectionEnricherAttachDetachContract:
             result = self.runner.invoke(
                 app,
                 [
-                    "collection",
+                    "container",
                     "attach-enricher",
                     "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
                     "enricher-ffprobe-1",
@@ -73,12 +73,12 @@ class TestCollectionEnricherAttachDetachContract:
         payload = json.loads(result.stdout)
         assert payload["status"] == "ok"
         assert payload["action"] == "attached"
-        assert payload["collection_id"] == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        assert payload["container_id"] == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
         assert payload["enricher_id"] == "enricher-ffprobe-1"
         assert payload["priority"] == 2
 
     def test_attach_enricher_not_found_exits_one(self):
-        with patch("retrovue.infra.uow.session") as session_ctx, patch(
+        with patch("retrovue.cli.commands.collection.session") as session_ctx, patch(
             "retrovue.usecases.collection_enrichers.attach_enricher_to_collection",
             side_effect=ValueError("Collection not found"),
         ):
@@ -88,7 +88,7 @@ class TestCollectionEnricherAttachDetachContract:
             result = self.runner.invoke(
                 app,
                 [
-                    "collection",
+                    "container",
                     "attach-enricher",
                     "missing",
                     "enricher-ffprobe-1",
@@ -101,14 +101,14 @@ class TestCollectionEnricherAttachDetachContract:
         assert "error" in result.stdout.lower() or "error" in result.stderr.lower()
 
     def test_detach_enricher_success_human(self):
-        with patch("retrovue.infra.uow.session") as session_ctx, patch(
+        with patch("retrovue.cli.commands.collection.session") as session_ctx, patch(
             "retrovue.usecases.collection_enrichers.detach_enricher_from_collection"
         ) as detach_fn:
             fake_db = MagicMock()
             session_ctx.return_value.__enter__.return_value = fake_db
             detach_fn.return_value = {
-                "collection_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-                "collection_name": "Movies",
+                "container_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                "container_name": "Movies",
                 "enricher_id": "enricher-ffprobe-1",
                 "status": "detached",
             }
@@ -116,7 +116,7 @@ class TestCollectionEnricherAttachDetachContract:
             result = self.runner.invoke(
                 app,
                 [
-                    "collection",
+                    "container",
                     "detach-enricher",
                     "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
                     "enricher-ffprobe-1",
@@ -128,14 +128,14 @@ class TestCollectionEnricherAttachDetachContract:
         detach_fn.assert_called_once()
 
     def test_detach_enricher_success_json(self):
-        with patch("retrovue.infra.uow.session") as session_ctx, patch(
+        with patch("retrovue.cli.commands.collection.session") as session_ctx, patch(
             "retrovue.usecases.collection_enrichers.detach_enricher_from_collection"
         ) as detach_fn:
             fake_db = MagicMock()
             session_ctx.return_value.__enter__.return_value = fake_db
             detach_fn.return_value = {
-                "collection_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-                "collection_name": "Movies",
+                "container_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                "container_name": "Movies",
                 "enricher_id": "enricher-ffprobe-1",
                 "status": "detached",
             }
@@ -143,7 +143,7 @@ class TestCollectionEnricherAttachDetachContract:
             result = self.runner.invoke(
                 app,
                 [
-                    "collection",
+                    "container",
                     "detach-enricher",
                     "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
                     "enricher-ffprobe-1",
@@ -155,7 +155,5 @@ class TestCollectionEnricherAttachDetachContract:
         payload = json.loads(result.stdout)
         assert payload["status"] == "ok"
         assert payload["action"] == "detached"
-        assert payload["collection_id"] == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+        assert payload["container_id"] == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
         assert payload["enricher_id"] == "enricher-ffprobe-1"
-
-

@@ -1,55 +1,77 @@
 import json
 import uuid
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
 from retrovue.cli.main import app
+from retrovue.domain.entities import Asset, Container, Source
+
+from ._fakes import FakeDB
+
+
+class _FakeImporter:
+    """Importer that returns configured items from discover()."""
+
+    def __init__(self, name: str, items: list[dict]):
+        self.name = name
+        self._items = items
+
+    def validate_ingestible(self, _collection) -> bool:
+        return True
+
+    def discover(self) -> list[dict]:
+        return list(self._items)
 
 
 class TestCollectionIngestSafetyContract:
     def setup_method(self):
         self.runner = CliRunner()
 
-    def _mock_collection(self):
-        mc = MagicMock()
-        mc.uuid = uuid.uuid4()
-        mc.id = str(mc.uuid)
-        mc.name = "Movies"
-        mc.sync_enabled = True
-        mc.ingestible = True
-        mc.source_id = uuid.uuid4()
-        return mc
+    def _make_collection(self):
+        coll = SimpleNamespace(
+            uuid=uuid.uuid4(),
+            id=str(uuid.uuid4()),
+            name="Movies",
+            sync_enabled=True,
+            ingestible=True,
+            source_id=str(uuid.uuid4()),
+            config={},
+            external_id=str(uuid.uuid4()),
+        )
+        return coll
+
+    def _make_db(self, existing_assets=None):
+        db = FakeDB()
+        db.seed(Asset, existing_assets or [])
+        db.seed(Container, [])
+        db.seed(Source, [])
+        return db
 
     def test_ingest_aborts_when_max_new_exceeded(self):
-        collection = self._mock_collection()
+        collection = self._make_collection()
 
         # Three new items to ingest
         items = [
-            {"uri": f"/media/m{i}.mkv", "size": 100 + i}
+            {"path": f"/media/m{i}.mkv"}
             for i in range(3)
         ]
 
-        importer = MagicMock()
-        importer.name = "mock"
-        importer.validate_ingestible.return_value = True
-        importer.discover.return_value = items
+        importer = _FakeImporter("mock", items)
+
+        db = self._make_db()
 
         with patch("retrovue.cli.commands.collection.session") as mock_session, \
-             patch("retrovue.cli.commands.collection.resolve_collection_selector", return_value=collection), \
-             patch("retrovue.cli.commands.collection.construct_importer_for_collection", return_value=importer), \
-             patch("retrovue.cli.commands._ops.collection_ingest_service.canonical_key_for", side_effect=lambda it, **_: it.get("uri")), \
-             patch("retrovue.cli.commands._ops.collection_ingest_service.canonical_hash", side_effect=lambda key: key):
+             patch("retrovue.cli.commands.collection.resolve_container_selector", return_value=collection), \
+             patch("retrovue.cli.commands.collection.get_importer", return_value=importer):
 
-            # DB behavior: no existing assets
-            db = MagicMock()
             mock_session.return_value.__enter__.return_value = db
-            db.scalar.return_value = None
 
             result = self.runner.invoke(
                 app,
                 [
-                    "collection",
+                    "container",
                     "ingest",
                     str(collection.uuid),
                     "--json",
@@ -64,39 +86,50 @@ class TestCollectionIngestSafetyContract:
             assert any("max_new exceeded" in e for e in payload["stats"]["errors"])  # abort reason present
 
     def test_ingest_ignores_max_updates_when_updates_disallowed(self):
-        collection = self._mock_collection()
+        collection = self._make_collection()
 
         # Three existing items that will trigger updates (changed content hash)
         items = [
-            {"uri": f"/media/e{i}.mkv", "size": 200 + i}
+            {"path": f"/media/e{i}.mkv"}
             for i in range(3)
         ]
 
-        importer = MagicMock()
-        importer.name = "mock"
-        importer.validate_ingestible.return_value = True
-        importer.discover.return_value = items
+        importer = _FakeImporter("mock", items)
 
-        # Existing asset objects
-        existing = MagicMock()
-        existing.state = "ready"
-        existing.uuid = uuid.uuid4()
+        # Build existing assets so reconciliation yields no_action (fingerprint match)
+        from retrovue.infra.canonical import canonical_hash, canonical_key_for
+
+        existing_assets = []
+        for item in items:
+            ck = canonical_key_for(item, container=collection, provider="mock")
+            ck_hash = canonical_hash(ck)
+            asset = SimpleNamespace(
+                uuid=uuid.uuid4(),
+                container_id=collection.uuid,
+                source_id=collection.source_id,
+                canonical_key=ck,
+                canonical_key_hash=ck_hash,
+                uri=item["path"],
+                canonical_uri=item["path"],
+                is_deleted=False,
+                file_size=None,
+                file_mtime=None,
+                state="ready",
+            )
+            existing_assets.append(asset)
+
+        db = self._make_db(existing_assets=existing_assets)
 
         with patch("retrovue.cli.commands.collection.session") as mock_session, \
-             patch("retrovue.cli.commands.collection.resolve_collection_selector", return_value=collection), \
-             patch("retrovue.cli.commands.collection.construct_importer_for_collection", return_value=importer), \
-             patch("retrovue.cli.commands._ops.collection_ingest_service.canonical_key_for", side_effect=lambda it, **_: it.get("uri")), \
-             patch("retrovue.cli.commands._ops.collection_ingest_service.canonical_hash", side_effect=lambda key: key):
+             patch("retrovue.cli.commands.collection.resolve_container_selector", return_value=collection), \
+             patch("retrovue.cli.commands.collection.get_importer", return_value=importer):
 
-            db = MagicMock()
             mock_session.return_value.__enter__.return_value = db
-            # Return an existing asset for each lookup
-            db.scalar.return_value = existing
 
             result = self.runner.invoke(
                 app,
                 [
-                    "collection",
+                    "container",
                     "ingest",
                     str(collection.uuid),
                     "--json",
@@ -113,27 +146,22 @@ class TestCollectionIngestSafetyContract:
             assert not payload["stats"]["errors"]
 
     def test_ingest_uses_test_db_when_flag_set(self):
-        collection = self._mock_collection()
+        collection = self._make_collection()
 
-        importer = MagicMock()
-        importer.name = "mock"
-        importer.validate_ingestible.return_value = True
-        importer.discover.return_value = []
+        importer = _FakeImporter("mock", [])
 
         SessionForTest = MagicMock()
         test_db_session = MagicMock()
         SessionForTest.return_value = test_db_session
 
         with patch("retrovue.cli.commands.collection.get_sessionmaker", return_value=SessionForTest) as mock_get_sm, \
-             patch("retrovue.cli.commands.collection.resolve_collection_selector", return_value=collection), \
-             patch("retrovue.cli.commands.collection.construct_importer_for_collection", return_value=importer), \
-             patch("retrovue.cli.commands._ops.collection_ingest_service.canonical_key_for", side_effect=lambda it, **_: it.get("uri")), \
-             patch("retrovue.cli.commands._ops.collection_ingest_service.canonical_hash", side_effect=lambda key: key):
+             patch("retrovue.cli.commands.collection.resolve_container_selector", return_value=collection), \
+             patch("retrovue.cli.commands.collection.get_importer", return_value=importer):
 
             result = self.runner.invoke(
                 app,
                 [
-                    "collection",
+                    "container",
                     "ingest",
                     str(collection.uuid),
                     "--json",
@@ -150,7 +178,3 @@ class TestCollectionIngestSafetyContract:
             assert SessionForTest.called
             assert test_db_session.__enter__.called
             assert test_db_session.__exit__.called
-
-
-
-

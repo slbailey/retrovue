@@ -26,7 +26,7 @@ class TestSourceDiscoverDataContract:
         """
         with (
             patch("retrovue.cli.commands.source.session") as mock_session,
-            patch("retrovue.cli.commands.source.usecase_discover_collections") as mock_discover,
+            patch("retrovue.cli.commands.source.usecase_discover_containers") as mock_discover,
         ):
             mock_db = MagicMock()
             mock_session.return_value.__enter__.return_value = mock_db
@@ -57,7 +57,7 @@ class TestSourceDiscoverDataContract:
         """
         with (
             patch("retrovue.cli.commands.source.session") as mock_session,
-            patch("retrovue.cli.commands.source.usecase_discover_collections") as mock_discover,
+            patch("retrovue.cli.commands.source.usecase_discover_containers") as mock_discover,
         ):
             mock_db = MagicMock()
             mock_session.return_value.__enter__.return_value = mock_db
@@ -87,7 +87,7 @@ class TestSourceDiscoverDataContract:
         """
         with (
             patch("retrovue.cli.commands.source.session") as mock_session,
-            patch("retrovue.cli.commands.source.usecase_discover_collections") as mock_discover,
+            patch("retrovue.cli.commands.source.usecase_discover_containers") as mock_discover,
         ):
             mock_db = MagicMock()
             mock_session.return_value.__enter__.return_value = mock_db
@@ -147,7 +147,7 @@ class TestSourceDiscoverDataContract:
         """
         with (
             patch("retrovue.cli.commands.source.session") as mock_session,
-            patch("retrovue.cli.commands.source.usecase_discover_collections") as mock_discover,
+            patch("retrovue.cli.commands.source.usecase_discover_containers") as mock_discover,
         ):
             mock_db = MagicMock()
             mock_session.return_value.__enter__.return_value = mock_db
@@ -177,7 +177,7 @@ class TestSourceDiscoverDataContract:
         """
         with (
             patch("retrovue.cli.commands.source.session") as mock_session,
-            patch("retrovue.cli.commands.source.usecase_discover_collections") as mock_discover,
+            patch("retrovue.cli.commands.source.usecase_discover_containers") as mock_discover,
         ):
             mock_db = MagicMock()
             mock_session.return_value.__enter__.return_value = mock_db
@@ -207,7 +207,7 @@ class TestSourceDiscoverDataContract:
         """
         with (
             patch("retrovue.cli.commands.source.session") as mock_session,
-            patch("retrovue.cli.commands.source.usecase_discover_collections") as mock_discover,
+            patch("retrovue.cli.commands.source.usecase_discover_containers") as mock_discover,
         ):
             mock_db = MagicMock()
             mock_session.return_value.__enter__.return_value = mock_db
@@ -230,7 +230,7 @@ class TestSourceDiscoverDataContract:
             collection_query.filter.return_value.first.return_value = existing_collection
             
             def query_side_effect(model):
-                if model == Collection:
+                if model is Container:
                     return collection_query
                 return MagicMock()
             
@@ -257,7 +257,7 @@ class TestSourceDiscoverDataContract:
         """
         with (
             patch("retrovue.cli.commands.source.session") as mock_session,
-            patch("retrovue.cli.commands.source.usecase_discover_collections") as mock_discover,
+            patch("retrovue.cli.commands.source.usecase_discover_containers") as mock_discover,
         ):
             mock_db = MagicMock()
             mock_session.return_value.__enter__.return_value = mock_db
@@ -311,7 +311,7 @@ class TestSourceDiscoverDataContract:
         """
         with (
             patch("retrovue.cli.commands.source.session") as mock_session,
-            patch("retrovue.cli.commands.source.usecase_discover_collections") as mock_discover,
+            patch("retrovue.cli.commands.source.usecase_discover_containers") as mock_discover,
         ):
             mock_db = MagicMock()
             mock_session.return_value.__enter__.return_value = mock_db
@@ -342,7 +342,7 @@ class TestSourceDiscoverDataContract:
         """
         with (
             patch("retrovue.cli.commands.source.session") as mock_session,
-            patch("retrovue.cli.commands.source.usecase_discover_collections") as mock_discover,
+            patch("retrovue.cli.commands.source.usecase_discover_containers") as mock_discover,
         ):
             mock_db = MagicMock()
             mock_session.return_value.__enter__.return_value = mock_db
@@ -382,7 +382,7 @@ class TestSourceDiscoverDataContract:
         """
         with (
             patch("retrovue.cli.commands.source.session") as mock_session,
-            patch("retrovue.cli.commands.source.usecase_discover_collections") as mock_discover,
+            patch("retrovue.cli.commands.source.usecase_discover_containers") as mock_discover,
         ):
             mock_db = MagicMock()
             mock_session.return_value.__enter__.return_value = mock_db
@@ -423,7 +423,7 @@ class TestSourceDiscoverDataContract:
         """
         with (
             patch("retrovue.cli.commands.source.session") as mock_session,
-            patch("retrovue.cli.commands.source.usecase_discover_collections") as mock_discover,
+            patch("retrovue.cli.commands.source.usecase_discover_containers") as mock_discover,
         ):
             mock_db = MagicMock()
             mock_session.return_value.__enter__.return_value = mock_db

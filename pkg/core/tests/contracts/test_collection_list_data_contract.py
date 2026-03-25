@@ -39,7 +39,7 @@ class TestCollectionListDataContract:
             
             mock_db.query.return_value.all.return_value = [mock_col]
             
-            result = self.runner.invoke(app, ["collection", "list", "--json"])
+            result = self.runner.invoke(app, ["container", "list", "--json"])
             
             assert result.exit_code == 0
             data = json.loads(result.stdout)
@@ -66,7 +66,7 @@ class TestCollectionListDataContract:
             
             mock_db.query.return_value.all.return_value = [mock_col]
             
-            result = self.runner.invoke(app, ["collection", "list", "--json"])
+            result = self.runner.invoke(app, ["container", "list", "--json"])
             
             assert result.exit_code == 0
             data = json.loads(result.stdout)
@@ -86,7 +86,7 @@ class TestCollectionListDataContract:
             
             mock_db.query.return_value.all.return_value = []
             
-            result = self.runner.invoke(app, ["collection", "list"])
+            result = self.runner.invoke(app, ["container", "list"])
             assert result.exit_code == 0
 
     # D-4: Source information from foreign key
@@ -114,7 +114,7 @@ class TestCollectionListDataContract:
             
             mock_db.query.return_value.all.return_value = [mock_col]
             
-            result = self.runner.invoke(app, ["collection", "list", "--json"])
+            result = self.runner.invoke(app, ["container", "list", "--json"])
             
             assert result.exit_code == 0
             # This is a placeholder - full implementation would join Source
@@ -138,7 +138,7 @@ class TestCollectionListDataContract:
             
             mock_db.query.return_value.all.return_value = [mock_col]
             
-            result = self.runner.invoke(app, ["collection", "list", "--json"])
+            result = self.runner.invoke(app, ["container", "list", "--json"])
             
             assert result.exit_code == 0
             # Verify only query() was called, not importer or external services
@@ -156,7 +156,7 @@ class TestCollectionListDataContract:
             
             mock_db.query.return_value.all.return_value = []
             
-            result = self.runner.invoke(app, ["collection", "list"])
+            result = self.runner.invoke(app, ["container", "list"])
             
             assert result.exit_code == 0
             mock_db.add.assert_not_called()
@@ -175,7 +175,7 @@ class TestCollectionListDataContract:
             
             mock_db.query.return_value.all.return_value = []
             
-            result = self.runner.invoke(app, ["collection", "list", "--test-db"])
+            result = self.runner.invoke(app, ["container", "list", "--test-db"])
             
             # TODO: tighten exit code once CLI is stable - placeholder test with mocks
             # Should not crash
@@ -194,7 +194,7 @@ class TestCollectionListDataContract:
             
             mock_db.query.return_value.all.return_value = []
             
-            result = self.runner.invoke(app, ["collection", "list"])
+            result = self.runner.invoke(app, ["container", "list"])
             assert result.exit_code == 0
 
     # D-9: Source lookup before filtering
@@ -225,7 +225,7 @@ class TestCollectionListDataContract:
             mock_db.query.return_value.filter.return_value.all.return_value = [mock_col]
             mock_db.query.return_value.all.return_value = []  # PathMappings
             
-            result = self.runner.invoke(app, ["collection", "list", "--source", "Test Source"])
+            result = self.runner.invoke(app, ["container", "list", "--source", "Test Source"])
             
             assert result.exit_code == 0
 

@@ -20,7 +20,7 @@ class TestCollectionIngestConfidenceContract:
         self.runner = CliRunner()
 
     @patch("retrovue.cli.commands.collection._get_db_context")
-    @patch("retrovue.cli.commands.collection.resolve_collection_selector")
+    @patch("retrovue.cli.commands.collection.resolve_container_selector")
     @patch("retrovue.cli.commands.collection.ContainerIngestService")
     def test_json_includes_thresholds_and_confidence_buckets(
         self, mock_service_cls, mock_resolve, mock_get_db_ctx
@@ -72,7 +72,7 @@ class TestCollectionIngestConfidenceContract:
         result = self.runner.invoke(
             app,
             [
-                "collection",
+                "container",
                 "ingest",
                 str(collection.uuid),
                 "--json",
@@ -88,7 +88,7 @@ class TestCollectionIngestConfidenceContract:
         assert data["stats"]["assets_needs_review"] == 1
 
     @patch("retrovue.cli.commands.collection._get_db_context")
-    @patch("retrovue.cli.commands.collection.resolve_collection_selector")
+    @patch("retrovue.cli.commands.collection.resolve_container_selector")
     @patch("retrovue.cli.commands.collection.ContainerIngestService")
     def test_verbose_created_assets_always_new_never_approved(
         self, mock_service_cls, mock_resolve, mock_get_db_ctx
@@ -155,7 +155,7 @@ class TestCollectionIngestConfidenceContract:
         result = self.runner.invoke(
             app,
             [
-                "collection",
+                "container",
                 "ingest",
                 str(collection.uuid),
                 "--json",

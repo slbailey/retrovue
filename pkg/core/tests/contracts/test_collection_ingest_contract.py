@@ -252,7 +252,7 @@ class TestCollectionIngestContract:
             mock_result.stats.assets_updated = 0
             mock_result.scope = "container"
             mock_result.collection_id = collection_id
-            mock_result.collection_name = "TV Shows"
+            mock_result.container_name = "TV Shows"
             mock_result.to_dict.return_value = {
                 "status": "success",
                 "scope": "container",
@@ -345,7 +345,7 @@ class TestCollectionIngestContract:
                     mock_result.scope = "container"
                     mock_result.last_ingest_time = "2024-01-15T10:30:00Z"
                     mock_result.collection_id = collection_id
-                    mock_result.collection_name = "TV Shows"
+                    mock_result.container_name = "TV Shows"
                     mock_result.to_dict.return_value = {
                         "status": "success",
                         "scope": "container",
@@ -428,7 +428,7 @@ class TestCollectionIngestContract:
             mock_result.stats.assets_skipped = 5
             mock_result.stats.assets_updated = 0
             mock_result.scope = "container"
-            mock_result.collection_name = "TV Shows"
+            mock_result.container_name = "TV Shows"
             mock_service_instance.ingest_container.return_value = mock_result
             
             with patch("retrovue.cli.commands.collection.ContainerIngestService", return_value=mock_service_instance):
@@ -469,7 +469,7 @@ class TestCollectionIngestContract:
             mock_result.stats.assets_skipped = 5
             mock_result.stats.assets_updated = 0
             mock_result.scope = "container"
-            mock_result.collection_name = "TV Shows"
+            mock_result.container_name = "TV Shows"
             mock_service_instance.ingest_container.return_value = mock_result
             
             with patch("retrovue.cli.commands.collection.ContainerIngestService", return_value=mock_service_instance):
@@ -697,7 +697,7 @@ class TestCollectionIngestContract:
             mock_result.stats.assets_skipped = 5
             mock_result.stats.assets_updated = 0
             mock_result.scope = "container"
-            mock_result.collection_name = "TV Shows"
+            mock_result.container_name = "TV Shows"
             mock_service_instance.ingest_container.return_value = mock_result
             
             with patch("retrovue.cli.commands.collection.ContainerIngestService", return_value=mock_service_instance):
@@ -1198,6 +1198,7 @@ class TestCollectionIngestDuplicateHandling:
     def _setup_session_mock(self, mock_session):
         """Helper to setup session mock consistently across tests."""
         mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.first.return_value = None
         mock_session.return_value.__enter__.return_value = mock_db
         return mock_db
     
@@ -1330,7 +1331,7 @@ class TestCollectionIngestDuplicateHandling:
         mock_result = ContainerIngestResult(
             container_id=self.collection_id,
             container_name=self.collection.name,
-            scope="collection",
+            scope="container",
             stats=IngestStats(
                 assets_discovered=100,
                 assets_ingested=0,  # No new assets
@@ -1375,7 +1376,7 @@ class TestCollectionIngestDuplicateHandling:
         mock_result = ContainerIngestResult(
             container_id=self.collection_id,
             container_name=self.collection.name,
-            scope="collection",
+            scope="container",
             stats=IngestStats(
                 assets_discovered=50,
                 assets_ingested=0,
@@ -1425,7 +1426,7 @@ class TestCollectionIngestDuplicateHandling:
         mock_result = ContainerIngestResult(
             container_id=self.collection_id,
             container_name=self.collection.name,
-            scope="collection",
+            scope="container",
             stats=IngestStats(
                 assets_discovered=25,
                 assets_ingested=0,  # No new assets
@@ -1470,7 +1471,7 @@ class TestCollectionIngestDuplicateHandling:
         mock_result = ContainerIngestResult(
             container_id=self.collection_id,
             container_name=self.collection.name,
-            scope="collection",
+            scope="container",
             stats=IngestStats(
                 assets_discovered=30,
                 assets_ingested=0,
@@ -1515,7 +1516,7 @@ class TestCollectionIngestDuplicateHandling:
         mock_result = ContainerIngestResult(
             container_id=self.collection_id,
             container_name=self.collection.name,
-            scope="collection",
+            scope="container",
             stats=IngestStats(
                 assets_discovered=40,
                 assets_ingested=0,
@@ -1567,6 +1568,7 @@ class TestCollectionIngestTimeTrackingAndStatistics:
     def _setup_session_mock(self, mock_session):
         """Helper to setup session mock consistently across tests."""
         mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.first.return_value = None
         mock_session.return_value.__enter__.return_value = mock_db
         return mock_db
     
@@ -1597,7 +1599,7 @@ class TestCollectionIngestTimeTrackingAndStatistics:
         mock_result = ContainerIngestResult(
             container_id=self.collection_id,
             container_name=self.collection.name,
-            scope="collection",
+            scope="container",
             stats=IngestStats(
                 assets_discovered=100,
                 assets_ingested=25,
@@ -1647,7 +1649,7 @@ class TestCollectionIngestTimeTrackingAndStatistics:
         mock_result = ContainerIngestResult(
             container_id=self.collection_id,
             container_name=self.collection.name,
-            scope="collection",
+            scope="container",
             stats=IngestStats(
                 assets_discovered=50,
                 assets_ingested=0,  # No new assets
@@ -1697,7 +1699,7 @@ class TestCollectionIngestTimeTrackingAndStatistics:
         mock_result = ContainerIngestResult(
             container_id=self.collection_id,
             container_name=self.collection.name,
-            scope="collection",
+            scope="container",
             stats=IngestStats(
                 assets_discovered=200,
                 assets_ingested=30,  # New assets
@@ -1749,7 +1751,7 @@ class TestCollectionIngestTimeTrackingAndStatistics:
         mock_result = ContainerIngestResult(
             container_id=self.collection_id,
             container_name=self.collection.name,
-            scope="collection",
+            scope="container",
             stats=IngestStats(
                 assets_discovered=75,
                 assets_ingested=15,
@@ -1817,6 +1819,7 @@ class TestCollectionIngestCanonicalKey:
     def _setup_session_mock(self, mock_session):
         """Helper to setup session mock consistently across tests."""
         mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.first.return_value = None
         mock_session.return_value.__enter__.return_value = mock_db
         return mock_db
     
@@ -1832,7 +1835,7 @@ class TestCollectionIngestCanonicalKey:
         windows_path = r"C:\Movies\The Matrix.mkv"
         result_key = canonical_key_for(
             {"path_uri": windows_path},
-            collection=self.collection,
+            container=self.collection,
             provider="filesystem"
         )
         # Should normalize Windows drive to lowercase /c/
@@ -1853,7 +1856,7 @@ class TestCollectionIngestCanonicalKey:
         posix_path = "/mnt/data/MOVIES/THE_MATRIX.MKV"
         result_key = canonical_key_for(
             {"path_uri": posix_path},
-            collection=self.collection,
+            container=self.collection,
             provider="filesystem"
         )
         # Should be lowercased
@@ -1871,7 +1874,7 @@ class TestCollectionIngestCanonicalKey:
         smb_path = "smb://SERVER/Share/Video.mkv"
         result_key = canonical_key_for(
             {"path_uri": smb_path},
-            collection=self.collection,
+            container=self.collection,
             provider="smb"
         )
         # Should lowercase but preserve structure
@@ -1892,12 +1895,12 @@ class TestCollectionIngestCanonicalKey:
         
         key1 = canonical_key_for(
             {"path_uri": path1},
-            collection=self.collection,
+            container=self.collection,
             provider="filesystem"
         )
         key2 = canonical_key_for(
             {"path_uri": path2},
-            collection=self.collection,
+            container=self.collection,
             provider="filesystem"
         )
         
@@ -1922,7 +1925,7 @@ class TestCollectionIngestCanonicalKey:
         with pytest.raises(IngestError, match="Cannot derive canonical key"):
             canonical_key_for(
                 {},
-                collection=self.collection,
+                container=self.collection,
                 provider="filesystem"
             )
     
@@ -1945,7 +1948,7 @@ class TestCollectionIngestCanonicalKey:
         for original, expected_normalized in test_paths:
             key = canonical_key_for(
                 {"path_uri": original},
-                collection=self.collection,
+                container=self.collection,
                 provider="filesystem"
             )
             # Should contain the normalized path
@@ -1970,14 +1973,12 @@ class TestMilestone2CAssetPersistence:
         imp.discover.return_value = items
         return imp
 
-    @patch("retrovue.cli.commands.collection.session")
-    def test_persist_new_assets_when_missing(self, mock_session):
+    def test_persist_new_assets_when_missing(self):
         from retrovue.cli.commands._ops.collection_ingest_service import ContainerIngestService
+        from retrovue.domain.entities import Asset
+        from tests.contracts._fakes import FakeDB
 
-        mock_db = MagicMock()
-        # No existing assets found
-        mock_db.scalar.return_value = None
-        mock_session.return_value.__enter__.return_value = mock_db
+        db = FakeDB()
 
         collection = self._make_collection()
         importer = self._make_importer([
@@ -1985,7 +1986,7 @@ class TestMilestone2CAssetPersistence:
             {"path_uri": "/media/TV/The Show/S01E02.mkv", "size": 234567},
         ])
 
-        service = ContainerIngestService(mock_db)
+        service = ContainerIngestService(db)
         result = service.ingest_container(container=collection, importer=importer)
 
         # Stats: 2 discovered, 2 ingested, 0 skipped, no errors
@@ -1994,19 +1995,21 @@ class TestMilestone2CAssetPersistence:
         assert result.stats.assets_skipped == 0
         assert result.stats.errors == []
 
-        # Persistence: Session.add called twice
-        assert mock_db.add.call_count == 2
+        # Persistence: two Asset objects added
+        asset_adds = [o for o in db.added if isinstance(o, Asset)]
+        assert len(asset_adds) == 2
 
-    @patch("retrovue.cli.commands.collection.session")
-    def test_skip_duplicates_by_canonical_hash(self, mock_session):
+    def test_skip_duplicates_by_canonical_hash(self):
         from retrovue.cli.commands._ops.collection_ingest_service import ContainerIngestService
         from retrovue.domain.entities import Asset
+        from tests.contracts._fakes import FakeDB
 
-        mock_db = MagicMock()
+        db = FakeDB()
         existing_asset = MagicMock(spec=Asset)
+        existing_asset.is_deleted = False
         # First lookup returns existing asset (duplicate), second returns None (new)
-        mock_db.scalar.side_effect = [existing_asset, None]
-        mock_session.return_value.__enter__.return_value = mock_db
+        _scalar_values = iter([existing_asset, None])
+        db.scalar = lambda *a, **kw: next(_scalar_values)
 
         collection = self._make_collection()
         importer = self._make_importer([
@@ -2014,7 +2017,7 @@ class TestMilestone2CAssetPersistence:
             {"path_uri": "/media/TV/The Show/S01E02.mkv", "size": 234567},  # new
         ])
 
-        service = ContainerIngestService(mock_db)
+        service = ContainerIngestService(db)
         result = service.ingest_container(container=collection, importer=importer)
 
         # Stats: 2 discovered, 1 ingested, 1 skipped
@@ -2022,8 +2025,9 @@ class TestMilestone2CAssetPersistence:
         assert result.stats.assets_ingested == 1
         assert result.stats.assets_skipped == 1
 
-        # Persistence: Session.add called once for the new asset only
-        assert mock_db.add.call_count == 1
+        # Persistence: one Asset added for the new asset only
+        asset_adds = [o for o in db.added if isinstance(o, Asset)]
+        assert len(asset_adds) == 1
 
 
 class TestMilestone2DAssetChangeDetection:
@@ -2049,11 +2053,12 @@ class TestMilestone2DAssetChangeDetection:
         from retrovue.cli.commands._ops import collection_ingest_service as svc
         from retrovue.cli.main import app
         from retrovue.domain.entities import Asset
+        from tests.contracts._fakes import FakeDB
 
         runner = CliRunner()
 
-        mock_db = MagicMock()
-        mock_session.return_value.__enter__.return_value = mock_db
+        db = FakeDB()
+        mock_session.return_value.__enter__.return_value = db
 
         collection = self._make_collection()
 
@@ -2066,6 +2071,7 @@ class TestMilestone2DAssetChangeDetection:
 
             existing = MagicMock(spec=Asset)
             existing.last_enricher_checksum = "enc1"
+            existing.is_deleted = False
             mock_repo_get.return_value = existing
 
             importer = self._make_importer([
@@ -2090,11 +2096,12 @@ class TestMilestone2DAssetChangeDetection:
         from retrovue.cli.commands._ops import collection_ingest_service as svc
         from retrovue.cli.main import app
         from retrovue.domain.entities import Asset
+        from tests.contracts._fakes import FakeDB
 
         runner = CliRunner()
 
-        mock_db = MagicMock()
-        mock_session.return_value.__enter__.return_value = mock_db
+        db = FakeDB()
+        mock_session.return_value.__enter__.return_value = db
 
         collection = self._make_collection()
 
@@ -2106,6 +2113,7 @@ class TestMilestone2DAssetChangeDetection:
 
             existing = MagicMock(spec=Asset)
             existing.last_enricher_checksum = "enc1"
+            existing.is_deleted = False
             mock_repo_get.return_value = existing
 
             importer = self._make_importer([
@@ -2130,11 +2138,12 @@ class TestMilestone2DAssetChangeDetection:
         from retrovue.cli.commands._ops import collection_ingest_service as svc
         from retrovue.cli.main import app
         from retrovue.domain.entities import Asset
+        from tests.contracts._fakes import FakeDB
 
         runner = CliRunner()
 
-        mock_db = MagicMock()
-        mock_session.return_value.__enter__.return_value = mock_db
+        db = FakeDB()
+        mock_session.return_value.__enter__.return_value = db
 
         collection = self._make_collection()
 
@@ -2146,6 +2155,7 @@ class TestMilestone2DAssetChangeDetection:
 
             existing = MagicMock(spec=Asset)
             existing.last_enricher_checksum = "enc1"
+            existing.is_deleted = False
             mock_repo_get.return_value = existing
 
             importer = self._make_importer([
@@ -2189,11 +2199,12 @@ class TestMilestone3AAssetStateUpdate:
         from retrovue.cli.commands._ops import collection_ingest_service as svc
         from retrovue.cli.main import app
         from retrovue.domain.entities import Asset
+        from tests.contracts._fakes import FakeDB
 
         runner = CliRunner()
 
-        mock_db = MagicMock()
-        mock_session.return_value.__enter__.return_value = mock_db
+        db = FakeDB()
+        mock_session.return_value.__enter__.return_value = db
 
         collection = self._make_collection()
 
@@ -2207,6 +2218,7 @@ class TestMilestone3AAssetStateUpdate:
             existing.last_enricher_checksum = "enc1"
             existing.state = "ready"
             existing.approved_for_broadcast = True
+            existing.is_deleted = False
             mock_repo_get.return_value = existing
 
             importer = self._make_importer([
@@ -2229,18 +2241,19 @@ class TestMilestone3AAssetStateUpdate:
             assert existing.state == "ready"
             assert existing.approved_for_broadcast is True
             # No DB add for updates
-            assert mock_db.add.call_count == 0
+            assert len(db.added) == 0
 
     @patch("retrovue.cli.commands.collection.session")
     def test_existing_asset_new_enricher_is_skipped_and_not_mutated(self, mock_session):
         from retrovue.cli.commands._ops import collection_ingest_service as svc
         from retrovue.cli.main import app
         from retrovue.domain.entities import Asset
+        from tests.contracts._fakes import FakeDB
 
         runner = CliRunner()
 
-        mock_db = MagicMock()
-        mock_session.return_value.__enter__.return_value = mock_db
+        db = FakeDB()
+        mock_session.return_value.__enter__.return_value = db
 
         collection = self._make_collection()
 
@@ -2254,6 +2267,7 @@ class TestMilestone3AAssetStateUpdate:
             existing.last_enricher_checksum = "enc1"
             existing.state = "ready"
             existing.approved_for_broadcast = True
+            existing.is_deleted = False
             mock_repo_get.return_value = existing
 
             importer = self._make_importer([
@@ -2276,18 +2290,19 @@ class TestMilestone3AAssetStateUpdate:
             assert existing.last_enricher_checksum == "enc1"
             assert existing.state == "ready"
             # No DB add for updates
-            assert mock_db.add.call_count == 0
+            assert len(db.added) == 0
 
     @patch("retrovue.cli.commands.collection.session")
     def test_existing_asset_no_changes_keeps_state_and_no_add(self, mock_session):
         from retrovue.cli.commands._ops import collection_ingest_service as svc
         from retrovue.cli.main import app
         from retrovue.domain.entities import Asset
+        from tests.contracts._fakes import FakeDB
 
         runner = CliRunner()
 
-        mock_db = MagicMock()
-        mock_session.return_value.__enter__.return_value = mock_db
+        db = FakeDB()
+        mock_session.return_value.__enter__.return_value = db
 
         collection = self._make_collection()
 
@@ -2301,6 +2316,7 @@ class TestMilestone3AAssetStateUpdate:
             existing.last_enricher_checksum = "enc1"
             existing.state = "ready"
             existing.approved_for_broadcast = True
+            existing.is_deleted = False
             mock_repo_get.return_value = existing
 
             importer = self._make_importer([
@@ -2319,4 +2335,4 @@ class TestMilestone3AAssetStateUpdate:
             assert data["stats"]["assets_ingested"] == 0
             assert data["stats"]["assets_skipped"] == 1
             # No mutation intended
-            assert mock_db.add.call_count == 0
+            assert len(db.added) == 0

@@ -38,6 +38,82 @@ if TYPE_CHECKING:
     from retrovue.catalog.db_asset_library import DatabaseAssetLibrary
 
 
+def _build_filler_segments(
+    gap_ms: int,
+    filler_uri: str,
+    filler_duration_ms: int,
+    alignment: str = "start",
+    wrapping_offset_ms: int = 0,
+) -> tuple[list[ScheduledSegment], int]:
+    """Build filler segments to fill a gap of ``gap_ms`` milliseconds.
+
+    INV-FILLER-ALIGNMENT-001: Two alignment modes.
+
+    **Start mode** — plays filler forward from ``wrapping_offset_ms``, wrapping
+    at the end of the filler file. Returns the new wrapping offset so
+    consecutive gaps continue seamlessly.
+
+    **End mode** — positions filler so the closing frames coincide with the
+    gap boundary (block seam). Stateless: returned offset is always 0.
+
+    Returns:
+        (segments, new_wrapping_offset)
+    """
+    if gap_ms <= 0:
+        return [], wrapping_offset_ms
+
+    segments: list[ScheduledSegment] = []
+
+    if alignment == "end":
+        remainder = gap_ms % filler_duration_ms
+        full_loops = gap_ms // filler_duration_ms
+
+        if remainder == 0:
+            # Exact multiple — all full loops, no partial
+            for _ in range(full_loops):
+                segments.append(ScheduledSegment(
+                    segment_type="filler",
+                    asset_uri=filler_uri,
+                    asset_start_offset_ms=0,
+                    segment_duration_ms=filler_duration_ms,
+                ))
+        else:
+            # Partial segment first (seam-aligned), then full loops
+            partial_offset = filler_duration_ms - remainder
+            segments.append(ScheduledSegment(
+                segment_type="filler",
+                asset_uri=filler_uri,
+                asset_start_offset_ms=partial_offset,
+                segment_duration_ms=remainder,
+            ))
+            for _ in range(full_loops):
+                segments.append(ScheduledSegment(
+                    segment_type="filler",
+                    asset_uri=filler_uri,
+                    asset_start_offset_ms=0,
+                    segment_duration_ms=filler_duration_ms,
+                ))
+
+        # INV-FILLER-ALIGNMENT-END-STATELESS-001: end mode is stateless
+        return segments, 0
+
+    # --- Start alignment (default) ---
+    offset = wrapping_offset_ms
+    remaining = gap_ms
+    while remaining > 0:
+        playable = min(remaining, filler_duration_ms - offset)
+        segments.append(ScheduledSegment(
+            segment_type="filler",
+            asset_uri=filler_uri,
+            asset_start_offset_ms=offset,
+            segment_duration_ms=playable,
+        ))
+        offset = (offset + playable) % filler_duration_ms
+        remaining -= playable
+
+    return segments, offset
+
+
 def fill_ad_blocks(
     block: ScheduledBlock,
     filler_uri: str,
@@ -48,6 +124,7 @@ def fill_ad_blocks(
     now_ms: int = 0,
     day_start_ms: int = 0,
     break_config: BreakConfig | None = None,
+    filler_alignment: str = "start",
 ) -> ScheduledBlock:
     """
     Fill all empty filler placeholders in a ScheduledBlock.
@@ -67,6 +144,7 @@ def fill_ad_blocks(
         now_ms: Current timestamp in ms for cooldown evaluation.
         day_start_ms: Channel traffic day start in ms for daily cap evaluation.
         break_config: Optional BreakConfig for structured break expansion.
+        filler_alignment: "start" or "end" (INV-FILLER-ALIGNMENT-001).
 
     Returns:
         New ScheduledBlock with filled segments.
@@ -120,20 +198,16 @@ def fill_ad_blocks(
                     new_segments.extend(filled)
                     continue
 
-            # Fallback: static filler (v1 behavior)
-            # Fill the break by sequentially playing through filler,
-            # wrapping when the end of the filler file is reached.
-            remaining_ms = seg.segment_duration_ms
-            while remaining_ms > 0:
-                playable = min(remaining_ms, filler_duration_ms - filler_offset_ms)
-                new_segments.append(ScheduledSegment(
-                    segment_type="filler",
-                    asset_uri=filler_uri,
-                    asset_start_offset_ms=filler_offset_ms,
-                    segment_duration_ms=playable,
-                ))
-                filler_offset_ms = (filler_offset_ms + playable) % filler_duration_ms
-                remaining_ms -= playable
+            # Fallback: static filler via _build_filler_segments
+            # INV-FILLER-ALIGNMENT-001: delegates to alignment-aware builder.
+            filler_segs, filler_offset_ms = _build_filler_segments(
+                gap_ms=seg.segment_duration_ms,
+                filler_uri=filler_uri,
+                filler_duration_ms=filler_duration_ms,
+                alignment=filler_alignment,
+                wrapping_offset_ms=filler_offset_ms,
+            )
+            new_segments.extend(filler_segs)
         else:
             new_segments.append(seg)
 

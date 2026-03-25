@@ -70,7 +70,7 @@ def backfill_plex_artwork(*, dry_run: bool = False) -> dict[str, int]:
 
             # Get all collections for this source.
             collections = (
-                db.query(Collection)
+                db.query(Container)
                 .filter(Container.source_id == source.id)
                 .all()
             )

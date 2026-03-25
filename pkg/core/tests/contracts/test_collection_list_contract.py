@@ -53,7 +53,7 @@ def _mock_db_session(mock_session):
         name = getattr(model_cls, "__name__", "")
         if name == "Source":
             return sources_q
-        if name == "Collection":
+        if name == "Container":
             return collections_q
         if name == "PathMapping":
             return pathmaps_q
@@ -77,7 +77,7 @@ def _mock_db_context(mock_get_db_context):
         name = getattr(model_cls, "__name__", "")
         if name == "Source":
             return sources_q
-        if name == "Collection":
+        if name == "Container":
             return collections_q
         if name == "PathMapping":
             return pathmaps_q
@@ -90,10 +90,10 @@ def _mock_db_context(mock_get_db_context):
 def test_collection_list_contract__help_flag(cli_runner):
     """B-0: The command exposes help with exit code 0."""
 
-    result = cli_runner.invoke(app, ["collection", "list", "--help"])
+    result = cli_runner.invoke(app, ["container", "list", "--help"])
 
     assert result.exit_code == 0
-    assert "Show Collections for a Source" in result.stdout
+    assert "Show containers for a source" in result.stdout
 
 
 def test_collection_list_contract__b1_lists_all_collections(cli_runner):
@@ -110,7 +110,7 @@ def test_collection_list_contract__b1_lists_all_collections(cli_runner):
         ]
         pathmaps_q.filter.return_value.all.return_value = []
 
-        result = cli_runner.invoke(app, ["collection", "list", "--json"])
+        result = cli_runner.invoke(app, ["container", "list", "--json"])
 
         assert result.exit_code == 0
 
@@ -143,7 +143,7 @@ def test_collection_list_contract__b2_resolves_source_by_uuid(cli_runner):
 
         result = cli_runner.invoke(
             app,
-            ["collection", "list", "--source", str(resolved_source.id), "--json"],
+            ["container", "list", "--source", str(resolved_source.id), "--json"],
         )
 
         assert result.exit_code == 0
@@ -180,7 +180,7 @@ def test_collection_list_contract__b2_resolves_source_by_external_id(cli_runner)
 
         result = cli_runner.invoke(
             app,
-            ["collection", "list", "--source", resolved_source.external_id, "--json"],
+            ["container", "list", "--source", resolved_source.external_id, "--json"],
         )
 
         assert result.exit_code == 0
@@ -216,7 +216,7 @@ def test_collection_list_contract__b2_resolves_source_by_name(cli_runner):
 
         result = cli_runner.invoke(
             app,
-            ["collection", "list", "--source", "my plex server", "--json"],
+            ["container", "list", "--source", "my plex server", "--json"],
         )
 
         assert result.exit_code == 0
@@ -233,7 +233,7 @@ def test_collection_list_contract__b3_errors_when_source_missing(cli_runner):
         filter_mock.all.return_value = []
         sources_q.filter.return_value = filter_mock
 
-        result = cli_runner.invoke(app, ["collection", "list", "--source", "missing-source"])
+        result = cli_runner.invoke(app, ["container", "list", "--source", "missing-source"])
 
         assert result.exit_code == 1
         out = result.stderr or result.stdout
@@ -252,7 +252,7 @@ def test_collection_list_contract__b4_errors_when_source_ambiguous(cli_runner):
         ]
         sources_q.filter.return_value = filter_mock
 
-        result = cli_runner.invoke(app, ["collection", "list", "--source", "My Server"])
+        result = cli_runner.invoke(app, ["container", "list", "--source", "My Server"])
 
         assert result.exit_code == 1
         out = result.stderr or result.stdout
@@ -279,7 +279,7 @@ def test_collection_list_contract__b5_filters_collections_by_source(cli_runner):
         ]
         pathmaps_q.filter.return_value.all.return_value = []
 
-        result = cli_runner.invoke(app, ["collection", "list", "--source", resolved_source.name, "--json"])
+        result = cli_runner.invoke(app, ["container", "list", "--source", resolved_source.name, "--json"])
 
         assert result.exit_code == 0
         data = json.loads(result.stdout)
@@ -297,7 +297,7 @@ def test_collection_list_contract__b6_returns_structured_json(cli_runner):
             _make_path_mapping(local_path="/local/tv"),
         ]
 
-        result = cli_runner.invoke(app, ["collection", "list", "--json"])
+        result = cli_runner.invoke(app, ["container", "list", "--json"])
 
         assert result.exit_code == 0
 
@@ -331,8 +331,8 @@ def test_collection_list_contract__b7_output_is_deterministic(cli_runner):
         ]
         pathmaps_q.filter.return_value.all.return_value = []
 
-        first = cli_runner.invoke(app, ["collection", "list", "--json"])
-        second = cli_runner.invoke(app, ["collection", "list", "--json"])
+        first = cli_runner.invoke(app, ["container", "list", "--json"])
+        second = cli_runner.invoke(app, ["container", "list", "--json"])
 
         assert first.exit_code == 0
         assert second.exit_code == 0
@@ -345,8 +345,8 @@ def test_collection_list_contract__b8_reports_no_collections(cli_runner):
 
         collections_q.all.return_value = []
 
-        json_result = cli_runner.invoke(app, ["collection", "list", "--json"])
-        human_result = cli_runner.invoke(app, ["collection", "list"])
+        json_result = cli_runner.invoke(app, ["container", "list", "--json"])
+        human_result = cli_runner.invoke(app, ["container", "list"])
 
         assert json_result.exit_code == 0
         assert human_result.exit_code == 0
@@ -362,7 +362,7 @@ def test_collection_list_contract__b9_is_read_only(cli_runner):
         ]
         pathmaps_q.filter.return_value.all.return_value = []
 
-        result = cli_runner.invoke(app, ["collection", "list", "--json"])
+        result = cli_runner.invoke(app, ["container", "list", "--json"])
 
         assert result.exit_code == 0
         db.commit.assert_not_called()
@@ -389,7 +389,7 @@ def test_collection_list_contract__b10_b11_test_db_uses_isolated_session(cli_run
             name = getattr(model_cls, "__name__", "")
             if name == "Source":
                 return sources_q
-            if name == "Collection":
+            if name == "Container":
                 return collections_q
             if name == "PathMapping":
                 return pathmaps_q
@@ -413,7 +413,7 @@ def test_collection_list_contract__b10_b11_test_db_uses_isolated_session(cli_run
 
         result = cli_runner.invoke(
             app,
-            ["collection", "list", "--source", resolved_source.name, "--json", "--test-db"],
+            ["container", "list", "--source", resolved_source.name, "--json", "--test-db"],
         )
 
         assert result.exit_code == 0
@@ -434,7 +434,7 @@ def test_collection_list_contract__b12_skips_external_systems(cli_runner):
         ]
         pathmaps_q.filter.return_value.all.return_value = []
 
-        result = cli_runner.invoke(app, ["collection", "list", "--json"])
+        result = cli_runner.invoke(app, ["container", "list", "--json"])
 
         assert result.exit_code == 0
         mock_get_importer.assert_not_called()

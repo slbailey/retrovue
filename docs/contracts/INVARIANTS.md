@@ -211,6 +211,7 @@ Canonical contract: [episode_progression.md](episode_progression.md)
 | INV-PRESENTATION-GRID-BUDGET-001 | [invariants/core/program-presentation/INV-PRESENTATION-GRID-BUDGET-001.md](invariants/core/program-presentation/INV-PRESENTATION-GRID-BUDGET-001.md) | LAW-GRID, LAW-CONTENT-AUTHORITY |
 | INV-PRESENTATION-NOT-FILLER-001 | [invariants/core/program-presentation/INV-PRESENTATION-NOT-FILLER-001.md](invariants/core/program-presentation/INV-PRESENTATION-NOT-FILLER-001.md) | LAW-CONTENT-AUTHORITY, LAW-ELIGIBILITY |
 | INV-PRESENTATION-BREAK-INVISIBLE-001 | [invariants/core/program-presentation/INV-PRESENTATION-BREAK-INVISIBLE-001.md](invariants/core/program-presentation/INV-PRESENTATION-BREAK-INVISIBLE-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-PRESENTATION-CONTEXTUAL-SELECT-001 | [invariants/core/program-presentation/INV-PRESENTATION-CONTEXTUAL-SELECT-001.md](invariants/core/program-presentation/INV-PRESENTATION-CONTEXTUAL-SELECT-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
 
 Canonical contract: [program_presentation.md](program_presentation.md)
 

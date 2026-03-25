@@ -11,12 +11,16 @@ from __future__ import annotations
 
 import json
 import uuid
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from typer.testing import CliRunner
 
 from retrovue.cli.main import app
+from retrovue.domain.entities import Asset, Container, Source
+
+from ._fakes import FakeDB
 
 
 class _FakeImporter:
@@ -37,21 +41,26 @@ class _FakeImporter:
 
 
 def _make_collection(source_id: str):
-    coll = MagicMock()
-    coll.uuid = uuid.uuid4()
-    coll.name = "Movies"
-    coll.sync_enabled = True
-    coll.ingestible = True
-    coll.source_id = source_id
+    coll = SimpleNamespace(
+        uuid=uuid.uuid4(),
+        id=str(uuid.uuid4()),
+        name="Movies",
+        sync_enabled=True,
+        ingestible=True,
+        source_id=source_id,
+        config={},
+        external_id=str(uuid.uuid4()),
+    )
     return coll
 
 
-def _make_source(source_type: str, name: str = "Test Source"):
-    src = MagicMock()
-    src.type = source_type
-    src.name = name
-    src.config = {}
-    return src
+def _make_db(existing_assets=None):
+    """Build a FakeDB seeded with empty stores for all queried models."""
+    db = FakeDB()
+    db.seed(Asset, existing_assets or [])
+    db.seed(Container, [])
+    db.seed(Source, [])
+    return db
 
 
 class TestCollectionIngestVerboseAssets:
@@ -59,16 +68,15 @@ class TestCollectionIngestVerboseAssets:
         self.runner = CliRunner()
 
     @patch("retrovue.cli.commands.collection.session")
-    @patch("retrovue.cli.commands.collection.resolve_collection_selector")
+    @patch("retrovue.cli.commands.collection.resolve_container_selector")
     @patch("retrovue.cli.commands.collection.get_importer")
     def test_collection_ingest_verbose_returns_created_assets(self, mock_get_importer, mock_resolve, mock_session):
         # Arrange DB and collection
-        db = MagicMock()
+        db = _make_db()
         mock_session.return_value.__enter__.return_value = db
         source_id = str(uuid.uuid4())
         collection = _make_collection(source_id)
         mock_resolve.return_value = collection
-        db.query.return_value.filter.return_value.first.return_value = _make_source("filesystem")
 
         # Importer emits two new items
         items = [
@@ -78,12 +86,9 @@ class TestCollectionIngestVerboseAssets:
         importer = _FakeImporter("filesystem", items)
         mock_get_importer.return_value = importer
 
-        # No existing assets
-        db.scalar.return_value = None
-
         # Act
         result = self.runner.invoke(app, [
-            "collection", "ingest", str(collection.uuid), "--json", "--verbose-assets"
+            "container", "ingest", str(collection.uuid), "--json", "--verbose-assets"
         ])
 
         # Assert
@@ -103,39 +108,50 @@ class TestCollectionIngestVerboseAssets:
             assert isinstance(a.get("uuid"), str) and len(a["uuid"]) > 0
 
     @patch("retrovue.cli.commands.collection.session")
-    @patch("retrovue.cli.commands.collection.resolve_collection_selector")
+    @patch("retrovue.cli.commands.collection.resolve_container_selector")
     @patch("retrovue.cli.commands.collection.get_importer")
     def test_collection_ingest_verbose_returns_no_updates_for_existing(self, mock_get_importer, mock_resolve, mock_session):
         # Arrange DB and collection
-        db = MagicMock()
-        mock_session.return_value.__enter__.return_value = db
         source_id = str(uuid.uuid4())
         collection = _make_collection(source_id)
-        mock_resolve.return_value = collection
-        db.query.return_value.filter.return_value.first.return_value = _make_source("filesystem")
 
-        # Importer emits two existing items with different changes
+        # Build existing assets matching the discovery items
+        from retrovue.infra.canonical import canonical_hash, canonical_key_for
+
         items = [
-            {"path": "/media/existing1.mkv"},  # content change scenario not used anymore
-            {"path": "/media/existing2.mkv", "enricher_checksum": "e2"},  # enricher change
+            {"path": "/media/existing1.mkv"},
+            {"path": "/media/existing2.mkv"},
         ]
+
+        existing_assets = []
+        for item in items:
+            ck = canonical_key_for(item, container=collection, provider="filesystem")
+            ck_hash = canonical_hash(ck)
+            asset = SimpleNamespace(
+                uuid=uuid.uuid4(),
+                container_id=collection.uuid,
+                source_id=source_id,
+                canonical_key=ck,
+                canonical_key_hash=ck_hash,
+                uri=item["path"],
+                canonical_uri=item["path"],
+                is_deleted=False,
+                file_size=None,
+                file_mtime=None,
+                last_enricher_checksum=None,
+            )
+            existing_assets.append(asset)
+
+        db = _make_db(existing_assets=existing_assets)
+        mock_session.return_value.__enter__.return_value = db
+        mock_resolve.return_value = collection
+
         importer = _FakeImporter("filesystem", items)
         mock_get_importer.return_value = importer
 
-        # Existing assets returned in order: two lookups
-        existing1 = MagicMock()
-        existing1.uuid = uuid.uuid4()
-        existing1.last_enricher_checksum = None
-
-        existing2 = MagicMock()
-        existing2.uuid = uuid.uuid4()
-        existing2.last_enricher_checksum = "e1"
-
-        db.scalar.side_effect = [existing1, existing2]
-
         # Act
         result = self.runner.invoke(app, [
-            "collection", "ingest", str(collection.uuid), "--json", "--verbose-assets"
+            "container", "ingest", str(collection.uuid), "--json", "--verbose-assets"
         ])
 
         # Assert
@@ -146,28 +162,24 @@ class TestCollectionIngestVerboseAssets:
         assert payload.get("updated_assets") == []
 
     @patch("retrovue.cli.commands.collection.session")
-    @patch("retrovue.cli.commands.collection.resolve_collection_selector")
+    @patch("retrovue.cli.commands.collection.resolve_container_selector")
     @patch("retrovue.cli.commands.collection.get_importer")
     def test_collection_ingest_verbose_does_not_affect_default_output(self, mock_get_importer, mock_resolve, mock_session):
         # Arrange DB and collection
-        db = MagicMock()
+        db = _make_db()
         mock_session.return_value.__enter__.return_value = db
         source_id = str(uuid.uuid4())
         collection = _make_collection(source_id)
         mock_resolve.return_value = collection
-        db.query.return_value.filter.return_value.first.return_value = _make_source("filesystem")
 
         # Importer emits one new item
         items = [{"path": "/media/new.mkv"}]
         importer = _FakeImporter("filesystem", items)
         mock_get_importer.return_value = importer
 
-        # No existing assets
-        db.scalar.return_value = None
-
         # Act (without --verbose-assets)
         result = self.runner.invoke(app, [
-            "collection", "ingest", str(collection.uuid), "--json"
+            "container", "ingest", str(collection.uuid), "--json"
         ])
 
         # Assert
@@ -176,9 +188,3 @@ class TestCollectionIngestVerboseAssets:
         assert payload["status"] == "success"
         assert "created_assets" not in payload
         assert "updated_assets" not in payload
-
-
-
-
-
-

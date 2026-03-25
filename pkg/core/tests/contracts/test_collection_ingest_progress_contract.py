@@ -11,7 +11,7 @@ def test_dry_run_emits_early_feedback():
     collection_id = str(uuid.uuid4())
 
     with patch("retrovue.cli.commands.collection.session") as mock_session, \
-         patch("retrovue.cli.commands.collection.resolve_collection_selector") as mock_resolve, \
+         patch("retrovue.cli.commands.collection.resolve_container_selector") as mock_resolve, \
          patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer, \
          patch("retrovue.cli.commands._ops.collection_ingest_service.ContainerIngestService") as mock_service:
 
@@ -36,11 +36,11 @@ def test_dry_run_emits_early_feedback():
         result.stats.assets_ingested = 0
         result.stats.assets_skipped = 0
         result.stats.assets_updated = 0
-        result.collection_name = "Movies"
+        result.container_name = "Movies"
         result.scope = "collection"
         mock_service.return_value.ingest_container.return_value = result
 
-        res = runner.invoke(app, ["collection", "ingest", collection_id, "--dry-run"])  # no --json
+        res = runner.invoke(app, ["container", "ingest", collection_id, "--dry-run"])  # no --json
         assert res.exit_code == 0
         # Early message should appear before the summary lines
         assert "Starting ingest: validating and ingesting assets" in res.stdout
