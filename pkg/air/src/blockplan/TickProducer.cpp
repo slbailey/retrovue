@@ -15,6 +15,7 @@
 #include "retrovue/blockplan/BlockPlanValidator.hpp"
 #include "retrovue/blockplan/FFmpegDecoderAdapter.hpp"
 #include "retrovue/decode/FFmpegDecoder.h"
+#include "retrovue/util/AirMemoryMonitor.hpp"
 #include "retrovue/util/Logger.hpp"
 
 namespace retrovue::blockplan {
@@ -930,6 +931,9 @@ std::optional<FrameData> TickProducer::DecodeNextFrameRaw(bool advance_output_st
                 << " block_ct_ms=" << block_ct_ms_
                 << " block_id=" << block_.block_id
                 << std::endl;
+      // AIR_MEM: Track segment transition and snapshot RSS.
+      retrovue::util::GetAirMemCounters().total_segment_transitions.fetch_add(1, std::memory_order_relaxed);
+      retrovue::util::LogSegmentTransitionMemory();
       decoder_ok_ = false;
     }
     // INV-AIR-MEDIA-TIME: On decode failure/EOF, do not advance media_ct_ms.

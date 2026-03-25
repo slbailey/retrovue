@@ -27,6 +27,7 @@ extern "C" {
 #include "retrovue/output/SinkDiagnostics.h"
 #include "retrovue/telemetry/MetricsExporter.h"
 #include "retrovue/timing/MasterClock.h"
+#include "retrovue/util/AirMemoryMonitor.hpp"
 
 namespace {
 
@@ -218,6 +219,9 @@ int main(int argc, char** argv) {
   // INV-FFMPEG-GLOBAL-INIT-001: Initialize FFmpeg global state before any
   // threads are spawned. Required for thread-safe network/TLS initialization.
   avformat_network_init();
+
+  // AIR_MEM: Initialize memory diagnostics (baseline + env check).
+  retrovue::util::InitMemDiag();
 
   try {
     ServerConfig config = ParseArgs(argc, argv);

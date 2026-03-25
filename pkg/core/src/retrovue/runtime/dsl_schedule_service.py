@@ -1501,18 +1501,40 @@ class DslScheduleService:
                 )
                 return None
 
-            # Get the last block from compiled_segments
+            # Get the last block from compiled_segments.
+            # Two formats exist:
+            #   V1 (block-envelope): list of dicts with block_id/start_utc_ms/end_utc_ms/segments
+            #   V2 (segment-level):  list of dicts with segment_type/asset_id/duration_ms
+            # Detect format by checking for block-level keys on the first element.
             seg_list = compiled_segs if isinstance(compiled_segs, list) else [compiled_segs]
             last_seg = seg_list[-1]
 
             if not isinstance(last_seg, dict):
                 return None
 
-            for field in ("block_id", "start_utc_ms", "end_utc_ms", "segments"):
-                if field not in last_seg:
-                    return None
+            has_block_envelope = all(
+                f in last_seg for f in ("block_id", "start_utc_ms", "end_utc_ms", "segments")
+            )
 
-            block = _deserialize_scheduled_block(last_seg, self._frame_tolerance_ms)
+            if has_block_envelope:
+                block = _deserialize_scheduled_block(last_seg, self._frame_tolerance_ms)
+            else:
+                # V2 segment-level format: reconstruct block from ScheduleItem envelope.
+                from retrovue.runtime.schedule_items_reader import _hydrate_compiled_segments
+                item_start_ms = int(last_item.start_time.timestamp() * 1000)
+                slot_duration_ms = int(last_item.duration_sec * 1000)
+                asset_id_raw = meta.get("asset_id_raw", "carry-in")
+                try:
+                    resolver = self._get_resolver()
+                except Exception:
+                    resolver = None
+                block = _hydrate_compiled_segments(
+                    compiled_segments=seg_list,
+                    asset_id=asset_id_raw,
+                    start_utc_ms=item_start_ms,
+                    slot_duration_ms=slot_duration_ms,
+                    resolver=resolver,
+                )
 
             logger.info(
                 "INV-TIMELINE-CARRY-IN-PRESERVED-001: loaded carry-in "

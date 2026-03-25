@@ -39,6 +39,7 @@
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSinkConfig.hpp"
 #include "retrovue/output/SocketSink.h"
 #include "retrovue/output/SinkDiagnostics.h"
+#include "retrovue/util/AirMemoryMonitor.hpp"
 #include "retrovue/util/Logger.hpp"
 #include "time/SystemTimeSource.hpp"
 
@@ -1695,6 +1696,9 @@ void PipelineManager::Run() {
     // repeats.
     // ==================================================================
 
+    // AIR_MEM: Windowed counter snapshot every 900 ticks (~30s).
+    const bool mem_sample_tick = (session_frame_index > 0 && (session_frame_index % 900) == 0);
+
     TakeDecision decision = TakeDecision::kPad;
     const buffer::Frame* chosen_video = nullptr;  // set during selection; one encodeFrame(*chosen_video) after cascade
     char take_source_char = 'P';  // set from decision after frame-selection cascade
@@ -2655,6 +2659,7 @@ void PipelineManager::Run() {
       mutable_video->metadata.SetDurationFromUs(output_frame_duration_us);
     }
     session_encoder->encodeFrame(*chosen_video, video_pts_90k);
+    retrovue::util::GetAirMemCounters().total_frames_emitted.fetch_add(1, std::memory_order_relaxed);
 
     // INV-PACING-SINGLE-AUTHORITY: First video frame diagnostic.
     if (!pacing_diag_first_video_logged) {
@@ -4481,6 +4486,52 @@ void PipelineManager::Run() {
       }
     }
 #endif
+
+    // AIR_MEM: Periodic memory snapshot every ~30 seconds.
+    // At ~30fps, 900 ticks ≈ 30s.  No chrono call — just a modulo on the frame counter.
+    // AIR_MEM: Periodic diagnostic check every ~30 seconds.
+    // LogMemorySnapshotEx handles its own gating: no-op when diag disabled,
+    // auto-triggers on heap growth, emits [AIR_MEM] when enabled.
+    // The only per-window cost when disabled: one mallinfo2 call (~2μs).
+    if (mem_sample_tick) {
+      retrovue::util::SubsystemSizes sub;
+      if (socket_sink) sub.socket_sink_queue_bytes = socket_sink->GetCurrentBufferSize();
+      if (video_buffer_) sub.video_store_size = video_buffer_->IndexedStoreSize();
+      if (audio_buffer_) sub.audio_buffer_depth_ms = static_cast<size_t>(audio_buffer_->DepthMs());
+      retrovue::util::LogMemorySnapshotEx(sub);
+
+      // Windowed encoder counters — only log when diag is on.
+      if (AIR_MEM_UNLIKELY(retrovue::util::IsMemDiagEnabled())) {
+        auto wc = session_encoder->SnapshotAndResetWindow();
+        char wbuf[768];
+        snprintf(wbuf, sizeof(wbuf),
+            "[AIR_WINDOW] tick=%lld gop=%d"
+            " venc=%lld aenc=%lld"
+            " vpkt=%lld vpkt_kb=%lld apkt=%lld apkt_kb=%lld"
+            " mux_w=%lld mux_kb=%lld"
+            " avio_w=%lld avio_kb=%lld avio_flush=%lld"
+            " clones=%lld ilv_hw=%lld writable_alloc=%lld"
+            " sk_q=%zu",
+            static_cast<long long>(session_frame_index),
+            enc_config.gop_size,
+            static_cast<long long>(wc.video_frames_encoded),
+            static_cast<long long>(wc.audio_frames_encoded),
+            static_cast<long long>(wc.video_pkts_received),
+            static_cast<long long>(wc.video_pkt_bytes / 1024),
+            static_cast<long long>(wc.audio_pkts_received),
+            static_cast<long long>(wc.audio_pkt_bytes / 1024),
+            static_cast<long long>(wc.mux_write_calls),
+            static_cast<long long>(wc.mux_write_bytes / 1024),
+            static_cast<long long>(wc.avio_write_calls),
+            static_cast<long long>(wc.avio_write_bytes / 1024),
+            static_cast<long long>(wc.avio_flush_calls),
+            static_cast<long long>(wc.clones_created),
+            static_cast<long long>(wc.interleaver_high_water),
+            static_cast<long long>(wc.make_writable_allocs),
+            socket_sink ? socket_sink->GetCurrentBufferSize() : 0);
+        Logger::Info(std::string(wbuf));
+      }
+    }
 
     session_frame_index++;
   }

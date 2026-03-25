@@ -332,6 +332,15 @@ class PlayoutSession:
                     "--port", str(grpc_port),
                 ]
 
+                # AIR_MEM: Wrap AIR in heaptrack when env var set.
+                import os as _os
+                if _os.environ.get("AIR_MEM_HEAPTRACK"):
+                    log_dir = Path("/opt/retrovue/pkg/air/logs")
+                    log_dir.mkdir(parents=True, exist_ok=True)
+                    ht_out = str(log_dir / f"{self.channel_id}-heaptrack")
+                    cmd = ["heaptrack", "--record-only", "-o", ht_out, "--"] + cmd
+                    logger.info("[PlayoutSession:%s] AIR_MEM: heaptrack wrapping → %s", self.channel_id, ht_out)
+
                 # Create log directory; capture both stdout and stderr to channel log
                 log_dir = Path("/opt/retrovue/pkg/air/logs")
                 log_dir.mkdir(parents=True, exist_ok=True)
@@ -353,8 +362,9 @@ class PlayoutSession:
                         cwd=str(Path.cwd()),
                     )
 
-                # Wait for gRPC to be ready
-                if not self._wait_for_grpc(timeout_s=10.0):
+                # Wait for gRPC to be ready (longer timeout under heaptrack)
+                _grpc_timeout = 30.0 if _os.environ.get("AIR_MEM_HEAPTRACK") else 10.0
+                if not self._wait_for_grpc(timeout_s=_grpc_timeout):
                     raise RuntimeError("AIR gRPC did not become ready")
 
                 # Attach stream (UDS socket)

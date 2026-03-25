@@ -14,6 +14,7 @@
 
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"  // SnapToStandardRationalFps
 #include "retrovue/decode/FFmpegInitGuard.hpp"
+#include "retrovue/util/AirMemoryMonitor.hpp"
 
 namespace {
 
@@ -92,6 +93,9 @@ FFmpegDecoder::~FFmpegDecoder() {
 
 bool FFmpegDecoder::Open() {
   std::cout << "[FFmpegDecoder] Opening: " << config_.input_uri << std::endl;
+
+  // AIR_MEM: Track decoder reopen for memory correlation.
+  retrovue::util::GetAirMemCounters().total_decoder_reopens.fetch_add(1, std::memory_order_relaxed);
 
   // Suppress FFmpeg warnings but keep errors visible
   av_log_set_level(AV_LOG_ERROR);
@@ -459,12 +463,17 @@ bool FFmpegDecoder::DecodeFrameToBuffer(buffer::Frame& output_frame) {
   if (has_pending_frame_) {
     has_pending_frame_ = false;
     output_frame = std::move(pending_frame_);
+    retrovue::util::GetAirMemCounters().total_frames_decoded.fetch_add(1, std::memory_order_relaxed);
     return true;
   }
   if (!IsOpen() || eof_reached_) {
     return false;
   }
-  return ReadAndDecodeFrame(output_frame);
+  bool ok = ReadAndDecodeFrame(output_frame);
+  if (ok) {
+    retrovue::util::GetAirMemCounters().total_frames_decoded.fetch_add(1, std::memory_order_relaxed);
+  }
+  return ok;
 }
 
 int FFmpegDecoder::GetVideoWidth() const {

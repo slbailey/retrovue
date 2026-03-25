@@ -345,8 +345,37 @@ class EncoderPipeline {
   using PacketWriteObserver = std::function<void(int stream_index, int64_t dts, int64_t pts, int64_t dts_90k, int64_t pts_90k)>;
   void SetPacketWriteObserver(PacketWriteObserver observer);
 
+  // =========================================================================
+  // AIR_MEM: Encode-phase memory diagnostics (diagnostic only, no behavior change)
+  // =========================================================================
+
+  // Windowed counters — accumulate across a full 900-tick window, then snapshot+reset.
+  struct EncodeWindowCounters {
+    int64_t video_frames_encoded = 0;   // encodeFrame calls
+    int64_t audio_frames_encoded = 0;   // encodeAudioFrame calls
+    int64_t video_pkts_received = 0;    // avcodec_receive_packet successes (video)
+    int64_t video_pkt_bytes = 0;        // sum of video packet->size from receive
+    int64_t audio_pkts_received = 0;    // avcodec_receive_packet successes (audio)
+    int64_t audio_pkt_bytes = 0;        // sum of audio packet->size from receive
+    int64_t mux_write_calls = 0;        // av_interleaved_write_frame calls
+    int64_t mux_write_bytes = 0;        // sum of packet->size entering WriteMuxPacket
+    int64_t avio_write_calls = 0;       // AVIO write callback invocations
+    int64_t avio_write_bytes = 0;       // sum of bytes through AVIO write callback
+    int64_t avio_flush_calls = 0;       // avio_flush calls
+    int64_t clones_created = 0;         // av_packet_clone calls
+    int64_t clones_freed = 0;           // av_packet_free on cloned packets (in interleaver flush)
+    int64_t interleaver_high_water = 0; // max queue depth seen this window
+    int64_t make_writable_allocs = 0;   // times av_frame_make_writable caused buffer replacement
+  };
+
+  // Snapshot the current window and reset counters for the next window.
+  EncodeWindowCounters SnapshotAndResetWindow();
+
  private:
   PacketWriteObserver packet_write_observer_;
+
+  // AIR_MEM: Windowed encode counters (always active, negligible cost).
+  EncodeWindowCounters window_counters_;
 };
 
 }  // namespace retrovue::playout_sinks::mpegts

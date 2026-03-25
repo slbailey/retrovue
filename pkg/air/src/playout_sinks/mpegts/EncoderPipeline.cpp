@@ -122,7 +122,6 @@ bool EncoderPipeline::open(const MpegTSPlayoutSinkConfig& config,
       std::cerr << "[EncoderPipeline] No H.264 encoder found (tried h264_nvenc, libx264)" << std::endl;
       return false;
     }
-    std::cout << "[EncoderPipeline] Using software encoder (libx264)" << std::endl;
   }
 
   av_log_set_level(AV_LOG_ERROR);
@@ -260,7 +259,7 @@ bool EncoderPipeline::open(const MpegTSPlayoutSinkConfig& config,
   }
 
   // Set codec parameters
-  codec_ctx_->codec_id = AV_CODEC_ID_H264;
+  codec_ctx_->codec_id = codec->id;
   codec_ctx_->codec_type = AVMEDIA_TYPE_VIDEO;
   codec_ctx_->pix_fmt = AV_PIX_FMT_YUV420P;
   codec_ctx_->bit_rate = config.bitrate;
@@ -693,6 +692,9 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
 
   // Phase 8.6: per-channel fixed resolution. If already opened at fixed size, scale input to it; no reinit.
   if (frame_width_ > 0 && frame_height_ > 0 && codec_opened_) {
+    // AIR_MEM: Track make_writable buffer replacement.
+    uint8_t* data0_before = frame_->data[0];
+
     // CRITICAL: Ensure frame buffer is writable before copying data
     // Without this, the encoder may hold references to the buffer from previous frames
     int wr = av_frame_make_writable(frame_);
@@ -701,6 +703,9 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
       av_strerror(wr, errbuf, AV_ERROR_MAX_STRING_SIZE);
       std::cerr << "[EncoderPipeline] av_frame_make_writable failed (fixed path): " << errbuf << std::endl;
       return false;
+    }
+    if (frame_->data[0] != data0_before) {
+      window_counters_.make_writable_allocs++;
     }
 
     const bool needs_scale = (frame.width != frame_width_ || frame.height != frame_height_);
@@ -777,6 +782,8 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
     // Let encoder decide frame type (no forcing)
     frame_->pict_type = AV_PICTURE_TYPE_NONE;
 
+    window_counters_.video_frames_encoded++;
+
     int send_ret = avcodec_send_frame(codec_ctx_, frame_);
     if (send_ret < 0) {
       if (send_ret == AVERROR(EAGAIN)) {
@@ -785,6 +792,8 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
           int dr = avcodec_receive_packet(codec_ctx_, packet_);
           if (dr == AVERROR(EAGAIN) || dr == AVERROR_EOF) break;
           if (dr < 0) break;
+          window_counters_.video_pkts_received++;
+          window_counters_.video_pkt_bytes += packet_->size;
           packet_->stream_index = video_stream_->index;
           av_packet_rescale_ts(packet_, codec_ctx_->time_base, video_stream_->time_base);
           EnforceMonotonicDts();
@@ -813,6 +822,8 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
         return false;
       }
       ++n;
+      window_counters_.video_pkts_received++;
+      window_counters_.video_pkt_bytes += packet_->size;
       packet_->stream_index = video_stream_->index;
       av_packet_rescale_ts(packet_, codec_ctx_->time_base, video_stream_->time_base);
       EnforceMonotonicDts();
@@ -1392,9 +1403,8 @@ int EncoderPipeline::AVIOWriteThunk(void* opaque, uint8_t* buf, int buf_size) {
 
 int EncoderPipeline::HandleAVIOWrite(uint8_t* buf, int buf_size) {
   if (!avio_write_callback_) return -1;
-  // Egress pacing is done in the write_callback (PipelineManager): do not complete
-  // TS write for tick N before deadline_mono_ns(N). Aligns to INV-TICK-DEADLINE-DISCIPLINE-001,
-  // INV-TICK-MONOTONIC-UTC-ANCHOR-001, INV-FPS-TICK-PTS (no drift).
+  window_counters_.avio_write_calls++;
+  window_counters_.avio_write_bytes += buf_size;
   return avio_write_callback_(avio_opaque_, buf, buf_size);
 }
 #endif  // RETROVUE_FFMPEG_AVAILABLE
@@ -1499,6 +1509,7 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
   if (!initialized_ || config_.stub_mode) {
     return false;
   }
+  window_counters_.audio_frames_encoded++;
 
 #ifdef RETROVUE_FFMPEG_AVAILABLE
   if (!audio_codec_ctx_ || !audio_stream_ || !audio_frame_ || !packet_) {
@@ -1777,24 +1788,42 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
       dbg_audio_chunk_count++;
     }
     
-    // Set frame parameters (encoder format and rate)
-    audio_frame_->format = audio_codec_ctx_->sample_fmt;
-    audio_frame_->sample_rate = encoder_sample_rate;
-    int audio_ret = av_channel_layout_copy(&audio_frame_->ch_layout, &audio_codec_ctx_->ch_layout);
-    if (audio_ret < 0) {
-      std::cerr << "[EncoderPipeline] Failed to copy channel layout to audio frame" << std::endl;
-      return false;
-    }
-    audio_frame_->nb_samples = samples_this_frame;
+    // Set PTS for this chunk (changes every iteration).
     audio_frame_->pts = av_rescale_q(current_pts90k, tb90k, tb_audio);
 
-    // Allocate frame buffer if needed
-    int ret = av_frame_get_buffer(audio_frame_, 0);
-    if (ret < 0) {
-      char errbuf[AV_ERROR_MAX_STRING_SIZE];
-      av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
-      std::cerr << "[EncoderPipeline] Failed to allocate audio frame buffer: " << errbuf << std::endl;
-      return false;
+    // Allocate frame buffer once; reuse on subsequent calls.
+    // av_frame_get_buffer allocates new backing storage.  If the encoder
+    // still holds a ref from the previous avcodec_send_frame, calling it
+    // again leaks the old buffer (~4 KB per frame — OOM after hours).
+    // av_frame_make_writable handles this correctly: it only allocates
+    // when the encoder holds a ref, and the old buffer is freed when the
+    // encoder drops it.
+    if (!audio_frame_->buf[0]) {
+      // First call: set constant frame shape and allocate.
+      audio_frame_->format = audio_codec_ctx_->sample_fmt;
+      audio_frame_->sample_rate = encoder_sample_rate;
+      int audio_ret = av_channel_layout_copy(&audio_frame_->ch_layout, &audio_codec_ctx_->ch_layout);
+      if (audio_ret < 0) {
+        std::cerr << "[EncoderPipeline] Failed to copy channel layout to audio frame" << std::endl;
+        return false;
+      }
+      audio_frame_->nb_samples = samples_this_frame;
+      int ret = av_frame_get_buffer(audio_frame_, 0);
+      if (ret < 0) {
+        char errbuf[AV_ERROR_MAX_STRING_SIZE];
+        av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
+        std::cerr << "[EncoderPipeline] Failed to allocate audio frame buffer: " << errbuf << std::endl;
+        return false;
+      }
+    } else {
+      // Subsequent calls: ensure buffer is writable (handles encoder refs).
+      int ret = av_frame_make_writable(audio_frame_);
+      if (ret < 0) {
+        char errbuf[AV_ERROR_MAX_STRING_SIZE];
+        av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
+        std::cerr << "[EncoderPipeline] av_frame_make_writable failed (audio): " << errbuf << std::endl;
+        return false;
+      }
     }
 
     // Copy / convert audio data for this chunk
@@ -1846,7 +1875,7 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
 #endif
 
     // Send frame to encoder
-    ret = avcodec_send_frame(audio_codec_ctx_, audio_frame_);
+    int ret = avcodec_send_frame(audio_codec_ctx_, audio_frame_);
     if (ret < 0) {
       if (ret == AVERROR(EAGAIN)) {
         // Drain encoder first
@@ -2030,22 +2059,30 @@ bool EncoderPipeline::flushAudio() {
     while (samples_remaining >= frame_size) {
       const int samples_this_frame = frame_size;
       
-      // Set frame parameters
-      audio_frame_->format = audio_codec_ctx_->sample_fmt;
-      audio_frame_->sample_rate = encoder_sample_rate;
-      int audio_ret = av_channel_layout_copy(&audio_frame_->ch_layout, &audio_codec_ctx_->ch_layout);
-      if (audio_ret < 0) {
-        std::cerr << "[EncoderPipeline] Failed to copy channel layout during flush" << std::endl;
-        break;
-      }
-      audio_frame_->nb_samples = samples_this_frame;
+      // Set PTS for this chunk.
       audio_frame_->pts = av_rescale_q(current_pts90k, tb90k, tb_audio);
-      
-      // Allocate frame buffer
-      int ret = av_frame_get_buffer(audio_frame_, 0);
-      if (ret < 0) {
-        std::cerr << "[EncoderPipeline] Failed to allocate audio frame buffer during flush" << std::endl;
-        break;
+
+      // Reuse audio frame buffer (same pattern as main encode path).
+      if (!audio_frame_->buf[0]) {
+        audio_frame_->format = audio_codec_ctx_->sample_fmt;
+        audio_frame_->sample_rate = encoder_sample_rate;
+        int audio_ret = av_channel_layout_copy(&audio_frame_->ch_layout, &audio_codec_ctx_->ch_layout);
+        if (audio_ret < 0) {
+          std::cerr << "[EncoderPipeline] Failed to copy channel layout during flush" << std::endl;
+          break;
+        }
+        audio_frame_->nb_samples = samples_this_frame;
+        int ret = av_frame_get_buffer(audio_frame_, 0);
+        if (ret < 0) {
+          std::cerr << "[EncoderPipeline] Failed to allocate audio frame buffer during flush" << std::endl;
+          break;
+        }
+      } else {
+        int ret = av_frame_make_writable(audio_frame_);
+        if (ret < 0) {
+          std::cerr << "[EncoderPipeline] av_frame_make_writable failed (audio flush): " << ret << std::endl;
+          break;
+        }
       }
       
       // Copy audio data
@@ -2065,7 +2102,7 @@ bool EncoderPipeline::flushAudio() {
       }
       
       // Send to encoder
-      ret = avcodec_send_frame(audio_codec_ctx_, audio_frame_);
+      int ret = avcodec_send_frame(audio_codec_ctx_, audio_frame_);
       if (ret < 0 && ret != AVERROR(EAGAIN)) {
         std::cerr << "[EncoderPipeline] Error sending frame during flush" << std::endl;
         break;
@@ -2333,6 +2370,7 @@ void EncoderPipeline::EmitPacket() {
     // INV-MUX-STARTUP-HOLDOFF: Route through internal interleaver.
     // Clone the packet (packet_ is reused) and enqueue for DTS-ordered drain.
     AVPacket* cloned = av_packet_clone(packet_);
+    window_counters_.clones_created++;
     if (!cloned) {
       std::cerr << "[EncoderPipeline] av_packet_clone failed (internal), writing directly" << std::endl;
       WriteMuxPacket(packet_);
@@ -2368,6 +2406,10 @@ void EncoderPipeline::EmitPacket() {
 void EncoderPipeline::FlushMuxInterleaver() {
 #ifdef RETROVUE_FFMPEG_AVAILABLE
   if (internal_interleaver_) {
+    size_t depth = internal_interleaver_->Size();
+    if (static_cast<int64_t>(depth) > window_counters_.interleaver_high_water) {
+      window_counters_.interleaver_high_water = static_cast<int64_t>(depth);
+    }
     internal_interleaver_->Flush();
   }
 #endif
@@ -2376,6 +2418,8 @@ void EncoderPipeline::FlushMuxInterleaver() {
 void EncoderPipeline::WriteMuxPacket(AVPacket* pkt) {
 #ifdef RETROVUE_FFMPEG_AVAILABLE
   if (!pkt || !format_ctx_) return;
+  window_counters_.mux_write_calls++;
+  window_counters_.mux_write_bytes += pkt->size;
 
   // MUX_PACKET_DIAG: Log first 10 packets to capture actual DTS/PTS entering muxer
   static int mux_diag_count = 0;
@@ -2416,6 +2460,7 @@ void EncoderPipeline::WriteMuxPacket(AVPacket* pkt) {
 
   av_interleaved_write_frame(format_ctx_, pkt);
   avio_flush(format_ctx_->pb);
+  window_counters_.avio_flush_calls++;
 #else
   (void)pkt;
 #endif
@@ -2423,6 +2468,12 @@ void EncoderPipeline::WriteMuxPacket(AVPacket* pkt) {
 
 void EncoderPipeline::SetPacketWriteObserver(PacketWriteObserver observer) {
   packet_write_observer_ = std::move(observer);
+}
+
+EncoderPipeline::EncodeWindowCounters EncoderPipeline::SnapshotAndResetWindow() {
+  EncodeWindowCounters snap = window_counters_;
+  window_counters_ = {};  // reset for next window
+  return snap;
 }
 
 }  // namespace retrovue::playout_sinks::mpegts

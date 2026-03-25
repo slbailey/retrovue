@@ -224,6 +224,9 @@ set(AIR_CORE_SOURCES
   # Thread-safe logger (prevents multi-thread log interleave)
   src/util/Logger.cpp
   src/util/ObservabilityLogger.cpp
+  # Memory diagnostics (RSS tracking + periodic logger)
+  src/util/MemoryUtils.cpp
+  src/util/AirMemoryMonitor.cpp
 )
 
 # Optional: enable PAD/audio priming diagnostic logging (PipelineManager).
