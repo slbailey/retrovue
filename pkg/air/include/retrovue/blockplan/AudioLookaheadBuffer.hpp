@@ -33,12 +33,16 @@ namespace retrovue::blockplan {
 // Thread safety: all public methods are mutex-protected.
 class AudioLookaheadBuffer {
  public:
+  // hard_cap_ms: absolute maximum buffer depth.  Push() rejects frames
+  // beyond this limit to prevent unbounded growth during transitions.
+  // Default 2000 ms ≈ 192 KB at 48 kHz stereo S16.
   explicit AudioLookaheadBuffer(
       int target_depth_ms = 1000,
       int sample_rate = buffer::kHouseAudioSampleRate,
       int channels = buffer::kHouseAudioChannels,
       int low_water_ms = 333,
-      int high_water_ms = 800);
+      int high_water_ms = 800,
+      int hard_cap_ms = 2000);
   ~AudioLookaheadBuffer();
 
   AudioLookaheadBuffer(const AudioLookaheadBuffer&) = delete;
@@ -46,14 +50,20 @@ class AudioLookaheadBuffer {
 
   // --- Producer ---
 
+  // Result of a Push() call.
+  enum class PushResult {
+    kPushed,              // Frame accepted into buffer.
+    kGenerationMismatch,  // Rejected: stale data from old fill thread.
+    kHardCapRejected,     // Rejected: buffer at INV-AUDIO-BOUNDED hard cap.
+    kInvalidFrame,        // Rejected: zero or negative nb_samples.
+  };
+
   // Push a decoded audio frame into the buffer.
-  // If expected_generation != 0 and doesn't match current generation_,
-  // the push is silently dropped (stale data from old fill thread).
-  // Returns true if the frame was accepted, false if rejected (generation
-  // mismatch or zero samples). Callers that require push success (e.g. the
-  // INV-AV-FILL-INTERLOCK-001 decoded-frame path) must check the return value.
-  bool Push(const buffer::AudioFrame& frame, uint64_t expected_generation = 0);
-  bool Push(buffer::AudioFrame&& frame, uint64_t expected_generation = 0);
+  // Callers that require push success (e.g. the INV-AV-FILL-INTERLOCK-001
+  // decoded-frame path) must inspect the result to distinguish expected
+  // rejections (hard cap) from unexpected ones (generation race).
+  PushResult Push(const buffer::AudioFrame& frame, uint64_t expected_generation = 0);
+  PushResult Push(buffer::AudioFrame&& frame, uint64_t expected_generation = 0);
 
   // Current generation counter (for fill thread capture).
   uint64_t CurrentGeneration() const;
@@ -94,6 +104,12 @@ class AudioLookaheadBuffer {
   // High-water mark in milliseconds (configuration).
   int HighWaterMs() const { return high_water_ms_; }
 
+  // Hard cap in milliseconds (configuration).
+  int HardCapMs() const { return hard_cap_ms_; }
+
+  // Number of frames rejected by hard cap.
+  int64_t HardCapDrops() const;
+
   // True when primed AND current depth_ms < low_water_ms.
   bool IsBelowLowWater() const;
 
@@ -126,11 +142,16 @@ class AudioLookaheadBuffer {
   // Monotonic generation counter — bumped on Reset().
   uint64_t generation_ = 0;
 
+  // Hard cap: maximum samples allowed in buffer.
+  int hard_cap_ms_;
+  int64_t hard_cap_samples_ = 0;
+
   // Running counters.
   int64_t total_samples_in_buffer_ = 0;
   int64_t total_samples_pushed_ = 0;
   int64_t total_samples_popped_ = 0;
   int64_t underflow_count_ = 0;
+  int64_t hard_cap_drops_ = 0;  // frames rejected by hard cap
   bool primed_ = false;
 };
 

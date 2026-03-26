@@ -30,95 +30,82 @@ AudioLookaheadBuffer::AudioLookaheadBuffer(int target_depth_ms,
                                            int sample_rate,
                                            int channels,
                                            int low_water_ms,
-                                           int high_water_ms)
+                                           int high_water_ms,
+                                           int hard_cap_ms)
     : sample_rate_(sample_rate),
       channels_(channels),
       target_depth_ms_(target_depth_ms),
       low_water_ms_(low_water_ms),
-      high_water_ms_(high_water_ms) {}
+      high_water_ms_(high_water_ms),
+      hard_cap_ms_(hard_cap_ms),
+      hard_cap_samples_((static_cast<int64_t>(hard_cap_ms) * sample_rate) / 1000) {}
 
 AudioLookaheadBuffer::~AudioLookaheadBuffer() = default;
 
-bool AudioLookaheadBuffer::Push(const buffer::AudioFrame& frame,
-                                uint64_t expected_generation) {
-  if (frame.nb_samples <= 0) return false;
+AudioLookaheadBuffer::PushResult AudioLookaheadBuffer::Push(
+    const buffer::AudioFrame& frame, uint64_t expected_generation) {
+  if (frame.nb_samples <= 0) return PushResult::kInvalidFrame;
   std::lock_guard<std::mutex> lock(mutex_);
   if (expected_generation != 0 && expected_generation != generation_) {
-    { std::ostringstream oss;
-      oss << "[AudioBuffer] PUSH_REJECTED_GEN T+" << boot_mono_ms()
-          << "ms nb_samples=" << frame.nb_samples
-          << " expected_gen=" << expected_generation
-          << " current_gen=" << generation_;
-      Logger::Warn(oss.str()); }
-    return false;
+    return PushResult::kGenerationMismatch;
   }
-#if defined(RETROVUE_VERBOSE_LOGS)
-  // PUSH_DIAG (copy): only in Debug builds.
-  {
-    static int push_copy_diag_count = 0;
-    if (push_copy_diag_count < 5) {
-      const int16_t* s16 = reinterpret_cast<const int16_t*>(frame.data.data());
-      int total_s16 = frame.nb_samples * frame.channels;
-      int16_t p_min = 0, p_max = 0;
-      for (int i = 0; i < total_s16; ++i) {
-        if (s16[i] < p_min) p_min = s16[i];
-        if (s16[i] > p_max) p_max = s16[i];
-      }
-      std::ostringstream oss;
-      oss << "[PUSH_DIAG_COPY] push#" << push_copy_diag_count
-          << " nb_samples=" << frame.nb_samples << " s16_min=" << p_min << " s16_max=" << p_max;
-      Logger::Info(oss.str());
-      push_copy_diag_count++;
+
+  // INV-AUDIO-BOUNDED: Hard cap — reject push if buffer is at capacity.
+  if (hard_cap_samples_ > 0 &&
+      total_samples_in_buffer_ + frame.nb_samples > hard_cap_samples_) {
+    hard_cap_drops_++;
+    if (hard_cap_drops_ == 1 || (hard_cap_drops_ % 100) == 0) {
+      int depth_ms = (sample_rate_ > 0)
+          ? static_cast<int>((total_samples_in_buffer_ * 1000) / sample_rate_) : 0;
+      char buf[192];
+      snprintf(buf, sizeof(buf),
+          "[AudioBuffer] INV-AUDIO-BOUNDED: hard cap drop #%lld"
+          " depth_ms=%d cap_ms=%d nb_samples=%d",
+          static_cast<long long>(hard_cap_drops_),
+          depth_ms, hard_cap_ms_, frame.nb_samples);
+      Logger::Warn(std::string(buf));
     }
+    return PushResult::kHardCapRejected;
   }
-#endif
 
   total_samples_pushed_ += frame.nb_samples;
   total_samples_in_buffer_ += frame.nb_samples;
   primed_ = true;
   frames_.push_back(frame);
-  return true;
+  return PushResult::kPushed;
 }
 
-bool AudioLookaheadBuffer::Push(buffer::AudioFrame&& frame,
-                                uint64_t expected_generation) {
-  if (frame.nb_samples <= 0) return false;
+AudioLookaheadBuffer::PushResult AudioLookaheadBuffer::Push(
+    buffer::AudioFrame&& frame, uint64_t expected_generation) {
+  if (frame.nb_samples <= 0) return PushResult::kInvalidFrame;
   std::lock_guard<std::mutex> lock(mutex_);
   if (expected_generation != 0 && expected_generation != generation_) {
-    { std::ostringstream oss;
-      oss << "[AudioBuffer] PUSH_REJECTED_GEN T+" << boot_mono_ms()
-          << "ms nb_samples=" << frame.nb_samples
-          << " expected_gen=" << expected_generation
-          << " current_gen=" << generation_;
-      Logger::Warn(oss.str()); }
-    return false;
+    return PushResult::kGenerationMismatch;
   }
-#if defined(RETROVUE_VERBOSE_LOGS)
-  // PUSH_DIAG: only in Debug builds.
-  {
-    static int push_diag_count = 0;
-    if (push_diag_count < 5) {
-      const int16_t* s16 = reinterpret_cast<const int16_t*>(frame.data.data());
-      int total_s16 = frame.nb_samples * frame.channels;
-      int16_t p_min = 0, p_max = 0;
-      for (int i = 0; i < total_s16; ++i) {
-        if (s16[i] < p_min) p_min = s16[i];
-        if (s16[i] > p_max) p_max = s16[i];
-      }
-      std::ostringstream oss;
-      oss << "[PUSH_DIAG] push#" << push_diag_count
-          << " nb_samples=" << frame.nb_samples << " s16_min=" << p_min << " s16_max=" << p_max;
-      Logger::Info(oss.str());
-      push_diag_count++;
+
+  // INV-AUDIO-BOUNDED: Hard cap — same check as copy overload.
+  if (hard_cap_samples_ > 0 &&
+      total_samples_in_buffer_ + frame.nb_samples > hard_cap_samples_) {
+    hard_cap_drops_++;
+    if (hard_cap_drops_ == 1 || (hard_cap_drops_ % 100) == 0) {
+      int depth_ms = (sample_rate_ > 0)
+          ? static_cast<int>((total_samples_in_buffer_ * 1000) / sample_rate_) : 0;
+      char buf[192];
+      snprintf(buf, sizeof(buf),
+          "[AudioBuffer] INV-AUDIO-BOUNDED: hard cap drop #%lld"
+          " depth_ms=%d cap_ms=%d nb_samples=%d",
+          static_cast<long long>(hard_cap_drops_),
+          depth_ms, hard_cap_ms_, frame.nb_samples);
+      Logger::Warn(std::string(buf));
     }
+    return PushResult::kHardCapRejected;
   }
-#endif
 
   total_samples_pushed_ += frame.nb_samples;
   total_samples_in_buffer_ += frame.nb_samples;
   primed_ = true;
   frames_.push_back(std::move(frame));
-  return true;
+  return PushResult::kPushed;
 }
 
 bool AudioLookaheadBuffer::TryPopSamples(int samples_needed,
@@ -273,11 +260,17 @@ bool AudioLookaheadBuffer::IsPrimed() const {
   return primed_;
 }
 
+int64_t AudioLookaheadBuffer::HardCapDrops() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return hard_cap_drops_;
+}
+
 void AudioLookaheadBuffer::Reset() {
   std::lock_guard<std::mutex> lock(mutex_);
   int old_depth_ms = (sample_rate_ > 0)
       ? static_cast<int>((total_samples_in_buffer_ * 1000) / sample_rate_)
       : 0;
+  int64_t old_cap_drops = hard_cap_drops_;
   generation_++;  // Invalidate any in-flight Push from old fill thread
   frames_.clear();
   partial_ = buffer::AudioFrame{};
@@ -287,10 +280,12 @@ void AudioLookaheadBuffer::Reset() {
   total_samples_pushed_ = 0;
   total_samples_popped_ = 0;
   underflow_count_ = 0;
+  hard_cap_drops_ = 0;
   primed_ = false;
   { std::ostringstream oss;
     oss << "[AudioBuffer] RESET T+" << boot_mono_ms()
         << "ms old_depth_ms=" << old_depth_ms
+        << " cap_drops=" << old_cap_drops
         << " new_gen=" << generation_;
     Logger::Info(oss.str()); }
 }

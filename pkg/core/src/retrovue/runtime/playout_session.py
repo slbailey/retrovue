@@ -355,11 +355,22 @@ class PlayoutSession:
                 with open(
                     log_path, "w", buffering=1, encoding="utf-8", errors="replace"
                 ) as log_file:
+                    # AIR_MEM: Inject jemalloc via LD_PRELOAD when env var set.
+                    popen_env = None
+                    _jemalloc_path = _os.environ.get("AIR_MEM_JEMALLOC")
+                    if _jemalloc_path:
+                        popen_env = _os.environ.copy()
+                        popen_env["LD_PRELOAD"] = _jemalloc_path
+                        logger.info(
+                            "[PlayoutSession:%s] AIR_MEM: jemalloc enabled → %s",
+                            self.channel_id, _jemalloc_path,
+                        )
                     self._state.air_process = subprocess.Popen(
                         cmd,
                         stdout=log_file,
                         stderr=log_file,
                         cwd=str(Path.cwd()),
+                        env=popen_env,
                     )
 
                 # Wait for gRPC to be ready (longer timeout under heaptrack)

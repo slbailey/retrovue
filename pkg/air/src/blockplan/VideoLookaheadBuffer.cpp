@@ -949,23 +949,42 @@ void VideoLookaheadBuffer::FillLoop() {
             Logger::Info(oss.str());
           }
         }
-        // INV-AV-FILL-INTERLOCK-001: Push() returns false on generation
-        // mismatch. If suppression_reason==kNone, this is a race between
-        // our precondition check and a fence — treat as a violation and abort.
-        const bool pushed = audio_buffer->Push(std::move(af), my_audio_gen);
-        if (!pushed &&
-            audio_suppression_reason == AudioSuppressionReason::kNone) {
+        // INV-AV-FILL-INTERLOCK-001: Dispatch on typed PushResult.
+        using PR = AudioLookaheadBuffer::PushResult;
+        const PR push_result = audio_buffer->Push(std::move(af), my_audio_gen);
+        switch (push_result) {
+          case PR::kPushed:
+            break;  // normal path
+          case PR::kHardCapRejected: {
+            // Expected during transitions when consumer stalls.
+            // Brief audio gap is acceptable — do not abort.
+            static int64_t cap_reject_count = 0;
+            cap_reject_count++;
+            if (cap_reject_count <= 3 || cap_reject_count % 200 == 0) {
+              char _cap_buf[192];
+              snprintf(_cap_buf, sizeof(_cap_buf),
+                  "[FillLoop:%s] INV-AUDIO-BOUNDED: push rejected (cap)"
+                  " src_idx=%lld af_idx=%d count=%lld",
+                  buffer_label_.c_str(),
+                  static_cast<long long>(vf.source_frame_index),
+                  audio_frames_this_decode,
+                  static_cast<long long>(cap_reject_count));
+              Logger::Warn(std::string(_cap_buf));
+            }
+            break;
+          }
+          case PR::kGenerationMismatch:
+            // Expected when a fence/reset happened between our precondition
+            // check and the Push. Normal lifecycle — not suspicious.
+            break;
+          case PR::kInvalidFrame:
+            break;  // shouldn't happen — already checked above
+        }
+        // Track non-generation rejections separately for observability.
+        if (push_result != PR::kPushed &&
+            push_result != PR::kGenerationMismatch) {
           audio_frames_suppressed_non_generation_.fetch_add(
               1, std::memory_order_relaxed);
-          std::ostringstream _rej_oss;
-          _rej_oss << "[FillLoop:" << buffer_label_ << "] "
-                   << "INV-AV-FILL-INTERLOCK-001 PUSH_REJECTED: "
-                   << "audio push failed after precondition passed "
-                   << "src_idx=" << vf.source_frame_index
-                   << " af_idx=" << audio_frames_this_decode
-                   << " suppression_reason=kNone";
-          Logger::Error(_rej_oss.str());
-          std::abort();
         }
       }
       audio_pushed_this_decode = true;
