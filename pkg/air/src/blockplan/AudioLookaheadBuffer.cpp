@@ -5,6 +5,7 @@
 // Copyright (c) 2025 RetroVue
 
 #include "retrovue/blockplan/AudioLookaheadBuffer.hpp"
+#include "retrovue/util/AirMemoryMonitor.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -54,7 +55,8 @@ AudioLookaheadBuffer::PushResult AudioLookaheadBuffer::Push(
   if (hard_cap_samples_ > 0 &&
       total_samples_in_buffer_ + frame.nb_samples > hard_cap_samples_) {
     hard_cap_drops_++;
-    if (hard_cap_drops_ == 1 || (hard_cap_drops_ % 100) == 0) {
+    if (AIR_MEM_UNLIKELY(retrovue::util::IsMemDiagEnabled()) &&
+        (hard_cap_drops_ == 1 || (hard_cap_drops_ % 100) == 0)) {
       int depth_ms = (sample_rate_ > 0)
           ? static_cast<int>((total_samples_in_buffer_ * 1000) / sample_rate_) : 0;
       char buf[192];
@@ -87,7 +89,8 @@ AudioLookaheadBuffer::PushResult AudioLookaheadBuffer::Push(
   if (hard_cap_samples_ > 0 &&
       total_samples_in_buffer_ + frame.nb_samples > hard_cap_samples_) {
     hard_cap_drops_++;
-    if (hard_cap_drops_ == 1 || (hard_cap_drops_ % 100) == 0) {
+    if (AIR_MEM_UNLIKELY(retrovue::util::IsMemDiagEnabled()) &&
+        (hard_cap_drops_ == 1 || (hard_cap_drops_ % 100) == 0)) {
       int depth_ms = (sample_rate_ > 0)
           ? static_cast<int>((total_samples_in_buffer_ * 1000) / sample_rate_) : 0;
       char buf[192];

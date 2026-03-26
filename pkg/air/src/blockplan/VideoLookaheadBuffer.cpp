@@ -5,6 +5,7 @@
 // Copyright (c) 2025 RetroVue
 
 #include "retrovue/blockplan/VideoLookaheadBuffer.hpp"
+#include "retrovue/util/AirMemoryMonitor.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -960,7 +961,8 @@ void VideoLookaheadBuffer::FillLoop() {
             // Brief audio gap is acceptable — do not abort.
             static int64_t cap_reject_count = 0;
             cap_reject_count++;
-            if (cap_reject_count <= 3 || cap_reject_count % 200 == 0) {
+            if (AIR_MEM_UNLIKELY(retrovue::util::IsMemDiagEnabled()) &&
+                (cap_reject_count <= 3 || cap_reject_count % 200 == 0)) {
               char _cap_buf[192];
               snprintf(_cap_buf, sizeof(_cap_buf),
                   "[FillLoop:%s] INV-AUDIO-BOUNDED: push rejected (cap)"

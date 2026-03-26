@@ -4563,6 +4563,9 @@ void PipelineManager::Run() {
         tmem_.after_heap_mb = retrovue::util::GetHeapAllocatedBytes() / (1024 * 1024);
         tmem_.pending = false;
 
+        int64_t delta_peak = static_cast<int64_t>(tmem_.peak_rss_mb) - static_cast<int64_t>(tmem_.before_rss_mb);
+        int64_t delta_after = static_cast<int64_t>(tmem_.after_rss_mb) - static_cast<int64_t>(tmem_.before_rss_mb);
+
         char tbuf[384];
         snprintf(tbuf, sizeof(tbuf),
             "[TRANSITION_MEM] id=%lld type=%s"
@@ -4573,9 +4576,21 @@ void PipelineManager::Run() {
             tmem_.type,
             tmem_.before_rss_mb, tmem_.peak_rss_mb, tmem_.after_rss_mb,
             tmem_.before_heap_mb, tmem_.after_heap_mb,
-            static_cast<long long>(tmem_.peak_rss_mb) - static_cast<long long>(tmem_.before_rss_mb),
-            static_cast<long long>(tmem_.after_rss_mb) - static_cast<long long>(tmem_.before_rss_mb));
+            static_cast<long long>(delta_peak),
+            static_cast<long long>(delta_after));
         Logger::Info(std::string(tbuf));
+
+        // Alert on anomalous retained growth (>200 MB after settling).
+        if (delta_after > 200) {
+          char abuf[256];
+          snprintf(abuf, sizeof(abuf),
+              "[TRANSITION_MEM_ALERT] id=%lld type=%s retained=%lld MB"
+              " (before=%zu after=%zu peak=%zu)",
+              static_cast<long long>(tmem_.seg_id), tmem_.type,
+              static_cast<long long>(delta_after),
+              tmem_.before_rss_mb, tmem_.after_rss_mb, tmem_.peak_rss_mb);
+          Logger::Warn(std::string(abuf));
+        }
       }
     }
 
