@@ -526,6 +526,21 @@ class PipelineManager : public IPlayoutExecutionEngine {
   int64_t pts_drift_slope_sum_us_ = 0;
   int pts_drift_slope_count_ = 0;
   int32_t pts_drift_last_segment_origin_ = -1;
+
+  // TRANSITION_MEM: Per-transition memory snapshot state.
+  struct TransitionMemSnapshot {
+    int64_t seg_id = -1;
+    size_t before_rss_mb = 0;
+    size_t before_heap_mb = 0;
+    size_t peak_rss_mb = 0;
+    size_t after_rss_mb = 0;
+    size_t after_heap_mb = 0;
+    int64_t settle_tick = -1;
+    bool pending = false;
+    const char* type = "";
+  };
+  TransitionMemSnapshot tmem_;
+  int64_t transition_count_ = 0;
 };
 
 }  // namespace retrovue::blockplan

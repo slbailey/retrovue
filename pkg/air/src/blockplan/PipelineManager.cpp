@@ -41,6 +41,7 @@
 #include "retrovue/output/SinkDiagnostics.h"
 #include "retrovue/util/AirMemoryMonitor.hpp"
 #include "retrovue/util/Logger.hpp"
+#include "retrovue/util/MemoryUtils.hpp"
 #include "time/SystemTimeSource.hpp"
 
 // Define RETROVUE_DEBUG_PAD_EMIT to enable per-tick pad frame logging.
@@ -2798,6 +2799,17 @@ void PipelineManager::Run() {
       auto outgoing_audio_buffer = std::move(audio_buffer_);
       auto detached = outgoing_video_buffer->StopFillingAsync(/*flush=*/true);
 
+      // TRANSITION_MEM: Capture "before" snapshot at block boundary.
+      {
+        transition_count_++;
+        tmem_ = {};
+        tmem_.seg_id = transition_count_;
+        tmem_.type = "block";
+        tmem_.before_rss_mb = retrovue::util::GetRSSMB();
+        tmem_.before_heap_mb = retrovue::util::GetHeapAllocatedBytes() / (1024 * 1024);
+        tmem_.peak_rss_mb = tmem_.before_rss_mb;
+      }
+
       // Step 3: Snapshot outgoing block and finalize accumulator.
       // INV-BLOCK-IDENTITY-001:
       // Block identity is owned by PipelineManager and must survive producer swaps.
@@ -3228,6 +3240,14 @@ void PipelineManager::Run() {
             << " video_buf_depth=" << video_buffer_->DepthFrames()
             << " audio_buf_depth_ms=" << audio_buffer_->DepthMs();
         Logger::Info(oss.str()); }
+
+      // TRANSITION_MEM: Schedule deferred "after" measurement ~5 seconds later.
+      {
+        size_t imm_rss = retrovue::util::GetRSSMB();
+        if (imm_rss > tmem_.peak_rss_mb) tmem_.peak_rss_mb = imm_rss;
+        tmem_.settle_tick = session_frame_index + 150;  // ~5s at 30fps
+        tmem_.pending = true;
+      }
 
       // Reset take_rotated for next fence cycle.
       take_rotated = false;
@@ -4530,6 +4550,32 @@ void PipelineManager::Run() {
             static_cast<long long>(wc.make_writable_allocs),
             socket_sink ? socket_sink->GetCurrentBufferSize() : 0);
         Logger::Info(std::string(wbuf));
+      }
+    }
+
+    // TRANSITION_MEM: Track peak RSS during transition window and emit summary when settled.
+    if (tmem_.pending) {
+      size_t cur_rss = retrovue::util::GetRSSMB();
+      if (cur_rss > tmem_.peak_rss_mb) tmem_.peak_rss_mb = cur_rss;
+
+      if (session_frame_index >= tmem_.settle_tick) {
+        tmem_.after_rss_mb = cur_rss;
+        tmem_.after_heap_mb = retrovue::util::GetHeapAllocatedBytes() / (1024 * 1024);
+        tmem_.pending = false;
+
+        char tbuf[384];
+        snprintf(tbuf, sizeof(tbuf),
+            "[TRANSITION_MEM] id=%lld type=%s"
+            " before_rss=%zu peak_rss=%zu after_rss=%zu"
+            " before_heap=%zu after_heap=%zu"
+            " delta_peak=%lld delta_after=%lld",
+            static_cast<long long>(tmem_.seg_id),
+            tmem_.type,
+            tmem_.before_rss_mb, tmem_.peak_rss_mb, tmem_.after_rss_mb,
+            tmem_.before_heap_mb, tmem_.after_heap_mb,
+            static_cast<long long>(tmem_.peak_rss_mb) - static_cast<long long>(tmem_.before_rss_mb),
+            static_cast<long long>(tmem_.after_rss_mb) - static_cast<long long>(tmem_.before_rss_mb));
+        Logger::Info(std::string(tbuf));
       }
     }
 
@@ -5863,6 +5909,21 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
 
   if (callbacks_.on_segment_start) {
     callbacks_.on_segment_start(from_seg, to_seg, live_parent_block_, session_frame_index);
+  }
+
+  // TRANSITION_MEM: Capture segment seam snapshot (only if no block transition pending).
+  if (!tmem_.pending) {
+    transition_count_++;
+    tmem_ = {};
+    tmem_.seg_id = transition_count_;
+    tmem_.type = "segment";
+    tmem_.before_rss_mb = retrovue::util::GetRSSMB();
+    tmem_.before_heap_mb = retrovue::util::GetHeapAllocatedBytes() / (1024 * 1024);
+    tmem_.peak_rss_mb = tmem_.before_rss_mb;
+    size_t imm_rss = retrovue::util::GetRSSMB();
+    if (imm_rss > tmem_.peak_rss_mb) tmem_.peak_rss_mb = imm_rss;
+    tmem_.settle_tick = session_frame_index + 150;
+    tmem_.pending = true;
   }
 
   { std::ostringstream oss;
