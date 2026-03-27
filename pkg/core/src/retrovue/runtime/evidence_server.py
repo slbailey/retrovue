@@ -630,6 +630,12 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
                 )
                 return
 
+            # Suppress as-run line for non-content segments (filler,
+            # commercial, pad).  These are interstitial execution detail,
+            # not program events.  The JSONL record is still emitted for
+            # full evidence trail.
+            is_content = seg_type_name in ("", "content")
+
             # Use end time for AIRED display so .asrun reads chronologically.
             # Previous: actual_start_utc_ms caused out-of-order timestamps
             # when segment_end arrived after the next segment_start.
@@ -647,7 +653,7 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
                 notes += f" reason={se.reason}"
             asrun_line = _format_asrun_line(
                 actual, dur, status, "PROGRAM", event_id, notes
-            )
+            ) if is_content else None
             jsonl_rec = {
                 "event_id": event_id,
                 "block_id": se.block_id,
@@ -685,9 +691,11 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
                     )
             last_asset_end_frame_by_block[se.block_id] = se.asset_end_frame
 
-            # INV-PAD-ASRUN-SUPPRESS-001: Suppress pad terminal from .asrun text.
-            # INV-PAD-ASRUN-JSONL-PRESERVED-001: Preserve in .jsonl.
-            if seg_type_name == "pad":
+            # INV-PAD-ASRUN-SUPPRESS-001: Suppress non-content segment
+            # terminals from .asrun text.  Filler, commercial, and pad
+            # segments are interstitial execution detail — not program
+            # events.  JSONL evidence trail is always preserved.
+            if not is_content:
                 writer.write_jsonl_only(jsonl_rec)
             else:
                 writer.write_and_flush(asrun_line, jsonl_rec)

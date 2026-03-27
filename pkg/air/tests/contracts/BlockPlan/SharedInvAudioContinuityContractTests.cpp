@@ -57,8 +57,9 @@ TEST(InvAudioContinuityNoDrop, Compliant_PushAndPop_NoSamplesLost) {
   constexpr int kTotal    = kFrames * kSamples;
 
   for (int i = 0; i < kFrames; ++i) {
-    bool ok = buf.Push(MakeAudioFrame(kSamples));
-    ASSERT_TRUE(ok) << "INV-AUDIO-CONTINUITY-NO-DROP: Push must succeed (not drop)";
+    auto result = buf.Push(MakeAudioFrame(kSamples));
+    ASSERT_EQ(result, AudioLookaheadBuffer::PushResult::kPushed)
+        << "INV-AUDIO-CONTINUITY-NO-DROP: Push must succeed (not drop)";
   }
 
   EXPECT_EQ(buf.TotalSamplesPushed(), kTotal)
@@ -125,7 +126,7 @@ TEST(InvAudioContinuityNoDrop, Compliant_SamplesContiguous_MultiFramePop) {
 
   // Push 4 frames of 800 samples each = 3200 total.
   for (int i = 0; i < 4; ++i) {
-    ASSERT_TRUE(buf.Push(MakeAudioFrame(800)));
+    ASSERT_EQ(buf.Push(MakeAudioFrame(800)), AudioLookaheadBuffer::PushResult::kPushed);
   }
 
   // Pop as 2 × 1600 — chunk boundary crossing.

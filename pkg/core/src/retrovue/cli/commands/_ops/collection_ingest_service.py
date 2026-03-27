@@ -601,6 +601,8 @@ class ContainerIngestService:
                 if not dry_run:
                     existing_asset.is_deleted = True
                     existing_asset.deleted_at = datetime.now(UTC)
+                    existing_asset.state = "retired"
+                    existing_asset.approved_for_broadcast = False
                 stats.assets_removed += 1
                 logger.info(
                     "asset_marked_unavailable",
@@ -836,6 +838,8 @@ class ContainerIngestService:
                     if not dry_run:
                         existing.is_deleted = False
                         existing.deleted_at = None
+                        existing.state = "new"
+                        existing.approved_for_broadcast = False
                         if loc and getattr(loc, "fingerprint", None):
                             if loc.fingerprint.size is not None:
                                 existing.file_size = loc.fingerprint.size

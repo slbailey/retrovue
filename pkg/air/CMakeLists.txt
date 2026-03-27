@@ -481,6 +481,7 @@ add_executable(blockplan_contract_tests
   tests/contracts/BlockPlan/SegmentSeamOverlapContractTests.cpp
   tests/contracts/BlockPlan/SegmentSeamRaceConditionFixTests.cpp
   tests/contracts/BlockPlan/DegradedTakeModeContractTests.cpp
+  tests/contracts/BlockPlan/UndecodablePreviewReleaseContractTests.cpp
   tests/contracts/BlockPlan/PipelineManagerPadFenceAudioContractTests.cpp
   tests/contracts/BlockPlan/PipelineManagerPadFenceAudio60fpsReproContractTests.cpp
   tests/contracts/BlockPlan/PipelineManagerPadFenceAudioSwapReproContractTests.cpp

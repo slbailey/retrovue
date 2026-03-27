@@ -2759,6 +2759,33 @@ void PipelineManager::Run() {
     //   suppress PADDED_GAP entry so the held frame continues until B primes
     //   or standby is reached.  INV-FENCE-TAKE-READY-001.
     // ==================================================================
+    // INV-PREROLL-UNDECODABLE-RELEASE: If preview_ exists but its decoder
+    // permanently failed, it will never prime.  Holding it blocks may_rotate
+    // indefinitely (b_primed stays false, !preview_ is false → PADDED_GAP
+    // unreachable).  Release it so the normal fence_fired_b_missing path
+    // enters PADDED_GAP and Core can feed the next block.
+    if (take_b && !take_rotated && preview_ &&
+        !AsTickProducer(preview_.get())->HasDecoder() && !b_primed) {
+      { std::ostringstream oss;
+        oss << "[PipelineManager] INV-PREROLL-UNDECODABLE-RELEASE"
+            << " tick=" << session_frame_index
+            << " fence_tick=" << FormatFenceTick(block_fence_frame_)
+            << " block=" << AsTickProducer(preview_.get())->GetBlock().block_id;
+        Logger::Warn(oss.str()); }
+      preview_.reset();
+      if (preview_video_buffer_) {
+        auto det = preview_video_buffer_->StopFillingAsync(/*flush=*/true);
+        ReapJob rj;
+        rj.job_id = reap_job_id_.fetch_add(1, std::memory_order_relaxed);
+        rj.block_id = "undecodable_preview";
+        rj.thread = std::move(det.thread);
+        rj.producer = nullptr;
+        rj.video_buffer = std::move(preview_video_buffer_);
+        rj.audio_buffer = std::move(preview_audio_buffer_);
+        HandOffToReaper(std::move(rj));
+      }
+    }
+
     const bool fence_fired_b_missing = take_b && !take_rotated && !committed_b_frame_this_tick
                                        && !degraded_take_active_;
     // INV-FENCE-TAKE-READY-001: Do not rotate when B exists but is not ready; output pad

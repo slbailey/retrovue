@@ -156,8 +156,14 @@ class CatalogAssetResolver:
     def _load(self, db: Session) -> None:
         """Eager-load all assets into memory."""
 
-        # Load all ready assets
-        assets = db.query(Asset).filter(Asset.state == "ready").all()
+        # INV-CATALOG-DELETED-EXCLUSION-001: must exclude soft-deleted assets.
+        # The SQL filter is the primary gate; the Python guard below is
+        # defense-in-depth (mocks in tests bypass the SQL filter).
+        assets = db.query(Asset).filter(
+            Asset.state == "ready",
+            Asset.is_deleted.is_(False),
+        ).all()
+        assets = [a for a in assets if not a.is_deleted]
 
         # Load editorial data
         editorials: dict[str, dict[str, Any]] = {}

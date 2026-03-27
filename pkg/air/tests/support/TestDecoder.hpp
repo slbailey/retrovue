@@ -137,6 +137,13 @@ class TestDecoder : public producers::IProducer,
   // Not used by TestDecoder but required by production callers
   void SetAspectPolicy(runtime::AspectPolicy) {}
 
+  // Test-only: simulate permanent probe failure (asset unresolvable).
+  void ForceNoDecoder() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    has_decoder_ = false;
+    has_primed_ = false;
+  }
+
  private:
   std::optional<FrameData> GenerateFrame() {
     if (frame_index_ >= frames_per_block_) return std::nullopt;
@@ -224,6 +231,40 @@ class TestProducerFactory : public IProducerFactory {
       int width, int height, RationalFps output_fps) override {
     return std::make_unique<TestDecoder>(width, height, output_fps);
   }
+};
+
+// DeadDecoderTestDecoder: AssignBlock sets boundaries/state=kReady but
+// has_decoder_=false — simulates a permanent asset probe failure.
+class DeadDecoderTestDecoder : public TestDecoder {
+ public:
+  using TestDecoder::TestDecoder;
+  void AssignBlock(const FedBlock& block) override {
+    TestDecoder::AssignBlock(block);
+    ForceNoDecoder();  // Simulate probe failure: state=kReady, has_decoder_=false
+  }
+};
+
+// ProbeFailProducerFactory: Nth created producer simulates a permanent probe
+// failure (AssignBlock sets boundaries/state but HasDecoder()=false).
+// All other producers behave normally.
+class ProbeFailProducerFactory : public IProducerFactory {
+ public:
+  // fail_on_nth: 1-based index of the producer that should fail.
+  explicit ProbeFailProducerFactory(int fail_on_nth)
+      : fail_on_nth_(fail_on_nth) {}
+
+  std::unique_ptr<producers::IProducer> Create(
+      int width, int height, RationalFps output_fps) override {
+    create_count_++;
+    if (create_count_ == fail_on_nth_) {
+      return std::make_unique<DeadDecoderTestDecoder>(width, height, output_fps);
+    }
+    return std::make_unique<TestDecoder>(width, height, output_fps);
+  }
+
+ private:
+  int fail_on_nth_;
+  int create_count_ = 0;
 };
 
 }  // namespace retrovue::blockplan::test_infra

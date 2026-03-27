@@ -263,6 +263,16 @@ def assemble_schedule_block(
 # ---------------------------------------------------------------------------
 
 
+def _rating_to_tag(rating: str | None) -> str | None:
+    """Convert an MPAA rating to its normalized tag form.
+
+    PG-13 → pg13, PG → pg, R → r, G → g, etc.
+    """
+    if not rating:
+        return None
+    return rating.lower().replace("-", "")
+
+
 def _resolve_program_context(
     content_asset_id: str,
     resolver: AssetResolver,
@@ -275,6 +285,7 @@ def _resolve_program_context(
     meta = resolver.lookup(content_asset_id)
     return {
         "program.rating": meta.rating,
+        "program.rating_tag": _rating_to_tag(meta.rating),
     }
 
 
@@ -313,10 +324,21 @@ def _apply_contextual_select(
                 continue
 
             if op == "eq":
-                filtered = [
-                    c for c in filtered
-                    if _asset_field(resolver, c, field) == resolved_val
-                ]
+                if field == "tags":
+                    # Tag containment: check if resolved_val is in asset tags.
+                    # Tags are stored with TAG: prefix; try both raw and prefixed.
+                    from retrovue.domain.tag_normalization import expand_tag_match_set
+                    filtered = [
+                        c for c in filtered
+                        if resolved_val in expand_tag_match_set(
+                            set(resolver.lookup(c).tags)
+                        )
+                    ]
+                else:
+                    filtered = [
+                        c for c in filtered
+                        if _asset_field(resolver, c, field) == resolved_val
+                    ]
     return filtered
 
 

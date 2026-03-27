@@ -136,6 +136,30 @@ def resolve_traffic_profile(channel_yaml: dict, block: dict) -> dict:
     ref = block.get("traffic_profile", traffic.get("default_profile"))
     profile = dict(profiles[ref])  # copy to avoid mutating config
 
+    # Bridge: allowed_pools (DSL v2) → allowed_types (runtime).
+    # allowed_pools names pool references from the channel DSL.  Each pool's
+    # select.where.type.eq gives the asset type.  If the pool definition is
+    # not resolvable, fall through to the pool name itself (which is often
+    # the plural of the asset type).
+    if "allowed_types" not in profile and "allowed_pools" in profile:
+        pools_section = channel_yaml.get("pools", {})
+        resolved_types = []
+        for pool_name in profile["allowed_pools"]:
+            pool_def = pools_section.get(pool_name, {})
+            # Extract type from pool's select.where.type.eq
+            type_val = (
+                pool_def.get("select", {})
+                .get("where", {})
+                .get("type", {})
+                .get("eq")
+            )
+            if type_val:
+                resolved_types.append(type_val)
+            else:
+                # Fallback: use pool name directly (may work for simple cases)
+                resolved_types.append(pool_name)
+        profile["allowed_types"] = resolved_types
+
     if "allowed_types" not in profile:
         profile["allowed_types"] = sorted(resolve_inventory_types(channel_yaml))
 

@@ -125,6 +125,69 @@ class TestFullIngestReconciliation:
         assert stale_asset.is_deleted is True
         assert stale_asset.deleted_at is not None
 
+    def test_removed_asset_state_retired_and_unapproved(self):
+        """INV-INGEST-RECONCILE-REMOVED-001 R-8: mark_unavailable MUST set
+        state='retired' and approved_for_broadcast=False so the asset is
+        excluded from every downstream query, not only those that check
+        is_deleted.
+
+        Root cause: 2026-03-27 incident — soft-deleted trailers with
+        state='ready' leaked into CatalogAssetResolver pool, producing
+        block plans with non-existent file URIs that wedged AIR.
+        """
+        from retrovue.cli.commands._ops.collection_ingest_service import (
+            ContainerIngestService,
+        )
+
+        db = MagicMock()
+        collection = _fake_collection()
+
+        discovered = [_fake_discovered_item(path_uri="/media/a.mp4")]
+
+        stale_asset = _fake_asset(uuid="a-old", canonical_key_hash="hash_gone")
+        stale_asset.state = "ready"
+        stale_asset.approved_for_broadcast = True
+        db.query.return_value.filter.return_value.all.return_value = [stale_asset]
+
+        importer = MagicMock()
+        importer.validate_ingestible.return_value = True
+        importer.discover.return_value = discovered
+        importer.name = "test"
+
+        with patch(
+            "retrovue.cli.commands._ops.collection_ingest_service.canonical_key_for",
+            return_value="key_a",
+        ), patch(
+            "retrovue.cli.commands._ops.collection_ingest_service.canonical_hash",
+            return_value="hash_a",
+        ), patch(
+            "retrovue.cli.commands._ops.collection_ingest_service.handle_ingest",
+            return_value={"resolved_fields": {}},
+        ), patch(
+            "retrovue.cli.commands._ops.collection_ingest_service.persist_asset_metadata",
+        ), patch(
+            "retrovue.cli.commands._ops.collection_ingest_service.load_catalog_state_for_container",
+            return_value={"hash_gone": stale_asset},
+        ), patch(
+            "retrovue.cli.commands._ops.collection_ingest_service.enqueue_processor_jobs",
+        ):
+            db.scalar.return_value = None
+
+            svc = ContainerIngestService(db)
+            result = svc.ingest_container(
+                container=collection,
+                importer=importer,
+            )
+
+        assert stale_asset.state == "retired", (
+            "INV-INGEST-RECONCILE-REMOVED-001 R-8: "
+            "mark_unavailable must set state='retired'"
+        )
+        assert stale_asset.approved_for_broadcast is False, (
+            "INV-INGEST-RECONCILE-REMOVED-001 R-8: "
+            "mark_unavailable must clear approved_for_broadcast"
+        )
+
 
 # ---------------------------------------------------------------------------
 # R-2: Scoped ingest does NOT delete
@@ -328,6 +391,78 @@ class TestReAddRestoresAsset:
         assert result.stats.assets_ingested == 1
         assert soft_deleted_asset.is_deleted is False
         assert soft_deleted_asset.deleted_at is None
+
+    def test_restored_asset_state_reset_to_new(self):
+        """INV-INGEST-RECONCILE-REMOVED-001 R-9: restore MUST reset state to
+        'new' (so enrichers re-run) and clear approved_for_broadcast (operator
+        must re-approve after the asset returns).
+
+        Symmetry with R-8: if mark_unavailable sets state='retired' and
+        approved_for_broadcast=False, the restore path must undo both.
+        State goes to 'new' (not 'ready') because the file may have changed
+        while absent — enrichers need to re-probe.
+        """
+        from retrovue.cli.commands._ops.collection_ingest_service import (
+            ContainerIngestService,
+        )
+
+        db = MagicMock()
+        collection = _fake_collection()
+
+        loc = SimpleNamespace(locator="/media/a.mp4", fingerprint=None)
+        item = _fake_discovered_item(path_uri="/media/a.mp4")
+        soft_deleted_asset = _fake_asset(
+            uuid="a-old",
+            canonical_key_hash="hash_a",
+            uri="/media/a.mp4",
+            is_deleted=True,
+        )
+        soft_deleted_asset.deleted_at = datetime.now(UTC)
+        soft_deleted_asset.state = "retired"
+        soft_deleted_asset.approved_for_broadcast = False
+
+        importer = MagicMock()
+        importer.validate_ingestible.return_value = True
+        importer.name = "test"
+
+        with patch(
+            "retrovue.cli.commands._ops.collection_ingest_service.discover_locators",
+            return_value=[(loc, item)],
+        ), patch(
+            "retrovue.cli.commands._ops.collection_ingest_service.canonical_key_for",
+            return_value="key_a",
+        ), patch(
+            "retrovue.cli.commands._ops.collection_ingest_service.canonical_hash",
+            return_value="hash_a",
+        ), patch(
+            "retrovue.cli.commands._ops.collection_ingest_service.handle_ingest",
+            return_value={"resolved_fields": {}},
+        ), patch(
+            "retrovue.cli.commands._ops.collection_ingest_service.persist_asset_metadata",
+        ), patch(
+            "retrovue.cli.commands._ops.collection_ingest_service.load_catalog_state_for_container",
+            return_value={},
+        ), patch(
+            "retrovue.cli.commands._ops.collection_ingest_service.enqueue_processor_jobs",
+        ):
+            db.scalar.return_value = soft_deleted_asset
+
+            svc = ContainerIngestService(db)
+            result = svc.ingest_container(
+                container=collection,
+                importer=importer,
+            )
+
+        assert soft_deleted_asset.is_deleted is False
+        assert soft_deleted_asset.deleted_at is None
+        assert soft_deleted_asset.state == "new", (
+            "INV-INGEST-RECONCILE-REMOVED-001 R-9: "
+            "restore must reset state to 'new' so enrichers re-run"
+        )
+        assert soft_deleted_asset.approved_for_broadcast is False, (
+            "INV-INGEST-RECONCILE-REMOVED-001 R-9: "
+            "restore must leave approved_for_broadcast=False (operator re-approves)"
+        )
 
 
 # ---------------------------------------------------------------------------

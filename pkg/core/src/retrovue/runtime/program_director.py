@@ -23,12 +23,14 @@ Design Principles:
 - Resource coordination and health monitoring
 """
 
+import atexit
 import asyncio
 from collections import deque
 import gc
 import logging
 import os
 import queue
+import signal as _signal_mod
 import threading
 import time
 import uuid
@@ -64,6 +66,146 @@ try:
     from retrovue.runtime.settings import RuntimeSettings  # type: ignore
 except ImportError:  # pragma: no cover - settings optional
     RuntimeSettings = None  # type: ignore
+
+
+# ---------------------------------------------------------------------------
+# Startup reaper: kill stale AIR processes from a previous Core incarnation
+# ---------------------------------------------------------------------------
+_EXPECTED_AIR_EXE_NAMES = frozenset({"retrovue_air"})
+
+# Resolved once at import time so the reaper matches on the exact deployment path.
+_DEPLOYMENT_AIR_DIR: Path | None = None
+try:
+    _repo_root = Path(__file__).resolve().parents[5]  # .../pkg/core/src/retrovue/runtime -> repo root
+    _candidate = _repo_root / "pkg" / "air" / "build" / "retrovue_air"
+    if _candidate.is_file():
+        _DEPLOYMENT_AIR_DIR = _candidate.parent.resolve()
+except Exception:
+    pass
+
+
+def _reap_stale_air_processes(*, my_pid: int) -> int:
+    """Find and SIGTERM stale retrovue_air processes belonging to this deployment.
+
+    Matching criteria (ALL must hold):
+      1. comm (short process name) is 'retrovue_air'
+      2. Executable path resolves into the same build directory as this deployment
+      3. Running as the same uid
+      4. Not our own pid (we haven't launched anything yet, but guard anyway)
+      5. Parent is pid 1 (orphaned — reparented to init)
+
+    Returns the number of processes reaped.
+    """
+    logger = logging.getLogger(__name__)
+    my_uid = os.getuid()
+    reaped = 0
+
+    if _DEPLOYMENT_AIR_DIR is None:
+        logger.debug("STARTUP-REAPER: cannot resolve deployment AIR dir — skipping")
+        return 0
+
+    proc_root = Path("/proc")
+    if not proc_root.is_dir():
+        return 0  # not Linux
+
+    for entry in proc_root.iterdir():
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        if pid == my_pid:
+            continue
+
+        try:
+            # 1. Check comm (fast, no symlink resolution)
+            comm = (entry / "comm").read_text().strip()
+            if comm not in _EXPECTED_AIR_EXE_NAMES:
+                continue
+
+            # 2. Check uid (loginuid or status UID line)
+            status_text = (entry / "status").read_text()
+            uid_line = [l for l in status_text.splitlines() if l.startswith("Uid:")]
+            if not uid_line:
+                continue
+            real_uid = int(uid_line[0].split()[1])
+            if real_uid != my_uid:
+                logger.debug(
+                    "STARTUP-REAPER: pid %d is retrovue_air but uid %d != %d — skipping (different user)",
+                    pid, real_uid, my_uid,
+                )
+                continue
+
+            # 3. Check ppid == 1 (orphaned)
+            ppid_line = [l for l in status_text.splitlines() if l.startswith("PPid:")]
+            if not ppid_line:
+                continue
+            ppid = int(ppid_line[0].split()[1])
+            if ppid != 1:
+                logger.debug(
+                    "STARTUP-REAPER: pid %d is retrovue_air but ppid=%d (not orphaned) — skipping",
+                    pid, ppid,
+                )
+                continue
+
+            # 4. Check executable path is within our deployment build dir
+            try:
+                exe_path = (entry / "exe").resolve()
+            except (OSError, PermissionError):
+                continue
+            if exe_path.parent.resolve() != _DEPLOYMENT_AIR_DIR:
+                logger.debug(
+                    "STARTUP-REAPER: pid %d exe %s not in deployment dir %s — skipping",
+                    pid, exe_path, _DEPLOYMENT_AIR_DIR,
+                )
+                continue
+
+            # 5. Read cmdline for logging context
+            try:
+                cmdline = (entry / "cmdline").read_text().replace("\x00", " ").strip()
+            except Exception:
+                cmdline = "(unreadable)"
+
+            # All criteria matched — this is an orphaned AIR from our deployment.
+            logger.warning(
+                "STARTUP-REAPER: killing stale AIR process pid=%d cmd=[%s] "
+                "(orphaned, ppid=1, uid=%d, exe=%s)",
+                pid, cmdline, real_uid, exe_path,
+            )
+            try:
+                os.kill(pid, _signal_mod.SIGTERM)
+                # Wait briefly for graceful exit, then escalate.
+                for _ in range(10):  # 10 × 0.2s = 2s
+                    time.sleep(0.2)
+                    try:
+                        os.kill(pid, 0)  # probe — raises if gone
+                    except ProcessLookupError:
+                        break
+                else:
+                    logger.warning(
+                        "STARTUP-REAPER: pid %d did not exit after SIGTERM, sending SIGKILL", pid,
+                    )
+                    try:
+                        os.kill(pid, _signal_mod.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                reaped += 1
+            except ProcessLookupError:
+                logger.debug("STARTUP-REAPER: pid %d already gone", pid)
+            except PermissionError:
+                logger.warning("STARTUP-REAPER: no permission to kill pid %d", pid)
+
+        except (FileNotFoundError, ProcessLookupError):
+            # Process vanished while we were inspecting it — benign race.
+            continue
+        except Exception as exc:
+            logger.debug("STARTUP-REAPER: error inspecting pid %d: %s", pid, exc)
+            continue
+
+    if reaped == 0:
+        logger.info("STARTUP-REAPER: no stale AIR processes found")
+    else:
+        logger.warning("STARTUP-REAPER: sent SIGTERM to %d stale AIR process(es)", reaped)
+
+    return reaped
 
 
 class _RawTSResponse(Response):
@@ -1234,6 +1376,16 @@ class ProgramDirector:
         and prewarm run in a background daemon thread. Request handlers
         return 503 until ``_startup_complete`` is set.
         """
+        # Reap orphaned AIR processes from a previous Core incarnation before
+        # we launch anything new.  Must run before any channel startup.
+        _reap_stale_air_processes(my_pid=os.getpid())
+
+        # Register atexit as a best-effort safety net.  This fires on normal
+        # interpreter exit and unhandled exceptions in the main thread — but
+        # NOT on SIGKILL or SIGSEGV.  The primary protection is the systemd
+        # KillMode=mixed + signal handlers; atexit is a belt-and-suspenders.
+        atexit.register(self._atexit_stop)
+
         # GC telemetry: log collection durations to correlate with UPSTREAM_LOOP spikes.
         # Gen 2 collections traverse the entire object graph under the GIL.
         self._install_gc_telemetry()
@@ -1370,6 +1522,8 @@ class ProgramDirector:
         timeout:
             Maximum seconds to wait for threads to exit before emitting a warning.
         """
+        # Mark as called so the atexit handler doesn't repeat the teardown.
+        self._atexit_called = True
         self._logger.debug("ProgramDirector.stop() requested")
 
         # Stop HTTP server
@@ -1470,6 +1624,25 @@ class ProgramDirector:
         self._playlog_daemons.clear()
 
         self._logger.debug("ProgramDirector stopped")
+
+    # ------------------------------------------------------------------
+    # atexit safety net
+    # ------------------------------------------------------------------
+    _atexit_called = False
+
+    def _atexit_stop(self) -> None:
+        """Best-effort cleanup on interpreter exit.
+
+        Guarded by a flag so ``stop()`` is not called twice if the signal
+        handler already ran it.
+        """
+        if self._atexit_called:
+            return
+        self._atexit_called = True
+        try:
+            self.stop(timeout=3.0)
+        except Exception:
+            pass
 
     def get_system_health(self) -> SystemHealth:
         """

@@ -43,6 +43,11 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=retrovue
 
+# Process kill semantics: SIGTERM to main (graceful cascade), then SIGKILL
+# to entire cgroup after timeout — catches orphaned AIR children.
+KillMode=mixed
+TimeoutStopSec=15
+
 # Resource limits
 LimitNOFILE=65536
 

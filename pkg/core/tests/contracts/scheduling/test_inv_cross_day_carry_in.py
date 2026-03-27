@@ -7,15 +7,15 @@ previous one ended.
 
 When a program crosses the broadcast day boundary, the subsequent day's
 program blocks are pushed forward (not trimmed or dropped) so that:
-  1. Fully subsumed blocks (ending before carry-in end) are removed.
-  2. The first surviving block starts at the carry-in end.
+  1. Fully subsumed blocks (ending before overlap end) are removed.
+  2. The first surviving block starts at the overlap end.
   3. Subsequent blocks cascade forward to maintain contiguity.
   4. No block content is trimmed — only start times shift.
 
 Architecture:
-  - Primary fix: _apply_carry_in_push_forward() at program-block level
+  - Primary fix: _apply_overlap_push_forward() at program-block level
   - Guardrail: _resolve_cross_day_overlaps() at merge time (defense-in-depth)
-  - Propagation: active_carry_in_end_ms propagates across empty days
+  - Propagation: prior_block_end_ms propagates across empty days
 """
 
 import logging
@@ -84,9 +84,9 @@ DAY_BOUNDARY_MS = 1_773_136_800_000    # 2026-03-10 10:00:00 UTC = 06:00 EDT
 SLOT_30 = 30 * 60 * 1000              # 30 minutes in ms
 HOUR_MS = 3600 * 1000
 
-# Movie from day 1 that carries past the day boundary
+# Movie from day 1 that extends past the day boundary
 MOVIE_START = DAY_BOUNDARY_MS - 2 * SLOT_30   # 05:00 EDT
-MOVIE_END = DAY_BOUNDARY_MS + SLOT_30          # 06:30 EDT (30 min carry-in)
+MOVIE_END = DAY_BOUNDARY_MS + SLOT_30          # 06:30 EDT (30 min overlap)
 
 # Day 2 blocks compiled independently at day boundary
 DAY2_BLOCK1_START = DAY_BOUNDARY_MS             # 06:00 EDT
@@ -104,46 +104,46 @@ DAY_BOUNDARY_DT = datetime.fromtimestamp(DAY_BOUNDARY_MS / 1000, tz=timezone.utc
 
 
 class TestEffectiveDayOpenMs:
-    """_compute_effective_day_open_ms must return max(day_start, carry_in_end)."""
+    """_compute_effective_day_open_ms must return max(day_start, prior_block_end)."""
 
-    def test_no_carry_in_returns_day_start(self):
-        """With no carry-in, effective open == broadcast day start."""
+    def test_no_overlap_returns_day_start(self):
+        """With no prior-block overlap, effective open == broadcast day start."""
         result = DslScheduleService._compute_effective_day_open_ms(
             broadcast_day="2026-03-10",
             day_start_hour=6,
             tz_name="America/New_York",
-            active_carry_in_end_ms=0,
+            prior_block_end_ms=0,
         )
         assert result == DAY_BOUNDARY_MS
 
-    def test_carry_in_past_boundary_returns_carry_in_end(self):
-        """Carry-in extending past day start → effective open == carry-in end."""
+    def test_overlap_past_boundary_returns_block_end(self):
+        """Prior block extending past day start → effective open == block end."""
         result = DslScheduleService._compute_effective_day_open_ms(
             broadcast_day="2026-03-10",
             day_start_hour=6,
             tz_name="America/New_York",
-            active_carry_in_end_ms=MOVIE_END,  # 06:30 EDT
+            prior_block_end_ms=MOVIE_END,  # 06:30 EDT
         )
         assert result == MOVIE_END
 
-    def test_carry_in_before_boundary_returns_day_start(self):
-        """Carry-in ending before day start → effective open == day start."""
+    def test_block_end_before_boundary_returns_day_start(self):
+        """Prior block ending before day start → effective open == day start."""
         early_end = DAY_BOUNDARY_MS - HOUR_MS  # 05:00 EDT
         result = DslScheduleService._compute_effective_day_open_ms(
             broadcast_day="2026-03-10",
             day_start_hour=6,
             tz_name="America/New_York",
-            active_carry_in_end_ms=early_end,
+            prior_block_end_ms=early_end,
         )
         assert result == DAY_BOUNDARY_MS
 
-    def test_carry_in_exactly_at_boundary_returns_boundary(self):
-        """Carry-in ending exactly at day start → effective open == day start."""
+    def test_block_end_exactly_at_boundary_returns_boundary(self):
+        """Prior block ending exactly at day start → effective open == day start."""
         result = DslScheduleService._compute_effective_day_open_ms(
             broadcast_day="2026-03-10",
             day_start_hour=6,
             tz_name="America/New_York",
-            active_carry_in_end_ms=DAY_BOUNDARY_MS,
+            prior_block_end_ms=DAY_BOUNDARY_MS,
         )
         assert result == DAY_BOUNDARY_MS
 
@@ -154,14 +154,14 @@ class TestEffectiveDayOpenMs:
 
 
 class TestPushForward:
-    """INV-CROSS-DAY-CARRY-IN-001: _apply_carry_in_push_forward pushes
-    program blocks forward past the carry-in end rather than trimming them.
+    """INV-CROSS-DAY-CARRY-IN-001: _apply_overlap_push_forward pushes
+    program blocks forward past the overlap end rather than trimming them.
     """
 
-    def test_carry_in_pushes_first_block_forward(self):
-        """15-min carry-in pushes the 06:00 block to start at 06:15.
+    def test_overlap_pushes_first_block_forward(self):
+        """15-min overlap pushes the 06:00 block to start at 06:15.
 
-        Movie A: 06:00-07:00 (3600s) — starts before carry-in end (06:15),
+        Movie A: 06:00-07:00 (3600s) — starts before overlap end (06:15),
         ends after → pushed forward to 06:15.
         Movie B: 07:00-07:30 — cascades to 07:15.
         """
@@ -175,9 +175,9 @@ class TestPushForward:
             ],
         }
 
-        # Carry-in ends at 06:15 EDT = DAY_BOUNDARY + 15 min
+        # Overlap ends at 06:15 EDT = DAY_BOUNDARY + 15 min
         effective_open = DAY_BOUNDARY_MS + 15 * 60 * 1000
-        DslScheduleService._apply_carry_in_push_forward(
+        DslScheduleService._apply_overlap_push_forward(
             schedule, effective_open, "2026-03-10",
         )
 
@@ -193,13 +193,13 @@ class TestPushForward:
         expected_b2_start = expected_b1_start + timedelta(seconds=3600)
         assert blocks[1]["start_at"] == expected_b2_start.isoformat()
 
-    def test_carry_in_drops_fully_subsumed_blocks(self):
-        """Blocks ending before carry-in end are removed entirely."""
-        # Block: 06:00-06:15 (15 min) — ends before 06:30 carry-in end
+    def test_overlap_drops_fully_subsumed_blocks(self):
+        """Blocks ending before overlap end are removed entirely."""
+        # Block: 06:00-06:15 (15 min) — ends before 06:30 overlap end
         b1_start = DAY_BOUNDARY_DT
-        # Block: 06:15-06:30 — ends exactly at carry-in end
+        # Block: 06:15-06:30 — ends exactly at overlap end
         b2_start = DAY_BOUNDARY_DT + timedelta(minutes=15)
-        # Block: 06:30-07:00 — starts at carry-in end
+        # Block: 06:30-07:00 — starts at overlap end
         b3_start = DAY_BOUNDARY_DT + timedelta(minutes=30)
 
         schedule = {
@@ -211,7 +211,7 @@ class TestPushForward:
         }
 
         effective_open = MOVIE_END  # 06:30 EDT
-        DslScheduleService._apply_carry_in_push_forward(
+        DslScheduleService._apply_overlap_push_forward(
             schedule, effective_open, "2026-03-10",
         )
 
@@ -220,7 +220,7 @@ class TestPushForward:
         assert len(blocks) == 1
         assert blocks[0]["title"] == "Feature"
 
-    def test_carry_in_preserves_slot_duration(self):
+    def test_overlap_preserves_slot_duration(self):
         """Push-forward changes start_at but never slot_duration_sec."""
         b1_start = DAY_BOUNDARY_DT
 
@@ -231,13 +231,13 @@ class TestPushForward:
         }
 
         effective_open = MOVIE_END
-        DslScheduleService._apply_carry_in_push_forward(
+        DslScheduleService._apply_overlap_push_forward(
             schedule, effective_open, "2026-03-10",
         )
 
         assert schedule["program_blocks"][0]["slot_duration_sec"] == 5400
 
-    def test_no_carry_in_no_change(self):
+    def test_no_overlap_no_change(self):
         """When effective_day_open_ms <= first block start, no push-forward."""
         b1_start = DAY_BOUNDARY_DT
 
@@ -248,7 +248,7 @@ class TestPushForward:
         }
 
         # effective_day_open == day boundary == first block start
-        DslScheduleService._apply_carry_in_push_forward(
+        DslScheduleService._apply_overlap_push_forward(
             schedule, DAY_BOUNDARY_MS, "2026-03-10",
         )
 
@@ -265,9 +265,9 @@ class TestPushForward:
 
         schedule = {"program_blocks": blocks_data}
 
-        # 1-hour carry-in: effective open = 07:00
+        # 1-hour overlap: effective open = 07:00
         effective_open = DAY_BOUNDARY_MS + HOUR_MS
-        DslScheduleService._apply_carry_in_push_forward(
+        DslScheduleService._apply_overlap_push_forward(
             schedule, effective_open, "2026-03-10",
         )
 
@@ -286,8 +286,8 @@ class TestPushForward:
                 f"block {i+1} start ({next_start_ms})"
             )
 
-    def test_carry_in_subsuming_entire_day(self):
-        """A carry-in spanning the entire day drops all blocks."""
+    def test_overlap_subsuming_entire_day(self):
+        """An overlap spanning the entire day drops all blocks."""
         blocks_data = []
         for i in range(48):  # 24h of 30-min blocks
             start = DAY_BOUNDARY_DT + timedelta(minutes=30 * i)
@@ -297,9 +297,9 @@ class TestPushForward:
 
         schedule = {"program_blocks": blocks_data}
 
-        # Carry-in ends 26h after day boundary
+        # Overlap ends 26h after day boundary
         effective_open = DAY_BOUNDARY_MS + 26 * HOUR_MS
-        DslScheduleService._apply_carry_in_push_forward(
+        DslScheduleService._apply_overlap_push_forward(
             schedule, effective_open, "2026-03-10",
         )
 
@@ -308,7 +308,7 @@ class TestPushForward:
     def test_empty_schedule_is_noop(self):
         """Empty program_blocks list is handled gracefully."""
         schedule = {"program_blocks": []}
-        DslScheduleService._apply_carry_in_push_forward(
+        DslScheduleService._apply_overlap_push_forward(
             schedule, MOVIE_END, "2026-03-10",
         )
         assert schedule["program_blocks"] == []
@@ -323,7 +323,7 @@ class TestPushForward:
         }
 
         with caplog.at_level(logging.INFO):
-            DslScheduleService._apply_carry_in_push_forward(
+            DslScheduleService._apply_overlap_push_forward(
                 schedule, MOVIE_END, "2026-03-10",
             )
 
@@ -334,36 +334,36 @@ class TestPushForward:
 
 
 # ---------------------------------------------------------------------------
-# 3. Carry-in propagation across empty days
+# 3. Prior-block overlap propagation across empty days
 # ---------------------------------------------------------------------------
 
 
-class TestCarryInPropagation:
-    """active_carry_in_end_ms must propagate forward even when a day
+class TestOverlapPropagation:
+    """prior_block_end_ms must propagate forward even when a day
     produces zero blocks.
 
     Pseudo logic:
-      active_carry_in_end_ms = max(active_carry_in_end_ms, last_block_end)
-      effective_day_open_ms = max(broadcast_day_start, active_carry_in_end_ms)
+      prior_block_end_ms = max(prior_block_end_ms, last_block_end)
+      effective_day_open_ms = max(broadcast_day_start, prior_block_end_ms)
 
-    If a day produces zero blocks, active_carry_in_end_ms persists unchanged.
+    If a day produces zero blocks, prior_block_end_ms persists unchanged.
     """
 
-    def test_carry_in_propagates_across_empty_day(self):
+    def test_overlap_propagates_across_empty_day(self):
         """Day N movie runs to Day N+2 08:00.
         Day N+1 produces zero blocks (fully subsumed).
-        Day N+2 must still respect the carry-in.
+        Day N+2 must still respect the overlap.
         """
         day_n2_boundary_ms = DAY_BOUNDARY_MS + 24 * HOUR_MS
 
         # Movie ends at 08:00 EDT on day N+2
-        carry_in_end = day_n2_boundary_ms + 2 * HOUR_MS
+        overlap_end = day_n2_boundary_ms + 2 * HOUR_MS
 
-        active_carry_in_end_ms = carry_in_end
+        prior_block_end_ms = overlap_end
 
         # Day N+1: all blocks subsumed
         day_n1_effective = DslScheduleService._compute_effective_day_open_ms(
-            "2026-03-10", 6, "America/New_York", active_carry_in_end_ms,
+            "2026-03-10", 6, "America/New_York", prior_block_end_ms,
         )
 
         # Push-forward drops all day N+1 blocks
@@ -374,22 +374,22 @@ class TestCarryInPropagation:
                 _make_program_block(f"n1-{i}", start.isoformat(), 1800),
             )
         schedule_n1 = {"program_blocks": day_n1_blocks}
-        DslScheduleService._apply_carry_in_push_forward(
+        DslScheduleService._apply_overlap_push_forward(
             schedule_n1, day_n1_effective, "2026-03-10",
         )
         assert len(schedule_n1["program_blocks"]) == 0, "Day N+1 should be fully subsumed"
 
-        # No blocks → active_carry_in_end_ms persists unchanged
-        assert active_carry_in_end_ms == carry_in_end
+        # No blocks → prior_block_end_ms persists unchanged
+        assert prior_block_end_ms == overlap_end
 
-        # Day N+2: carry-in still active
+        # Day N+2: overlap still active
         day_n2_effective = DslScheduleService._compute_effective_day_open_ms(
-            "2026-03-11", 6, "America/New_York", active_carry_in_end_ms,
+            "2026-03-11", 6, "America/New_York", prior_block_end_ms,
         )
-        assert day_n2_effective == carry_in_end
+        assert day_n2_effective == overlap_end
 
-    def test_active_carry_in_uses_max(self):
-        """active_carry_in_end_ms = max(active, last_block_end) so it never
+    def test_prior_block_end_uses_max(self):
+        """prior_block_end_ms = max(active, last_block_end) so it never
         shrinks backward if a day produces shorter blocks.
         """
         active = DAY_BOUNDARY_MS + 3 * HOUR_MS  # 09:00 EDT
@@ -397,7 +397,7 @@ class TestCarryInPropagation:
 
         active = max(active, last_block_end)
         assert active == DAY_BOUNDARY_MS + 3 * HOUR_MS, (
-            "active_carry_in_end_ms must never shrink"
+            "prior_block_end_ms must never shrink"
         )
 
 
@@ -429,7 +429,7 @@ class TestMergeTimeGuardrail:
         assert "day2-block2" in block_ids
 
     def test_guardrail_drops_multiple_subsumed_blocks(self):
-        """Long carry-in can subsume multiple blocks."""
+        """Long overlap can subsume multiple blocks."""
         long_movie_start = DAY_BOUNDARY_MS - 2 * HOUR_MS
         long_movie_end = DAY_BOUNDARY_MS + HOUR_MS
 

@@ -155,10 +155,8 @@ presentation:
         - pool: ratings_cards
           select:
             where:
-              rating:
-                eq: program.rating
-              year:
-                lte: program.release_year
+              tags:
+                eq: program.rating_tag
 
       postroll:
         - pool: coming_up_next_promos

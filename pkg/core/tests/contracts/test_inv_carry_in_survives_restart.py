@@ -1,17 +1,14 @@
 """Contract tests: INV-CROSS-DAY-CARRY-IN-SURVIVES-RESTART-001
 
 When _build_initial() compiles the schedule starting from day D, and
-day D-1 is NOT in the compilation window, the system MUST load the
-prior day's carry-in end time from the DB so that day D's first block
-does not trample the carry-in movie.
-
-Root cause: _build_initial initializes active_carry_in_end_ms=0 and only
-tracks carry-in across days it compiles in the same loop. If the prior
-day is outside the loop, the carry-in is lost.
+day D-1 is NOT in the compilation window, the system MUST use
+window-based timeline loading to include all blocks that intersect the
+window — regardless of broadcast_day.  This ensures the effective day
+open for D accounts for prior-day blocks that extend past the boundary.
 
 Incident: 2026-03-24 — "In Search of Darkness Part III" (342 min) was
 playing from 09:30 UTC. Process restarted at 13:54 UTC. _build_initial
-compiled March 24 starting at 10:00 with no carry-in knowledge. EPG
+compiled March 24 starting at 10:00 with no overlap knowledge. EPG
 replaced the movie. Viewer got Lilo & Stitch instead.
 """
 
@@ -78,42 +75,42 @@ def _make_revision(
 
 
 # ===========================================================================
-# Core invariant: _compute_effective_day_open_ms respects carry-in
+# Core invariant: _compute_effective_day_open_ms respects prior-block end
 # ===========================================================================
 
 
 class TestComputeEffectiveDayOpen:
-    """_compute_effective_day_open_ms must push day open past carry-in end."""
+    """_compute_effective_day_open_ms must push day open past prior-block end."""
 
-    def test_carry_in_pushes_day_open(self):
-        """When carry-in extends past day start, effective open = carry-in end."""
+    def test_prior_block_pushes_day_open(self):
+        """When prior-day block extends past day start, effective open = block end."""
         # Day start: 2026-03-24 10:00 UTC
-        # Carry-in end: 2026-03-24 15:30 UTC (movie from yesterday)
+        # Prior-block end: 2026-03-24 15:30 UTC (movie from yesterday)
         result = DslScheduleService._compute_effective_day_open_ms(
             broadcast_day="2026-03-24",
             day_start_hour=6,
             tz_name="America/New_York",
-            active_carry_in_end_ms=int(
+            prior_block_end_ms=int(
                 datetime(2026, 3, 24, 15, 30, tzinfo=timezone.utc).timestamp() * 1000
             ),
         )
 
-        # Must be at carry-in end (15:30 UTC), not day start (10:00 UTC)
-        carry_in_end_ms = int(
+        # Must be at prior-block end (15:30 UTC), not day start (10:00 UTC)
+        expected_end_ms = int(
             datetime(2026, 3, 24, 15, 30, tzinfo=timezone.utc).timestamp() * 1000
         )
-        assert result == carry_in_end_ms, (
-            f"effective_day_open must equal carry-in end. "
-            f"Expected {carry_in_end_ms}, got {result}"
+        assert result == expected_end_ms, (
+            f"effective_day_open must equal prior-block end. "
+            f"Expected {expected_end_ms}, got {result}"
         )
 
-    def test_no_carry_in_uses_day_start(self):
-        """Without carry-in, effective open = broadcast day start."""
+    def test_no_overlap_uses_day_start(self):
+        """Without prior-block overlap, effective open = broadcast day start."""
         result = DslScheduleService._compute_effective_day_open_ms(
             broadcast_day="2026-03-24",
             day_start_hour=6,
             tz_name="America/New_York",
-            active_carry_in_end_ms=0,
+            prior_block_end_ms=0,
         )
 
         from zoneinfo import ZoneInfo
@@ -125,28 +122,12 @@ class TestComputeEffectiveDayOpen:
 
 
 # ===========================================================================
-# Root cause: _build_initial does not load prior day carry-in from DB
+# _build_initial loads from DB via window-based timeline loading
 # ===========================================================================
 
 
-class TestBuildInitialCarryInFromDB:
-    """_build_initial MUST load prior day carry-in from active revision
-    when the prior day is outside the compilation window.
-    """
-
-    def test_prior_day_carry_in_loaded_from_db(self):
-        """When start_date = March 24 and March 23's last block ends at
-        15:30 UTC on March 24, _build_initial must use 15:30 as the
-        carry-in end for March 24's compilation.
-
-        This test verifies the function that loads carry-in from the DB.
-        """
-        load_fn = getattr(DslScheduleService, "_load_prior_day_carry_in_end_ms", None)
-        assert load_fn is not None, (
-            "INV-CROSS-DAY-CARRY-IN-SURVIVES-RESTART-001: "
-            "DslScheduleService must have _load_prior_day_carry_in_end_ms method "
-            "to load carry-in from DB on cold start"
-        )
+class TestBuildInitialLoadsFromDB:
+    """_build_initial MUST load from DB via _load_existing_timeline."""
 
     def test_load_existing_timeline_method_exists(self):
         """INV-TIMELINE-SINGLE-AUTHORITY-001: _build_initial must load
@@ -157,28 +138,19 @@ class TestBuildInitialCarryInFromDB:
             "DslScheduleService must have _load_existing_timeline method"
         )
 
-    def test_load_carry_in_block_method_exists(self):
-        """INV-TIMELINE-CARRY-IN-PRESERVED-001: carry-in block must be
-        loadable as a full ScheduledBlock, not just an end timestamp.
-        """
-        assert hasattr(DslScheduleService, "_load_carry_in_block_from_revision"), (
-            "INV-TIMELINE-CARRY-IN-PRESERVED-001: "
-            "DslScheduleService must have _load_carry_in_block_from_revision method"
-        )
-
 
 # ===========================================================================
-# Regression: carry-in within the compilation window still works
+# Regression: prior-block overlap within the compilation window
 # ===========================================================================
 
 
-class TestCarryInWithinCompilationWindow:
-    """When both days are in the compilation window, carry-in still propagates.
+class TestOverlapWithinCompilationWindow:
+    """When both days are in the compilation window, overlap still propagates.
     This is the existing behavior that must not regress.
     """
 
-    def test_active_carry_in_end_ms_propagates(self):
-        """The _build_initial loop propagates carry-in via active_carry_in_end_ms.
+    def test_prior_block_end_ms_propagates(self):
+        """The _build_initial loop propagates prior-block end across days.
         Verify the propagation formula is correct.
         """
         # Simulate: last block of day 1 ends at 15:30 UTC
@@ -186,14 +158,14 @@ class TestCarryInWithinCompilationWindow:
             datetime(2026, 3, 24, 15, 30, tzinfo=timezone.utc).timestamp() * 1000
         ))]
 
-        # active_carry_in_end_ms should be max of current and last block end
-        active_carry_in_end_ms = 0
+        # prior_block_end_ms should be max of current and last block end
+        prior_block_end_ms = 0
         if blocks_day1:
-            active_carry_in_end_ms = max(
-                active_carry_in_end_ms, blocks_day1[-1].end_utc_ms,
+            prior_block_end_ms = max(
+                prior_block_end_ms, blocks_day1[-1].end_utc_ms,
             )
 
         expected = int(
             datetime(2026, 3, 24, 15, 30, tzinfo=timezone.utc).timestamp() * 1000
         )
-        assert active_carry_in_end_ms == expected
+        assert prior_block_end_ms == expected

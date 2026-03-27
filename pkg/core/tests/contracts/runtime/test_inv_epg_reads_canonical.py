@@ -192,21 +192,21 @@ class TestInvEpgReadsCanonical001:
         assert result is None
 
     # Tier: 2 | Scheduling logic invariant
-    def test_get_canonical_epg_includes_carry_in_block(self):
-        """A ScheduleItem from the previous day that overlaps the window
-        MUST be included in the EPG output."""
+    def test_get_canonical_epg_includes_cross_day_block(self):
+        """A ScheduleItem from a prior broadcast_day that overlaps the window
+        MUST be included in the EPG output (window intersection rule)."""
         window_start = datetime(2026, 3, 1, 6, 0, tzinfo=UTC)
         window_end = datetime(2026, 3, 2, 6, 0, tzinfo=UTC)
 
-        # Carry-in: starts 04:00 (before window), 4h duration → ends 08:00 (inside window)
-        carry_in = _make_schedule_item(
+        # Prior-day block: starts 04:00 (before window), 4h duration → ends 08:00 (inside window)
+        prior_day_block = _make_schedule_item(
             "Late Night Movie",
             datetime(2026, 3, 1, 4, 0, tzinfo=UTC),
             14400,
             asset_id="asset.late_movie",
             revision_id=1,
         )
-        # Day N block: starts 08:00
+        # Current day block: starts 08:00
         day_block = _make_schedule_item(
             "Morning Show",
             datetime(2026, 3, 1, 8, 0, tzinfo=UTC),
@@ -217,7 +217,7 @@ class TestInvEpgReadsCanonical001:
 
         rev1 = MagicMock()
         rev1.id = 1
-        rev1.broadcast_day = date(2026, 2, 28)  # carry-in from previous day
+        rev1.broadcast_day = date(2026, 2, 28)  # from previous broadcast day
         rev2 = MagicMock()
         rev2.id = 2
         rev2.broadcast_day = date(2026, 3, 1)
@@ -227,7 +227,7 @@ class TestInvEpgReadsCanonical001:
         # return both items — the code filters by window overlap.
         mock_db = _mock_db_for_epg(
             channel_id=1,
-            items=[carry_in, day_block],
+            items=[prior_day_block, day_block],
             revisions=[rev1, rev2],
         )
 
@@ -242,5 +242,5 @@ class TestInvEpgReadsCanonical001:
         assert result is not None
         asset_ids = [b["asset_id"] for b in result]
         assert "asset.late_movie" in asset_ids, (
-            "Carry-in block from previous day not included"
+            "Cross-day block overlapping window not included"
         )
