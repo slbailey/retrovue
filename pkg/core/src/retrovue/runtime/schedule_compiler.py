@@ -166,17 +166,18 @@ def _expand_to_compiled_segments(
     slot_duration_ms: int,
     start_utc_ms: int,
     channel_type: str,
+    dsl_midroll: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Expand an AssemblyResult into break-aware compiled_segments.
 
     INV-STRUCTURAL-RESOLUTION-001: Break detection runs at compile time.
-    The returned list contains content acts (with offsets and transitions),
-    filler placeholders, and any presentation/intro/outro segments from
-    the assembly.
+    INV-SC-BBL-CUTOVER-001: Uses BlockBreakLayout for break decisions.
 
-    For the primary content asset, expand_program_block() is called to
-    produce break-aware content acts and filler. Non-content segments
-    (presentation, intro, outro) are serialized with safe defaults.
+    Constructs a BlockBreakLayout from the assembly result, then expands
+    it into compiled_segments via expand_break_layout. All break decisions
+    (source selection, budget allocation, policy) happen inside
+    build_break_layout. This function bridges BBL output to the
+    compiled_segments schema consumed by the hydration layer.
     """
     content_segs = [s for s in result.segments if s.segment_type == "content"]
     non_content_segs = [s for s in result.segments if s.segment_type != "content"]
@@ -210,76 +211,143 @@ def _expand_to_compiled_segments(
         s.segment_type == "postroll_traffic" for s in postroll_segs
     )
 
-    compiled: list[dict[str, Any]] = []
-
-    # Serialize preroll segments (T1 presentation, intro) first.
-    for s in preroll_segs:
-        compiled.append(_serialize_assembly_segment(s, resolver, is_primary=False))
-
-    # For content: run expand_program_block() to get break-aware segments.
+    # --- Resolve primary content asset metadata ---
     primary = content_segs[0]
     ep_meta = resolver.lookup(primary.asset_id)
-
-    # Compute content slot: slot minus ALL non-content structural durations
-    # (excludes postroll_traffic markers which have duration_ms=0)
-    non_content_ms = sum(s.duration_ms for s in non_content_segs)
-    content_slot_ms = slot_duration_ms - non_content_ms
+    content_gain_db = ep_meta.loudness_gain_db
 
     # Resolve chapter markers from catalog
-    chapter_ms = None
+    chapter_ms: tuple[int, ...] | None = None
     if ep_meta.chapter_markers_sec:
         chapter_ms = tuple(
             int(c * 1000) for c in ep_meta.chapter_markers_sec if c > 0
         )
 
-    expanded_block = expand_program_block(
-        asset_id=primary.asset_id,
-        asset_uri=ep_meta.file_uri or "",
-        start_utc_ms=start_utc_ms,
-        slot_duration_ms=content_slot_ms,
-        episode_duration_ms=primary.duration_ms,
-        chapter_markers_ms=chapter_ms,
-        channel_type=channel_type,
-        gain_db=ep_meta.loudness_gain_db,
+    # --- Convert assembly segments to BBL types ---
+    from retrovue.runtime.block_break_layout import (
+        BlockBreakLayout,
+        PostrollEntry,
+        StructuralEntry,
+        build_break_layout,
+        expand_break_layout,
     )
 
-    # Separate content segments from filler produced by expand_program_block.
-    expanded_content = []
-    expanded_filler = []
-    for seg in expanded_block.segments:
-        entry = {
-            "segment_type": seg.segment_type,
-            "asset_id": primary.asset_id if seg.segment_type == "content" else "",
-            "duration_ms": seg.segment_duration_ms,
-            "asset_start_offset_ms": seg.asset_start_offset_ms,
-            "transition_in": seg.transition_in,
-            "transition_in_duration_ms": seg.transition_in_duration_ms,
-            "transition_out": seg.transition_out,
-            "transition_out_duration_ms": seg.transition_out_duration_ms,
-            "gain_db": seg.gain_db,
-            "is_primary": seg.is_primary,
-        }
-        if seg.segment_type == "filler":
-            expanded_filler.append(entry)
+    bbl_preroll = []
+    for s in preroll_segs:
+        # Resolve gain_db for structural assets
+        seg_gain = 0.0
+        if s.asset_id:
+            try:
+                seg_meta = resolver.lookup(s.asset_id)
+                seg_gain = getattr(seg_meta, "loudness_gain_db", 0.0)
+            except (KeyError, AttributeError):
+                pass
+        bbl_preroll.append(StructuralEntry(
+            asset_id=s.asset_id,
+            duration_ms=s.duration_ms,
+            segment_type=s.segment_type,
+        ))
+
+    bbl_postroll = []
+    for s in postroll_segs:
+        if s.segment_type == "postroll_traffic":
+            bbl_postroll.append(PostrollEntry(
+                asset_id="", duration_ms=0,
+                segment_type="postroll_traffic", is_traffic_marker=True,
+            ))
         else:
-            expanded_content.append(entry)
+            bbl_postroll.append(PostrollEntry(
+                asset_id=s.asset_id, duration_ms=s.duration_ms,
+                segment_type=s.segment_type, is_traffic_marker=False,
+            ))
 
-    # Add content (+ midroll filler for network channels)
-    compiled.extend(expanded_content)
+    # --- Build layout (all decisions happen here) ---
+    layout = build_break_layout(
+        grid_slot_ms=slot_duration_ms,
+        content_duration_ms=primary.duration_ms,
+        channel_type=channel_type,
+        block_start_utc_ms=start_utc_ms,
+        dsl_midroll=dsl_midroll,
+        chapter_markers_ms=chapter_ms,
+        preroll=bbl_preroll,
+        postroll=bbl_postroll,
+    )
 
-    if has_postroll_traffic:
-        # INV-DSL-UNIFIED-FILL-001: filler goes at the traffic marker's
-        # declared position within the postroll sequence.
-        for s in postroll_segs:
-            if s.segment_type == "postroll_traffic":
-                compiled.extend(expanded_filler)
-            else:
-                compiled.append(_serialize_assembly_segment(s, resolver, is_primary=False))
-    else:
-        # No traffic marker — filler trails content, then postroll after.
-        compiled.extend(expanded_filler)
-        for s in postroll_segs:
-            compiled.append(_serialize_assembly_segment(s, resolver, is_primary=False))
+    # --- Expand layout into segment dicts ---
+    bbl_segments = expand_break_layout(layout)
+
+    # --- Bridge BBL output → compiled_segments schema ---
+    # The hydration layer (dsl_schedule_service._expand_blocks_hydrate)
+    # expects specific keys on each compiled segment dict.
+    _FADE_DURATION_MS = 500
+
+    compiled: list[dict[str, Any]] = []
+    for seg in bbl_segments:
+        seg_type = seg["segment_type"]
+
+        # Determine asset_id
+        if seg_type == "content":
+            asset_id = primary.asset_id
+        elif seg_type == "filler":
+            asset_id = ""
+        else:
+            # Structural (presentation, intro, outro)
+            asset_id = seg.get("asset_id", "")
+
+        # Map transition_style → transition_in/transition_out
+        style = seg.get("transition_style")
+        if style == "fade":
+            transition_out = "TRANSITION_FADE"
+            transition_out_ms = _FADE_DURATION_MS
+        else:
+            transition_out = "TRANSITION_NONE"
+            transition_out_ms = 0
+
+        # Fade-in applies to content after a faded break
+        # (content segment following a filler that was preceded by a fade-out)
+        # We track this: if the PREVIOUS compiled segment was filler and the
+        # segment before that had transition_out=FADE, this content fades in.
+        transition_in = "TRANSITION_NONE"
+        transition_in_ms = 0
+        if seg_type == "content" and len(compiled) >= 2:
+            prev = compiled[-1]
+            prev_prev = compiled[-2] if len(compiled) >= 2 else None
+            if (
+                prev.get("segment_type") == "filler"
+                and prev_prev is not None
+                and prev_prev.get("transition_out") == "TRANSITION_FADE"
+            ):
+                transition_in = "TRANSITION_FADE"
+                transition_in_ms = _FADE_DURATION_MS
+
+        # Resolve gain_db
+        if seg_type == "content":
+            gain_db = content_gain_db
+        elif asset_id:
+            try:
+                seg_meta = resolver.lookup(asset_id)
+                gain_db = getattr(seg_meta, "loudness_gain_db", 0.0)
+            except (KeyError, AttributeError):
+                gain_db = 0.0
+        else:
+            gain_db = 0.0
+
+        compiled.append({
+            "segment_type": seg_type,
+            "asset_id": asset_id,
+            "duration_ms": seg["duration_ms"],
+            "asset_start_offset_ms": seg.get("asset_start_offset_ms", 0),
+            "transition_in": transition_in,
+            "transition_in_duration_ms": transition_in_ms,
+            "transition_out": transition_out if seg_type == "content" else "TRANSITION_NONE",
+            "transition_out_duration_ms": transition_out_ms if seg_type == "content" else 0,
+            "gain_db": gain_db,
+            "is_primary": (
+                seg_type == "content"
+                and channel_type in ("movie", "premium")
+                and len(layout.midroll.opportunities) == 0
+            ),
+        })
 
     return compiled
 
@@ -288,11 +356,11 @@ def _resolve_presentation_ref(
     prog_def: dict[str, Any],
     presentation_defs: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Resolve a presentation string reference to inline preroll + postroll.
+    """Resolve a presentation string reference to inline preroll, postroll, and midroll.
 
     If prog_def["presentation"] is a string (e.g., "movies"), look it up
-    in presentation_defs["programs"]["movies"] and resolve both preroll
-    and postroll phases.
+    in presentation_defs["programs"]["movies"] and resolve preroll,
+    postroll, and midroll phases.
 
     If it's already a list (old inline format), return prog_def unchanged.
     If presentation_defs is None or the reference doesn't resolve, clear it.
@@ -301,6 +369,8 @@ def _resolve_presentation_ref(
         INV-POSTROLL-TRAFFIC-PREROLL-FORBIDDEN-001 — no traffic in preroll.
         INV-DSL-SINGLE-FILL-DIRECTIVE-001 — at most one traffic directive
         across preroll + postroll.
+    INV-SC-PRESENTATION-MIDROLL-001: midroll extracted and attached as
+        presentation_midroll. No validation here — build_break_layout validates.
     """
     pres = prog_def.get("presentation")
     if pres is None or isinstance(pres, list):
@@ -320,6 +390,7 @@ def _resolve_presentation_ref(
     pres_block = program_presentations.get(pres, {})
     preroll = pres_block.get("preroll", [])
     postroll = pres_block.get("postroll", [])
+    midroll = pres_block.get("midroll")
 
     # INV-POSTROLL-TRAFFIC-PREROLL-FORBIDDEN-001: no traffic in preroll
     for entry in preroll:
@@ -347,6 +418,7 @@ def _resolve_presentation_ref(
     else:
         resolved.pop("presentation", None)
     resolved["presentation_postroll"] = postroll
+    resolved["presentation_midroll"] = midroll
 
     return resolved
 
@@ -735,6 +807,7 @@ def _compile_program_block(
                         slot_duration_ms=slot_duration * 1000,
                         start_utc_ms=int(current_time.timestamp() * 1000),
                         channel_type=channel_type,
+                        dsl_midroll=prog_def.get("presentation_midroll"),
                     ),
                     traffic_profile=block_def.get("traffic_profile"),
                 )
@@ -808,6 +881,7 @@ def _compile_program_block(
                         slot_duration_ms=slot_duration * 1000,
                         start_utc_ms=int(current_time.timestamp() * 1000),
                         channel_type=channel_type,
+                        dsl_midroll=prog_def.get("presentation_midroll"),
                     ),
                     traffic_profile=block_def.get("traffic_profile"),
                 )

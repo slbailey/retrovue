@@ -221,6 +221,7 @@ Canonical contract: [program_presentation.md](program_presentation.md)
 |-----------|------|--------------|
 | INV-TIER-DISPLACEMENT-001 | [block_assembly_tiers.md](block_assembly_tiers.md) | LAW-CONTENT-AUTHORITY, LAW-GRID |
 | INV-TIER2-OBLIGATION-YAML-ONLY-001 | [block_assembly_tiers.md](block_assembly_tiers.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-MIDROLL-INTERLEAVE-001 | [invariants/core/block-assembly-tiers/INV-MIDROLL-INTERLEAVE-001.md](invariants/core/block-assembly-tiers/INV-MIDROLL-INTERLEAVE-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
 | INV-STRUCTURAL-RESOLUTION-001 | [invariants/core/block-assembly-tiers/INV-STRUCTURAL-RESOLUTION-001.md](invariants/core/block-assembly-tiers/INV-STRUCTURAL-RESOLUTION-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
 | INV-GRID-SIZING-STRUCTURAL-001 | [invariants/core/block-assembly-tiers/INV-GRID-SIZING-STRUCTURAL-001.md](invariants/core/block-assembly-tiers/INV-GRID-SIZING-STRUCTURAL-001.md) | LAW-GRID, LAW-CONTENT-AUTHORITY |
 | INV-EXPANSION-NON-MUTATION-001 | [invariants/core/block-assembly-tiers/INV-EXPANSION-NON-MUTATION-001.md](invariants/core/block-assembly-tiers/INV-EXPANSION-NON-MUTATION-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |

@@ -79,17 +79,22 @@ def _hydrate_compiled_segments(
     slot_duration_ms: int,
     resolver: CatalogAssetResolver | None = None,
 ) -> ScheduledBlock:
-    """Build a ScheduledBlock from V2 compiled segments.
+    """Build a ScheduledBlock from compiled segments.
 
-    V2 compiled_segments schema (canonical):
-        {"segment_type": str, "asset_id": str, "duration_ms": int}
+    INV-HYDRATE-SCHEMA-COMPLETE-001: Reads all fields from the post-BBL
+    compiled_segments schema. Fields present on the dict are preserved;
+    fields absent use safe defaults for backward compatibility with
+    pre-BBL minimal schema (segment_type, asset_id, duration_ms only).
 
-    During hydration, asset_id is resolved to a file URI via the
-    CatalogAssetResolver. V1 segment fields (asset_uri, segment_duration_ms)
-    are rejected — their presence indicates stale V1 data that must be purged.
+    INV-HYDRATE-OFFSET-PRESERVE-001: asset_start_offset_ms is read from
+    the dict, not hardcoded to 0.
+
+    INV-HYDRATE-NO-DUPLICATE-FILLER-001: Trailing filler is only appended
+    when compiled_segment durations sum to less than slot_duration_ms.
+    Post-BBL segments already include all filler and sum exactly.
     """
     segments: list[ScheduledSegment] = []
-    content_total_ms = 0
+    total_duration_ms = 0
 
     for cs in compiled_segments:
         # Guard: reject V1 segment schema fields
@@ -104,25 +109,37 @@ def _hydrate_compiled_segments(
         dur_ms = int(cs["duration_ms"])
         seg_asset_id = cs.get("asset_id", "")
 
-        # Resolve asset_id → file URI and loudness gain via catalog
+        # Resolve asset_id → file URI and loudness gain via catalog.
+        # INV-HYDRATE-GAIN-FALLBACK-001: catalog gain wins when resolvable;
+        # fall back to compiled value when not.
         asset_uri = ""
-        gain_db = 0.0
+        gain_db = cs.get("gain_db", 0.0)
         if seg_asset_id and resolver is not None:
-            meta = resolver.lookup(seg_asset_id)
-            asset_uri = meta.file_uri or ""
-            # INV-LOUDNESS-NORMALIZED-001: propagate per-asset loudness gain
-            gain_db = meta.loudness_gain_db
+            try:
+                meta = resolver.lookup(seg_asset_id)
+                asset_uri = meta.file_uri or ""
+                gain_db = meta.loudness_gain_db
+            except (KeyError, AttributeError):
+                pass
+
         segments.append(ScheduledSegment(
             segment_type=cs["segment_type"],
             asset_uri=asset_uri,
-            asset_start_offset_ms=0,
+            asset_start_offset_ms=int(cs.get("asset_start_offset_ms", 0)),
             segment_duration_ms=dur_ms,
+            transition_in=cs.get("transition_in", "TRANSITION_NONE"),
+            transition_in_duration_ms=int(cs.get("transition_in_duration_ms", 0)),
+            transition_out=cs.get("transition_out", "TRANSITION_NONE"),
+            transition_out_duration_ms=int(cs.get("transition_out_duration_ms", 0)),
             gain_db=gain_db,
+            is_primary=cs.get("is_primary", False),
         ))
-        content_total_ms += dur_ms
+        total_duration_ms += dur_ms
 
-    # Post-content filler for remaining slot time (slot completion, not editorial)
-    remaining_ms = max(0, slot_duration_ms - content_total_ms)
+    # INV-HYDRATE-NO-DUPLICATE-FILLER-001: Only append trailing filler
+    # when compiled_segments do not already account for the full slot.
+    # Post-BBL segments sum exactly to slot_duration_ms.
+    remaining_ms = max(0, slot_duration_ms - total_duration_ms)
     if remaining_ms > 0:
         segments.append(ScheduledSegment(
             segment_type="filler",

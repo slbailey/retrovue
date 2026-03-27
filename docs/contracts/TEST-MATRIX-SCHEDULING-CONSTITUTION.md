@@ -2075,6 +2075,10 @@ The following domain tables group tests by functional area. Each test is classif
 | TIER-DISP-003 | INV-TIER-DISPLACEMENT-001 | LAW-CONTENT-AUTHORITY | T0–T3 segments all present after compilation, never dropped for fill budget |
 | TIER2-YAML-001 | INV-TIER2-OBLIGATION-YAML-ONLY-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Same config + block boundaries produce identical obligations across compilations |
 | TIER2-YAML-002 | INV-TIER2-OBLIGATION-YAML-ONLY-001 | LAW-DERIVATION | Obligation evaluation does not query database |
+| MIDROLL-INT-001 | INV-MIDROLL-INTERLEAVE-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Network channel compiled_segments has filler between content acts (chapter markers) |
+| MIDROLL-INT-002 | INV-MIDROLL-INTERLEAVE-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Network channel compiled_segments has filler between content acts (algorithmic breaks) |
+| MIDROLL-INT-003 | INV-MIDROLL-INTERLEAVE-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Content-filler-content alternation pattern preserved in compiled_segments |
+| MIDROLL-INT-004 | INV-MIDROLL-INTERLEAVE-001 | LAW-CONTENT-AUTHORITY | Movie channel filler correctly trails all content (no midroll) |
 | STRUCT-RES-001 | INV-STRUCTURAL-RESOLUTION-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | All T0–T3 segments have non-empty asset_id and duration_ms > 0 after compile_schedule() |
 | STRUCT-RES-002 | INV-STRUCTURAL-RESOLUTION-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | No compiled_segments entry has empty asset_id or zero duration_ms |
 | GRID-STRUCT-001 | INV-GRID-SIZING-STRUCTURAL-001 | LAW-GRID, LAW-CONTENT-AUTHORITY | slot_duration_sec * 1000 >= sum(structural segment durations) |

@@ -147,6 +147,19 @@ def write_active_revision_from_compiled_schedule(
             )
             return False
 
+    # INV-PERSISTENCE-GUARD-NONEMPTY-001: Reject empty revisions for
+    # programmed days BEFORE writing.  Zero blocks after overlap
+    # push-forward is a carry-in computation error, not valid output.
+    blocks = schedule.get("program_blocks", [])
+    if not blocks:
+        logger.warning(
+            "INV-PERSISTENCE-GUARD-NONEMPTY-001: refusing to persist "
+            "empty revision for %s/%s (0 program_blocks). "
+            "This is a compile failure, not a valid schedule.",
+            channel_slug, broadcast_day,
+        )
+        return False
+
     # Supersede ALL active revisions for this channel+day via bulk update.
     # This is idempotent — if none exist, zero rows are affected.
     db.query(ScheduleRevision).filter(

@@ -28,6 +28,8 @@ pools:
       where:
         type:
           eq: commercial
+        tags:
+          excludes_any: [anime]
 
   promos:
     select:
@@ -51,19 +53,22 @@ programs:
     pool: cheers
     grid_blocks_max: 1
     fill_mode: single
+    presentation: sitcom_30
 
 presentation:
 
-  sitcom_30:
-    midroll:
-      - type: traffic
-        profile: sitcom
-        fill: remaining
-        placement:
-          fallback:
-            strategy: weighted_positions
-            positions: [0.30, 0.72]
-            weights:   [1,    1]
+  programs:
+
+    sitcom_30:
+      midroll:
+        - type: traffic
+          profile: sitcom
+          fill: remaining
+          placement:
+            fallback:
+              strategy: weighted_positions
+              positions: [0.30, 0.72]
+              weights:   [1,    1]
 
 # -----------------------------
 # TRAFFIC CONFIG
@@ -73,11 +78,9 @@ traffic:
 
   profiles:
     sitcom:
-      allowed_pools: [commercials, promos, bumpers]
+      allowed_pools: [commercials]
       weights:
         commercials: 1
-        promos: 1
-        bumpers: 1
       rotation:
         strategy: weighted
       duration_strategy: pack

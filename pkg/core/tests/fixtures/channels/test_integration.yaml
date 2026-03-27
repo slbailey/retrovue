@@ -1,0 +1,30 @@
+channel: test-integration
+number: 998
+name: "Integration Test Channel"
+channel_type: network
+timezone: UTC
+
+format:
+  video: { width: 720, height: 480, frame_rate: "30000/1001" }
+  audio: { sample_rate: 48000, channels: 2 }
+  grid_minutes: 30
+
+pools:
+  test_episodes:
+    select:
+      where:
+        type:
+          eq: episode
+
+programs:
+  test_show:
+    pool: test_episodes
+    grid_blocks: 1
+    fill_mode: single
+
+schedule:
+  all_day:
+    - start: "06:00"
+      slots: 48
+      program: [test_show]
+      progression: sequential

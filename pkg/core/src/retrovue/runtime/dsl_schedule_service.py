@@ -661,10 +661,10 @@ class DslScheduleService:
 
     @staticmethod
     def _resolve_cross_day_overlaps(blocks: list[ScheduledBlock]) -> list[ScheduledBlock]:
-        """INV-CROSS-DAY-CARRY-IN-001: Defense-in-depth guardrail.
+        """Defense-in-depth guardrail for cross-day block overlaps.
 
-        After carry-in push-forward at the program-block level, this method
-        should be a no-op.  If it finds overlaps, the push-forward missed
+        After overlap push-forward at the program-block level, this method
+        should be a no-op.  If it finds overlaps, push-forward missed
         something — log a warning so the root cause can be investigated.
 
         Precondition: *blocks* is sorted by start_utc_ms.
@@ -678,7 +678,7 @@ class DslScheduleService:
             if blk.start_utc_ms < prev.end_utc_ms:
                 logger.warning(
                     "INV-CROSS-DAY-CARRY-IN-001 GUARDRAIL: Cross-day overlap "
-                    "detected at merge time — carry-in push-forward should "
+                    "detected at merge time — overlap push-forward should "
                     "have prevented this. Dropping block %s [%d, %d) "
                     "overlapping %s [%d, %d)",
                     blk.block_id, blk.start_utc_ms, blk.end_utc_ms,
@@ -694,106 +694,66 @@ class DslScheduleService:
         broadcast_day: str,
         day_start_hour: int,
         tz_name: str,
-        active_carry_in_end_ms: int,
+        prior_block_end_ms: int,
     ) -> int:
-        """INV-CROSS-DAY-CARRY-IN-001: First legal block start time for a day.
+        """First legal block start time for a compiled day.
 
-        effective_day_open_ms = max(broadcast_day_start_ms, active_carry_in_end_ms)
+        effective_day_open_ms = max(broadcast_day_start_ms, prior_block_end_ms)
 
-        If there is no carry-in (active_carry_in_end_ms == 0), this returns
-        the broadcast day start so that no filtering occurs.
+        When the prior day's last block extends past the day boundary,
+        this pushes the effective open forward so new blocks do not
+        overlap already-scheduled content.  If prior_block_end_ms == 0,
+        returns the broadcast day start unchanged.
         """
         from zoneinfo import ZoneInfo
         tz = ZoneInfo(tz_name)
         bd = date.fromisoformat(broadcast_day)
         day_start_dt = datetime(bd.year, bd.month, bd.day, day_start_hour, 0, tzinfo=tz)
         broadcast_day_start_ms = int(day_start_dt.timestamp() * 1000)
-        return max(broadcast_day_start_ms, active_carry_in_end_ms)
+        return max(broadcast_day_start_ms, prior_block_end_ms)
 
-    def _load_prior_day_carry_in_end_ms(
-        self,
-        channel_id: str,
-        start_date: "date_type",
-        tz_name: str,
+    @staticmethod
+    def _get_prior_day_end_ms(
+        blocks: list["ScheduledBlock"],
+        prior_day: "date_type",
     ) -> int:
-        """INV-CROSS-DAY-CARRY-IN-SURVIVES-RESTART-001: Load carry-in from DB.
+        """Return the end_utc_ms of the last block on prior_day, or 0.
 
-        When _build_initial starts at day D and day D-1 is outside the
-        compilation window, we must check whether D-1's last ScheduleItem
-        extends past D's broadcast day start. If so, that end time becomes
-        the active_carry_in_end_ms for D's compilation.
+        INV-CARRY-IN-AUTHORITY-001: Carry-in for day D is derived from
+        D-1 only.  This method scans blocks for those whose start falls
+        on ``prior_day`` and returns the latest end time.
 
-        Returns 0 if no carry-in exists or the prior day has no active revision.
+        INV-COMPILE-DAY-ISOLATION-001: Only blocks whose start falls on
+        ``prior_day`` are considered.  Blocks from D, D+1, or any other
+        day are excluded.
         """
-        prior_day = start_date - timedelta(days=1)
-        try:
-            from retrovue.domain.entities import ScheduleRevision, ScheduleItem
-            from sqlalchemy import select, and_
+        from zoneinfo import ZoneInfo
+        # prior_day broadcast window: [prior_day 00:00 UTC, prior_day+1 00:00 UTC)
+        # Use a generous window — blocks are assigned to a broadcast day by
+        # their start_time, and day-start-hour offsets vary.  A 48-hour
+        # window centered on prior_day covers any reasonable offset.
+        pd_start = datetime(
+            prior_day.year, prior_day.month, prior_day.day,
+            0, 0, tzinfo=timezone.utc,
+        )
+        pd_start_ms = int(pd_start.timestamp() * 1000)
+        pd_end_ms = pd_start_ms + 48 * 3600 * 1000  # +48h generous bound
 
-            with session() as db:
-                # Resolve channel UUID from slug
-                from retrovue.domain.entities import Channel
-                ch_row = db.execute(
-                    select(Channel).where(Channel.slug == channel_id)
-                ).scalars().first()
-                if ch_row is None:
-                    return 0
-                ch_uuid = ch_row.id
+        # Next day start (the day we're computing carry-in FOR)
+        next_day = prior_day + timedelta(days=1)
+        nd_start_ms = int(datetime(
+            next_day.year, next_day.month, next_day.day,
+            0, 0, tzinfo=timezone.utc,
+        ).timestamp() * 1000)
 
-                # Find active revision for the prior day
-                rev = db.execute(
-                    select(ScheduleRevision).where(and_(
-                        ScheduleRevision.channel_id == ch_uuid,
-                        ScheduleRevision.broadcast_day == prior_day,
-                        ScheduleRevision.status == "active",
-                    ))
-                ).scalars().first()
-                if rev is None:
-                    return 0
-
-                # Get the last ScheduleItem by slot_index
-                last_item = db.execute(
-                    select(ScheduleItem)
-                    .where(ScheduleItem.schedule_revision_id == rev.id)
-                    .order_by(ScheduleItem.slot_index.desc())
-                    .limit(1)
-                ).scalars().first()
-                if last_item is None:
-                    return 0
-
-                # Compute end time: start_time + duration_sec
-                item_end = last_item.start_time + timedelta(seconds=last_item.duration_sec)
-                item_end_ms = int(item_end.timestamp() * 1000)
-
-                # Only return carry-in if it extends past the current day's start
-                from zoneinfo import ZoneInfo
-                tz = ZoneInfo(tz_name)
-                day_start_dt = datetime(
-                    start_date.year, start_date.month, start_date.day,
-                    self._day_start_hour, 0, tzinfo=tz,
-                )
-                day_start_ms = int(day_start_dt.timestamp() * 1000)
-
-                if item_end_ms > day_start_ms:
-                    logger.info(
-                        "INV-CROSS-DAY-CARRY-IN-SURVIVES-RESTART-001: "
-                        "loaded carry-in from prior day %s: last item ends at %s "
-                        "(carry_in_end_ms=%d, day_start_ms=%d, delta=%d min)",
-                        prior_day, item_end.isoformat(),
-                        item_end_ms, day_start_ms,
-                        (item_end_ms - day_start_ms) // 60000,
-                    )
-                    return item_end_ms
-
-                return 0
-
-        except Exception as e:
-            logger.warning(
-                "INV-CROSS-DAY-CARRY-IN-SURVIVES-RESTART-001: "
-                "could not load prior day carry-in for %s: %s",
-                prior_day, e,
-            )
-            return 0
+        best_end = 0
+        for b in blocks:
+            # Block belongs to prior_day if its start is before the target day
+            # and within the generous prior-day window.
+            if pd_start_ms <= b.start_utc_ms < nd_start_ms:
+                if b.end_utc_ms > best_end:
+                    best_end = b.end_utc_ms
+        return best_end
 
     def _find_in_memory_block(self, utc_ms: int) -> ScheduledBlock | None:
         """Pure in-memory time-range lookup on the current compilation.
@@ -969,12 +929,12 @@ class DslScheduleService:
                 if day_str in self._compiled_days:
                     return
 
-            # INV-CROSS-DAY-CARRY-IN-001: Compute effective day open from
-            # the last block in the current horizon (the carry-in window).
+            # Compute effective day open from the last block in the
+            # current horizon so new blocks do not overlap existing ones.
             tz_name = (self._channel_dsl or {}).get("timezone", "UTC")
             effective_day_open_ms = self._compute_effective_day_open_ms(
                 day_str, self._day_start_hour, tz_name,
-                last_end_ms,  # active carry-in from current horizon
+                last_end_ms,
             )
 
             logger.info(
@@ -1129,23 +1089,29 @@ class DslScheduleService:
         )
 
         # ── Compile missing days ──────────────────────────────────────
-        # If DB load returned zero blocks or has missing days, compile
-        # them from the DSL so the channel can serve content immediately.
-        # This handles channels with older ScheduleRevisions that lack
-        # the compiled_segments block format.
+        # INV-COMPILE-NO-FUTURE-INFLUENCE-001: Compile in chronological
+        # order.  Carry-in for each day is derived ONLY from D-1, not
+        # from a global horizon accumulator.
+        #
+        # INV-COMPILE-DAY-ISOLATION-001: No data from D+1 or beyond
+        # may influence block dropping or push-forward for day D.
+        #
+        # INV-CARRY-IN-AUTHORITY-001: Carry-in must originate from D-1
+        # with provable provenance.
         if missing_days:
-            active_carry_in_end_ms = 0
-            if loaded_blocks:
-                active_carry_in_end_ms = loaded_blocks[-1].end_utc_ms
-            else:
-                active_carry_in_end_ms = self._load_prior_day_carry_in_end_ms(
-                    channel_id, start_date, tz_name,
-                )
             for day_str in sorted(missing_days):
                 try:
+                    # INV-CARRY-IN-AUTHORITY-001: Compute carry-in from
+                    # D-1 ONLY, not from a global accumulator.
+                    prior_day = (
+                        date_type.fromisoformat(day_str) - timedelta(days=1)
+                    )
+                    prior_day_end_ms = self._get_prior_day_end_ms(
+                        loaded_blocks, prior_day,
+                    )
                     effective_day_open_ms = self._compute_effective_day_open_ms(
                         day_str, self._day_start_hour, tz_name,
-                        active_carry_in_end_ms,
+                        prior_day_end_ms,
                     )
                     blocks = self._compile_day(
                         channel_id, day_str,
@@ -1154,7 +1120,6 @@ class DslScheduleService:
                     if not blocks:
                         # _compile_day returned [] — the write was refused
                         # because a committed revision exists for this day.
-                        # We still need blocks in _blocks for runtime lookups.
                         # Use the schedule_items_reader path to reconstruct
                         # blocks from the existing revision's ScheduleItems.
                         try:
@@ -1191,9 +1156,6 @@ class DslScheduleService:
                     loaded_blocks.extend(blocks)
                     if blocks:
                         loaded_days.add(day_str)
-                        active_carry_in_end_ms = max(
-                            active_carry_in_end_ms, blocks[-1].end_utc_ms,
-                        )
                     else:
                         logger.info(
                             "Day %s for channel=%s: no blocks available",
@@ -1204,6 +1166,82 @@ class DslScheduleService:
                         "Failed to compile missing day %s for channel=%s: %s",
                         day_str, channel_id, e, exc_info=True,
                     )
+
+        # ── INV-STARTUP-DAY-COVERAGE-001: Validate every programmed day ──
+        # After all compilation, check for days that still have zero blocks.
+        # These may be poisoned (empty revision in DB).  Attempt rebuild.
+        loaded_blocks.sort(key=lambda b: b.start_utc_ms)
+        expected_days = loaded_days | missing_days
+
+        for day_str in sorted(expected_days):
+            day_d = date_type.fromisoformat(day_str)
+            day_start = int(datetime(
+                day_d.year, day_d.month, day_d.day, 0, 0, tzinfo=timezone.utc,
+            ).timestamp() * 1000)
+            day_end = day_start + 48 * 3600 * 1000  # generous 48h window
+            day_blocks = [
+                b for b in loaded_blocks
+                if day_start <= b.start_utc_ms < day_end
+            ]
+            if day_blocks:
+                continue
+
+            # Day has zero blocks.  Check if this is a poisoned empty revision.
+            logger.warning(
+                "INV-STARTUP-DAY-COVERAGE-001: day %s has zero blocks for "
+                "channel=%s — attempting poison recovery",
+                day_str, channel_id,
+            )
+            try:
+                # Supersede the empty/poisoned revision
+                with session() as db:
+                    from retrovue.domain.entities import (
+                        Channel as ChannelEntity,
+                        ScheduleRevision as SR,
+                    )
+                    ch_row = db.query(ChannelEntity).filter(
+                        ChannelEntity.slug == channel_id,
+                    ).first()
+                    if ch_row:
+                        db.query(SR).filter(
+                            SR.channel_id == ch_row.id,
+                            SR.broadcast_day == day_d,
+                            SR.status == "active",
+                        ).update(
+                            {"status": "superseded"},
+                            synchronize_session=False,
+                        )
+
+                # Recompile with correct per-day carry-in
+                prior_day = day_d - timedelta(days=1)
+                prior_end = self._get_prior_day_end_ms(loaded_blocks, prior_day)
+                eff_open = self._compute_effective_day_open_ms(
+                    day_str, self._day_start_hour, tz_name, prior_end,
+                )
+                rebuilt = self._compile_day(
+                    channel_id, day_str,
+                    effective_day_open_ms=eff_open,
+                )
+                if rebuilt:
+                    loaded_blocks.extend(rebuilt)
+                    loaded_days.add(day_str)
+                    logger.info(
+                        "INV-STARTUP-POISON-DETECTION-001: recovered day %s "
+                        "for channel=%s — %d blocks rebuilt",
+                        day_str, channel_id, len(rebuilt),
+                    )
+                else:
+                    logger.error(
+                        "INV-STARTUP-DAY-COVERAGE-001: day %s rebuild failed "
+                        "for channel=%s — channel will fail fast for this day",
+                        day_str, channel_id,
+                    )
+            except Exception as e:
+                logger.error(
+                    "INV-STARTUP-POISON-DETECTION-001: recovery failed for "
+                    "day %s channel=%s: %s",
+                    day_str, channel_id, e, exc_info=True,
+                )
 
         loaded_blocks.sort(key=lambda b: b.start_utc_ms)
 
@@ -1226,21 +1264,19 @@ class DslScheduleService:
         horizon_days: int,
         tz_name: str,
     ) -> tuple[list["ScheduledBlock"], set[str], set[str]]:
-        """Load ScheduledBlocks from active ScheduleRevisions in the database.
+        """Load ScheduledBlocks via time-range query on ScheduleItems.
 
-        INV-TIMELINE-SINGLE-AUTHORITY-001: This is the sole mechanism for
-        populating _blocks.  The database is the authority; _blocks is a
-        cache.
+        docs/contracts/timeline_window_loading.md — Window Intersection Rule:
+        A block is included iff block.start < window_end AND block.end > window_start.
 
-        For each day in [start_date, start_date + horizon_days):
-          1. Query ChannelActiveRevision → active ScheduleRevision
-          2. Load ScheduleItems ordered by slot_index
-          3. Extract compiled_segments from metadata_
-          4. Deserialize each via _deserialize_scheduled_block()
-          5. Validate: reject days with missing/corrupt segments
+        The query joins ScheduleItem → ScheduleRevision (active, matching
+        channel) and filters by time overlap against the window.  No
+        broadcast_day iteration occurs; broadcast_day is irrelevant to
+        inclusion.
 
-        Also loads the carry-in block from day D-1 if it extends into the
-        horizon window (INV-TIMELINE-CARRY-IN-PRESERVED-001).
+        loaded_days / missing_days are derived after loading for the
+        compilation fallback in _build_initial — they are not used for
+        block selection.
 
         Returns:
             (blocks, loaded_days, missing_days)
@@ -1254,7 +1290,33 @@ class DslScheduleService:
 
         all_blocks: list[ScheduledBlock] = []
         loaded_days: set[str] = set()
-        missing_days: set[str] = set()
+
+        # ── Compute window bounds ─────────────────────────────────────
+        from zoneinfo import ZoneInfo
+        try:
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            tz = timezone.utc
+        day_start_dt = datetime(
+            start_date.year, start_date.month, start_date.day,
+            self._day_start_hour, 0, tzinfo=tz,
+        )
+        window_start_ms = int(day_start_dt.timestamp() * 1000)
+        window_start_dt = day_start_dt
+
+        end_date = start_date + timedelta(days=horizon_days)
+        end_dt = datetime(
+            end_date.year, end_date.month, end_date.day,
+            self._day_start_hour, 0, tzinfo=tz,
+        )
+        window_end_ms = int(end_dt.timestamp() * 1000)
+        window_end_dt = end_dt
+
+        # Horizon days expected — used to compute missing_days below.
+        expected_days: set[str] = set(
+            (start_date + timedelta(days=d)).strftime("%Y-%m-%d")
+            for d in range(horizon_days)
+        )
 
         try:
             with session() as db:
@@ -1268,94 +1330,109 @@ class DslScheduleService:
                         "not found in DB — no timeline to load",
                         channel_id,
                     )
-                    return all_blocks, loaded_days, set(
-                        (start_date + timedelta(days=d)).strftime("%Y-%m-%d")
-                        for d in range(horizon_days)
-                    )
+                    return all_blocks, loaded_days, expected_days
+
                 ch_uuid = ch_row.id
 
-                # ── Load carry-in block from day D-1 ──────────────────
-                # INV-TIMELINE-CARRY-IN-PRESERVED-001
-                prior_day = start_date - timedelta(days=1)
-                carry_in_block = self._load_carry_in_block_from_revision(
-                    db, ch_uuid, prior_day, start_date, tz_name,
-                )
-                if carry_in_block is not None:
-                    all_blocks.append(carry_in_block)
+                # ── Time-range query: all active ScheduleItems whose
+                #    time span overlaps the window. ─────────────────────
+                #    item overlaps iff:
+                #        item.start_time < window_end_dt
+                #        AND (item.start_time + duration_sec) > window_start_dt
+                #
+                #    We approximate the second condition with:
+                #        item.start_time > window_start_dt - max_item_duration
+                #    then apply the exact predicate after deserialization.
+                #    max_item_duration is generous (48h) to avoid missing
+                #    any items.
+                max_item_duration = timedelta(hours=48)
+                items_with_rev = db.execute(
+                    select(ScheduleItem, ScheduleRevision.broadcast_day)
+                    .join(
+                        ScheduleRevision,
+                        ScheduleItem.schedule_revision_id == ScheduleRevision.id,
+                    )
+                    .where(and_(
+                        ScheduleRevision.channel_id == ch_uuid,
+                        ScheduleRevision.status == "active",
+                        ScheduleItem.start_time < window_end_dt,
+                        ScheduleItem.start_time > window_start_dt - max_item_duration,
+                    ))
+                    .order_by(ScheduleItem.start_time)
+                ).all()
 
-                # ── Load each day in the horizon ──────────────────────
-                for day_offset in range(horizon_days):
-                    day = start_date + timedelta(days=day_offset)
-                    day_str = day.strftime("%Y-%m-%d")
-
-                    rev = db.execute(
-                        select(ScheduleRevision).where(and_(
-                            ScheduleRevision.channel_id == ch_uuid,
-                            ScheduleRevision.broadcast_day == day,
-                            ScheduleRevision.status == "active",
-                        ))
-                    ).scalars().first()
-
-                    if rev is None:
-                        logger.info(
-                            "INV-TIMELINE-SINGLE-AUTHORITY-001: no active "
-                            "revision for %s/%s — day not loaded",
-                            channel_id, day_str,
-                        )
-                        missing_days.add(day_str)
+                for item, broadcast_day in items_with_rev:
+                    # Exact time overlap check at the item level.
+                    item_start_ms = int(item.start_time.timestamp() * 1000)
+                    item_end_ms = int(
+                        (item.start_time + timedelta(seconds=item.duration_sec)).timestamp() * 1000
+                    )
+                    if item_end_ms <= window_start_ms or item_start_ms >= window_end_ms:
                         continue
 
-                    items = db.execute(
-                        select(ScheduleItem)
-                        .where(ScheduleItem.schedule_revision_id == rev.id)
-                        .order_by(ScheduleItem.slot_index)
-                    ).scalars().all()
+                    meta = item.metadata_ or {}
+                    compiled_segs = meta.get("compiled_segments")
 
-                    if not items:
+                    if not compiled_segs:
                         logger.warning(
-                            "INV-TIMELINE-SINGLE-AUTHORITY-001: revision %s "
-                            "for %s/%s has no ScheduleItems — day not loaded",
-                            rev.id, channel_id, day_str,
+                            "INV-TIMELINE-SINGLE-AUTHORITY-001: item "
+                            "slot=%d (start=%s) has no compiled_segments — skipping",
+                            item.slot_index, item.start_time,
                         )
-                        missing_days.add(day_str)
                         continue
 
-                    # Extract and validate compiled_segments from each item
-                    day_blocks: list[ScheduledBlock] = []
-                    day_valid = True
+                    # INV-LOADER-SCHEMA-DISTINCTION-001: Detect format.
+                    # compiled_segments = flat list of segment dicts
+                    # segmented_blocks = list of block wrapper dicts with block_id etc.
+                    seg_list = compiled_segs if isinstance(compiled_segs, list) else [compiled_segs]
 
-                    for item in items:
-                        meta = item.metadata_ or {}
-                        compiled_segs = meta.get("compiled_segments")
+                    if not seg_list or not isinstance(seg_list[0], dict):
+                        logger.warning(
+                            "INV-TIMELINE-SINGLE-AUTHORITY-001: "
+                            "non-dict compiled_segment in slot=%d — skipping",
+                            item.slot_index,
+                        )
+                        continue
 
-                        if not compiled_segs:
-                            # Item has no compiled_segments — entire day
-                            # is invalid (cannot reconstruct block structure)
-                            logger.warning(
-                                "INV-TIMELINE-SINGLE-AUTHORITY-001: item "
-                                "slot=%d in revision %s for %s/%s has no "
-                                "compiled_segments — day not loaded",
-                                item.slot_index, rev.id, channel_id, day_str,
+                    first_entry = seg_list[0]
+                    is_block_format = "block_id" in first_entry and "segments" in first_entry
+                    is_segment_format = "segment_type" in first_entry and "duration_ms" in first_entry
+
+                    if is_segment_format and not is_block_format:
+                        # Post-BBL compiled_segments: flat segment list.
+                        # INV-LOADER-HYDRATE-PATH-001: Hydrate using
+                        # ScheduleItem time metadata for the block envelope.
+                        from retrovue.runtime.schedule_items_reader import (
+                            _hydrate_compiled_segments,
+                        )
+                        raw_asset_id = (
+                            meta.get("asset_id_raw")
+                            or (str(item.asset_id) if item.asset_id else "")
+                        )
+                        try:
+                            resolver = self._get_resolver()
+                            block = _hydrate_compiled_segments(
+                                compiled_segments=seg_list,
+                                asset_id=raw_asset_id,
+                                start_utc_ms=item_start_ms,
+                                slot_duration_ms=item_end_ms - item_start_ms,
+                                resolver=resolver,
                             )
-                            day_valid = False
-                            break
-
-                        # compiled_segments may be a single block dict or
-                        # a list of block dicts (for multi-block programs)
-                        seg_list = compiled_segs if isinstance(compiled_segs, list) else [compiled_segs]
-
+                            if block.start_utc_ms < window_end_ms and block.end_utc_ms > window_start_ms:
+                                all_blocks.append(block)
+                                day_str = broadcast_day.strftime("%Y-%m-%d")
+                                loaded_days.add(day_str)
+                        except (ValueError, KeyError, TypeError) as exc:
+                            logger.warning(
+                                "INV-TIMELINE-SINGLE-AUTHORITY-001: "
+                                "failed to hydrate compiled_segments in slot=%d "
+                                "(start=%s): %s — skipping block",
+                                item.slot_index, item.start_time, exc,
+                            )
+                            continue
+                    elif is_block_format:
+                        # Legacy segmented_blocks format: block wrapper dicts.
                         for seg_dict in seg_list:
-                            if not isinstance(seg_dict, dict):
-                                logger.warning(
-                                    "INV-TIMELINE-SINGLE-AUTHORITY-001: "
-                                    "non-dict compiled_segment in slot=%d "
-                                    "revision %s — day not loaded",
-                                    item.slot_index, rev.id,
-                                )
-                                day_valid = False
-                                break
-
-                            # Validate required fields
                             missing_fields = [
                                 f for f in ("block_id", "start_utc_ms", "end_utc_ms", "segments")
                                 if f not in seg_dict
@@ -1363,68 +1440,33 @@ class DslScheduleService:
                             if missing_fields:
                                 logger.warning(
                                     "INV-TIMELINE-CONTINUITY-001: block in "
-                                    "slot=%d missing fields %s — day not loaded",
+                                    "slot=%d missing fields %s — skipping",
                                     item.slot_index, missing_fields,
                                 )
-                                day_valid = False
-                                break
-
+                                continue
                             try:
                                 block = _deserialize_scheduled_block(
                                     seg_dict, self._frame_tolerance_ms,
                                 )
-                                day_blocks.append(block)
+                                if block.start_utc_ms < window_end_ms and block.end_utc_ms > window_start_ms:
+                                    all_blocks.append(block)
+                                    day_str = broadcast_day.strftime("%Y-%m-%d")
+                                    loaded_days.add(day_str)
                             except (ValueError, KeyError, TypeError) as exc:
                                 logger.warning(
                                     "INV-TIMELINE-SINGLE-AUTHORITY-001: "
                                     "failed to deserialize block in slot=%d "
-                                    "revision %s for %s/%s: %s — day not loaded",
-                                    item.slot_index, rev.id,
-                                    channel_id, day_str, exc,
+                                    "(start=%s): %s — skipping block",
+                                    item.slot_index, item.start_time, exc,
                                 )
-                                day_valid = False
-                                break
-
-                        if not day_valid:
-                            break
-
-                    if not day_valid or not day_blocks:
-                        missing_days.add(day_str)
+                                continue
+                    else:
+                        logger.warning(
+                            "INV-TIMELINE-SINGLE-AUTHORITY-001: "
+                            "unrecognized compiled_segments format in slot=%d — skipping",
+                            item.slot_index,
+                        )
                         continue
-
-                    # Validate contiguity within the day
-                    day_blocks.sort(key=lambda b: b.start_utc_ms)
-                    contiguous = True
-                    for i in range(1, len(day_blocks)):
-                        if day_blocks[i].start_utc_ms != day_blocks[i - 1].end_utc_ms:
-                            gap_or_overlap = (
-                                "gap" if day_blocks[i].start_utc_ms > day_blocks[i - 1].end_utc_ms
-                                else "overlap"
-                            )
-                            logger.warning(
-                                "INV-TIMELINE-CONTINUITY-001: %s between "
-                                "blocks %d and %d in %s/%s (prev_end=%d, "
-                                "curr_start=%d) — day not loaded",
-                                gap_or_overlap, i - 1, i,
-                                channel_id, day_str,
-                                day_blocks[i - 1].end_utc_ms,
-                                day_blocks[i].start_utc_ms,
-                            )
-                            contiguous = False
-                            break
-
-                    if not contiguous:
-                        missing_days.add(day_str)
-                        continue
-
-                    all_blocks.extend(day_blocks)
-                    loaded_days.add(day_str)
-
-                    logger.debug(
-                        "INV-TIMELINE-SINGLE-AUTHORITY-001: loaded %d "
-                        "blocks for %s/%s from revision %s",
-                        len(day_blocks), channel_id, day_str, rev.id,
-                    )
 
         except Exception as e:
             logger.error(
@@ -1433,125 +1475,21 @@ class DslScheduleService:
                 channel_id, e, exc_info=True,
             )
 
-        return all_blocks, loaded_days, missing_days
+        # Deduplicate by block_id, sort by start_utc_ms
+        seen: set[str] = set()
+        deduped: list[ScheduledBlock] = []
+        for b in all_blocks:
+            if b.block_id not in seen:
+                deduped.append(b)
+                seen.add(b.block_id)
+        deduped.sort(key=lambda b: b.start_utc_ms)
 
-    def _load_carry_in_block_from_revision(
-        self,
-        db,
-        ch_uuid,
-        prior_day: "date_type",
-        current_day: "date_type",
-        tz_name: str,
-    ) -> "ScheduledBlock | None":
-        """Load the carry-in block from day D-1 if it extends into day D.
+        # Derive missing_days: expected horizon days not covered by any
+        # loaded block.  This is for _build_initial's compilation fallback,
+        # not for block selection.
+        missing_days = expected_days - loaded_days
 
-        INV-TIMELINE-CARRY-IN-PRESERVED-001: If D-1's last ScheduleItem
-        extends past D's broadcast day start, deserialize its last
-        compiled_segment block and return it so _blocks has no gap.
-
-        Returns None if no carry-in exists.
-        """
-        from retrovue.domain.entities import ScheduleItem, ScheduleRevision
-        from sqlalchemy import select, and_
-
-        try:
-            rev = db.execute(
-                select(ScheduleRevision).where(and_(
-                    ScheduleRevision.channel_id == ch_uuid,
-                    ScheduleRevision.broadcast_day == prior_day,
-                    ScheduleRevision.status == "active",
-                ))
-            ).scalars().first()
-            if rev is None:
-                return None
-
-            last_item = db.execute(
-                select(ScheduleItem)
-                .where(ScheduleItem.schedule_revision_id == rev.id)
-                .order_by(ScheduleItem.slot_index.desc())
-                .limit(1)
-            ).scalars().first()
-            if last_item is None:
-                return None
-
-            # Check if the item extends past the current day's start
-            item_end = last_item.start_time + timedelta(seconds=last_item.duration_sec)
-            item_end_ms = int(item_end.timestamp() * 1000)
-
-            from zoneinfo import ZoneInfo
-            tz = ZoneInfo(tz_name)
-            day_start_dt = datetime(
-                current_day.year, current_day.month, current_day.day,
-                self._day_start_hour, 0, tzinfo=tz,
-            )
-            day_start_ms = int(day_start_dt.timestamp() * 1000)
-
-            if item_end_ms <= day_start_ms:
-                return None  # no carry-in
-
-            # Extract compiled_segments from the last item
-            meta = last_item.metadata_ or {}
-            compiled_segs = meta.get("compiled_segments")
-            if not compiled_segs:
-                logger.warning(
-                    "INV-TIMELINE-CARRY-IN-PRESERVED-001: prior day %s "
-                    "last item has no compiled_segments — carry-in block "
-                    "cannot be loaded",
-                    prior_day,
-                )
-                return None
-
-            # Get the last block from compiled_segments.
-            # Two formats exist:
-            #   V1 (block-envelope): list of dicts with block_id/start_utc_ms/end_utc_ms/segments
-            #   V2 (segment-level):  list of dicts with segment_type/asset_id/duration_ms
-            # Detect format by checking for block-level keys on the first element.
-            seg_list = compiled_segs if isinstance(compiled_segs, list) else [compiled_segs]
-            last_seg = seg_list[-1]
-
-            if not isinstance(last_seg, dict):
-                return None
-
-            has_block_envelope = all(
-                f in last_seg for f in ("block_id", "start_utc_ms", "end_utc_ms", "segments")
-            )
-
-            if has_block_envelope:
-                block = _deserialize_scheduled_block(last_seg, self._frame_tolerance_ms)
-            else:
-                # V2 segment-level format: reconstruct block from ScheduleItem envelope.
-                from retrovue.runtime.schedule_items_reader import _hydrate_compiled_segments
-                item_start_ms = int(last_item.start_time.timestamp() * 1000)
-                slot_duration_ms = int(last_item.duration_sec * 1000)
-                asset_id_raw = meta.get("asset_id_raw", "carry-in")
-                try:
-                    resolver = self._get_resolver()
-                except Exception:
-                    resolver = None
-                block = _hydrate_compiled_segments(
-                    compiled_segments=seg_list,
-                    asset_id=asset_id_raw,
-                    start_utc_ms=item_start_ms,
-                    slot_duration_ms=slot_duration_ms,
-                    resolver=resolver,
-                )
-
-            logger.info(
-                "INV-TIMELINE-CARRY-IN-PRESERVED-001: loaded carry-in "
-                "block from %s — %s [%d, %d) extends %d min past day start",
-                prior_day, block.block_id,
-                block.start_utc_ms, block.end_utc_ms,
-                (block.end_utc_ms - day_start_ms) // 60000,
-            )
-            return block
-
-        except Exception as e:
-            logger.warning(
-                "INV-TIMELINE-CARRY-IN-PRESERVED-001: failed to load "
-                "carry-in block from prior day %s: %s",
-                prior_day, e,
-            )
-            return None
+        return deduped, loaded_days, missing_days
 
     @staticmethod
     def _count_slots_in_dsl(dsl: dict) -> int:
@@ -1682,8 +1620,11 @@ class DslScheduleService:
                     return None
 
                 # ── Extract and validate compiled_segments ────────────
+                # INV-LOADER-SCHEMA-DISTINCTION-001: Detect compiled_segments
+                # format (flat segment dicts) vs segmented_blocks format
+                # (block wrapper dicts). Convert both into segmented_blocks
+                # format for _hydrate_schedule consumption.
                 segmented_blocks: list[dict] = []
-                required_fields = ("block_id", "start_utc_ms", "end_utc_ms", "segments")
 
                 for item in items:
                     meta = item.metadata_ or {}
@@ -1699,33 +1640,75 @@ class DslScheduleService:
 
                     seg_list = compiled_segs if isinstance(compiled_segs, list) else [compiled_segs]
 
-                    for seg_dict in seg_list:
-                        if not isinstance(seg_dict, dict):
+                    if not seg_list or not isinstance(seg_list[0], dict):
+                        logger.debug(
+                            "_get_cached_schedule: non-dict segment in "
+                            "slot=%d — cache miss",
+                            item.slot_index,
+                        )
+                        return None
+
+                    first_entry = seg_list[0]
+                    is_block_format = "block_id" in first_entry and "segments" in first_entry
+                    is_segment_format = "segment_type" in first_entry and "duration_ms" in first_entry
+
+                    if is_segment_format and not is_block_format:
+                        # Post-BBL compiled_segments: flat segment list.
+                        # Hydrate into a segmented_blocks-compatible dict
+                        # using ScheduleItem time metadata for the envelope.
+                        from retrovue.runtime.schedule_items_reader import (
+                            _hydrate_compiled_segments,
+                        )
+                        raw_asset_id = (
+                            meta.get("asset_id_raw")
+                            or (str(item.asset_id) if item.asset_id else "")
+                        )
+                        item_start_ms = int(item.start_time.timestamp() * 1000)
+                        item_slot_ms = int(item.duration_sec) * 1000
+                        try:
+                            block = _hydrate_compiled_segments(
+                                compiled_segments=seg_list,
+                                asset_id=raw_asset_id,
+                                start_utc_ms=item_start_ms,
+                                slot_duration_ms=item_slot_ms,
+                            )
+                            segmented_blocks.append(
+                                _serialize_scheduled_block(block)
+                            )
+                        except Exception as exc:
                             logger.debug(
-                                "_get_cached_schedule: non-dict segment in "
-                                "slot=%d — cache miss",
-                                item.slot_index,
+                                "_get_cached_schedule: failed to hydrate "
+                                "compiled_segments in slot=%d: %s — cache miss",
+                                item.slot_index, exc,
                             )
                             return None
-
-                        missing = [f for f in required_fields if f not in seg_dict]
-                        if missing:
-                            logger.debug(
-                                "_get_cached_schedule: block in slot=%d "
-                                "missing %s — cache miss",
-                                item.slot_index, missing,
-                            )
-                            return None
-
-                        if seg_dict["end_utc_ms"] <= seg_dict["start_utc_ms"]:
-                            logger.debug(
-                                "_get_cached_schedule: block in slot=%d has "
-                                "end <= start — cache miss",
-                                item.slot_index,
-                            )
-                            return None
-
-                        segmented_blocks.append(seg_dict)
+                    elif is_block_format:
+                        # Legacy segmented_blocks format.
+                        for seg_dict in seg_list:
+                            required_fields = ("block_id", "start_utc_ms", "end_utc_ms", "segments")
+                            missing = [f for f in required_fields if f not in seg_dict]
+                            if missing:
+                                logger.debug(
+                                    "_get_cached_schedule: block in slot=%d "
+                                    "missing %s — cache miss",
+                                    item.slot_index, missing,
+                                )
+                                return None
+                            if seg_dict["end_utc_ms"] <= seg_dict["start_utc_ms"]:
+                                logger.debug(
+                                    "_get_cached_schedule: block in slot=%d has "
+                                    "end <= start — cache miss",
+                                    item.slot_index,
+                                )
+                                return None
+                            segmented_blocks.append(seg_dict)
+                    else:
+                        logger.debug(
+                            "_get_cached_schedule: unrecognized format in "
+                            "slot=%d — cache miss",
+                            item.slot_index,
+                        )
+                        return None
 
                 if not segmented_blocks:
                     return None
@@ -1901,11 +1884,11 @@ class DslScheduleService:
         Uses deterministic sequential counters based on day offset from epoch,
         so episodes are consistent regardless of compilation order.
 
-        INV-CROSS-DAY-CARRY-IN-001: ``effective_day_open_ms`` is the first
-        legal block start time for this broadcast day.  It equals
-        max(broadcast_day_start_ms, active_carry_in_end_ms).  Blocks that
-        start before this time are removed before persisting — they will
-        never air because the carry-in movie owns that time.
+        ``effective_day_open_ms`` is the first legal block start time for
+        this broadcast day.  It equals max(broadcast_day_start_ms,
+        prior_block_end_ms).  Blocks that start before this time are
+        removed before persisting — they will never air because a
+        prior-day block owns that time.
         """
         # DB-first: check cache
         cached = self._get_cached_schedule(channel_id, broadcast_day)
@@ -1938,16 +1921,16 @@ class DslScheduleService:
         # Resolve all plex:// URIs to local file paths
         self._resolve_uris(resolver, schedule)
 
-        # INV-CROSS-DAY-CARRY-IN-001: Broadcast days are accounting
-        # constructs.  The schedule is a linked list — each block starts
-        # where the previous one ended.  When a carry-in movie occupies
-        # time past the broadcast day boundary, the first block of the
-        # new day starts at the carry-in end, not the grid boundary.
+        # Broadcast days are accounting constructs.  The schedule is a
+        # linked list — each block starts where the previous one ended.
+        # When a prior-day block extends past the day boundary, the
+        # first block of the new day starts at that block's end, not
+        # the grid boundary.
         #
-        # Apply carry-in adjustment to program_blocks BEFORE expansion
+        # Apply overlap push-forward to program_blocks BEFORE expansion
         # so that ScheduledBlocks are born with correct start times.
         if effective_day_open_ms > 0:
-            self._apply_carry_in_push_forward(
+            self._apply_overlap_push_forward(
                 schedule, effective_day_open_ms, broadcast_day,
             )
 
@@ -2047,19 +2030,20 @@ class DslScheduleService:
         return blocks
 
     @staticmethod
-    def _apply_carry_in_push_forward(
+    def _apply_overlap_push_forward(
         schedule: dict,
         effective_day_open_ms: int,
         broadcast_day: str,
     ) -> None:
-        """INV-CROSS-DAY-CARRY-IN-001: Push program blocks forward past the carry-in.
+        """Push program blocks forward past prior-day overlap.
 
         Broadcast days are accounting constructs.  The schedule is a
         continuous linked list — each block starts where the previous one
-        ended.  When a carry-in movie extends past the day boundary, blocks
-        that fall entirely within the carry-in window are dropped, and the
-        first surviving block's start_at is pushed forward to the carry-in
-        end.  Subsequent blocks cascade forward to remain contiguous.
+        ended.  When a prior-day block extends past the day boundary,
+        blocks that fall entirely within the overlap window are dropped,
+        and the first surviving block's start_at is pushed forward to the
+        effective day open.  Subsequent blocks cascade forward to remain
+        contiguous.
 
         Mutates ``schedule["program_blocks"]`` in-place.
         """
@@ -2083,8 +2067,8 @@ class DslScheduleService:
 
             pb_start_ms = int(pb_start.timestamp() * 1000)
             if pb_start_ms < effective_day_open_ms:
-                # This block starts before the carry-in ends.
-                # Push it forward so it starts at the carry-in end.
+                # This block starts before the effective day open.
+                # Push it forward so it starts at the overlap end.
                 # Subsequent blocks cascade via the same push.
                 push_ms = effective_day_open_ms - pb_start_ms
                 pb["start_at"] = effective_open_dt.isoformat()
@@ -2111,7 +2095,7 @@ class DslScheduleService:
         if len(surviving) < len(program_blocks):
             logger.info(
                 "INV-CROSS-DAY-CARRY-IN-001: Dropped %d subsumed blocks "
-                "from %s (carry-in owns time before %s)",
+                "from %s (prior-day block owns time before %s)",
                 len(program_blocks) - len(surviving),
                 broadcast_day, effective_open_dt.isoformat(),
             )
