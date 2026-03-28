@@ -46,15 +46,18 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 
 ---
 
-## Phase 6 — Old HLS Stack Deletion (HIGH IMPACT, MEDIUM RISK)
+## Phase 6 — Old HLS Stack Removal (HIGH RISK — BROADCAST MIGRATION)
 
-- [ ] **6a** — Audit: confirm no active production clients use `/hls/` endpoints. Check config/defaults.yaml, IPTV M3U output, Plex lineup URLs. Document findings.
-- [ ] **6b** — Remove `/hls/{channel_id}/live.m3u8` and `/hls/{channel_id}/{segment}` endpoint handlers from PD. Remove `self._hls_manager` instantiation (line ~588) and `stop_all()` call.
-- [ ] **6c** — Delete `retrovue.streaming.hls_writer` module entirely (~492 lines).
-- [ ] **6d** — Remove `hls_manager` parameter from `ChannelStream.__init__` if only used for old stack wiring. Run tests (floor 330).
-- [ ] **6e** — After deletion: update CLAUDE.md to add rule: "There is one HLS delivery stack: SegmentRing + HlsSegmenter at /channels/. No disk-based HLS. INV-HLS-NO-DISK-IO-001 is a hard constraint."
+Treat this as a broadcast infrastructure migration, not a code deletion.
+Risk is HIGH operationally — old stack may be masking new stack bugs. Validate before delete.
 
----
+- [ ] **6a** — Audit: confirm no active production clients use /hls/ endpoints. Check IPTV M3U output, Plex lineup, config files. Smoke test /channels/ returns valid manifests.
+- [ ] **6b** — Shadow validation: add temporary response comparison logging — when a request hits /channels/, internally validate old stack would have produced equivalent output. Log any divergence. Run for one 15-min turn.
+- [ ] **6c** — Review shadow log. If clean: proceed to 6d. If divergences found: fix in new stack first, then re-run 6b.
+- [ ] **6d** — Remove /hls/ endpoint handlers from PD. Remove self._hls_manager instantiation and stop_all() call. Keep hls_writer.py module for now (rollback safety).
+- [ ] **6e** — Run tests (floor 330). Confirm HLS clients work against /channels/ endpoints. Confirm no segment ring behavioral differences.
+- [ ] **6f** — Delete retrovue.streaming.hls_writer module entirely. Remove dead imports. Run tests.
+- [ ] **6g** — Update CLAUDE.md: "There is one HLS delivery stack: SegmentRing + HlsSegmenter at /channels/. No disk-based HLS. INV-HLS-NO-DISK-IO-001 is a hard constraint. Do not re-introduce a parallel HLS stack."
 
 ## Phase 7 — Mock Relocation (MEDIUM IMPACT, LOW RISK)
 
@@ -65,15 +68,26 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 
 ---
 
-## Phase 8 — HLS Activation Unification (MEDIUM IMPACT, MEDIUM RISK)
+## Phase 8 — Consumption Adapter Model (replaces "HLS Activation Unification")
 
-- [ ] **8a** — Write contract test: "HLS activation and raw TS activation share the same channel start code path." Test must FAIL before code change.
-- [ ] **8b** — Extract phantom management from `_ensure_channel_active_for_hls` into `_activate_hls_phantom(channel_id, mgr)` helper.
-- [ ] **8c** — Update `channels_hls_manifest` endpoint to call `start_channel()` → `_activate_hls_phantom()` instead of `_ensure_channel_active_for_hls()`.
-- [ ] **8d** — Delete `_ensure_channel_active_for_hls()` (~190 lines). Run tests (floor 330). Contract test from 8a must now PASS.
-- [ ] **8e** — Update CLAUDE.md to add rule: "There is one channel activation path: start_channel(). No parallel activation code paths. _ensure_channel_active_for_hls() must not be re-introduced."
+Reframed: HLS and TS are two consumption adapters over one PD-owned lifecycle.
+Not just path merger — defines the correct mental model going forward.
 
----
+- [ ] **8a** — Write contract test: "Channel lifecycle is PD-owned; HLS and TS are consumption adapters that share the same CM activation path." Must FAIL before code change.
+- [ ] **8b** — Extract HLS phantom management from _ensure_channel_active_for_hls into HlsConsumptionAdapter._activate_phantom(channel_id, mgr) helper.
+- [ ] **8c** — Extract raw TS fanout management into TsConsumptionAdapter._wire_fanout(channel_id, mgr) helper.
+- [ ] **8d** — Both adapters call PD.start_channel() as the single lifecycle entry point. Delete _ensure_channel_active_for_hls() body (~190 lines). Run tests (floor 330). Contract test from 8a must PASS.
+- [ ] **8e** — Update CLAUDE.md: "Channel lifecycle is PD-owned. HLS and TS are consumption adapters. There is one lifecycle path: start_channel(). Adapters add consumption-model behavior (phantom, fanout) but do not own lifecycle."
+
+## Phase 8.5 — Observability Hardening (BEFORE process gates)
+
+Goal: be able to trace a single viewer session from tune-in to tune-out in the logs.
+Required before Phase 9 so we can validate the refactor worked.
+
+- [ ] **8.5a** — Add structured log events (DEBUG level, gated) at: channel activation, first segment produced, viewer join/leave, linger start/expire, teardown.
+- [ ] **8.5b** — Add correlation ID (session_id) flowing: PD activation -> CM lifecycle -> HLS phantom -> segments. Must appear in all log lines for a viewer session.
+- [ ] **8.5c** — Validate end-to-end: start a channel, join as viewer, leave, confirm full lifecycle traceable in logs. Commit with test.
+- [ ] **8.5d** — Update CLAUDE.md: "Runtime lifecycle transitions must emit structured log events at DEBUG level. Viewer sessions must carry a correlation ID traceable end-to-end."
 
 ## Phase 9 — Model Lockdown (MOST IMPORTANT FOR FUTURE CONTROL)
 
