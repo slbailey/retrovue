@@ -2599,10 +2599,6 @@ class BlockPlanProducer(Producer):
         if self._on_producer_failure is not None:
             self._on_producer_failure(reason)
 
-    def play_content(self, content: ContentSegment) -> bool:
-        """Not used in BlockPlan mode (blocks are fed instead)."""
-        return True
-
     def get_stream_endpoint(self) -> str | None:
         """Return stream endpoint URL."""
         return self.output_url

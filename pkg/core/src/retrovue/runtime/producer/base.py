@@ -163,7 +163,6 @@ class Producer(ABC):
         """
         pass
 
-    @abstractmethod
     def play_content(self, content: ContentSegment) -> bool:
         """
         Play a content segment.
@@ -174,7 +173,7 @@ class Producer(ABC):
         Returns:
             True if content started playing successfully
         """
-        pass
+        return True
 
     @abstractmethod
     def get_stream_endpoint(self) -> str | None:
