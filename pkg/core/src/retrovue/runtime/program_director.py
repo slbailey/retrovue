@@ -425,6 +425,70 @@ class ChannelInfo:
     last_activity: datetime
 
 
+
+@dataclass
+class HlsDiagnosticsState:
+    """Per-channel HLS diagnostic state.
+
+    Extracted from ProgramDirector to make the boundary explicit and testable.
+    PD holds one instance and delegates all _hls_diag_* calls to it.
+    """
+
+    duration_s: float
+    ring_max_events: int
+    lock: threading.Lock = None  # set post-init
+    mode_until: dict = None       # channel_id -> float (monotonic)
+    ring: dict = None             # channel_id -> deque
+    reconnect_hits: dict = None   # channel_id -> deque
+
+    def __post_init__(self) -> None:
+        if self.lock is None:
+            self.lock = threading.Lock()
+        if self.mode_until is None:
+            self.mode_until = {}
+        if self.ring is None:
+            self.ring = {}
+        if self.reconnect_hits is None:
+            self.reconnect_hits = {}
+
+    def is_active(self, channel_id: str) -> bool:
+        now = time.monotonic()
+        with self.lock:
+            return self.mode_until.get(channel_id, 0.0) > now
+
+    def record(self, channel_id: str, event: str, **fields) -> None:
+        now = time.monotonic()
+        with self.lock:
+            ring = self.ring.get(channel_id)
+            if ring is None:
+                ring = deque(maxlen=self.ring_max_events)
+                self.ring[channel_id] = ring
+            ring.append({"t": now, "event": event, **fields})
+
+    def dump_recent(self, channel_id: str, max_events: int = 120) -> list:
+        with self.lock:
+            return list(self.ring.get(channel_id, []))[-max_events:]
+
+    def trigger(self, channel_id: str, reason: str, **fields) -> None:
+        now = time.monotonic()
+        with self.lock:
+            prev = self.mode_until.get(channel_id, 0.0)
+            self.mode_until[channel_id] = max(prev, now + self.duration_s)
+        self.record(channel_id, "DIAG_TRIGGER", reason=reason, **fields)
+
+    def note_reconnect_attempt(self, channel_id: str) -> int:
+        now = time.monotonic()
+        with self.lock:
+            dq = self.reconnect_hits.get(channel_id)
+            if dq is None:
+                dq = deque()
+                self.reconnect_hits[channel_id] = dq
+            dq.append(now)
+            while dq and (now - dq[0]) > 30.0:
+                dq.popleft()
+            return len(dq)
+
+
 class ChannelManagerProvider(Protocol):
     """Protocol for getting ChannelManager instances."""
 
@@ -592,13 +656,12 @@ class ProgramDirector:
         self._hls_activity_lock = threading.Lock()
 
         # Conditional diagnostic mode (per channel): minimal steady-state overhead.
-        self._hls_diag_lock = threading.Lock()
-        self._hls_diag_mode_until: dict[str, float] = {}
-        self._hls_diag_ring: dict[str, deque] = {}
-        self._hls_diag_reconnect_hits: dict[str, deque] = {}
+        # State is encapsulated in HlsDiagnosticsState; PD holds one instance and delegates.
         _diag = _ch_cfg["diagnostics"]
-        self._hls_diag_duration_s: float = _diag["duration_seconds"]
-        self._hls_diag_ring_max_events: int = _diag["ring_max_events"]
+        self._hls_diag = HlsDiagnosticsState(
+            duration_s=_diag["duration_seconds"],
+            ring_max_events=_diag["ring_max_events"],
+        )
 
         # Evidence pipeline configuration
         _ev = _ch_cfg["evidence"]
@@ -641,45 +704,22 @@ class ProgramDirector:
         )
 
     def _hls_diag_is_active(self, channel_id: str) -> bool:
-        now = time.monotonic()
-        with self._hls_diag_lock:
-            return self._hls_diag_mode_until.get(channel_id, 0.0) > now
+        return self._hls_diag.is_active(channel_id)
 
     def _hls_diag_record(self, channel_id: str, event: str, **fields: Any) -> None:
-        now = time.monotonic()
-        with self._hls_diag_lock:
-            ring = self._hls_diag_ring.get(channel_id)
-            if ring is None:
-                ring = deque(maxlen=self._hls_diag_ring_max_events)
-                self._hls_diag_ring[channel_id] = ring
-            ring.append({"t": now, "event": event, **fields})
+        self._hls_diag.record(channel_id, event, **fields)
 
     def _hls_diag_dump_recent(self, channel_id: str, max_events: int = 120) -> None:
-        with self._hls_diag_lock:
-            ring = list(self._hls_diag_ring.get(channel_id, []))[-max_events:]
-        for item in ring:
+        for item in self._hls_diag.dump_recent(channel_id, max_events):
             self._logger.warning("[HLS-DIAG][%s] %s", channel_id, item)
 
     def _hls_diag_trigger(self, channel_id: str, reason: str, **fields: Any) -> None:
-        now = time.monotonic()
-        with self._hls_diag_lock:
-            prev = self._hls_diag_mode_until.get(channel_id, 0.0)
-            self._hls_diag_mode_until[channel_id] = max(prev, now + self._hls_diag_duration_s)
-        self._hls_diag_record(channel_id, "DIAG_TRIGGER", reason=reason, **fields)
-        self._logger.warning("[HLS-DIAG][%s] ENABLED reason=%s duration_s=%.0f", channel_id, reason, self._hls_diag_duration_s)
+        self._hls_diag.trigger(channel_id, reason, **fields)
+        self._logger.warning("[HLS-DIAG][%s] ENABLED reason=%s duration_s=%.0f", channel_id, reason, self._hls_diag.duration_s)
         self._hls_diag_dump_recent(channel_id)
 
     def _hls_diag_note_reconnect_attempt(self, channel_id: str, reason: str) -> None:
-        now = time.monotonic()
-        with self._hls_diag_lock:
-            dq = self._hls_diag_reconnect_hits.get(channel_id)
-            if dq is None:
-                dq = deque()
-                self._hls_diag_reconnect_hits[channel_id] = dq
-            dq.append(now)
-            while dq and (now - dq[0]) > 30.0:
-                dq.popleft()
-            hits = len(dq)
+        hits = self._hls_diag.note_reconnect_attempt(channel_id)
         self._hls_diag_record(channel_id, "RECONNECT_ATTEMPT", reason=reason, hits_30s=hits)
         if hits >= 3:
             self._hls_diag_trigger(channel_id, "repeated_reconnect_attempts", hits_30s=hits)
