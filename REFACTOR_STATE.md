@@ -27,9 +27,11 @@ Branch: `refactor/simplify-single-authority-l3`
 ## Phase 4 Sub-steps:
 
 - [x] **3d / Phase 4 kickoff** — Produce PHASE4_DIAGNOSTICS_AUDIT.md. 330 pass. ← DONE
-- [ ] **4a** — Verify StreamingDiagnostics config fields: grep AIR C++ source for consumption of startup_events, steady_interval, recv_gap_warn_threshold_ms, recv_gap_warn_count, upstream_loop_spike_ms. Determine if dead or AIR-consumed. ← NEXT
+- [x] **4a** — Verify StreamingDiagnostics config fields: grep AIR C++ source for consumption of startup_events, steady_interval, recv_gap_warn_threshold_ms, recv_gap_warn_count, upstream_loop_spike_ms. Determine if dead or AIR-consumed. DONE: DEAD in both Python runtime AND AIR C++ src. No cpp/h references. Only schema.py + testing.py. Remove in 4b.
 
-## NEXT SUB-STEP: 4a
+- [ ] **4b** — Remove StreamingDiagnostics class from schema.py, remove diagnostics field from StreamingSchema, remove from testing.py fixtures. Run tests (must stay >= 328).
+
+## NEXT SUB-STEP: 4b
 
 ---
 
