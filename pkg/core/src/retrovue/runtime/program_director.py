@@ -897,6 +897,7 @@ class ProgramDirector:
             channel_slug=channel_id,
             channel_type=sc.get("channel_type", "network"),
             resolved_config=self._resolved_config,
+            clock=self._embedded_clock,
         )
 
         setattr(self, key, svc)

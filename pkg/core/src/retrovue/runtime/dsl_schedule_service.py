@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from retrovue.runtime.schedule_types import ScheduledBlock, ScheduledSegment
+from retrovue.runtime.clock import MasterClock
 from retrovue.runtime.schedule_compiler import compile_schedule, parse_dsl
 from retrovue.runtime.playout_log_expander import expand_program_block
 
@@ -194,6 +195,7 @@ class DslScheduleService:
         channel_slug: str | None = None,
         channel_type: str = "network",
         resolved_config: dict | None = None,
+        clock: MasterClock | None = None,
     ) -> None:
         if resolved_config is None:
             raise RuntimeError(
@@ -201,6 +203,7 @@ class DslScheduleService:
                 "fallback defaults are no longer supported"
             )
         self._resolved_config = resolved_config
+        self._clock = clock or MasterClock()
         _sched = resolved_config["scheduling"]
         self._horizon_days: int = _sched["horizon"]["days"]
         self._recompile_threshold_hours: int = _sched["horizon"]["recompile_threshold_hours"]
@@ -1002,7 +1005,7 @@ class DslScheduleService:
         Returns the number of rows deleted (0 if throttled or no-op).
         """
         if now_utc_ms == 0:
-            now_utc_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+            now_utc_ms = int(self._clock.now_utc().timestamp() * 1000)
 
         # Hourly throttle
         if (now_utc_ms - self._last_program_schedule_purge_utc_ms) < 3_600_000:
@@ -1048,7 +1051,7 @@ class DslScheduleService:
             if self._blocks:
                 return
 
-        now = datetime.now(timezone.utc)
+        now = self._clock.now_utc()
 
         # ── Determine start_date (unchanged) ──────────────────────────
         if self._broadcast_day_override:
