@@ -23,11 +23,11 @@ Branch: `refactor/simplify-single-authority-l3`
 - [x] **2b** — Delete dead code: `deferred_teardown_triggered()` in `pkg/core/runtime/channel_manager.py` + its poll call in `ProgramDirector._health_check_loop`. Run tests (must stay >= 328).
 - [x] **2c** — Delete dead code: `compute_jip_position()` from `pkg/core/runtime/channel_manager.py`. Run tests.
 - [x] **2d** — Delete dead code: `_mock_grid_*` methods from `pkg/core/runtime/channel_manager.py` (`_floor_to_grid`, `_calculate_join_offset`, `_calculate_filler_offset`, `_determine_active_content`, `_build_mock_grid_playout_plan`). Run tests.
-- [ ] **2e** — Invert linger callback: add `on_linger_expired: Callable` param to `ChannelManager.__init__`. Update `_linger_expire()` and `_start_linger()` to call `self.on_linger_expired()` instead of `program_director.stop_channel()`. Run tests.
+- [x] **2e** — Invert linger callback: add `on_linger_expired: Callable` param to `ChannelManager.__init__`. Update `_linger_expire()` and `_start_linger()` to call `self.on_linger_expired()` instead of `program_director.stop_channel()`. Run tests. (commit e396513, 333 passed)
 - [ ] **2f** — Wire PD side: update `ProgramDirector._create_channel_manager()` to inject `on_linger_expired=self._stop_channel_internal`. Run tests. Contract test from 2a should now PASS.
 - [ ] **2g** — Inject MasterClock into DslScheduleService: replace bare `datetime.now(timezone.utc)` in `_purge_expired_program_schedule` and `_maybe_extend_horizon`. Run tests.
 
-## NEXT SUB-STEP: 2e
+## NEXT SUB-STEP: 2f
 
 ---
 
@@ -42,6 +42,8 @@ Branch: `refactor/simplify-single-authority-l3`
 | 2a | 2026-03-28 | 27d1982 | Contract test INV-LIFECYCLE-PD-SOLE-TEARDOWN-001 added (6 tests RED as expected, 328 still pass) |
 | 2b | 2026-03-28 | c81d328 | Deleted deferred_teardown_triggered() and PD poll block (13 lines removed; 330 pass) |
 | 2c | 2026-03-28 | 39ded8f | Deleted compute_jip_position() 58 lines; 331 pass |
+| 2d | 2026-03-28 | 522b298 | Deleted _mock_grid_* methods; 333 pass |
+| 2e | 2026-03-28 | e396513 | Add on_linger_expired callback to ChannelManager, invert linger dep; 333 pass |
 
 ---
 
