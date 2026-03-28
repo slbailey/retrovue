@@ -30,7 +30,7 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 - [x] **4c** — Extract `_hls_diag_*` state from ProgramDirector into a `HlsDiagnosticsState` dataclass (per-channel). PD holds one instance per channel and delegates. Does NOT change behavior — makes the boundary explicit and testable. Files: `pkg/core/src/retrovue/runtime/program_director.py`. Run tests (floor 330).
 - [x] **4d** — Verify auto-expiry (`_hls_diag_mode_until` check) is the ONLY expiry mechanism — no manual reset paths that could suppress diagnostics. Document result. Commit PHASE4_COMPLETE.md.
 
-## NEXT SUB-STEP: 6b
+## NEXT SUB-STEP: 6c
 
 ---
 
@@ -52,7 +52,7 @@ Treat this as a broadcast infrastructure migration, not a code deletion.
 Risk is HIGH operationally — old stack may be masking new stack bugs. Validate before delete.
 
 - [x] **6a** — Audit: confirm no active production clients use /hls/ endpoints. Check IPTV M3U output, Plex lineup, config files. Smoke test /channels/ returns valid manifests.
-- [ ] **6b** — Shadow validation: add temporary response comparison logging — when a request hits /channels/, internally validate old stack would have produced equivalent output. Log any divergence. Run for one 15-min turn.
+- [x] **6b** — Shadow validation: add temporary response comparison logging — when a request hits /channels/, internally validate old stack would have produced equivalent output. Log any divergence. Run for one 15-min turn.
 - [ ] **6c** — Review shadow log. If clean: proceed to 6d. If divergences found: fix in new stack first, then re-run 6b.
 - [ ] **6d** — Remove /hls/ endpoint handlers from PD. Remove self._hls_manager instantiation and stop_all() call. Keep hls_writer.py module for now (rollback safety).
 - [ ] **6e** — Run tests (floor 330). Confirm HLS clients work against /channels/ endpoints. Confirm no segment ring behavioral differences.
@@ -153,3 +153,4 @@ Future AI sessions must be unable to re-introduce these problems without visibly
 - Each phase now ends with a CLAUDE.md update to prevent re-introduction
 - Test floor: 330 passing (up from baseline 328)
 | 5g | 2026-03-28 | (this turn) | CLAUDE.md ghost prohibition rule added (INV-NO-GHOST-METHODS-001); Phase 5 complete; 330 pass |
+| 6b | 2026-03-28 | e6a4e59 | Shadow validation logging added to /channels/ manifest; DEBUG per-request, WARNING on divergence; 330 pass |
