@@ -74,16 +74,16 @@ Cross-repo index of markdown documentation under `docs/`, `pkg/air/docs/`, and `
 | air | pkg/air/docs/contracts/phases/README.md | — | phases | yes | low | Links to Phase6A, Phase8. |
 | air | pkg/air/docs/archive/phases/Phase6-ExecutionContract.md | 6 | control plane | no | high | gRPC mock-first; superseded by Phase6A. |
 | air | pkg/air/docs/archive/phases/Phase6A-Overview.md | 6A | execution | no | high | Historical; superseded by contracts/architecture. |
-| air | pkg/air/docs/archive/phases/Phase6A-0-ControlSurface.md | 6A.0 | gRPC | no | med | |
-| air | pkg/air/docs/archive/phases/Phase6A-1-ExecutionProducer.md | 6A.1 | producers | no | high | |
-| air | pkg/air/docs/archive/phases/Phase6A-2-FileBackedProducer.md | 6A.2 | producers | no | high | |
-| air | pkg/air/docs/archive/phases/Phase6A-3-ProgrammaticProducer.md | 6A.3 | producers | no | med | |
+| air | pkg/air/docs/archive/phases/Phase6A-0-ControlSurface.md | 6A.0 | gRPC | no | med |  |
+| air | pkg/air/docs/archive/phases/Phase6A-1-ExecutionProducer.md | 6A.1 | producers | no | high |  |
+| air | pkg/air/docs/archive/phases/Phase6A-2-FileBackedProducer.md | 6A.2 | producers | no | high |  |
+| air | pkg/air/docs/archive/phases/Phase6A-3-ProgrammaticProducer.md | 6A.3 | producers | no | med |  |
 | air | pkg/air/docs/archive/domain/*.md | — | domain | no | med | MasterClock, PlayoutEngine, FileProducer, etc. Superseded by semantics. |
 | air | pkg/air/docs/archive/milestones/*.md | 2,3 | milestones | no | low | Phase2/3 Plan/Complete, Roadmap, Refactoring. |
 | air | pkg/air/docs/DEBUG-VLC-NO-OUTPUT-RUNBOOK.md | — | ops | yes | low | Debug runbook for VLC issues. |
 | air | pkg/air/docs/operations/telemetry-README.md | — | telemetry | yes | low | Grafana Timing.json. |
 | air | pkg/air/docs/operations/Integration.md | — | integration | yes | med | Proto, versioning. |
-| air | pkg/air/docs/runtime/PlayoutRuntime.md | — | runtime | yes | med | |
+| air | pkg/air/docs/runtime/PlayoutRuntime.md | — | runtime | yes | med |  |
 | air | pkg/air/docs/overview/*.md | — | overview | yes | low | Architecture, glossary, PROJECT_OVERVIEW. |
 | air | pkg/air/docs/developer/*.md | — | developer | yes | low | BuildAndDebug, ContractTesting, TimingScenarios, etc. |
 | core | pkg/core/docs/contracts/README.md | — | contracts index | yes | high | Authoritative index; normative contracts. |
@@ -120,11 +120,11 @@ Cross-repo index of markdown documentation under `docs/`, `pkg/air/docs/`, and `
 
 ## Quick reference: canonical vs archived
 
-| Repo | Canonical (yes) | Archived / Superseded (no) |
-|------|-----------------|----------------------------|
-| main | ComponentMap, PHASE_MODEL, core/, standards/ | legacy/air/* (all) |
-| air | contracts/, operations/, overview/, developer/, runtime/ | archive/* |
-| core | contracts/, data/, runtime/, scheduling/, architecture/ | archive/* |
+| Repo | Canonical (yes)                                  | Archived / Superseded (no)      |
+|------|--------------------------------------------------|---------------------------------|
+| main | ComponentMap, PHASE_MODEL, core/, standards/     | legacy/air/* (all)              |
+| air  | contracts/, operations/, overview/, developer/, runtime/ | archive/*                 |
+| core | contracts/, data/, runtime/, scheduling/, architecture/ | archive/*                  |
 
 ---
 
@@ -134,5 +134,5 @@ Cross-repo index of markdown documentation under `docs/`, `pkg/air/docs/`, and `
 2. **air/contracts/semantics/** — semantic contracts (correctness).
 3. **air/contracts/coordination/** — coordination contracts (switching, flow control).
 4. **core/contracts/resources/MasterClockContract.md** — Core clock; aligns with Air laws.
-5. **core/contracts/runtime/ScheduleManager*.md** — scheduling invariants; cross-refs Air.
+5. **core/contracts/runtime/ScheduleManager\*.md** — scheduling invariants; cross-refs Air.
 6. **main/docs/legacy/air/** — preserved rules in TS, timing, orchestration; migrate before codifying.
