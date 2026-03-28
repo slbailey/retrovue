@@ -21,10 +21,10 @@ Branch: `refactor/simplify-single-authority-l3`
 
 - [x] **3a** — Audit contract files for tests that assert internal sequencing (not required invariants). Produce a candidate list of tests/classes to retire. Write findings to `/opt/retrovue/PHASE3_CONTRACT_AUDIT.md`. Do NOT delete anything yet. Run tests (must stay >= 328). DONE: 334 pass.
 - [x] **3b** — Retire 4 internal/meta tests from `test_frame_selection_cadence_contract.py`: test_buggy_cascade_violates_pop_invariant, test_buggy_consumption_ratio_is_1_0, test_accumulator_budget_bounded, test_60_to_30_cadence_half. Expected: 334-4=330 pass (floor 328). DONE: 330 pass. Commit: be7edd6.
-- [ ] **3c** — Per audit: no second retirement possible within floor constraint (headroom only 2 after 3b). Update state to reflect this and move to 3d.
-- [ ] **3d** — Move to Phase 4: Diagnostics isolation audit.
+- [x] **3c** — Per audit: no second retirement possible within floor constraint (headroom only 2 after 3b). Update state to reflect this and move to 3d. DONE: state-only, 330 pass.
+- [ ] **3d** — Move to Phase 4: Diagnostics isolation audit. ← NEXT
 
-## NEXT SUB-STEP: 3c
+## NEXT SUB-STEP: 3d
 
 ---
 
@@ -62,6 +62,7 @@ Sub-steps completed:
 | 2f | 2026-03-28 | 1ce56d8 | Wire PD: inject on_linger_expired=self._stop_channel_internal; 334 pass, contract GREEN |
 | 2g | 2026-03-28 | 652521f | Inject MasterClock into DslScheduleService; replace 2x bare datetime.now(); 334 pass |
 | 2h | 2026-03-28 | 0f326e1 | Audit dsl_schedule_service.py datetime.now() — CLEAN; Phase 2 complete; 334 pass |
+| 3c | 2026-03-28 | (pending) | State-only: confirmed no second test retirement within floor; 330 pass |
 
 ---
 
