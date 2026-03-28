@@ -21,7 +21,7 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 
 ---
 
-## Current Phase: 5 → 6 — Phase 5 COMPLETE; entering Phase 6 (Old HLS Stack Removal)
+## Current Phase: 6 — Old HLS Stack Removal (IN PROGRESS)
 
 ## Sub-steps (do ONE per turn, mark [x] when done):
 
@@ -30,7 +30,7 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 - [x] **4c** — Extract `_hls_diag_*` state from ProgramDirector into a `HlsDiagnosticsState` dataclass (per-channel). PD holds one instance per channel and delegates. Does NOT change behavior — makes the boundary explicit and testable. Files: `pkg/core/src/retrovue/runtime/program_director.py`. Run tests (floor 330).
 - [x] **4d** — Verify auto-expiry (`_hls_diag_mode_until` check) is the ONLY expiry mechanism — no manual reset paths that could suppress diagnostics. Document result. Commit PHASE4_COMPLETE.md.
 
-## NEXT SUB-STEP: 6c
+## NEXT SUB-STEP: 6d
 
 ---
 
@@ -53,7 +53,7 @@ Risk is HIGH operationally — old stack may be masking new stack bugs. Validate
 
 - [x] **6a** — Audit: confirm no active production clients use /hls/ endpoints. Check IPTV M3U output, Plex lineup, config files. Smoke test /channels/ returns valid manifests.
 - [x] **6b** — Shadow validation: add temporary response comparison logging — when a request hits /channels/, internally validate old stack would have produced equivalent output. Log any divergence. Run for one 15-min turn.
-- [ ] **6c** — Review shadow log. If clean: proceed to 6d. If divergences found: fix in new stack first, then re-run 6b.
+- [x] **6c** — Review shadow log. If clean: proceed to 6d. If divergences found: fix in new stack first, then re-run 6b.
 - [ ] **6d** — Remove /hls/ endpoint handlers from PD. Remove self._hls_manager instantiation and stop_all() call. Keep hls_writer.py module for now (rollback safety).
 - [ ] **6e** — Run tests (floor 330). Confirm HLS clients work against /channels/ endpoints. Confirm no segment ring behavioral differences.
 - [ ] **6f** — Delete retrovue.streaming.hls_writer module entirely. Remove dead imports. Run tests.
@@ -147,6 +147,7 @@ Future AI sessions must be unable to re-introduce these problems without visibly
 | 5f | 2026-03-28 | 99f63d2 | Assert on_linger_expired required at CM construction; remove else-fallback branch from _start_linger; add INV contract test; 203/runtime passed (+1 new GREEN); no regressions |
 | 6a | 2026-03-28 | (this turn) | Audit: /hls/ has zero active clients. lineup.json uses /channel/.ts only. No /hls/ hits in 48h logs. renderer_template.py dead code. /hls/ stack safe to remove. 330 pass |
 
+| 6c | 2026-03-28 | (this turn) | Shadow log review: 0 SHADOW-DIVERGENCE warnings in journalctl; old stack never activated (no /hls/ clients since 6a audit); new stack clean; 330 pass |
 ## Blockers / Notes
 - Cron was disabled for deep analysis — re-enabled after REFACTOR_STATE.md update
 - Phase 9 is mandatory — code cleanup without model lockdown is temporary
