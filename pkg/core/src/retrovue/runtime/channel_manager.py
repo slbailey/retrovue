@@ -1190,9 +1190,6 @@ class ChannelManager:
         boundary_s = math.ceil(earliest_s / segment_seconds) * segment_seconds
         return epoch_utc + timedelta(seconds=boundary_s)
 
-    def deferred_teardown_triggered(self) -> bool:
-        """True when deferred teardown executed (BlockPlan path has no deferral; always False)."""
-        return False
 
     @property
     def is_live(self) -> bool:

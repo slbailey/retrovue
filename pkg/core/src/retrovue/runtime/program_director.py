@@ -1118,14 +1118,10 @@ class ProgramDirector:
             try:
                 with self._managers_lock:
                     managers = list(self._managers.values())
-                deferred_destroy: list[str] = []
                 for manager in managers:
                     try:
                         manager.check_health()
                         manager.tick()
-                        # P12-CORE-006: Poll for deferred teardown completion; destroy channel when ready
-                        if getattr(manager, "deferred_teardown_triggered", lambda: False)() is True:
-                            deferred_destroy.append(manager.channel_id)
                     except Exception as e:
                         self._logger.warning(
                             "Health check failed for channel %s: %s",
@@ -1133,12 +1129,6 @@ class ProgramDirector:
                             e,
                             exc_info=True,
                         )
-                for channel_id in deferred_destroy:
-                    self._logger.info(
-                        "[channel %s] Deferred teardown ready; destroying ChannelManager",
-                        channel_id,
-                    )
-                    self._stop_channel_internal(channel_id)
 
                 # Periodic re-freeze: runtime churn (DB sessions, ScheduledBlocks,
                 # ORM identities) accumulates in Gen 2 after the startup freeze.
