@@ -30,7 +30,24 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 - [x] **4c** — Extract `_hls_diag_*` state from ProgramDirector into a `HlsDiagnosticsState` dataclass (per-channel). PD holds one instance per channel and delegates. Does NOT change behavior — makes the boundary explicit and testable. Files: `pkg/core/src/retrovue/runtime/program_director.py`. Run tests (floor 330).
 - [x] **4d** — Verify auto-expiry (`_hls_diag_mode_until` check) is the ONLY expiry mechanism — no manual reset paths that could suppress diagnostics. Document result. Commit PHASE4_COMPLETE.md.
 
-## NEXT SUB-STEP: 6f
+## NEXT SUB-STEP: 6g-1
+
+## Phase 6g — HLS Contract Test Migration (TABLED — do after Phase 7)
+
+Old HLSSegmenter API tests need updating to new HlsSegmenter+SegmentRing API.
+Full plan: /opt/retrovue/HLS_TEST_MIGRATION_PLAN.md
+
+- [ ] **6g-1** — Update conftest.py shared fixtures (ring-first pattern, new imports)
+- [ ] **6g-2** — Update test_segment_ring.py
+- [ ] **6g-3** — Update test_segment_production.py
+- [ ] **6g-4** — Update test_manifest.py
+- [ ] **6g-5** — Update test_channel_lifecycle.py
+- [ ] **6g-6** — Update test_delivery_endpoints.py
+- [ ] **6g-7** — Update test_inv_hls_no_disk_io.py
+- [ ] **6g-8** — Update test_inv_hls_discontinuity_marker.py + CLAUDE.md rule
+
+NOTE: Proceed to Phase 7 (Mock Relocation) now. Return to 6g after Phase 7 is complete.
+
 
 ---
 
