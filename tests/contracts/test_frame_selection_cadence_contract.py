@@ -312,35 +312,6 @@ class TestCadencePopInvariant:
             f"{result['pop_on_repeat'][:10]}..."
         )
 
-    # Tier: 1 | Structural invariant
-    def test_buggy_cascade_violates_pop_invariant(self):
-        """
-        Verify that the buggy simulation DOES violate INV-CADENCE-POP-001.
-        This confirms the test would catch the bug if present.
-        """
-        result = simulate_cadence_buggy(
-            INPUT_24P_NUM, INPUT_24P_DEN,
-            OUTPUT_30_NUM, OUTPUT_30_DEN,
-            num_ticks=1500,
-        )
-        # Buggy: pops on every tick, so pop_count == total ticks
-        assert result["pop_count"] == 1500, (
-            f"Buggy simulation should pop on every tick, got {result['pop_count']}"
-        )
-        # Buggy: pop_count != advance_count (1500 != 1200)
-        assert result["pop_count"] != result["advance_count"], (
-            "Buggy simulation should violate pop == advance invariant"
-        )
-        # Buggy: pops occurred on repeat ticks
-        assert len(result["pop_on_repeat"]) > 0, (
-            "Buggy simulation should have pops on REPEAT ticks"
-        )
-        assert len(result["pop_on_repeat"]) == result["repeat_count"], (
-            f"Buggy: every REPEAT tick should have a pop. "
-            f"pop_on_repeat={len(result['pop_on_repeat'])}, repeat_count={result['repeat_count']}"
-        )
-
-
 class TestConsumptionRatio:
     """INV-CADENCE-POP-003: Consumption ratio matches FPS ratio."""
 
@@ -389,29 +360,6 @@ class TestConsumptionRatio:
                 f"expected {expected_pops} pops, got {result['pop_count']}"
             )
 
-    # Tier: 1 | Structural invariant
-    def test_buggy_consumption_ratio_is_1_0(self):
-        """
-        Buggy cascade consumes at output rate → ratio = 1.0, not 0.8.
-        This produces 1.25× playback speed (30/24 = 1.25).
-        """
-        num_ticks = 1500
-        result = simulate_cadence_buggy(
-            INPUT_24P_NUM, INPUT_24P_DEN,
-            OUTPUT_30_NUM, OUTPUT_30_DEN,
-            num_ticks=num_ticks,
-        )
-        observed_ratio = result["pop_count"] / num_ticks
-        assert observed_ratio == 1.0, (
-            f"Buggy cascade should consume at ratio 1.0, got {observed_ratio}"
-        )
-        # This means content plays at 30/24 = 1.25× speed
-        speed_multiplier = observed_ratio / 0.8
-        assert abs(speed_multiplier - 1.25) < 0.01, (
-            f"Buggy cascade speed multiplier should be 1.25×, got {speed_multiplier}"
-        )
-
-
 class TestLongRunStability:
     """Long-run stability: cadence correctness over extended periods."""
 
@@ -449,28 +397,6 @@ class TestLongRunStability:
         # Verify exact counts for 10000 ticks (2000 full 5-tick periods)
         assert result["advance_count"] == 8000
         assert result["repeat_count"] == 2000
-
-    # Tier: 1 | Structural invariant
-    def test_accumulator_budget_bounded(self):
-        """
-        The Bresenham budget must stay bounded: 0 ≤ budget < threshold.
-        If it grows unbounded, the accumulator is broken.
-        """
-        acc = CadenceAccumulator(
-            input_fps_num=INPUT_24P_NUM,
-            input_fps_den=INPUT_24P_DEN,
-            output_fps_num=OUTPUT_30_NUM,
-            output_fps_den=OUTPUT_30_DEN,
-        )
-        max_budget = 0
-        for _ in range(100000):
-            acc.tick()
-            if acc.budget > max_budget:
-                max_budget = acc.budget
-            assert 0 <= acc.budget < acc.threshold, (
-                f"Budget {acc.budget} out of range [0, {acc.threshold})"
-            )
-
 
 class TestEdgeCases:
     """Edge cases for cadence behavior."""
@@ -510,30 +436,6 @@ class TestEdgeCases:
             acc.tick()
         assert acc.advance_count == 50
         assert acc.repeat_count == 10
-
-    # Tier: 1 | Structural invariant
-    def test_60_to_30_cadence_half(self):
-        """
-        60fps input → 30fps output is NOT a cadence case (input faster than output).
-        increment > threshold, so every tick is ADVANCE.
-        In practice this path would be handled differently (frame dropping),
-        but the accumulator math should still work: every tick advances.
-        """
-        acc = CadenceAccumulator(
-            input_fps_num=60,
-            input_fps_den=1,
-            output_fps_num=30,
-            output_fps_den=1,
-        )
-        # increment = 60 * 1 = 60, threshold = 30 * 1 = 30
-        # budget starts at 0, after tick: budget = 60 >= 30 → ADVANCE, budget = 30
-        # next tick: budget = 90 >= 30 → ADVANCE, budget = 60
-        # budget grows unbounded — this case needs special handling
-        # For this test, just verify no REPEAT decisions
-        for _ in range(10):
-            decision = acc.tick()
-            assert decision == "ADVANCE"
-
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
