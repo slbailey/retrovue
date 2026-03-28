@@ -273,3 +273,27 @@ Do NOT re-introduce:
 If a change requires a second HLS code path, stop and redesign using the existing stack.
 
 Reference invariant: INV-HLS-NO-DISK-IO-001 in docs/contracts/INVARIANTS.md
+
+────────────────────────
+PRODUCTION BOUNDARY RULE (INV-PRODUCTION-BOUNDARY-001)
+────────────────────────
+Production modules contain only production code.
+
+Rules:
+- Mocks, test fixtures, and test harnesses belong in tests/fixtures/, never in runtime/.
+- Protocols (abstract interface definitions) belong in retrovue/runtime/protocols.py.
+- If a class is only instantiated in tests or behind mock_* flags, it belongs in tests/fixtures/.
+- No class named Mock*, Fake*, Stub*, or Test* may live in a production module.
+
+Forbidden patterns:
+- class MockXxx in pkg/core/src/retrovue/runtime/*.py
+- class MockXxx in pkg/core/src/retrovue/scheduling/*.py
+- Any test harness or fixture in a non-test directory
+
+If you need a mock or fake for testing: place it in tests/fixtures/<domain>_fixtures.py.
+If you need an abstract interface: place it in retrovue/runtime/protocols.py.
+
+Violating this rule blurs the boundary between production behavior and test behavior,
+makes production modules harder to audit, and can cause mocks to silently run in production.
+
+Reference invariant: INV-PRODUCTION-BOUNDARY-001 in docs/contracts/INVARIANTS.md
