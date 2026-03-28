@@ -358,7 +358,7 @@ class ChannelManager:
             evidence_endpoint: host:port for evidence gRPC, empty = disabled
             resolved_config: Frozen resolved config from config resolver (REQUIRED)
             on_linger_expired: Callback invoked when linger timer fires and no viewers remain.
-                               If None, falls back to calling program_director.stop_channel directly (legacy).
+                               Must be provided; PD is the sole teardown authority (INV-LIFECYCLE-PD-SOLE-TEARDOWN-001).
         """
         if resolved_config is None:
             raise RuntimeError(
@@ -729,8 +729,6 @@ class ChannelManager:
             )
             if self.on_linger_expired is not None:
                 self.on_linger_expired()
-            elif hasattr(self.program_director, "stop_channel"):
-                self.program_director.stop_channel(self.channel_id, reason="last_viewer_left")
             else:
                 self._channel_state = "STOPPED"
                 self._stop_reason = "last_viewer_left"
@@ -749,8 +747,6 @@ class ChannelManager:
             # Pass reason so AIR logs "last_viewer_left" only when stop was due to viewer leave.
             if self.on_linger_expired is not None:
                 self.on_linger_expired()
-            elif hasattr(self.program_director, "stop_channel"):
-                self.program_director.stop_channel(self.channel_id, reason="last_viewer_left")
             else:
                 self._channel_state = "STOPPED"
                 self._stop_reason = "last_viewer_left"

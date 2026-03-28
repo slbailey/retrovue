@@ -1082,6 +1082,10 @@ class ProgramDirector:
                 event_loop=_loop,
                 evidence_endpoint=self._evidence_endpoint,
                 resolved_config=self._resolved_config,
+                # INV-LIFECYCLE-PD-SOLE-TEARDOWN-001: PD is the sole teardown
+                # authority. CM must not call stop_channel directly — it invokes
+                # this callback instead.
+                on_linger_expired=lambda cid=channel_id: self._stop_channel_internal(cid, reason="last_viewer_left"),
             )
             manager.channel_config = channel_config
             if self._mock_schedule_grid_mode:
