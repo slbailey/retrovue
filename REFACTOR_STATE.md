@@ -30,7 +30,7 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 - [x] **4c** — Extract `_hls_diag_*` state from ProgramDirector into a `HlsDiagnosticsState` dataclass (per-channel). PD holds one instance per channel and delegates. Does NOT change behavior — makes the boundary explicit and testable. Files: `pkg/core/src/retrovue/runtime/program_director.py`. Run tests (floor 330).
 - [x] **4d** — Verify auto-expiry (`_hls_diag_mode_until` check) is the ONLY expiry mechanism — no manual reset paths that could suppress diagnostics. Document result. Commit PHASE4_COMPLETE.md.
 
-## NEXT SUB-STEP: 7a — Move MockGridScheduleService and MockAlternatingScheduleService from channel_manager.py to tests/fixtures/mock_schedule_services.py (Phase 7 begins)
+## NEXT SUB-STEP: 7b — Move Playlist, PlaylistSegment from channel_manager.py to retrovue/scheduling/playlist_types.py. Update import in scheduling/playlist_schedule_manager.py. Run tests.
 
 ## Phase 6g — HLS Contract Test Migration (TABLED — do after Phase 7)
 
@@ -78,7 +78,7 @@ Risk is HIGH operationally — old stack may be masking new stack bugs. Validate
 
 ## Phase 7 — Mock Relocation (MEDIUM IMPACT, LOW RISK)
 
-- [ ] **7a** — Move `MockGridScheduleService` and `MockAlternatingScheduleService` from `channel_manager.py` to `tests/fixtures/mock_schedule_services.py`. Update 4 import sites in `program_director.py`. Run tests.
+- [x] **7a** — Move `MockGridScheduleService` and `MockAlternatingScheduleService` from `channel_manager.py` to `tests/fixtures/mock_schedule_services.py`. Update 4 import sites in `program_director.py`. Run tests.
 - [ ] **7b** — Move `Playlist`, `PlaylistSegment` from `channel_manager.py` to `retrovue/scheduling/playlist_types.py`. Update import in `scheduling/playlist_schedule_manager.py`. Run tests.
 - [ ] **7c** — Move `ProgramDirector` Protocol and `ScheduleService` Protocol from `channel_manager.py` to `retrovue/runtime/protocols.py`. Update import sites. Run tests.
 - [ ] **7d** — After relocation: update CLAUDE.md to add rule: "Production modules contain only production code. If a class is only instantiated in tests or behind mock_* flags, it belongs in tests/fixtures/, not in runtime/."
@@ -176,3 +176,4 @@ Future AI sessions must be unable to re-introduce these problems without visibly
 | 6f | 2026-03-28 | 8cccc5b | Retire hls_writer contract tests (78 tests); fix conftest for new HLS stack; 252 pass in tests/contracts (+116 new-stack tests unblocked) |
 | 6g | 2026-03-28 | (this commit) | CLAUDE.md HLS delivery stack rule added (INV-HLS-NO-DISK-IO-001); Phase 6 complete; 252 pass |
 | 6d | 2026-03-28 | (this turn) | Remove /hls/ endpoint handlers (3 routes), _hls_manager instantiation, stop_all(), shadow validation block; 268 lines removed; 330 pass (2 pre-existing failures unrelated) |
+| 7a | 2026-03-28 | c2d9d33 | Move MockGridScheduleService+MockAlternatingScheduleService to mock_schedule_services.py; 4 import sites in PD + 1 test updated; 252 pass |
