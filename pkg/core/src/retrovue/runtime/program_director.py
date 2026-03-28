@@ -1765,7 +1765,6 @@ class ProgramDirector:
                     fanout = ChannelStream(
                         channel_id=channel_id,
                         ts_source_factory=lambda stop_event=None, s=sock: SocketTsSource(s),
-                        hls_manager=None,
                         hls_segmenter=_hls_seg,
                     )
                     self._fanout_buffers[channel_id] = fanout
@@ -1902,9 +1901,7 @@ class ProgramDirector:
                     return FakeTsSource()
                 fanout = ChannelStream(
                     channel_id=channel_id,
-                    ts_source_factory=ts_source_factory,
-                    hls_manager=None,
-                )
+                    ts_source_factory=ts_source_factory)
                 self._fanout_buffers[channel_id] = fanout
                 return fanout
 
@@ -1998,7 +1995,7 @@ class ProgramDirector:
 
                 # Wire HLS segmenter from ChannelManager if available
                 _hls_seg = getattr(manager, "hls_segmenter", None)
-                fanout = ChannelStream(channel_id=channel_id, ts_source_factory=ts_source_factory, hls_manager=None, hls_segmenter=_hls_seg)
+                fanout = ChannelStream(channel_id=channel_id, ts_source_factory=ts_source_factory, hls_segmenter=_hls_seg)
                 self._fanout_buffers[channel_id] = fanout
                 return fanout
 
@@ -2010,7 +2007,7 @@ class ProgramDirector:
                 fanout = self._channel_stream_factory(channel_id, str(socket_path))
             else:
                 _hls_seg = getattr(manager, "hls_segmenter", None)
-                fanout = ChannelStream(channel_id=channel_id, socket_path=socket_path, hls_manager=None, hls_segmenter=_hls_seg)
+                fanout = ChannelStream(channel_id=channel_id, socket_path=socket_path, hls_segmenter=_hls_seg)
             self._fanout_buffers[channel_id] = fanout
             return fanout
 

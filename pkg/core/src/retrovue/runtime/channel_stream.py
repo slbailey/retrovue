@@ -446,7 +446,6 @@ class ChannelStream:
         channel_id: str,
         socket_path: str | Path | None = None,
         ts_source_factory: Callable[..., TsSource] | None = None,
-        hls_manager: Any | None = None,
         hls_segmenter: Any | None = None,
         *,
         ring_buffer_max_bytes: int | None = None,
@@ -461,7 +460,6 @@ class ChannelStream:
             channel_id: Channel identifier
             socket_path: UDS socket path (if None, uses ts_source_factory)
             ts_source_factory: Factory for creating TS source (for tests)
-            hls_manager: Optional legacy HLSManager to tee TS data for HLS output
             hls_segmenter: Optional HlsSegmenter (new canonical segmenter) to tee TS data
             ring_buffer_max_bytes: Max ring buffer size (overrides config)
             client_buffer_max_bytes: Per-client queue byte cap (overrides config)
@@ -482,7 +480,6 @@ class ChannelStream:
         self.channel_id = channel_id
         self.socket_path = Path(socket_path) if socket_path else None
         self.ts_source_factory = ts_source_factory
-        self.hls_manager = hls_manager
         self.hls_segmenter = hls_segmenter
         self._backpressure_policy = backpressure_policy
         self._client_buffer_max_bytes = (
@@ -838,11 +835,6 @@ class ChannelStream:
                         len(self.subscribers),
                         self.channel_id,
                     )
-            if self.hls_manager is not None:
-                try:
-                    self.hls_manager.feed(self.channel_id, chunk)
-                except Exception:
-                    pass
             if self.hls_segmenter is not None:
                 try:
                     self.hls_segmenter.feed(chunk)
