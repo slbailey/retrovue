@@ -1,53 +1,33 @@
 # REFACTOR_STATE.md — Live Execution State
 
-> This file is the chain link between turns. Every agent turn MUST read this first, do work, then update this file last before exiting.
+> This file is the chain link between turns. Every agent turn MUST:
+> 1. Read this file first
+> 2. Do ONE atomic sub-step only
+> 3. Mark it done and set the next sub-step
+> 4. Commit and report
 
 ---
 
 ## Overall Goal
-Aggressive (L3) complexity reduction of Retrovue codebase.
-- Single source of truth per concern (clock, segment window, lifecycle, diagnostics)
-- No backward compat. Delete dead paths.
-- Separate branch: `refactor/simplify-single-authority-l3`
-- PR-sized rollback units
-- Done when: single ownership map enforced, contract overlap reduced, reconnect hardened, fewer cross-component touches per feature
-
-Full locked constraints: `/opt/retrovue/SIMPLIFICATION_PLAN_V1.md`
+Aggressive (L3) complexity reduction. Single source of truth per concern.
+Full constraints: `/opt/retrovue/SIMPLIFICATION_PLAN_V1.md`
+Branch: `refactor/simplify-single-authority-l3`
 
 ---
 
-## Current Phase: 1 — COMPLETE
+## Current Phase: 2 — Lifecycle Hardening
 
-## Phase 1 Summary (2026-03-28)
-- Commit: `2488974`
-- File: `docs/architecture/AUTHORITY_MAP.md`
-- Authority map produced for 4 concerns: clock, segment-window, lifecycle, diagnostics
-- Baseline tests: 328 passed / 2 failed (pre-existing)
+## Sub-steps (do ONE per turn, mark [x] when done):
 
----
+- [ ] **2a** — Write contract test: "CM never calls PD.stop_channel directly" (test must FAIL before code change). File: `tests/contracts/test_lifecycle_authority.py`
+- [ ] **2b** — Delete dead code: `deferred_teardown_triggered()` in `pkg/core/runtime/channel_manager.py` + its poll call in `ProgramDirector._health_check_loop`. Run tests (must stay >= 328).
+- [ ] **2c** — Delete dead code: `compute_jip_position()` from `pkg/core/runtime/channel_manager.py`. Run tests.
+- [ ] **2d** — Delete dead code: `_mock_grid_*` methods from `pkg/core/runtime/channel_manager.py` (`_floor_to_grid`, `_calculate_join_offset`, `_calculate_filler_offset`, `_determine_active_content`, `_build_mock_grid_playout_plan`). Run tests.
+- [ ] **2e** — Invert linger callback: add `on_linger_expired: Callable` param to `ChannelManager.__init__`. Update `_linger_expire()` and `_start_linger()` to call `self.on_linger_expired()` instead of `program_director.stop_channel()`. Run tests.
+- [ ] **2f** — Wire PD side: update `ProgramDirector._create_channel_manager()` to inject `on_linger_expired=self._stop_channel_internal`. Run tests. Contract test from 2a should now PASS.
+- [ ] **2g** — Inject MasterClock into DslScheduleService: replace bare `datetime.now(timezone.utc)` in `_purge_expired_program_schedule` and `_maybe_extend_horizon`. Run tests.
 
-## Next Phase: 2 — Lifecycle Hardening
-
-### What to do next turn:
-1. **Invert the linger callback** in `runtime/channel_manager.py`:
-   - CM currently calls `program_director.stop_channel()` directly from `_linger_expire()`
-   - Change: CM exposes `on_linger_expired: Callable` injected by PD at creation
-   - CM calls `self.on_linger_expired()` instead of `program_director.stop_channel()`
-   - PD registers a handler that calls `_stop_channel_internal`
-   - This removes the CM→PD dependency
-2. **Delete dead code** (L3 rule — no legacy):
-   - `deferred_teardown_triggered()` in ChannelManager (BlockPlan path always returns False)
-   - Remove the poll loop call in `ProgramDirector._health_check_loop`
-   - `compute_jip_position()` in ChannelManager (deprecated, legacy)
-   - `_mock_grid_*` methods on ChannelManager (`_floor_to_grid`, `_calculate_join_offset`, `_calculate_filler_offset`, `_determine_active_content`, `_build_mock_grid_playout_plan`)
-3. **Add contract test**: "PD is sole teardown decision point — CM never calls PD.stop_channel directly"
-4. **Run tests**: `cd /opt/retrovue && pkg/core/.venv/bin/python -m pytest tests/contracts -m "contract and not soak" -q --tb=no`
-5. **Update this file** and commit all changes together
-
-### Key files:
-- `pkg/core/runtime/channel_manager.py`
-- `pkg/core/runtime/program_director.py`
-- `tests/contracts/` (add new test)
+## NEXT SUB-STEP: 2a
 
 ---
 
@@ -55,11 +35,14 @@ Full locked constraints: `/opt/retrovue/SIMPLIFICATION_PLAN_V1.md`
 | Turn | Date | Commit | What Was Done |
 |------|------|--------|---------------|
 | 0 | 2026-03-28 | 6154e89 | Created branch, committed plan, captured test baseline (328p/2f) |
-| 0b | 2026-03-28 | a0168ea | Added REFACTOR_STATE.md chain state file |
-| 1 | 2026-03-28 | 2488974 | Authority overlap map — 4 concerns mapped, 3 dead paths identified, HIGH overlap in lifecycle |
+| 0b | 2026-03-28 | a0168ea | Added REFACTOR_STATE.md |
+| 1 | 2026-03-28 | 2488974 | Authority overlap map produced |
+| 1b | 2026-03-28 | 293c545 | REFACTOR_STATE.md updated to phase 2 |
+| wip | 2026-03-28 | 0683216 | Safety check committed leftover AIR files from pre-branch work |
 
 ---
 
 ## Blockers / Notes
-- Anthropic API overload error killed last turn before REFACTOR_STATE.md could be updated — state manually corrected
-- Phase 2 is the highest-risk phase (lifecycle inversion). Contract test must come BEFORE code change.
+- Timeout was 300s — increased to 600s
+- One atomic action per turn rule added to prevent timeout mid-work
+- AIR files in wip commit (0683216) are pre-existing uncommitted work from main, not part of refactor — may need review
