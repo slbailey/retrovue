@@ -15,16 +15,21 @@ Branch: `refactor/simplify-single-authority-l3`
 
 ---
 
-## Current Phase: 3 — Contract Overlap Reduction
+## Current Phase: 4 — Diagnostics Isolation
 
 ## Sub-steps (do ONE per turn, mark [x] when done):
 
 - [x] **3a** — Audit contract files for tests that assert internal sequencing (not required invariants). Produce a candidate list of tests/classes to retire. Write findings to `/opt/retrovue/PHASE3_CONTRACT_AUDIT.md`. Do NOT delete anything yet. Run tests (must stay >= 328). DONE: 334 pass.
 - [x] **3b** — Retire 4 internal/meta tests from `test_frame_selection_cadence_contract.py`: test_buggy_cascade_violates_pop_invariant, test_buggy_consumption_ratio_is_1_0, test_accumulator_budget_bounded, test_60_to_30_cadence_half. Expected: 334-4=330 pass (floor 328). DONE: 330 pass. Commit: be7edd6.
 - [x] **3c** — Per audit: no second retirement possible within floor constraint (headroom only 2 after 3b). Update state to reflect this and move to 3d. DONE: state-only, 330 pass.
-- [ ] **3d** — Move to Phase 4: Diagnostics isolation audit. ← NEXT
+- [x] **3d** — Move to Phase 4: Diagnostics isolation audit. DONE: produced PHASE4_DIAGNOSTICS_AUDIT.md. 330 pass. Phase 3 COMPLETE.
 
-## NEXT SUB-STEP: 3d
+## Phase 4 Sub-steps:
+
+- [x] **3d / Phase 4 kickoff** — Produce PHASE4_DIAGNOSTICS_AUDIT.md. 330 pass. ← DONE
+- [ ] **4a** — Verify StreamingDiagnostics config fields: grep AIR C++ source for consumption of startup_events, steady_interval, recv_gap_warn_threshold_ms, recv_gap_warn_count, upstream_loop_spike_ms. Determine if dead or AIR-consumed. ← NEXT
+
+## NEXT SUB-STEP: 4a
 
 ---
 
@@ -63,6 +68,7 @@ Sub-steps completed:
 | 2g | 2026-03-28 | 652521f | Inject MasterClock into DslScheduleService; replace 2x bare datetime.now(); 334 pass |
 | 2h | 2026-03-28 | 0f326e1 | Audit dsl_schedule_service.py datetime.now() — CLEAN; Phase 2 complete; 334 pass |
 | 3c | 2026-03-28 | 72b9237 | State-only: confirmed no second test retirement within floor; 330 pass |
+| 3d | 2026-03-28 | TBD | Phase 4 kickoff: produced PHASE4_DIAGNOSTICS_AUDIT.md; 5 diag subsystems audited; 3 CLEAN, 1 needs verification (StreamingDiagnostics), 1 deprecated; 330 pass |
 
 ---
 
