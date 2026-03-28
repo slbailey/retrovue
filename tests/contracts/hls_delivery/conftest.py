@@ -1,13 +1,15 @@
 """
 Shared fixtures for HLS delivery contract tests.
 
-All fixtures produce synthetic TS data and operate against the HLSSegmenter
-from retrovue.streaming.hls_writer. No real AIR subprocess or network I/O
-is involved — tests validate behavioral contracts through the segmenter's
-public API and generated playlists/segments.
+All fixtures and helpers produce synthetic TS data for use with the
+new HLS stack (retrovue.runtime.hls). No real AIR subprocess or network
+I/O is involved.
 
 Contract tests MUST NOT use time.sleep. Use contract_clock for deterministic
 time advancement.
+
+NOTE: Old hls_writer.HLSSegmenter fixtures retired in refactor step 6f.
+The new stack uses HlsSegmenter (retrovue.runtime.hls.segmenter) + SegmentRing.
 """
 
 from __future__ import annotations
@@ -18,7 +20,9 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from retrovue.streaming.hls_writer import HLSSegmenter, TS_PACKET_SIZE, TS_SYNC_BYTE
+# MPEG-TS constants (canonical; no longer imported from hls_writer)
+TS_PACKET_SIZE = 188
+TS_SYNC_BYTE = 0x47
 
 
 # ---------------------------------------------------------------------------
@@ -102,18 +106,6 @@ def generate_segment_data(
     return b"".join(packets)
 
 
-def feed_n_segments(seg: HLSSegmenter, n: int, target_dur: float = 2.5) -> None:
-    """Feed enough data to finalize exactly n segments."""
-    for i in range(n):
-        pcr_start = i * target_dur
-        data = generate_segment_data(duration=target_dur, pcr_start=pcr_start)
-        seg.feed(data)
-    # Feed one more keyframe to trigger finalization of the last segment
-    final_pcr = n * target_dur
-    trigger = make_ts_packet(pid=0x100, keyframe=True, pcr=final_pcr)
-    seg.feed(trigger)
-
-
 def extract_segment_names(playlist: str) -> list[str]:
     """Extract ordered segment filenames from an M3U8 playlist string."""
     return [
@@ -166,26 +158,3 @@ def extract_segment_indices(playlist: str) -> list[int]:
         for line in playlist.splitlines()
         if (m := re.match(r"seg_(\d{5})\.ts", line.strip()))
     ]
-
-
-# ---------------------------------------------------------------------------
-# Shared fixtures
-# ---------------------------------------------------------------------------
-
-@pytest.fixture
-def segmenter():
-    """Provide a fresh HLSSegmenter with standard test configuration."""
-    seg = HLSSegmenter("test-channel", target_duration=2.0, max_segments=5)
-    seg.start()
-    yield seg
-    seg.stop()
-
-
-@pytest.fixture
-def segmenter_with_segments():
-    """Provide a segmenter with 3 finalized segments ready for inspection."""
-    seg = HLSSegmenter("test-channel", target_duration=2.0, max_segments=10)
-    seg.start()
-    feed_n_segments(seg, 3, target_dur=2.5)
-    yield seg
-    seg.stop()
