@@ -30,7 +30,7 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 - [x] **4c** — Extract `_hls_diag_*` state from ProgramDirector into a `HlsDiagnosticsState` dataclass (per-channel). PD holds one instance per channel and delegates. Does NOT change behavior — makes the boundary explicit and testable. Files: `pkg/core/src/retrovue/runtime/program_director.py`. Run tests (floor 330).
 - [x] **4d** — Verify auto-expiry (`_hls_diag_mode_until` check) is the ONLY expiry mechanism — no manual reset paths that could suppress diagnostics. Document result. Commit PHASE4_COMPLETE.md.
 
-## NEXT SUB-STEP: 5c
+## NEXT SUB-STEP: 5d
 
 ---
 
@@ -38,7 +38,7 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 
 - [x] **5a** — Delete 11 ghost TODO/pass methods from PD (lines 1642–1806). Delete `SystemHealth`, `ChannelInfo`, `ChannelStatus`. Run tests (floor 330).
 - [x] **5b** — Delete 2 dead HTTP 501 stubs (`/test/segment/...`, `/test/channel/...`). Run tests. 330 pass.
-- [ ] **5c** — Delete `play_content()` dead method from `BlockPlanProducer` in channel_manager.py. Run tests.
+- [x] **5c** — Delete `play_content()` dead method from `BlockPlanProducer` in channel_manager.py. Run tests.
 - [ ] **5d** — Move `MockBlockPlanProvider` from `playout_session.py` to `tests/fixtures/mock_block_plan.py`. Update imports. Run tests.
 - [ ] **5e** — Delete `_build_producer_for_mode` monkeypatch wrapper in `PD._get_or_create_manager()` (4 lines, zero functional change). Run tests.
 - [ ] **5f** — Replace `_start_linger()` fallback branch with `assert self.on_linger_expired is not None`. Add test confirming ChannelManager construction without callback raises. Run tests.
@@ -107,6 +107,7 @@ Future AI sessions must be unable to re-introduce these problems without visibly
 ## NEXT SUB-STEP (after 4c): Continue from current position — now 4d.
 
 | 5a | 2026-03-28 | 056f506 | Delete 11 ghost TODO/pass methods + SystemHealth/ChannelInfo/ChannelStatus; 197 lines removed; 330 pass |
+| 5c | 2026-03-28 | 26288d3 | Delete play_content() ghost from BlockPlanProducer; demote to default in base; 330 pass |
 
 ---
 
