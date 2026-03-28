@@ -25,9 +25,10 @@ Branch: `refactor/simplify-single-authority-l3`
 - [x] **2d** — Delete dead code: `_mock_grid_*` methods from `pkg/core/runtime/channel_manager.py` (`_floor_to_grid`, `_calculate_join_offset`, `_calculate_filler_offset`, `_determine_active_content`, `_build_mock_grid_playout_plan`). Run tests.
 - [x] **2e** — Invert linger callback: add `on_linger_expired: Callable` param to `ChannelManager.__init__`. Update `_linger_expire()` and `_start_linger()` to call `self.on_linger_expired()` instead of `program_director.stop_channel()`. Run tests. (commit e396513, 333 passed)
 - [x] **2f** — Wire PD side: update `ProgramDirector._create_channel_manager()` to inject `on_linger_expired=self._stop_channel_internal`. Run tests. Contract test from 2a should now PASS. (commit 1ce56d8, 334 passed, contract GREEN)
-- [ ] **2g** — Inject MasterClock into DslScheduleService: replace bare `datetime.now(timezone.utc)` in `_purge_expired_program_schedule` and `_maybe_extend_horizon`. Run tests.
+- [x] **2g** — Inject MasterClock into DslScheduleService: replace bare `datetime.now(timezone.utc)` in `_purge_expired_program_schedule` and `_build_initial`. PD injects `self._embedded_clock`. Run tests. (commit 652521f, 334 passed)
+- [ ] **2h** — Audit remaining `datetime.now(timezone.utc)` calls in `dsl_schedule_service.py` (lines ~1005 area already done). Check if `_maybe_extend_horizon` caller at line 975 passes now_utc_ms from ChannelManager correctly (no bare datetime.now there). Then move to Phase 3: identify next authority overlap.
 
-## NEXT SUB-STEP: 2g
+## NEXT SUB-STEP: 2h
 
 ---
 
@@ -44,6 +45,8 @@ Branch: `refactor/simplify-single-authority-l3`
 | 2c | 2026-03-28 | 39ded8f | Deleted compute_jip_position() 58 lines; 331 pass |
 | 2d | 2026-03-28 | 522b298 | Deleted _mock_grid_* methods; 333 pass |
 | 2e | 2026-03-28 | e396513 | Add on_linger_expired callback to ChannelManager, invert linger dep; 333 pass |
+| 2f | 2026-03-28 | 1ce56d8 | Wire PD: inject on_linger_expired=self._stop_channel_internal; 334 pass, contract GREEN |
+| 2g | 2026-03-28 | 652521f | Inject MasterClock into DslScheduleService; replace 2x bare datetime.now(); 334 pass |
 
 ---
 
