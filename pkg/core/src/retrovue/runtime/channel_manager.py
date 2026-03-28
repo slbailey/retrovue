@@ -22,7 +22,7 @@ import weakref
 from datetime import datetime, timedelta, timezone
 from enum import Enum, auto
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 # P11E-001: Single source for prefeed/startup timing (env RETROVUE_MIN_PREFEED_LEAD_TIME_MS).
@@ -344,6 +344,7 @@ class ChannelManager:
         event_loop: asyncio.AbstractEventLoop | None = None,
         evidence_endpoint: str = "",
         resolved_config: Any = None,
+        on_linger_expired: Callable[[], None] | None = None,
     ):
         """
         Initialize the ChannelManager for a specific channel.
@@ -356,6 +357,8 @@ class ChannelManager:
             event_loop: Optional event loop for P11F-005; when set, switch issuance uses call_later instead of threading.Timer
             evidence_endpoint: host:port for evidence gRPC, empty = disabled
             resolved_config: Frozen resolved config from config resolver (REQUIRED)
+            on_linger_expired: Callback invoked when linger timer fires and no viewers remain.
+                               If None, falls back to calling program_director.stop_channel directly (legacy).
         """
         if resolved_config is None:
             raise RuntimeError(
@@ -367,6 +370,7 @@ class ChannelManager:
         assert self.clock is not None, "ChannelManager requires a MasterClock"
         self.schedule_service = schedule_service
         self.program_director = program_director
+        self.on_linger_expired: Callable[[], None] | None = on_linger_expired
         self._loop: asyncio.AbstractEventLoop | None = event_loop
         self._evidence_endpoint = evidence_endpoint
         # P11F-005: asyncio handle when using event loop (cancel on teardown)
@@ -723,7 +727,9 @@ class ChannelManager:
                 "[channel %s] LINGER_SKIP (no event loop); stopping producer and tearing down",
                 self.channel_id,
             )
-            if hasattr(self.program_director, "stop_channel"):
+            if self.on_linger_expired is not None:
+                self.on_linger_expired()
+            elif hasattr(self.program_director, "stop_channel"):
                 self.program_director.stop_channel(self.channel_id, reason="last_viewer_left")
             else:
                 self._channel_state = "STOPPED"
@@ -741,7 +747,9 @@ class ChannelManager:
             )
             # Full teardown: notify ProgramDirector so channel is removed and AIR is stopped.
             # Pass reason so AIR logs "last_viewer_left" only when stop was due to viewer leave.
-            if hasattr(self.program_director, "stop_channel"):
+            if self.on_linger_expired is not None:
+                self.on_linger_expired()
+            elif hasattr(self.program_director, "stop_channel"):
                 self.program_director.stop_channel(self.channel_id, reason="last_viewer_left")
             else:
                 self._channel_state = "STOPPED"
