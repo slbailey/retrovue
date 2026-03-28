@@ -802,6 +802,8 @@ class ProgramDirector:
         from retrovue.runtime.channel_manager import (
             BlockPlanProducer,
             ChannelManager,
+        )
+        from retrovue.runtime.mock_schedule_services import (
             MockAlternatingScheduleService,
             MockGridScheduleService,
         )
@@ -838,7 +840,7 @@ class ProgramDirector:
         self._channel_config_provider = channel_config_provider
         # Mock A/B without config file: provide minimal blockplan config for test-1.
         if self._channel_config_provider is None and self._mock_schedule_ab_mode:
-            from retrovue.runtime.channel_manager import MockAlternatingScheduleService
+            from retrovue.runtime.mock_schedule_services import MockAlternatingScheduleService
             test1_config = ChannelConfig(
                 channel_id=MockAlternatingScheduleService.MOCK_AB_CHANNEL_ID,
                 number=1,
@@ -860,7 +862,7 @@ class ProgramDirector:
         # Embedded mock A/B or grid: use the single embedded schedule service for that channel.
         if self._schedule_service is not None:
             if self._mock_schedule_ab_mode:
-                from retrovue.runtime.channel_manager import MockAlternatingScheduleService
+                from retrovue.runtime.mock_schedule_services import MockAlternatingScheduleService
                 if channel_id == MockAlternatingScheduleService.MOCK_AB_CHANNEL_ID:
                     return self._schedule_service
             if self._mock_schedule_grid_mode:
@@ -1161,7 +1163,7 @@ class ProgramDirector:
                 return []
             return self._channel_config_provider.list_channel_ids()
         if self._mock_schedule_ab_mode:
-            from retrovue.runtime.channel_manager import MockAlternatingScheduleService
+            from retrovue.runtime.mock_schedule_services import MockAlternatingScheduleService
             channel_id = MockAlternatingScheduleService.MOCK_AB_CHANNEL_ID
             success, _ = self._schedule_service.load_schedule(channel_id)
             return [channel_id] if success else []

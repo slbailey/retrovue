@@ -13,8 +13,8 @@ import pytest
 
 from retrovue.runtime.channel_manager import (
     ChannelManager,
-    MockGridScheduleService,
 )
+from retrovue.runtime.mock_schedule_services import MockGridScheduleService
 from retrovue.runtime.clock import MasterClock
 from retrovue.config.testing import TEST_RESOLVED_CONFIG
 
