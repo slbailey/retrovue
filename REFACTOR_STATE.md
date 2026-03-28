@@ -61,7 +61,7 @@ Sub-steps completed:
 | 2e | 2026-03-28 | e396513 | Add on_linger_expired callback to ChannelManager, invert linger dep; 333 pass |
 | 2f | 2026-03-28 | 1ce56d8 | Wire PD: inject on_linger_expired=self._stop_channel_internal; 334 pass, contract GREEN |
 | 2g | 2026-03-28 | 652521f | Inject MasterClock into DslScheduleService; replace 2x bare datetime.now(); 334 pass |
-| 2h | 2026-03-28 | (pending) | Audit dsl_schedule_service.py datetime.now() — CLEAN; Phase 2 complete; 334 pass |
+| 2h | 2026-03-28 | 0f326e1 | Audit dsl_schedule_service.py datetime.now() — CLEAN; Phase 2 complete; 334 pass |
 
 ---
 
