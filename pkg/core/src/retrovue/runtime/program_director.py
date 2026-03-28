@@ -1829,28 +1829,29 @@ class ProgramDirector:
 
     def _get_or_create_fanout_buffer(self, channel_id: str, manager: Any) -> Optional[ChannelStream]:
         """
-        Phase 0 contract: Get or create FanoutBuffer (ChannelStream) for a channel.
-        
+        Phase 8c: Get or create FanoutBuffer (ChannelStream) for a channel.
+
+        PD owns the _fanout_buffers dict (lifecycle: when to create/remove entries).
+        TsConsumptionAdapter._wire_fanout() owns ChannelStream construction logic.
+
         Args:
             channel_id: Channel identifier
             manager: ChannelManager instance
-            
+
         Returns:
             ChannelStream instance or None if Producer not available
         """
         with self._fanout_lock:
-            # Embedded mode + test mode: fake TS source (no real Producer)
-            if (
-                self._channel_manager_provider is None
-                and self._test_mode
-            ):
+            # Test mode: fake TS source (no real Producer)
+            if self._channel_manager_provider is None and self._test_mode:
                 if channel_id in self._fanout_buffers:
                     return self._fanout_buffers[channel_id]
-                def ts_source_factory(_stop_event=None) -> FakeTsSource:
-                    return FakeTsSource()
-                fanout = ChannelStream(
-                    channel_id=channel_id,
-                    ts_source_factory=ts_source_factory)
+                # Delegate ChannelStream construction to TsConsumptionAdapter
+                fanout = self._ts_adapter._wire_fanout(
+                    channel_id,
+                    manager=None,
+                    test_mode=True,
+                )
                 self._fanout_buffers[channel_id] = fanout
                 return fanout
 
@@ -1867,96 +1868,17 @@ class ProgramDirector:
             if not producer:
                 return None
 
-            # Phase 8 Air: we are the UDS server; the already-accepted socket is in reader_socket_queue.
-            # Use that socket (do not connect to the path — the listener is closed after Air connects).
-            reader_queue = getattr(producer, "reader_socket_queue", None)
-            if reader_queue is not None:
-                self._logger.info(
-                    "Using reader_socket_queue for channel %s (socket from Air)",
-                    channel_id,
-                )
-
-                def ts_source_factory(stop_event=None) -> Any:
-                    # INV-CHANNEL-STREAM-RECONNECT-001: Resolve the *current*
-                    # producer's queue at call time so reconnect after AIR
-                    # restart picks up the new producer's socket.
-                    #
-                    # INV-CHANNEL-STREAM-SHUTDOWN-001: stop_event is passed by
-                    # ChannelStream._create_ts_source so that all blocking waits
-                    # here can be interrupted within the 5s stop() deadline.
-                    for attempt in range(6):
-                        if stop_event is not None and stop_event.is_set():
-                            raise RuntimeError(
-                                "Factory cancelled (shutdown) for %s" % channel_id
-                            )
-                        current_producer = getattr(manager, "active_producer", None)
-                        if current_producer is None:
-                            self._logger.debug(
-                                "Factory: no active_producer for %s (attempt %d/6)",
-                                channel_id, attempt + 1,
-                            )
-                            if stop_event is not None:
-                                if stop_event.wait(timeout=2.0):
-                                    raise RuntimeError(
-                                        "Factory cancelled (shutdown) for %s" % channel_id
-                                    )
-                            else:
-                                time.sleep(2.0)
-                            continue
-                        current_queue = getattr(current_producer, "reader_socket_queue", None)
-                        if current_queue is None:
-                            self._logger.debug(
-                                "Factory: no reader_socket_queue for %s (attempt %d/6)",
-                                channel_id, attempt + 1,
-                            )
-                            if stop_event is not None:
-                                if stop_event.wait(timeout=2.0):
-                                    raise RuntimeError(
-                                        "Factory cancelled (shutdown) for %s" % channel_id
-                                    )
-                            else:
-                                time.sleep(2.0)
-                            continue
-                        # Poll the queue in short bursts so stop_event can interrupt.
-                        deadline = time.monotonic() + 2.0
-                        while time.monotonic() < deadline:
-                            if stop_event is not None and stop_event.is_set():
-                                raise RuntimeError(
-                                    "Factory cancelled (shutdown) for %s" % channel_id
-                                )
-                            try:
-                                sock = current_queue.get(timeout=0.1)
-                                self._logger.info(
-                                    "Got socket from queue for channel %s",
-                                    channel_id,
-                                )
-                                return SocketTsSource(sock)
-                            except queue.Empty:
-                                pass
-                        self._logger.debug(
-                            "Reader queue empty for channel %s (attempt %d/6)",
-                            channel_id, attempt + 1,
-                        )
-                    raise RuntimeError(
-                        "Timed out waiting for socket from reader_socket_queue for %s"
-                        % channel_id
-                    )
-
-                # Wire HLS segmenter from ChannelManager if available
-                _hls_seg = getattr(manager, "hls_segmenter", None)
-                fanout = ChannelStream(channel_id=channel_id, ts_source_factory=ts_source_factory, hls_segmenter=_hls_seg)
-                self._fanout_buffers[channel_id] = fanout
-                return fanout
-
-            # Fallback: Producer exposes only socket_path (legacy/test); connect as client (may fail if server closed).
-            socket_path = getattr(producer, "socket_path", None)
-            if not socket_path:
+            # Delegate ChannelStream construction to TsConsumptionAdapter.
+            # Phase 8c: construction logic (socket queue, socket_path fallback,
+            # FakeTsSource test path) lives in TsConsumptionAdapter._wire_fanout().
+            fanout = self._ts_adapter._wire_fanout(
+                channel_id,
+                manager=manager,
+                test_mode=False,
+                channel_stream_factory=self._channel_stream_factory,
+            )
+            if fanout is None:
                 return None
-            if self._channel_stream_factory:
-                fanout = self._channel_stream_factory(channel_id, str(socket_path))
-            else:
-                _hls_seg = getattr(manager, "hls_segmenter", None)
-                fanout = ChannelStream(channel_id=channel_id, socket_path=socket_path, hls_segmenter=_hls_seg)
             self._fanout_buffers[channel_id] = fanout
             return fanout
 

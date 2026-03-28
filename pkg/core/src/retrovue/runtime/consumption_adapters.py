@@ -163,16 +163,143 @@ class HlsConsumptionAdapter:
 
 
 class TsConsumptionAdapter:
-    """Owns raw TS fanout wiring (Phase 8c stub).
+    """Owns raw TS fanout wiring.
 
     INV-SINGLE-ACTIVATION-PATH-001: TS viewers activate channels through
     PD.start_channel() — this adapter adds TS-specific fanout wiring
     but does not own channel lifecycle.
 
-    Phase 8c will extract _wire_fanout() from ProgramDirector here.
+    Phase 8c: _wire_fanout() extracted from ProgramDirector._get_or_create_fanout_buffer().
+    PD retains ownership of the _fanout_buffers dict (lifecycle), but the ChannelStream
+    construction logic lives here. PD calls _wire_fanout() for the actual creation.
     """
 
     def __init__(self, logger: Optional[logging.Logger] = None) -> None:
         self._logger = logger or logging.getLogger(__name__)
 
-    # Phase 8c: _wire_fanout(channel_id, mgr) will be added here.
+    def _wire_fanout(
+        self,
+        channel_id: str,
+        manager: Any,
+        *,
+        test_mode: bool = False,
+        channel_stream_factory: Any = None,
+    ) -> Any:
+        """Construct and return a new ChannelStream for this channel.
+
+        Called by ProgramDirector._get_or_create_fanout_buffer() when no existing
+        fanout is present. PD manages the _fanout_buffers dict (add/remove entries);
+        this method owns only the ChannelStream construction logic.
+
+        Args:
+            channel_id: Channel identifier.
+            manager: ChannelManager for this channel (provides active_producer,
+                     reader_socket_queue, hls_segmenter).
+            test_mode: If True, construct a FakeTsSource-backed stream (no real AIR).
+            channel_stream_factory: Optional factory callable(channel_id, socket_path)
+                                    -> ChannelStream used in tests.
+
+        Returns:
+            A new ChannelStream instance, or None if the producer is not ready.
+        """
+        import queue as _queue
+        import time as _time
+        from retrovue.runtime.channel_stream import ChannelStream, FakeTsSource, SocketTsSource
+
+        # Test mode: no real producer, use FakeTsSource
+        if test_mode and manager is None:
+            def ts_source_factory(_stop_event=None) -> FakeTsSource:
+                return FakeTsSource()
+            return ChannelStream(channel_id=channel_id, ts_source_factory=ts_source_factory)
+
+        # Check for real producer
+        producer = getattr(manager, "active_producer", None)
+        if not producer:
+            return None
+
+        # AIR UDS socket path: use reader_socket_queue (server mode)
+        reader_queue = getattr(producer, "reader_socket_queue", None)
+        if reader_queue is not None:
+            self._logger.info(
+                "TsConsumptionAdapter: using reader_socket_queue for channel %s", channel_id,
+            )
+
+            def ts_source_factory(stop_event=None) -> Any:
+                # INV-CHANNEL-STREAM-RECONNECT-001: Resolve the *current*
+                # producer's queue at call time so reconnect after AIR
+                # restart picks up the new producer's socket.
+                #
+                # INV-CHANNEL-STREAM-SHUTDOWN-001: stop_event is passed by
+                # ChannelStream._create_ts_source so that all blocking waits
+                # here can be interrupted within the 5s stop() deadline.
+                import time as _t
+                for attempt in range(6):
+                    if stop_event is not None and stop_event.is_set():
+                        raise RuntimeError(
+                            "Factory cancelled (shutdown) for %s" % channel_id
+                        )
+                    current_producer = getattr(manager, "active_producer", None)
+                    if current_producer is None:
+                        self._logger.debug(
+                            "Factory: no active_producer for %s (attempt %d/6)",
+                            channel_id, attempt + 1,
+                        )
+                        if stop_event is not None:
+                            if stop_event.wait(timeout=2.0):
+                                raise RuntimeError(
+                                    "Factory cancelled (shutdown) for %s" % channel_id
+                                )
+                        else:
+                            _t.sleep(2.0)
+                        continue
+                    current_queue = getattr(current_producer, "reader_socket_queue", None)
+                    if current_queue is None:
+                        self._logger.debug(
+                            "Factory: no reader_socket_queue for %s (attempt %d/6)",
+                            channel_id, attempt + 1,
+                        )
+                        if stop_event is not None:
+                            if stop_event.wait(timeout=2.0):
+                                raise RuntimeError(
+                                    "Factory cancelled (shutdown) for %s" % channel_id
+                                )
+                        else:
+                            _t.sleep(2.0)
+                        continue
+                    # Poll the queue in short bursts so stop_event can interrupt.
+                    deadline = _t.monotonic() + 2.0
+                    while _t.monotonic() < deadline:
+                        if stop_event is not None and stop_event.is_set():
+                            raise RuntimeError(
+                                "Factory cancelled (shutdown) for %s" % channel_id
+                            )
+                        try:
+                            sock = current_queue.get(timeout=0.1)
+                            self._logger.info(
+                                "Got socket from queue for channel %s", channel_id,
+                            )
+                            return SocketTsSource(sock)
+                        except _queue.Empty:
+                            pass
+                    self._logger.debug(
+                        "Reader queue empty for channel %s (attempt %d/6)",
+                        channel_id, attempt + 1,
+                    )
+                raise RuntimeError(
+                    "Timed out waiting for socket from reader_socket_queue for %s"
+                    % channel_id
+                )
+
+            _hls_seg = getattr(manager, "hls_segmenter", None)
+            return ChannelStream(channel_id=channel_id, ts_source_factory=ts_source_factory, hls_segmenter=_hls_seg)
+
+        # Fallback: Producer exposes only socket_path (legacy/test); connect as client.
+        socket_path = getattr(producer, "socket_path", None)
+        if not socket_path:
+            return None
+
+        if channel_stream_factory:
+            return channel_stream_factory(channel_id, str(socket_path))
+
+        _hls_seg = getattr(manager, "hls_segmenter", None)
+        return ChannelStream(channel_id=channel_id, socket_path=socket_path, hls_segmenter=_hls_seg)
