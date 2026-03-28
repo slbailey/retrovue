@@ -727,12 +727,11 @@ class ChannelManager:
                 "[channel %s] LINGER_SKIP (no event loop); stopping producer and tearing down",
                 self.channel_id,
             )
-            if self.on_linger_expired is not None:
-                self.on_linger_expired()
-            else:
-                self._channel_state = "STOPPED"
-                self._stop_reason = "last_viewer_left"
-                self._stop_producer_if_idle()
+            assert self.on_linger_expired is not None, (
+                "INV-LIFECYCLE-PD-SOLE-TEARDOWN-001 violated: "
+                "ChannelManager created without on_linger_expired callback"
+            )
+            self.on_linger_expired()
 
     def _linger_expire(self) -> None:
         """Linger timer fired. If still no viewers, stop producer and tear down (AIR exits after linger)."""
@@ -745,12 +744,11 @@ class ChannelManager:
             )
             # Full teardown: notify ProgramDirector so channel is removed and AIR is stopped.
             # Pass reason so AIR logs "last_viewer_left" only when stop was due to viewer leave.
-            if self.on_linger_expired is not None:
-                self.on_linger_expired()
-            else:
-                self._channel_state = "STOPPED"
-                self._stop_reason = "last_viewer_left"
-                self._stop_producer_if_idle()
+            assert self.on_linger_expired is not None, (
+                "INV-LIFECYCLE-PD-SOLE-TEARDOWN-001 violated: "
+                "ChannelManager created without on_linger_expired callback"
+            )
+            self.on_linger_expired()
 
     def _cancel_linger(self) -> None:
         """Cancel any pending linger timer."""
