@@ -186,6 +186,11 @@ bool SeamPreparer::HasPending() const {
   return !queue_.empty();
 }
 
+bool SeamPreparer::HasBlockPrerollClaimed() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return block_in_pipeline_;
+}
+
 void SeamPreparer::SetDelayHook(DelayHookFn hook) {
   std::lock_guard<std::mutex> lock(mutex_);
   delay_hook_ = std::move(hook);

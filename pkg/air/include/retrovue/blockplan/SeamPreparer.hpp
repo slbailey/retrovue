@@ -120,6 +120,12 @@ class SeamPreparer {
   // True if queue is non-empty.
   bool HasPending() const;
 
+  // INV-BLOCK-PREROLL-1IN-FLIGHT-001: true from Submit(kBlock) until the last
+  // queued/completed block result is consumed by TakeBlockResult().  Unlike
+  // IsRunning(), this is true while a kBlock is only queued (worker has not
+  // popped yet).  Callers MUST NOT start another block preroll when this is true.
+  bool HasBlockPrerollClaimed() const;
+
   // Test-only: inject delay before AssignBlock in worker.
   void SetDelayHook(DelayHookFn hook);
 

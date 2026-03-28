@@ -496,19 +496,30 @@ void PipelineManager::TryKickoffBlockPreload(int64_t tick) {
   // Guard 2: INV-BLOCK-PREROLL-1IN-FLIGHT-001 — at most ONE block occupies the
   // preroll pipeline (SeamPreparer worker → block_results_ → preview_) at any instant.
   //
-  // Three conditions must ALL be clear before starting a new block preroll:
-  //   (a) HasBlockResult()    — no completed result waiting to be taken into preview_
-  //   (b) IsRunning()         — worker is not actively prerolling a block
-  //   (c) preview_ != nullptr — no prerolled block waiting to be activated as live_
+  // Four conditions must ALL be clear before starting a new block preroll:
+  //   (a) HasBlockResult()         — no completed result waiting to be taken into preview_
+  //   (b) IsRunning()                — worker is not actively prerolling a request
+  //   (c) preview_ != nullptr       — no prerolled block waiting to be activated as live_
+  //   (d) HasBlockPrerollClaimed()  — SeamPreparer has accepted a kBlock Submit() and
+  //                                   not yet released it (includes: queued but worker
+  //                                   has not popped — IsRunning() is still false).
   //
-  // Without all three: rapid startup or same-fence_tick submissions can place two
+  // Without (a–c): rapid startup or same-fence_tick submissions can place two
   // blocks into block_results_ in completion order rather than schedule order.
   // FIFO consumption (TakeBlockResult → preview_) then promotes the wrong block,
   // causing a block to be skipped at fence time (proven: The Hobbit, 2026-03-17).
   //
+  // Without (d): the main tick thread can call TryKickoffBlockPreload twice in the
+  // same frame (e.g. padded-gap exit + end-of-tick). The first Submit(kBlock) sets
+  // block_in_pipeline_ before the worker sets worker_active_; the second call passes
+  // (a–c) and aborts inside Submit() — Cheers 2026-03-27, INV-BLOCK-PREROLL-1IN-FLIGHT-001.
+  //
   // Note: this guard covers BLOCK preroll only. ArmSegmentPrep submits kSegment
   // requests independently and is unaffected — no segment starvation risk here.
-  if (seam_preparer_->HasBlockResult() || seam_preparer_->IsRunning() || preview_ != nullptr) return;
+  if (seam_preparer_->HasBlockResult() || seam_preparer_->IsRunning() || preview_ != nullptr ||
+      seam_preparer_->HasBlockPrerollClaimed()) {
+    return;
+  }
 
   bool has_next = false;
   FedBlock block;
