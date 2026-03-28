@@ -272,15 +272,6 @@ streaming:
   slow_client:
     put_timeout_seconds: 3.0
 
-  # --- diagnostics (Core transport) -------------------------------------
-  diagnostics:
-    enabled: false
-    startup_events: 200
-    steady_interval: 100
-    recv_gap_warn_threshold_ms: 40
-    recv_gap_warn_count: 10
-    upstream_loop_spike_ms: 50.0
-
   # --- FFmpeg / legacy probe defaults -----------------------------------
   ffmpeg:
     read_from_files_live: true

@@ -29,9 +29,13 @@ Branch: `refactor/simplify-single-authority-l3`
 - [x] **3d / Phase 4 kickoff** — Produce PHASE4_DIAGNOSTICS_AUDIT.md. 330 pass. ← DONE
 - [x] **4a** — Verify StreamingDiagnostics config fields: grep AIR C++ source for consumption of startup_events, steady_interval, recv_gap_warn_threshold_ms, recv_gap_warn_count, upstream_loop_spike_ms. Determine if dead or AIR-consumed. DONE: DEAD in both Python runtime AND AIR C++ src. No cpp/h references. Only schema.py + testing.py. Remove in 4b.
 
-- [ ] **4b** — Remove StreamingDiagnostics class from schema.py, remove diagnostics field from StreamingSchema, remove from testing.py fixtures. Run tests (must stay >= 328).
+- [x] **4b** — Remove StreamingDiagnostics class from schema.py, remove diagnostics field from StreamingSchema, remove from testing.py fixtures and defaults.yaml. 330 pass. DONE.
 
-## NEXT SUB-STEP: 4b
+## NEXT SUB-STEP: 4c
+
+## Phase 4 Sub-steps (continued):
+
+- [ ] **4c** — Audit: identify next dead config field or diagnostics coupling to remove. If Phase 4 is clean, produce PHASE4_COMPLETE.md and move to Phase 5.
 
 ---
 
@@ -71,6 +75,7 @@ Sub-steps completed:
 | 2h | 2026-03-28 | 0f326e1 | Audit dsl_schedule_service.py datetime.now() — CLEAN; Phase 2 complete; 334 pass |
 | 3c | 2026-03-28 | 72b9237 | State-only: confirmed no second test retirement within floor; 330 pass |
 | 3d | 2026-03-28 | TBD | Phase 4 kickoff: produced PHASE4_DIAGNOSTICS_AUDIT.md; 5 diag subsystems audited; 3 CLEAN, 1 needs verification (StreamingDiagnostics), 1 deprecated; 330 pass |
+| 4b | 2026-03-28 | TBD | Remove StreamingDiagnostics class+field from schema.py, testing.py, defaults.yaml (26 lines deleted); 330 pass |
 
 ---
 

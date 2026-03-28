@@ -189,14 +189,6 @@ def make_test_config(**overrides: Any) -> MappingProxyType[str, Any]:
             "slow_client": {
                 "put_timeout_seconds": 3.0,
             },
-            "diagnostics": {
-                "enabled": False,
-                "startup_events": 200,
-                "steady_interval": 100,
-                "recv_gap_warn_threshold_ms": 40,
-                "recv_gap_warn_count": 10,
-                "upstream_loop_spike_ms": 50.0,
-            },
             "ffmpeg": {
                 "read_from_files_live": True,
                 "probe_size": "10M",

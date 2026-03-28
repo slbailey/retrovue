@@ -205,14 +205,6 @@ class StreamingBackpressure(_Strict):
 class StreamingSlowClient(_Strict):
     put_timeout_seconds: float
 
-class StreamingDiagnostics(_Strict):
-    enabled: bool
-    startup_events: int
-    steady_interval: int
-    recv_gap_warn_threshold_ms: int
-    recv_gap_warn_count: int
-    upstream_loop_spike_ms: float
-
 class StreamingFfmpeg(_Strict):
     read_from_files_live: bool
     probe_size: str
@@ -227,7 +219,6 @@ class StreamingSchema(_Strict):
     upstream_poll_timeout_seconds: float
     backpressure: StreamingBackpressure
     slow_client: StreamingSlowClient
-    diagnostics: StreamingDiagnostics
     ffmpeg: StreamingFfmpeg
 
 
