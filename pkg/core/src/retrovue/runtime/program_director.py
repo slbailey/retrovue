@@ -1101,13 +1101,6 @@ class ProgramDirector:
                 manager._mock_grid_filler_epoch = datetime(
                     2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc
                 )
-            cfg = channel_config
-            # ChannelManager always uses BlockPlanProducer.
-            _cm_build = ChannelManager._build_producer_for_mode
-
-            def factory_wrapper(mode: str, cfg: ChannelConfig = cfg) -> Optional[Any]:
-                return _cm_build(manager, mode)
-            manager._build_producer_for_mode = factory_wrapper
             self._managers[channel_id] = manager
             self._logger.info(
                 "[channel %s] ChannelManager created (channel_id_int=%d)",

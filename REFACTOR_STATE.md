@@ -30,7 +30,7 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 - [x] **4c** — Extract `_hls_diag_*` state from ProgramDirector into a `HlsDiagnosticsState` dataclass (per-channel). PD holds one instance per channel and delegates. Does NOT change behavior — makes the boundary explicit and testable. Files: `pkg/core/src/retrovue/runtime/program_director.py`. Run tests (floor 330).
 - [x] **4d** — Verify auto-expiry (`_hls_diag_mode_until` check) is the ONLY expiry mechanism — no manual reset paths that could suppress diagnostics. Document result. Commit PHASE4_COMPLETE.md.
 
-## NEXT SUB-STEP: 5d
+## NEXT SUB-STEP: 5f
 
 ---
 
@@ -39,8 +39,8 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 - [x] **5a** — Delete 11 ghost TODO/pass methods from PD (lines 1642–1806). Delete `SystemHealth`, `ChannelInfo`, `ChannelStatus`. Run tests (floor 330).
 - [x] **5b** — Delete 2 dead HTTP 501 stubs (`/test/segment/...`, `/test/channel/...`). Run tests. 330 pass.
 - [x] **5c** — Delete `play_content()` dead method from `BlockPlanProducer` in channel_manager.py. Run tests.
-- [ ] **5d** — Move `MockBlockPlanProvider` from `playout_session.py` to `tests/fixtures/mock_block_plan.py`. Update imports. Run tests.
-- [ ] **5e** — Delete `_build_producer_for_mode` monkeypatch wrapper in `PD._get_or_create_manager()` (4 lines, zero functional change). Run tests.
+- [x] **5d** — Move `MockBlockPlanProvider` from `playout_session.py` to `tests/fixtures/mock_block_plan.py`. Update imports. Run tests.
+- [x] **5e** — Delete `_build_producer_for_mode` monkeypatch wrapper in `PD._get_or_create_manager()` (4 lines, zero functional change). Run tests.
 - [ ] **5f** — Replace `_start_linger()` fallback branch with `assert self.on_linger_expired is not None`. Add test confirming ChannelManager construction without callback raises. Run tests.
 - [ ] **5g** — After all ghost deletions: update CLAUDE.md to add rule: "No TODO/pass methods. If a method is not implemented, do not create it. Ghost scaffolding is forbidden."
 
@@ -142,6 +142,8 @@ Future AI sessions must be unable to re-introduce these problems without visibly
 
 | 4c | 2026-03-28 | d9b02b6 | Extract _hls_diag_* into HlsDiagnosticsState dataclass; 330 pass |
 | 4d | 2026-03-28 | 5e7be6a | Expiry audit — auto-expiry sole mechanism; fix stale contract test; PHASE4_COMPLETE.md |
+| 5d | 2026-03-28 | (prior turn) | MockBlockPlanProvider already in tests/fixtures/mock_block_plan.py — marked retroactively |
+| 5e | 2026-03-28 | (this turn) | Delete _build_producer_for_mode monkeypatch wrapper from PD; 7 lines removed; 330 pass |
 ## Blockers / Notes
 - Cron was disabled for deep analysis — re-enabled after REFACTOR_STATE.md update
 - Phase 9 is mandatory — code cleanup without model lockdown is temporary
