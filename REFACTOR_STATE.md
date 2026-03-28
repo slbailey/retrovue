@@ -21,7 +21,7 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 
 ---
 
-## Current Phase: 4 — Diagnostics Isolation
+## Current Phase: 5 → 6 — Phase 5 COMPLETE; entering Phase 6 (Old HLS Stack Removal)
 
 ## Sub-steps (do ONE per turn, mark [x] when done):
 
@@ -30,7 +30,7 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 - [x] **4c** — Extract `_hls_diag_*` state from ProgramDirector into a `HlsDiagnosticsState` dataclass (per-channel). PD holds one instance per channel and delegates. Does NOT change behavior — makes the boundary explicit and testable. Files: `pkg/core/src/retrovue/runtime/program_director.py`. Run tests (floor 330).
 - [x] **4d** — Verify auto-expiry (`_hls_diag_mode_until` check) is the ONLY expiry mechanism — no manual reset paths that could suppress diagnostics. Document result. Commit PHASE4_COMPLETE.md.
 
-## NEXT SUB-STEP: 5f
+## NEXT SUB-STEP: 6a
 
 ---
 
@@ -42,7 +42,7 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 - [x] **5d** — Move `MockBlockPlanProvider` from `playout_session.py` to `tests/fixtures/mock_block_plan.py`. Update imports. Run tests.
 - [x] **5e** — Delete `_build_producer_for_mode` monkeypatch wrapper in `PD._get_or_create_manager()` (4 lines, zero functional change). Run tests.
 - [ ] **5f** — Replace `_start_linger()` fallback branch with `assert self.on_linger_expired is not None`. Add test confirming ChannelManager construction without callback raises. Run tests.
-- [ ] **5g** — After all ghost deletions: update CLAUDE.md to add rule: "No TODO/pass methods. If a method is not implemented, do not create it. Ghost scaffolding is forbidden."
+- [x] **5g** — After all ghost deletions: update CLAUDE.md to add rule: "No TODO/pass methods. If a method is not implemented, do not create it. Ghost scaffolding is forbidden."
 
 ---
 
@@ -150,3 +150,4 @@ Future AI sessions must be unable to re-introduce these problems without visibly
 - Phase 9 is mandatory — code cleanup without model lockdown is temporary
 - Each phase now ends with a CLAUDE.md update to prevent re-introduction
 - Test floor: 330 passing (up from baseline 328)
+| 5g | 2026-03-28 | (this turn) | CLAUDE.md ghost prohibition rule added (INV-NO-GHOST-METHODS-001); Phase 5 complete; 330 pass |

@@ -229,3 +229,24 @@ ACKNOWLEDGEMENT
 ────────────────────────
 Confirm understanding of RetroVue as a multi-component broadcast simulation platform with strict separation between editorial orchestration (Core) and runtime playout execution (AIR).
 Do not proceed until this model is accepted.
+
+────────────────────────
+GHOST METHOD PROHIBITION (INV-NO-GHOST-METHODS-001)
+────────────────────────
+No production module may contain unimplemented method stubs.
+
+Forbidden patterns:
+- def some_method(self, ...): pass
+- def some_method(self, ...): raise NotImplementedError("TODO")
+- def some_method(self, ...):  # TODO: implement
+- Any method whose entire body is a no-op, pass, or deferred TODO
+
+Rule: If a method is not implemented, do not create it.
+Ghost scaffolding creates false API surface, misleads future readers,
+and violates INV-NO-GHOST-METHODS-001.
+
+If you need a stub for future work: write the contract test first (RED),
+leave it failing, and do not create a method placeholder in production code.
+
+Violating this rule is a contract violation — not a style issue.
+Reference invariant: INV-NO-GHOST-METHODS-001 in docs/contracts/INVARIANTS.md
