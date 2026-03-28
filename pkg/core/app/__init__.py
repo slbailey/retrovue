@@ -13,7 +13,7 @@ try:
     from retrovue.schedule_manager.schedule_service import ScheduleService
 except ImportError:
     # Fallback to the protocol (from src)
-    from retrovue.runtime.channel_manager import ScheduleService
+    from retrovue.runtime.protocols import ScheduleService
 
 __all__ = ["ScheduleService"]
 

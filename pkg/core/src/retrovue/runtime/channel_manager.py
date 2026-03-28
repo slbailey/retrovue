@@ -49,7 +49,7 @@ from .config import (
     MOCK_CHANNEL_CONFIG,
 )
 from ..usecases import channel_manager_launch
-from typing import Protocol, Sequence, TYPE_CHECKING
+from typing import Sequence, TYPE_CHECKING
 from dataclasses import dataclass, field
 from datetime import datetime
 import logging
@@ -91,47 +91,10 @@ from .playout_session import FeedResult
 
 
 # ----------------------------------------------------------------------
-# Protocols
+# Protocols — canonical definitions live in retrovue/runtime/protocols.py
+# Re-exported here for backward compatibility.
 # ----------------------------------------------------------------------
-
-
-class ScheduleService(Protocol):
-    """Read-only schedule accessor."""
-
-    def get_playout_plan_now(
-        self,
-        channel_id: str,
-        at_station_time: datetime,
-    ) -> list[dict[str, Any]]:
-        """
-        Return the resolved segment sequence that should be airing 'right now' on this channel.
-
-        Must include correct timing offsets so we can join mid-program instead of restarting at frame 0.
-        Must NOT mutate schedule state.
-        """
-        ...
-
-    def get_block_at(self, channel_id: str, utc_ms: int) -> "ScheduledBlock | None":
-        """Return the fully constructed block covering the given wall-clock time.
-
-        READ-ONLY: This is a pure query over pre-built horizon data.
-        It MUST NOT trigger schedule generation, pipeline execution, or grid rebuild.
-        It MAY perform idempotent day resolution (INV-P5-002) in legacy mode.
-
-        Returns ScheduledBlock or None (planning failure).
-        """
-        ...
-
-
-class ProgramDirector(Protocol):
-    """Global policy/mode provider."""
-
-    def get_channel_mode(self, channel_id: str) -> str:
-        """
-        Return the required mode for this channel: "normal", "emergency", "guide", etc.
-        ChannelManager is not allowed to make this decision on its own.
-        """
-        ...
+from .protocols import ScheduleService, ProgramDirectorProtocol as ProgramDirector  # noqa: F401
 
 
 # ----------------------------------------------------------------------
