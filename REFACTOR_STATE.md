@@ -106,6 +106,8 @@ Future AI sessions must be unable to re-introduce these problems without visibly
 
 ## NEXT SUB-STEP (after 4c): Continue from current position — now 4d.
 
+| 5a | 2026-03-28 | (pending) | Delete 11 ghost TODO/pass methods + SystemHealth/ChannelInfo/ChannelStatus; 197 lines removed; 330 pass |
+
 | 5a | 2026-03-28 | 056f506 | Delete 11 ghost TODO/pass methods + SystemHealth/ChannelInfo/ChannelStatus; 197 lines removed; 330 pass |
 | 5c | 2026-03-28 | 26288d3 | Delete play_content() ghost from BlockPlanProducer; demote to default in base; 330 pass |
 

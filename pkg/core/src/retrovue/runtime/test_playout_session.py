@@ -35,9 +35,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from retrovue.runtime.playout_session import (
     BlockPlan,
-    MockBlockPlanProvider,
     PlayoutSession,
 )
+from tests.fixtures.mock_block_plan import MockBlockPlanProvider
 
 logging.basicConfig(
     level=logging.INFO,
