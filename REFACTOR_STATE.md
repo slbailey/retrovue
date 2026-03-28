@@ -30,7 +30,7 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 - [x] **4c** — Extract `_hls_diag_*` state from ProgramDirector into a `HlsDiagnosticsState` dataclass (per-channel). PD holds one instance per channel and delegates. Does NOT change behavior — makes the boundary explicit and testable. Files: `pkg/core/src/retrovue/runtime/program_director.py`. Run tests (floor 330).
 - [x] **4d** — Verify auto-expiry (`_hls_diag_mode_until` check) is the ONLY expiry mechanism — no manual reset paths that could suppress diagnostics. Document result. Commit PHASE4_COMPLETE.md.
 
-## NEXT SUB-STEP: 7d — Update CLAUDE.md to add rule: "Production modules contain only production code. Mocks, fixtures, and test harnesses belong in tests/fixtures/. Protocols belong in runtime/protocols.py."
+## NEXT SUB-STEP: 8a — Write contract test for Phase 8 (Consumption Adapter Model): channel lifecycle is PD-owned; HLS and TS are consumption adapters sharing same CM activation path. Must FAIL before code change. "Production modules contain only production code. Mocks, fixtures, and test harnesses belong in tests/fixtures/. Protocols belong in runtime/protocols.py."
 
 ## Phase 6g — HLS Contract Test Migration (TABLED — do after Phase 7)
 
@@ -81,7 +81,7 @@ Risk is HIGH operationally — old stack may be masking new stack bugs. Validate
 - [x] **7a** — Move `MockGridScheduleService` and `MockAlternatingScheduleService` from `channel_manager.py` to `tests/fixtures/mock_schedule_services.py`. Update 4 import sites in `program_director.py`. Run tests.
 - [x] **7b** — Move `Playlist`, `PlaylistSegment` from `channel_manager.py` to `retrovue/scheduling/playlist_types.py`. Update import in `scheduling/playlist_schedule_manager.py`. Run tests.
 - [x] **7c** — Move `ProgramDirector` Protocol and `ScheduleService` Protocol from `channel_manager.py` to `retrovue/runtime/protocols.py`. Update import sites. Run tests.
-- [ ] **7d** — After relocation: update CLAUDE.md to add rule: "Production modules contain only production code. If a class is only instantiated in tests or behind mock_* flags, it belongs in tests/fixtures/, not in runtime/."
+- [x] **7d** — After relocation: update CLAUDE.md to add rule: "Production modules contain only production code. If a class is only instantiated in tests or behind mock_* flags, it belongs in tests/fixtures/, not in runtime/."
 
 ---
 
@@ -179,3 +179,4 @@ Future AI sessions must be unable to re-introduce these problems without visibly
 | 7a | 2026-03-28 | c2d9d33 | Move MockGridScheduleService+MockAlternatingScheduleService to mock_schedule_services.py; 4 import sites in PD + 1 test updated; 252 pass |
 | 7b | 2026-03-28 | e8958e6 | Move Playlist+PlaylistSegment to scheduling/playlist_types.py; re-export in channel_manager.py; 252 pass, 2 pre-existing failures, no regressions |
 | 7c | 2026-03-28 | 713ae7d | Move ScheduleService+ProgramDirector Protocols to runtime/protocols.py; re-export in channel_manager.py; 252 pass, 2 pre-existing failures, no regressions |
+| 7d | 2026-03-28 | f94ff7e | Add INV-PRODUCTION-BOUNDARY-001 to CLAUDE.md + INVARIANTS.md; register INV-NO-GHOST-METHODS-001 in index; 252 pass, 2 pre-existing failures, no regressions |
