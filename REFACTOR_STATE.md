@@ -30,7 +30,7 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 - [x] **4c** — Extract `_hls_diag_*` state from ProgramDirector into a `HlsDiagnosticsState` dataclass (per-channel). PD holds one instance per channel and delegates. Does NOT change behavior — makes the boundary explicit and testable. Files: `pkg/core/src/retrovue/runtime/program_director.py`. Run tests (floor 330).
 - [x] **4d** — Verify auto-expiry (`_hls_diag_mode_until` check) is the ONLY expiry mechanism — no manual reset paths that could suppress diagnostics. Document result. Commit PHASE4_COMPLETE.md.
 
-## NEXT SUB-STEP: 6a
+## NEXT SUB-STEP: 6b
 
 ---
 
@@ -51,7 +51,7 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 Treat this as a broadcast infrastructure migration, not a code deletion.
 Risk is HIGH operationally — old stack may be masking new stack bugs. Validate before delete.
 
-- [ ] **6a** — Audit: confirm no active production clients use /hls/ endpoints. Check IPTV M3U output, Plex lineup, config files. Smoke test /channels/ returns valid manifests.
+- [x] **6a** — Audit: confirm no active production clients use /hls/ endpoints. Check IPTV M3U output, Plex lineup, config files. Smoke test /channels/ returns valid manifests.
 - [ ] **6b** — Shadow validation: add temporary response comparison logging — when a request hits /channels/, internally validate old stack would have produced equivalent output. Log any divergence. Run for one 15-min turn.
 - [ ] **6c** — Review shadow log. If clean: proceed to 6d. If divergences found: fix in new stack first, then re-run 6b.
 - [ ] **6d** — Remove /hls/ endpoint handlers from PD. Remove self._hls_manager instantiation and stop_all() call. Keep hls_writer.py module for now (rollback safety).
@@ -145,6 +145,8 @@ Future AI sessions must be unable to re-introduce these problems without visibly
 | 5d | 2026-03-28 | (prior turn) | MockBlockPlanProvider already in tests/fixtures/mock_block_plan.py — marked retroactively |
 | 5e | 2026-03-28 | (this turn) | Delete _build_producer_for_mode monkeypatch wrapper from PD; 7 lines removed; 330 pass |
 | 5f | 2026-03-28 | 99f63d2 | Assert on_linger_expired required at CM construction; remove else-fallback branch from _start_linger; add INV contract test; 203/runtime passed (+1 new GREEN); no regressions |
+| 6a | 2026-03-28 | (this turn) | Audit: /hls/ has zero active clients. lineup.json uses /channel/.ts only. No /hls/ hits in 48h logs. renderer_template.py dead code. /hls/ stack safe to remove. 330 pass |
+
 ## Blockers / Notes
 - Cron was disabled for deep analysis — re-enabled after REFACTOR_STATE.md update
 - Phase 9 is mandatory — code cleanup without model lockdown is temporary
