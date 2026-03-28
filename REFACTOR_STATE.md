@@ -24,10 +24,10 @@ Branch: `refactor/simplify-single-authority-l3`
 - [x] **2c** — Delete dead code: `compute_jip_position()` from `pkg/core/runtime/channel_manager.py`. Run tests.
 - [x] **2d** — Delete dead code: `_mock_grid_*` methods from `pkg/core/runtime/channel_manager.py` (`_floor_to_grid`, `_calculate_join_offset`, `_calculate_filler_offset`, `_determine_active_content`, `_build_mock_grid_playout_plan`). Run tests.
 - [x] **2e** — Invert linger callback: add `on_linger_expired: Callable` param to `ChannelManager.__init__`. Update `_linger_expire()` and `_start_linger()` to call `self.on_linger_expired()` instead of `program_director.stop_channel()`. Run tests. (commit e396513, 333 passed)
-- [ ] **2f** — Wire PD side: update `ProgramDirector._create_channel_manager()` to inject `on_linger_expired=self._stop_channel_internal`. Run tests. Contract test from 2a should now PASS.
+- [x] **2f** — Wire PD side: update `ProgramDirector._create_channel_manager()` to inject `on_linger_expired=self._stop_channel_internal`. Run tests. Contract test from 2a should now PASS. (commit 1ce56d8, 334 passed, contract GREEN)
 - [ ] **2g** — Inject MasterClock into DslScheduleService: replace bare `datetime.now(timezone.utc)` in `_purge_expired_program_schedule` and `_maybe_extend_horizon`. Run tests.
 
-## NEXT SUB-STEP: 2f
+## NEXT SUB-STEP: 2g
 
 ---
 
