@@ -25,7 +25,7 @@ import math
 from datetime import datetime, timedelta
 from typing import Sequence
 
-from retrovue.runtime.channel_manager import Playlist, PlaylistSegment
+from retrovue.scheduling.playlist_types import Playlist, PlaylistSegment
 
 # ---------------------------------------------------------------------------
 # Constants (internal — not exposed across the Playlist boundary)

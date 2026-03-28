@@ -23,7 +23,7 @@ from typing import Sequence
 
 import pytest
 
-from retrovue.runtime.channel_manager import Playlist, PlaylistSegment
+from retrovue.scheduling.playlist_types import Playlist, PlaylistSegment
 
 
 # ---------------------------------------------------------------------------
