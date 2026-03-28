@@ -345,7 +345,6 @@ class _RawTSResponse(Response):
 
 import re as _re
 
-from retrovue.streaming.hls_writer import HLSManager
 
 _HLS_SEGMENT_RE = _re.compile(r"^seg_\d{5}\.ts$")
 
@@ -613,12 +612,6 @@ class ProgramDirector:
         # Phase 0: System mode
         self._system_mode = SystemMode.NORMAL
 
-        # HLS Manager
-        self._hls_manager = HLSManager()
-        # HLS activity tracking: channel_id -> last fetch timestamp (time.monotonic)
-        self._hls_last_activity: dict[str, float] = {}
-        self._hls_phantom_sessions: dict[str, str] = {}  # channel_id -> hls_session_id
-        self._hls_activity_lock = threading.Lock()
 
         # Conditional diagnostic mode (per channel): minimal steady-state overhead.
         # State is encapsulated in HlsDiagnosticsState; PD holds one instance and delegates.
@@ -1536,9 +1529,6 @@ class ProgramDirector:
         # Shutdown startup executor
         self._startup_executor.shutdown(wait=False)
 
-        # Stop all HLS writers
-        self._hls_manager.stop_all()
-
         # INV-TEARDOWN-SIGNAL-BEFORE-KILL: Signal all fanout stop events first
         # so reader loops see _stop_event when AIR sockets close, avoiding
         # spurious reconnect attempts during shutdown.
@@ -1775,7 +1765,7 @@ class ProgramDirector:
                     fanout = ChannelStream(
                         channel_id=channel_id,
                         ts_source_factory=lambda stop_event=None, s=sock: SocketTsSource(s),
-                        hls_manager=self._hls_manager,
+                        hls_manager=None,
                         hls_segmenter=_hls_seg,
                     )
                     self._fanout_buffers[channel_id] = fanout
@@ -1913,7 +1903,7 @@ class ProgramDirector:
                 fanout = ChannelStream(
                     channel_id=channel_id,
                     ts_source_factory=ts_source_factory,
-                    hls_manager=self._hls_manager,
+                    hls_manager=None,
                 )
                 self._fanout_buffers[channel_id] = fanout
                 return fanout
@@ -2008,7 +1998,7 @@ class ProgramDirector:
 
                 # Wire HLS segmenter from ChannelManager if available
                 _hls_seg = getattr(manager, "hls_segmenter", None)
-                fanout = ChannelStream(channel_id=channel_id, ts_source_factory=ts_source_factory, hls_manager=self._hls_manager, hls_segmenter=_hls_seg)
+                fanout = ChannelStream(channel_id=channel_id, ts_source_factory=ts_source_factory, hls_manager=None, hls_segmenter=_hls_seg)
                 self._fanout_buffers[channel_id] = fanout
                 return fanout
 
@@ -2020,7 +2010,7 @@ class ProgramDirector:
                 fanout = self._channel_stream_factory(channel_id, str(socket_path))
             else:
                 _hls_seg = getattr(manager, "hls_segmenter", None)
-                fanout = ChannelStream(channel_id=channel_id, socket_path=socket_path, hls_manager=self._hls_manager, hls_segmenter=_hls_seg)
+                fanout = ChannelStream(channel_id=channel_id, socket_path=socket_path, hls_manager=None, hls_segmenter=_hls_seg)
             self._fanout_buffers[channel_id] = fanout
             return fanout
 
@@ -2518,212 +2508,6 @@ class ProgramDirector:
             return HTMLResponse(content=html)
 
 
-        # --- HLS Endpoints ---
-
-        @self.fastapi_app.get("/hls/{channel_id}/live.m3u8")
-        async def hls_playlist(channel_id: str, request: Request) -> Response:
-            """Serve HLS playlist.
-
-            If a raw-TS viewer is already connected (ChannelStream running),
-            the segmenter is fed via tee in the reader loop — just ensure
-            the segmenter is started.
-
-            If no viewer exists, start the channel normally (tune_in triggers
-            FFmpeg).  The ChannelStream reader loop will tee to HLS.
-
-            HLS phantom viewer lifecycle: phantom tunes in when first HLS
-            client requests the playlist, and tunes out after no client has
-            fetched a playlist or segment for LINGER_SECONDS. This lets the
-            normal viewer_count -> 0 -> linger -> teardown lifecycle work.
-            """
-            import time as _time
-
-            # INV-HLS-PHANTOM-CLEANUP-001: Activity tracking moved to
-            # success path only.  503 retries MUST NOT refresh the
-            # timestamp — otherwise the phantom never idles out.
-
-            seg = self._hls_manager.get_or_create(channel_id)
-            if not seg.is_running():
-                # INV-CHANNEL-STARTUP-CONCURRENCY-001: Fail fast when at capacity.
-                if self._startup_semaphore.locked():
-                    return Response(
-                        content="Server at startup capacity, try again shortly",
-                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    )
-
-                seg.start()
-
-                # INV-CHANNEL-STARTUP-NONBLOCKING-001 + CONCURRENCY-001: Acquire
-                # semaphore, then offload manager acquisition + tune_in to the
-                # bounded executor so the event loop is never blocked.
-                hls_session_id = f"hls-{channel_id}-{uuid.uuid4().hex[:8]}"
-                with self._hls_activity_lock:
-                    self._hls_phantom_sessions[channel_id] = hls_session_id
-                    # INV-HLS-PHANTOM-CLEANUP-001: Set initial activity so
-                    # the drain thread has a valid baseline.  Subsequent
-                    # updates only happen on successful (200) responses.
-                    self._hls_last_activity[channel_id] = _time.monotonic()
-
-                await self._startup_semaphore.acquire()
-                try:
-                    def _startup_hls_channel():
-                        if self._channel_manager_provider is not None:
-                            mgr = self._channel_manager_provider.get_channel_manager(channel_id)
-                        else:
-                            mgr = self._get_or_create_manager(channel_id)
-                        mgr.tune_in(hls_session_id, {"channel_id": channel_id})
-                        return mgr
-
-                    loop = asyncio.get_running_loop()
-                    manager = await loop.run_in_executor(
-                        self._startup_executor, _startup_hls_channel
-                    )
-                except Exception as e:
-                    self._logger.warning("HLS startup error: %s", e)
-                    manager = None
-                finally:
-                    self._startup_semaphore.release()
-
-                # Wait for fanout (which starts the reader loop that tees to HLS)
-                fanout = None
-                for _ in range(20 if manager is not None else 0):
-                    fanout = self._get_or_create_fanout_buffer(channel_id, manager)
-                    if fanout:
-                        break
-                    await asyncio.sleep(1)
-                if fanout:
-                    hls_queue = fanout.subscribe(hls_session_id)
-                    import threading as _td
-
-                    # Drain thread: keeps fanout alive, but monitors HLS client activity.
-                    # When no client has fetched playlist/segments for LINGER_SECONDS,
-                    # the phantom disconnects — letting viewer_count hit 0 and linger begin.
-                    def _drain_hls_phantom(q=hls_queue, s=seg, mgr=manager, sid=hls_session_id, cid=channel_id):
-                        IDLE_CHECK_INTERVAL = 5.0  # seconds between idle checks
-                        # Use the channel manager's LINGER_SECONDS if available, else default 20s
-                        idle_timeout = getattr(mgr, 'LINGER_SECONDS', 20)
-                        self._logger.info(
-                            "[HLS-phantom %s] started, idle_timeout=%ds", cid, idle_timeout
-                        )
-                        while s.is_running():
-                            try:
-                                chunk = q.get(timeout=IDLE_CHECK_INTERVAL)
-                                if not chunk:
-                                    break
-                            except Exception:
-                                pass
-                            # Check if any HLS client is still active
-                            with self._hls_activity_lock:
-                                last = self._hls_last_activity.get(cid, 0)
-                            idle_seconds = _time.monotonic() - last
-                            if idle_seconds > idle_timeout:
-                                self._logger.info(
-                                    "[HLS-phantom %s] no client activity for %.0fs (timeout=%ds), disconnecting",
-                                    cid, idle_seconds, idle_timeout
-                                )
-                                break
-
-                        # Cleanup: tune out the phantom viewer
-                        self._logger.info("[HLS-phantom %s] tearing down phantom viewer %s", cid, sid)
-                        try:
-                            mgr.tune_out(sid)
-                        except Exception as e:
-                            self._logger.warning("[HLS-phantom %s] tune_out error: %s", cid, e)
-                        try:
-                            fanout.unsubscribe(sid)
-                        except Exception:
-                            pass
-                        # Stop the segmenter
-                        try:
-                            s.stop()
-                        except Exception:
-                            pass
-                        # Clean up tracking
-                        with self._hls_activity_lock:
-                            self._hls_phantom_sessions.pop(cid, None)
-                            self._hls_last_activity.pop(cid, None)
-
-                    _td.Thread(target=_drain_hls_phantom, daemon=True, name=f"hls-phantom-{channel_id}").start()
-                else:
-                    # INV-HLS-PHANTOM-CLEANUP-001: Startup failed — no fanout
-                    # created.  Clean up the zombie segmenter and phantom
-                    # session so the next request can retry startup fresh.
-                    self._logger.warning(
-                        "[HLS %s] startup failed (no fanout), cleaning up phantom %s",
-                        channel_id, hls_session_id,
-                    )
-                    seg.stop()
-                    if manager is not None:
-                        try:
-                            manager.tune_out(hls_session_id)
-                        except Exception:
-                            pass
-                    with self._hls_activity_lock:
-                        self._hls_phantom_sessions.pop(channel_id, None)
-                        self._hls_last_activity.pop(channel_id, None)
-                    return Response(
-                        content="Channel not available",
-                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    )
-
-                # Wait for first segment to be ready
-                ready = await asyncio.get_event_loop().run_in_executor(
-                    None, seg.wait_for_playlist, 15.0
-                )
-
-            playlist_content = seg.get_playlist()
-            if playlist_content is None:
-                return Response(
-                    content="Playlist not ready yet",
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                )
-            # INV-HLS-PHANTOM-CLEANUP-001: Only refresh activity on success.
-            with self._hls_activity_lock:
-                self._hls_last_activity[channel_id] = _time.monotonic()
-            return Response(
-                content=playlist_content,
-                media_type="application/vnd.apple.mpegurl",
-                headers={
-                    "Cache-Control": "no-cache, no-store",
-                    "Access-Control-Allow-Origin": "*",
-                },
-            )
-
-        @self.fastapi_app.get("/hls/{channel_id}/{segment}")
-        async def hls_segment(channel_id: str, segment: str) -> Response:
-            """Serve HLS .ts segments."""
-            import time as _time
-
-            if not _HLS_SEGMENT_RE.match(segment):
-                return Response(content="Not found", status_code=404)
-            segmenter = self._hls_manager.get_or_create(channel_id)
-            seg_data = segmenter.get_segment(segment)
-            if seg_data is None:
-                return Response(content="Not found", status_code=404)
-            # INV-HLS-PHANTOM-CLEANUP-001: Only refresh activity on success.
-            with self._hls_activity_lock:
-                self._hls_last_activity[channel_id] = _time.monotonic()
-            return Response(
-                content=seg_data,
-                media_type="video/mpeg",
-                headers={
-                    "Cache-Control": "public, no-cache",
-                    "Access-Control-Allow-Origin": "*",
-                },
-            )
-
-        @self.fastapi_app.post("/hls/{channel_id}/tune_out")
-        async def hls_tune_out(channel_id: str) -> Response:
-            """Immediate HLS viewer disconnect signal (called via sendBeacon on page unload)."""
-            import time as _time
-            with self._hls_activity_lock:
-                phantom = self._hls_phantom_sessions.get(channel_id)
-                if phantom:
-                    # Set last activity to epoch so the drain thread sees immediate timeout
-                    self._hls_last_activity[channel_id] = 0
-                    self._logger.info("[HLS %s] tune_out received, forcing phantom idle", channel_id)
-            return Response(status_code=204)
-
         # ---------------------------------------------------------------
         # New canonical HLS endpoints (Phase 6 — backed by SegmentRing)
         # ---------------------------------------------------------------
@@ -2818,58 +2602,6 @@ class ProgramDirector:
                     channel_id, req_id, ring_count, is_active,
                 )
 
-            # 6b SHADOW VALIDATION: Log new-stack manifest metrics.
-            # If old segmenter is also running, compare and log divergence.
-            try:
-                import re as _re
-
-                def _parse_manifest_sequence(m: str) -> int | None:
-                    match = _re.search(r"#EXT-X-MEDIA-SEQUENCE:(\d+)", m)
-                    return int(match.group(1)) if match else None
-
-                def _parse_manifest_segment_count(m: str) -> int:
-                    return len(_re.findall(r"#EXTINF:", m))
-
-                new_seq = _parse_manifest_sequence(playlist)
-                new_seg_count = _parse_manifest_segment_count(playlist)
-                self._logger.debug(
-                    "[SHADOW][%s] new-stack manifest: seq=%s seg_count=%d ring_count=%d",
-                    channel_id, new_seq, new_seg_count, ring_count,
-                )
-
-                # Compare against old stack if its segmenter is still running
-                old_seg = self._hls_manager.get_or_create(channel_id) if hasattr(self, "_hls_manager") else None
-                if old_seg is not None and old_seg.is_running():
-                    old_playlist = old_seg.get_playlist()
-                    if old_playlist is not None:
-                        old_seq = _parse_manifest_sequence(old_playlist)
-                        old_seg_count = _parse_manifest_segment_count(old_playlist)
-                        self._logger.debug(
-                            "[SHADOW][%s] old-stack manifest: seq=%s seg_count=%d",
-                            channel_id, old_seq, old_seg_count,
-                        )
-                        # Log divergence if sequence gap is large (>window size)
-                        if new_seq is not None and old_seq is not None:
-                            seq_gap = abs(new_seq - old_seq)
-                            if seq_gap > 10:
-                                self._logger.warning(
-                                    "[SHADOW-DIVERGENCE][%s] MEDIA-SEQUENCE gap=%d new=%s old=%s req_id=%s",
-                                    channel_id, seq_gap, new_seq, old_seq, req_id,
-                                )
-                        if abs(new_seg_count - old_seg_count) > 2:
-                            self._logger.warning(
-                                "[SHADOW-DIVERGENCE][%s] seg_count mismatch new=%d old=%d req_id=%s",
-                                channel_id, new_seg_count, old_seg_count, req_id,
-                            )
-                    else:
-                        self._logger.debug(
-                            "[SHADOW][%s] old-stack segmenter running but no playlist yet", channel_id
-                        )
-                else:
-                    self._logger.debug("[SHADOW][%s] old-stack segmenter not running — clean", channel_id)
-            except Exception as _shadow_ex:
-                self._logger.debug("[SHADOW][%s] shadow validation error: %s", channel_id, _shadow_ex)
-            # END 6b SHADOW VALIDATION
 
             return Response(
                 content=playlist,
