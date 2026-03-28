@@ -15,20 +15,34 @@ Branch: `refactor/simplify-single-authority-l3`
 
 ---
 
-## Current Phase: 2 — Lifecycle Hardening
+## Current Phase: 3 — Contract Overlap Reduction
 
 ## Sub-steps (do ONE per turn, mark [x] when done):
 
-- [x] **2a** — Write contract test: "CM never calls PD.stop_channel directly" (test must FAIL before code change). File: `tests/contracts/test_lifecycle_authority.py`
-- [x] **2b** — Delete dead code: `deferred_teardown_triggered()` in `pkg/core/runtime/channel_manager.py` + its poll call in `ProgramDirector._health_check_loop`. Run tests (must stay >= 328).
-- [x] **2c** — Delete dead code: `compute_jip_position()` from `pkg/core/runtime/channel_manager.py`. Run tests.
-- [x] **2d** — Delete dead code: `_mock_grid_*` methods from `pkg/core/runtime/channel_manager.py` (`_floor_to_grid`, `_calculate_join_offset`, `_calculate_filler_offset`, `_determine_active_content`, `_build_mock_grid_playout_plan`). Run tests.
-- [x] **2e** — Invert linger callback: add `on_linger_expired: Callable` param to `ChannelManager.__init__`. Update `_linger_expire()` and `_start_linger()` to call `self.on_linger_expired()` instead of `program_director.stop_channel()`. Run tests. (commit e396513, 333 passed)
-- [x] **2f** — Wire PD side: update `ProgramDirector._create_channel_manager()` to inject `on_linger_expired=self._stop_channel_internal`. Run tests. Contract test from 2a should now PASS. (commit 1ce56d8, 334 passed, contract GREEN)
-- [x] **2g** — Inject MasterClock into DslScheduleService: replace bare `datetime.now(timezone.utc)` in `_purge_expired_program_schedule` and `_build_initial`. PD injects `self._embedded_clock`. Run tests. (commit 652521f, 334 passed)
-- [ ] **2h** — Audit remaining `datetime.now(timezone.utc)` calls in `dsl_schedule_service.py` (lines ~1005 area already done). Check if `_maybe_extend_horizon` caller at line 975 passes now_utc_ms from ChannelManager correctly (no bare datetime.now there). Then move to Phase 3: identify next authority overlap.
+- [ ] **3a** — Audit contract files for tests that assert internal sequencing (not required invariants). Produce a candidate list of tests/classes to retire. Write findings to `/opt/retrovue/PHASE3_CONTRACT_AUDIT.md`. Do NOT delete anything yet. Run tests (must stay >= 328).
+- [ ] **3b** — Retire first candidate contract class/test identified in 3a (the weakest / most internal-sequencing one). Run tests.
+- [ ] **3c** — Retire second candidate if any. Run tests.
+- [ ] **3d** — Move to Phase 4: Diagnostics isolation audit.
 
-## NEXT SUB-STEP: 2h
+## NEXT SUB-STEP: 3a
+
+---
+
+## Phase 2 — COMPLETED
+
+Sub-steps completed:
+- [x] **2a** — Write contract test: "CM never calls PD.stop_channel directly" (FAIL before code change).
+- [x] **2b** — Delete dead code: deferred_teardown_triggered() + poll call in PD._health_check_loop.
+- [x] **2c** — Delete dead code: compute_jip_position() from ChannelManager.
+- [x] **2d** — Delete dead code: _mock_grid_* methods from ChannelManager.
+- [x] **2e** — Invert linger callback: add on_linger_expired: Callable to ChannelManager.__init__.
+- [x] **2f** — Wire PD side: inject on_linger_expired=self._stop_channel_internal. Contract GREEN.
+- [x] **2g** — Inject MasterClock into DslScheduleService; replace 2x bare datetime.now().
+- [x] **2h** — Audit remaining datetime.now() in dsl_schedule_service.py. Result: CLEAN.
+  - No bare datetime.now() calls remain.
+  - _maybe_extend_horizon receives now_utc_ms from ChannelManager caller correctly.
+  - _purge_expired_program_schedule fallback uses self._clock.now_utc() (MasterClock injected).
+  - 334 pass, 2 pre-existing failures unrelated to this phase.
 
 ---
 
@@ -47,10 +61,12 @@ Branch: `refactor/simplify-single-authority-l3`
 | 2e | 2026-03-28 | e396513 | Add on_linger_expired callback to ChannelManager, invert linger dep; 333 pass |
 | 2f | 2026-03-28 | 1ce56d8 | Wire PD: inject on_linger_expired=self._stop_channel_internal; 334 pass, contract GREEN |
 | 2g | 2026-03-28 | 652521f | Inject MasterClock into DslScheduleService; replace 2x bare datetime.now(); 334 pass |
+| 2h | 2026-03-28 | (pending) | Audit dsl_schedule_service.py datetime.now() — CLEAN; Phase 2 complete; 334 pass |
 
 ---
 
 ## Blockers / Notes
 - Timeout was 300s — increased to 600s
 - One atomic action per turn rule added to prevent timeout mid-work
-- AIR files in wip commit (0683216) are pre-existing uncommitted work from main, not part of refactor — may need review
+- AIR files in wip commit (0683216) are pre-existing uncommitted work from main, not part of refactor
+- 2 pre-existing test failures in test_interstitial_enrichment.py (unmatched_directory and known_type_directory filler defaults) — NOT caused by this branch
