@@ -44,6 +44,7 @@ def test_runway_follows_injected_clock_not_wall_clock():
         schedule_service=schedule_service,
         program_director=program_director,
         resolved_config=TEST_RESOLVED_CONFIG,
+        on_linger_expired=lambda: None,
     )
     cm.set_blockplan_mode(True)
 

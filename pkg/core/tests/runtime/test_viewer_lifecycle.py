@@ -104,6 +104,7 @@ class TestViewerLifecycle:
             schedule_service=self.schedule_service,
             program_director=self.program_director,
             resolved_config=TEST_RESOLVED_CONFIG,
+        on_linger_expired=lambda: None,
         )
         cm.set_blockplan_mode(True)
         return cm
@@ -381,6 +382,7 @@ class TestLingerGracePeriod:
                 program_director=self.program_director,
                 event_loop=loop,
                 resolved_config=TEST_RESOLVED_CONFIG,
+                on_linger_expired=lambda: None,
             )
             cm.set_blockplan_mode(True)
 
@@ -407,6 +409,7 @@ class TestLingerGracePeriod:
             schedule_service=self.schedule_service,
             program_director=self.program_director,
             resolved_config=TEST_RESOLVED_CONFIG,
+            on_linger_expired=lambda: None,
             # event_loop not passed → self._loop is None
         )
         cm.set_blockplan_mode(True)

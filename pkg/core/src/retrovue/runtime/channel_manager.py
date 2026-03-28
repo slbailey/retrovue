@@ -370,7 +370,12 @@ class ChannelManager:
         assert self.clock is not None, "ChannelManager requires a MasterClock"
         self.schedule_service = schedule_service
         self.program_director = program_director
-        self.on_linger_expired: Callable[[], None] | None = on_linger_expired
+        assert on_linger_expired is not None, (
+            "INV-LIFECYCLE-PD-SOLE-TEARDOWN-001 violated: "
+            "ChannelManager must be constructed with on_linger_expired callback. "
+            "PD is the sole teardown authority — omitting this callback is forbidden."
+        )
+        self.on_linger_expired: Callable[[], None] = on_linger_expired
         self._loop: asyncio.AbstractEventLoop | None = event_loop
         self._evidence_endpoint = evidence_endpoint
         # P11F-005: asyncio handle when using event loop (cancel on teardown)
@@ -727,10 +732,6 @@ class ChannelManager:
                 "[channel %s] LINGER_SKIP (no event loop); stopping producer and tearing down",
                 self.channel_id,
             )
-            assert self.on_linger_expired is not None, (
-                "INV-LIFECYCLE-PD-SOLE-TEARDOWN-001 violated: "
-                "ChannelManager created without on_linger_expired callback"
-            )
             self.on_linger_expired()
 
     def _linger_expire(self) -> None:
@@ -744,10 +745,6 @@ class ChannelManager:
             )
             # Full teardown: notify ProgramDirector so channel is removed and AIR is stopped.
             # Pass reason so AIR logs "last_viewer_left" only when stop was due to viewer leave.
-            assert self.on_linger_expired is not None, (
-                "INV-LIFECYCLE-PD-SOLE-TEARDOWN-001 violated: "
-                "ChannelManager created without on_linger_expired callback"
-            )
             self.on_linger_expired()
 
     def _cancel_linger(self) -> None:
