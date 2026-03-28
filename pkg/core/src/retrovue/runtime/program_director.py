@@ -3182,18 +3182,6 @@ class ProgramDirector:
                          "X-Accel-Buffering": "no"},
             )
 
-        @self.fastapi_app.get("/test/segment/{asset_id}.ts")
-        async def test_segment_stream(request: Request, asset_id: str) -> Response:
-            return Response(content="not yet implemented",
-                            status_code=status.HTTP_501_NOT_IMPLEMENTED)
-
-        @self.fastapi_app.get("/test/channel/{channel_id}.ts")
-        async def test_channel_stream_at(
-            request: Request, channel_id: str, t: Optional[int] = None
-        ) -> Response:
-            return Response(content="not yet implemented",
-                            status_code=status.HTTP_501_NOT_IMPLEMENTED)
-
         @self.fastapi_app.post("/lineup.post")
         def plex_lineup_post():
             """Plex channel scan trigger (POST) — no-op for virtual tuner."""

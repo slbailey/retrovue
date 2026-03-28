@@ -30,14 +30,14 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 - [x] **4c** — Extract `_hls_diag_*` state from ProgramDirector into a `HlsDiagnosticsState` dataclass (per-channel). PD holds one instance per channel and delegates. Does NOT change behavior — makes the boundary explicit and testable. Files: `pkg/core/src/retrovue/runtime/program_director.py`. Run tests (floor 330).
 - [x] **4d** — Verify auto-expiry (`_hls_diag_mode_until` check) is the ONLY expiry mechanism — no manual reset paths that could suppress diagnostics. Document result. Commit PHASE4_COMPLETE.md.
 
-## NEXT SUB-STEP: 5b
+## NEXT SUB-STEP: 5c
 
 ---
 
 ## Phase 5 — Ghost Surface Deletion (ZERO RISK)
 
 - [x] **5a** — Delete 11 ghost TODO/pass methods from PD (lines 1642–1806). Delete `SystemHealth`, `ChannelInfo`, `ChannelStatus`. Run tests (floor 330).
-- [ ] **5b** — Delete 2 dead HTTP 501 stubs (`/test/segment/...`, `/test/channel/...`). Run tests.
+- [x] **5b** — Delete 2 dead HTTP 501 stubs (`/test/segment/...`, `/test/channel/...`). Run tests. 330 pass.
 - [ ] **5c** — Delete `play_content()` dead method from `BlockPlanProducer` in channel_manager.py. Run tests.
 - [ ] **5d** — Move `MockBlockPlanProvider` from `playout_session.py` to `tests/fixtures/mock_block_plan.py`. Update imports. Run tests.
 - [ ] **5e** — Delete `_build_producer_for_mode` monkeypatch wrapper in `PD._get_or_create_manager()` (4 lines, zero functional change). Run tests.
