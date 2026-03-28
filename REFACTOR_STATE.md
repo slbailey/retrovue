@@ -30,7 +30,7 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 - [x] **4c** — Extract `_hls_diag_*` state from ProgramDirector into a `HlsDiagnosticsState` dataclass (per-channel). PD holds one instance per channel and delegates. Does NOT change behavior — makes the boundary explicit and testable. Files: `pkg/core/src/retrovue/runtime/program_director.py`. Run tests (floor 330).
 - [x] **4d** — Verify auto-expiry (`_hls_diag_mode_until` check) is the ONLY expiry mechanism — no manual reset paths that could suppress diagnostics. Document result. Commit PHASE4_COMPLETE.md.
 
-## NEXT SUB-STEP: 8a — Write contract test for Phase 8 (Consumption Adapter Model): channel lifecycle is PD-owned; HLS and TS are consumption adapters sharing same CM activation path. Must FAIL before code change. "Production modules contain only production code. Mocks, fixtures, and test harnesses belong in tests/fixtures/. Protocols belong in runtime/protocols.py."
+## NEXT SUB-STEP: 8b — Extract HLS phantom management from _ensure_channel_active_for_hls into HlsConsumptionAdapter._activate_phantom(channel_id, mgr) helper in runtime/consumption_adapters.py. This is the first code change for Phase 8 — the 4 RED contract tests from 8a must move toward GREEN.
 
 ## Phase 6g — HLS Contract Test Migration (TABLED — do after Phase 7)
 
@@ -90,7 +90,7 @@ Risk is HIGH operationally — old stack may be masking new stack bugs. Validate
 Reframed: HLS and TS are two consumption adapters over one PD-owned lifecycle.
 Not just path merger — defines the correct mental model going forward.
 
-- [ ] **8a** — Write contract test: "Channel lifecycle is PD-owned; HLS and TS are consumption adapters that share the same CM activation path." Must FAIL before code change.
+- [x] **8a** — Write contract test: "Channel lifecycle is PD-owned; HLS and TS are consumption adapters that share the same CM activation path." Must FAIL before code change.
 - [ ] **8b** — Extract HLS phantom management from _ensure_channel_active_for_hls into HlsConsumptionAdapter._activate_phantom(channel_id, mgr) helper.
 - [ ] **8c** — Extract raw TS fanout management into TsConsumptionAdapter._wire_fanout(channel_id, mgr) helper.
 - [ ] **8d** — Both adapters call PD.start_channel() as the single lifecycle entry point. Delete _ensure_channel_active_for_hls() body (~190 lines). Run tests (floor 330). Contract test from 8a must PASS.
@@ -180,3 +180,4 @@ Future AI sessions must be unable to re-introduce these problems without visibly
 | 7b | 2026-03-28 | e8958e6 | Move Playlist+PlaylistSegment to scheduling/playlist_types.py; re-export in channel_manager.py; 252 pass, 2 pre-existing failures, no regressions |
 | 7c | 2026-03-28 | 713ae7d | Move ScheduleService+ProgramDirector Protocols to runtime/protocols.py; re-export in channel_manager.py; 252 pass, 2 pre-existing failures, no regressions |
 | 7d | 2026-03-28 | f94ff7e | Add INV-PRODUCTION-BOUNDARY-001 to CLAUDE.md + INVARIANTS.md; register INV-NO-GHOST-METHODS-001 in index; 252 pass, 2 pre-existing failures, no regressions |
+| 8a | 2026-03-28 | 5c95a37 | Contract test INV-SINGLE-ACTIVATION-PATH-001 (4 RED): ensure_channel_active_for_hls removed, phantom tracking in adapter, HlsConsumptionAdapter exists, TsConsumptionAdapter exists; 252 pass, 4 new RED (intentional), 2 pre-existing failures unchanged |
