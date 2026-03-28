@@ -19,12 +19,12 @@ Branch: `refactor/simplify-single-authority-l3`
 
 ## Sub-steps (do ONE per turn, mark [x] when done):
 
-- [ ] **3a** — Audit contract files for tests that assert internal sequencing (not required invariants). Produce a candidate list of tests/classes to retire. Write findings to `/opt/retrovue/PHASE3_CONTRACT_AUDIT.md`. Do NOT delete anything yet. Run tests (must stay >= 328).
-- [ ] **3b** — Retire first candidate contract class/test identified in 3a (the weakest / most internal-sequencing one). Run tests.
-- [ ] **3c** — Retire second candidate if any. Run tests.
+- [x] **3a** — Audit contract files for tests that assert internal sequencing (not required invariants). Produce a candidate list of tests/classes to retire. Write findings to `/opt/retrovue/PHASE3_CONTRACT_AUDIT.md`. Do NOT delete anything yet. Run tests (must stay >= 328). DONE: 334 pass.
+- [ ] **3b** — Retire 4 internal/meta tests from `test_frame_selection_cadence_contract.py`: test_buggy_cascade_violates_pop_invariant, test_buggy_consumption_ratio_is_1_0, test_accumulator_budget_bounded, test_60_to_30_cadence_half. Expected: 334-4=330 pass (floor 328). Run tests.
+- [ ] **3c** — Per audit: no second retirement possible within floor constraint (headroom only 2 after 3b). Update state to reflect this and move to 3d.
 - [ ] **3d** — Move to Phase 4: Diagnostics isolation audit.
 
-## NEXT SUB-STEP: 3a
+## NEXT SUB-STEP: 3b
 
 ---
 
