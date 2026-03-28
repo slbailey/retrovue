@@ -250,3 +250,26 @@ leave it failing, and do not create a method placeholder in production code.
 
 Violating this rule is a contract violation — not a style issue.
 Reference invariant: INV-NO-GHOST-METHODS-001 in docs/contracts/INVARIANTS.md
+
+────────────────────────
+HLS DELIVERY STACK (INV-HLS-NO-DISK-IO-001)
+────────────────────────
+There is exactly ONE HLS delivery stack in RetroVue:
+  SegmentRing + HlsSegmenter, served at /channels/<id>/live.m3u8
+
+Rules:
+- All HLS segment production goes through SegmentRing.
+- All HLS manifest generation goes through HlsSegmenter.
+- No disk-based HLS (.ts files written to filesystem for serving) is permitted.
+- No parallel or alternate HLS delivery path may exist.
+- INV-HLS-NO-DISK-IO-001 is a hard constraint: HLS delivery must be in-memory, never disk.
+
+Do NOT re-introduce:
+- A second HLS manager or HLS route namespace (e.g. /hls/).
+- Disk-based segment caching for HLS delivery.
+- Any class named HLSSegmenter, HlsManager, HlsWriter, or similar that duplicates
+  SegmentRing + HlsSegmenter responsibilities.
+
+If a change requires a second HLS code path, stop and redesign using the existing stack.
+
+Reference invariant: INV-HLS-NO-DISK-IO-001 in docs/contracts/INVARIANTS.md

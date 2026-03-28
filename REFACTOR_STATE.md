@@ -30,7 +30,7 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 - [x] **4c** — Extract `_hls_diag_*` state from ProgramDirector into a `HlsDiagnosticsState` dataclass (per-channel). PD holds one instance per channel and delegates. Does NOT change behavior — makes the boundary explicit and testable. Files: `pkg/core/src/retrovue/runtime/program_director.py`. Run tests (floor 330).
 - [x] **4d** — Verify auto-expiry (`_hls_diag_mode_until` check) is the ONLY expiry mechanism — no manual reset paths that could suppress diagnostics. Document result. Commit PHASE4_COMPLETE.md.
 
-## NEXT SUB-STEP: 6g (CLAUDE.md rule)
+## NEXT SUB-STEP: 7a — Move MockGridScheduleService and MockAlternatingScheduleService from channel_manager.py to tests/fixtures/mock_schedule_services.py (Phase 7 begins)
 
 ## Phase 6g — HLS Contract Test Migration (TABLED — do after Phase 7)
 
@@ -74,7 +74,7 @@ Risk is HIGH operationally — old stack may be masking new stack bugs. Validate
 - [x] **6d** — Remove /hls/ endpoint handlers from PD. Remove self._hls_manager instantiation and stop_all() call. Keep hls_writer.py module for now (rollback safety).
 - [x] **6e** — Run tests (floor 330). Confirm HLS clients work against /channels/ endpoints. Confirm no segment ring behavioral differences.
 - [x] **6f** — Delete retrovue.streaming.hls_writer module entirely. Remove dead imports. Run tests.
-- [ ] **6g** — Update CLAUDE.md: "There is one HLS delivery stack: SegmentRing + HlsSegmenter at /channels/. No disk-based HLS. INV-HLS-NO-DISK-IO-001 is a hard constraint. Do not re-introduce a parallel HLS stack."
+- [x] **6g** — Update CLAUDE.md: "There is one HLS delivery stack: SegmentRing + HlsSegmenter at /channels/. No disk-based HLS. INV-HLS-NO-DISK-IO-001 is a hard constraint. Do not re-introduce a parallel HLS stack."
 
 ## Phase 7 — Mock Relocation (MEDIUM IMPACT, LOW RISK)
 
@@ -174,4 +174,5 @@ Future AI sessions must be unable to re-introduce these problems without visibly
 | 5g | 2026-03-28 | (this turn) | CLAUDE.md ghost prohibition rule added (INV-NO-GHOST-METHODS-001); Phase 5 complete; 330 pass |
 | 6b | 2026-03-28 | e6a4e59 | Shadow validation logging added to /channels/ manifest; DEBUG per-request, WARNING on divergence; 330 pass |
 | 6f | 2026-03-28 | 8cccc5b | Retire hls_writer contract tests (78 tests); fix conftest for new HLS stack; 252 pass in tests/contracts (+116 new-stack tests unblocked) |
+| 6g | 2026-03-28 | (this commit) | CLAUDE.md HLS delivery stack rule added (INV-HLS-NO-DISK-IO-001); Phase 6 complete; 252 pass |
 | 6d | 2026-03-28 | (this turn) | Remove /hls/ endpoint handlers (3 routes), _hls_manager instantiation, stop_all(), shadow validation block; 268 lines removed; 330 pass (2 pre-existing failures unrelated) |
