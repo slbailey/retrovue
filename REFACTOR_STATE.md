@@ -16,34 +16,38 @@ Full locked constraints: `/opt/retrovue/SIMPLIFICATION_PLAN_V1.md`
 
 ---
 
-## Current Phase: 0 — COMPLETE
+## Current Phase: 1 — COMPLETE
 
-## Baseline (captured 2026-03-28)
-- Branch: `refactor/simplify-single-authority-l3`
-- Last commit: `6154e89` (plan file committed)
-- Test baseline: **328 passed / 2 failed** (pre-existing failures in `test_interstitial_enrichment.py`)
-- AIR C++ contract tests: NOT YET RUN (need build verification first)
-- Unstaged on main at branch point: `SeamPreparer.hpp`, `PipelineManager.cpp`, `SeamPreparer.cpp`
+## Phase 1 Summary (2026-03-28)
+- Commit: `2488974`
+- File: `docs/architecture/AUTHORITY_MAP.md`
+- Authority map produced for 4 concerns: clock, segment-window, lifecycle, diagnostics
+- Baseline tests: 328 passed / 2 failed (pre-existing)
 
 ---
 
-## Next Phase: 1 — Authority Overlap Map
+## Next Phase: 2 — Lifecycle Hardening
 
 ### What to do next turn:
-1. Map current authority holders for each concern:
-   - **Clock/timebase** — who decides "what time is it now" for playout decisions?
-   - **Segment-window** — who owns the HLS window state?
-   - **Channel lifecycle** — who decides start/stop/reconnect?
-   - **Diagnostics** — who controls diagnostic mode activation/expiry?
-2. Find duplicate decision points (files/classes that have secondary authority over any concern)
-3. Write findings to `docs/architecture/AUTHORITY_MAP.md`
-4. Commit the map
-5. Update this file with: what was found, which overlaps are highest priority to fix, next phase action
+1. **Invert the linger callback** in `runtime/channel_manager.py`:
+   - CM currently calls `program_director.stop_channel()` directly from `_linger_expire()`
+   - Change: CM exposes `on_linger_expired: Callable` injected by PD at creation
+   - CM calls `self.on_linger_expired()` instead of `program_director.stop_channel()`
+   - PD registers a handler that calls `_stop_channel_internal`
+   - This removes the CM→PD dependency
+2. **Delete dead code** (L3 rule — no legacy):
+   - `deferred_teardown_triggered()` in ChannelManager (BlockPlan path always returns False)
+   - Remove the poll loop call in `ProgramDirector._health_check_loop`
+   - `compute_jip_position()` in ChannelManager (deprecated, legacy)
+   - `_mock_grid_*` methods on ChannelManager (`_floor_to_grid`, `_calculate_join_offset`, `_calculate_filler_offset`, `_determine_active_content`, `_build_mock_grid_playout_plan`)
+3. **Add contract test**: "PD is sole teardown decision point — CM never calls PD.stop_channel directly"
+4. **Run tests**: `cd /opt/retrovue && pkg/core/.venv/bin/python -m pytest tests/contracts -m "contract and not soak" -q --tb=no`
+5. **Update this file** and commit all changes together
 
-### Key files to examine for Phase 1:
-- `pkg/core/` — ProgramDirector, ChannelManager, orchestration
-- `pkg/air/` — timing, lifecycle, diagnostics
-- `docs/contracts/laws/` — LAW-CLOCK, LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY
+### Key files:
+- `pkg/core/runtime/channel_manager.py`
+- `pkg/core/runtime/program_director.py`
+- `tests/contracts/` (add new test)
 
 ---
 
@@ -51,9 +55,11 @@ Full locked constraints: `/opt/retrovue/SIMPLIFICATION_PLAN_V1.md`
 | Turn | Date | Commit | What Was Done |
 |------|------|--------|---------------|
 | 0 | 2026-03-28 | 6154e89 | Created branch, committed plan, captured test baseline (328p/2f) |
+| 0b | 2026-03-28 | a0168ea | Added REFACTOR_STATE.md chain state file |
+| 1 | 2026-03-28 | 2488974 | Authority overlap map — 4 concerns mapped, 3 dead paths identified, HIGH overlap in lifecycle |
 
 ---
 
 ## Blockers / Notes
-- None currently
-- AIR C++ tests need `pkg/air/build` to exist — check before running `ctest`
+- Anthropic API overload error killed last turn before REFACTOR_STATE.md could be updated — state manually corrected
+- Phase 2 is the highest-risk phase (lifecycle inversion). Contract test must come BEFORE code change.
