@@ -30,13 +30,13 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 - [x] **4c** — Extract `_hls_diag_*` state from ProgramDirector into a `HlsDiagnosticsState` dataclass (per-channel). PD holds one instance per channel and delegates. Does NOT change behavior — makes the boundary explicit and testable. Files: `pkg/core/src/retrovue/runtime/program_director.py`. Run tests (floor 330).
 - [x] **4d** — Verify auto-expiry (`_hls_diag_mode_until` check) is the ONLY expiry mechanism — no manual reset paths that could suppress diagnostics. Document result. Commit PHASE4_COMPLETE.md.
 
-## NEXT SUB-STEP: 5a
+## NEXT SUB-STEP: 5b
 
 ---
 
 ## Phase 5 — Ghost Surface Deletion (ZERO RISK)
 
-- [ ] **5a** — Delete 11 ghost TODO/pass methods from PD (lines 1642–1806). Delete `SystemHealth`, `ChannelInfo`, `ChannelStatus`. Run tests (floor 330).
+- [x] **5a** — Delete 11 ghost TODO/pass methods from PD (lines 1642–1806). Delete `SystemHealth`, `ChannelInfo`, `ChannelStatus`. Run tests (floor 330).
 - [ ] **5b** — Delete 2 dead HTTP 501 stubs (`/test/segment/...`, `/test/channel/...`). Run tests.
 - [ ] **5c** — Delete `play_content()` dead method from `BlockPlanProducer` in channel_manager.py. Run tests.
 - [ ] **5d** — Move `MockBlockPlanProvider` from `playout_session.py` to `tests/fixtures/mock_block_plan.py`. Update imports. Run tests.
@@ -105,6 +105,8 @@ Future AI sessions must be unable to re-introduce these problems without visibly
 - [ ] **9h** — Final: produce REFACTOR_COMPLETE.md with: all-clear status, what was done, what the codebase looks like now, prompt language updates for CLAUDE.md, lessons learned. This is the document handed to Steve.
 
 ## NEXT SUB-STEP (after 4c): Continue from current position — now 4d.
+
+| 5a | 2026-03-28 | (pending) | Delete 11 ghost TODO/pass methods + SystemHealth/ChannelInfo/ChannelStatus; 197 lines removed; 330 pass |
 
 ---
 
