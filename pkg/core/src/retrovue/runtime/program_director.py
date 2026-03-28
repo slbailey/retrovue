@@ -2818,6 +2818,59 @@ class ProgramDirector:
                     channel_id, req_id, ring_count, is_active,
                 )
 
+            # 6b SHADOW VALIDATION: Log new-stack manifest metrics.
+            # If old segmenter is also running, compare and log divergence.
+            try:
+                import re as _re
+
+                def _parse_manifest_sequence(m: str) -> int | None:
+                    match = _re.search(r"#EXT-X-MEDIA-SEQUENCE:(\d+)", m)
+                    return int(match.group(1)) if match else None
+
+                def _parse_manifest_segment_count(m: str) -> int:
+                    return len(_re.findall(r"#EXTINF:", m))
+
+                new_seq = _parse_manifest_sequence(playlist)
+                new_seg_count = _parse_manifest_segment_count(playlist)
+                self._logger.debug(
+                    "[SHADOW][%s] new-stack manifest: seq=%s seg_count=%d ring_count=%d",
+                    channel_id, new_seq, new_seg_count, ring_count,
+                )
+
+                # Compare against old stack if its segmenter is still running
+                old_seg = self._hls_manager.get_or_create(channel_id) if hasattr(self, "_hls_manager") else None
+                if old_seg is not None and old_seg.is_running():
+                    old_playlist = old_seg.get_playlist()
+                    if old_playlist is not None:
+                        old_seq = _parse_manifest_sequence(old_playlist)
+                        old_seg_count = _parse_manifest_segment_count(old_playlist)
+                        self._logger.debug(
+                            "[SHADOW][%s] old-stack manifest: seq=%s seg_count=%d",
+                            channel_id, old_seq, old_seg_count,
+                        )
+                        # Log divergence if sequence gap is large (>window size)
+                        if new_seq is not None and old_seq is not None:
+                            seq_gap = abs(new_seq - old_seq)
+                            if seq_gap > 10:
+                                self._logger.warning(
+                                    "[SHADOW-DIVERGENCE][%s] MEDIA-SEQUENCE gap=%d new=%s old=%s req_id=%s",
+                                    channel_id, seq_gap, new_seq, old_seq, req_id,
+                                )
+                        if abs(new_seg_count - old_seg_count) > 2:
+                            self._logger.warning(
+                                "[SHADOW-DIVERGENCE][%s] seg_count mismatch new=%d old=%d req_id=%s",
+                                channel_id, new_seg_count, old_seg_count, req_id,
+                            )
+                    else:
+                        self._logger.debug(
+                            "[SHADOW][%s] old-stack segmenter running but no playlist yet", channel_id
+                        )
+                else:
+                    self._logger.debug("[SHADOW][%s] old-stack segmenter not running — clean", channel_id)
+            except Exception as _shadow_ex:
+                self._logger.debug("[SHADOW][%s] shadow validation error: %s", channel_id, _shadow_ex)
+            # END 6b SHADOW VALIDATION
+
             return Response(
                 content=playlist,
                 media_type="application/vnd.apple.mpegurl",
