@@ -144,6 +144,7 @@ Future AI sessions must be unable to re-introduce these problems without visibly
 | 4d | 2026-03-28 | 5e7be6a | Expiry audit — auto-expiry sole mechanism; fix stale contract test; PHASE4_COMPLETE.md |
 | 5d | 2026-03-28 | (prior turn) | MockBlockPlanProvider already in tests/fixtures/mock_block_plan.py — marked retroactively |
 | 5e | 2026-03-28 | (this turn) | Delete _build_producer_for_mode monkeypatch wrapper from PD; 7 lines removed; 330 pass |
+| 5f | 2026-03-28 | 99f63d2 | Assert on_linger_expired required at CM construction; remove else-fallback branch from _start_linger; add INV contract test; 203/runtime passed (+1 new GREEN); no regressions |
 ## Blockers / Notes
 - Cron was disabled for deep analysis — re-enabled after REFACTOR_STATE.md update
 - Phase 9 is mandatory — code cleanup without model lockdown is temporary
