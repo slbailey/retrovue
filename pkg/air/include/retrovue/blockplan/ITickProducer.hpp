@@ -13,15 +13,41 @@
 #include <atomic>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/blockplan/RationalFps.hpp"
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
+#include "retrovue/buffer/FrameRingBuffer.h"
+#include "retrovue/runtime/AspectPolicy.h"
 
 namespace retrovue::blockplan {
 
-struct FrameData;  // forward — defined in TickProducer.hpp
+// FrameData: decoded frame + audio + metadata.
+// Defined here (not in TickProducer.hpp) because DecodeResult needs it complete.
+struct FrameData {
+  buffer::Frame video;
+  std::vector<buffer::AudioFrame> audio;  // 0-2 frames
+  std::string asset_uri;
+  int64_t block_ct_ms = 0;
+  int64_t source_frame_index = -1;
+};
+
+// INV-AIR-DECODE-RESULT-EXPLICIT-001: Explicit decode outcome.
+// Contract: docs/contracts/air/DECODE_RESULT_MODEL.md
+enum class DecodeStatus {
+  kFrame,     // Normal decoded frame available
+  kUnderrun,  // Temporary — no frame this tick, may recover
+  kEof,       // Terminal — segment asset exhausted, no more frames
+  kError      // Fatal — decoder failed, unrecoverable for this segment
+};
+
+// INV-AIR-DECODE-RESULT-SCOPE-001: Per-call result, no persistent state.
+struct DecodeResult {
+  DecodeStatus status;
+  std::optional<FrameData> frame;  // present when status == kFrame
+};
 
 class ITickProducer {
  public:
@@ -32,9 +58,9 @@ class ITickProducer {
   // Assign a block.  Synchronous: probes assets, opens decoder, seeks.
   virtual void AssignBlock(const FedBlock& block) = 0;
 
-  // Try to decode the next frame for the current block position.
-  // Returns FrameData if decoded, nullopt if decode failed.
-  virtual std::optional<FrameData> TryGetFrame() = 0;
+  // INV-AIR-DECODE-RESULT-EXPLICIT-001: Decode one frame with explicit status.
+  // Contract: docs/contracts/air/DECODE_RESULT_MODEL.md
+  virtual DecodeResult TryGetFrame() = 0;
 
   // Reset to EMPTY, releasing decoder and block state.
   virtual void Reset() = 0;
@@ -85,6 +111,26 @@ class ITickProducer {
     std::atomic<bool>* session_stop = nullptr;
   };
   virtual void SetInterruptFlags(const InterruptFlags&) {}
+
+  // INV-AIR-PRODUCER-PRIME-001: Audio priming result.
+  // Defined on the interface so PipelineManager can prime any producer
+  // without concrete-type downcasts.
+  struct PrimeResult {
+    bool met_threshold = false;
+    int actual_depth_ms = 0;
+  };
+
+  // INV-AIR-PRODUCER-PRIME-001: Prime audio to min_audio_prime_ms depth.
+  // TickProducer overrides with real decoding.  Other implementations
+  // (test stubs, pad-only producers) inherit the default no-op.
+  virtual PrimeResult PrimeFirstTick(int /*min_audio_prime_ms*/) {
+    return {false, 0};
+  }
+
+  // INV-AIR-PRODUCER-ASPECT-001: Set aspect policy for decoder scaling.
+  // TickProducer overrides to configure FFmpegDecoder.  Other
+  // implementations inherit the default no-op.
+  virtual void SetAspectPolicy(runtime::AspectPolicy) {}
 };
 
 }  // namespace retrovue::blockplan

@@ -632,6 +632,7 @@ def _fill_break_with_interstitials(
                     duration_ms=c.duration_ms,
                     asset_category=getattr(c, "asset_category", None),
                     cooldown_group=getattr(c, "cooldown_group", None),
+                    tags=getattr(c, "tags", ()),
                 )
                 for c in candidates
             ]

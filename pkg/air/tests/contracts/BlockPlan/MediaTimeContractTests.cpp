@@ -815,12 +815,12 @@ TEST(MediaTimeContract, TickProducer_DROP_SetsOutputDuration_ToOutputTick) {
   ASSERT_EQ(producer.GetDropStep(), 2);
 
   // First frame: duration must be output tick (1/30), not input (1/60)
-  std::optional<FrameData> fd = producer.TryGetFrame();
-  ASSERT_TRUE(fd.has_value()) << "TryGetFrame must return a frame in DROP";
-  EXPECT_NEAR(fd->video.metadata.duration, kExpectedTickDurationS, kToleranceS)
+  auto fd = producer.TryGetFrame();
+  ASSERT_EQ(fd.status, DecodeStatus::kFrame) << "TryGetFrame must return a frame in DROP";
+  EXPECT_NEAR(fd.frame->video.metadata.duration, kExpectedTickDurationS, kToleranceS)
       << "INV-FPS-MAPPING: In DROP, returned frame duration must equal 1/output_fps, not 1/60";
   // Audio must contain aggregation from skip decodes (emit + 1 skip = 2 input frames' audio)
-  EXPECT_GE(fd->audio.size(), 1u) << "DROP must aggregate audio from emit + skip decodes";
+  EXPECT_GE(fd.frame->audio.size(), 1u) << "DROP must aggregate audio from emit + skip decodes";
 }
 
 // =============================================================================
@@ -846,8 +846,8 @@ TEST(MediaTimeContract, TickProducer_DROP_OutputPTS_AdvancesByTickDuration) {
   std::vector<int64_t> pts_us;
   for (int i = 0; i < 10; i++) {
     auto fd = producer.TryGetFrame();
-    if (!fd) break;
-    pts_us.push_back(fd->video.metadata.pts);
+    if (fd.status != DecodeStatus::kFrame) break;
+    pts_us.push_back(fd.frame->video.metadata.pts);
   }
   ASSERT_GE(pts_us.size(), 2u) << "Need at least 2 frames to assert PTS delta";
 
@@ -874,8 +874,8 @@ TEST(MediaTimeContract, TickProducer_DROP_E2E_WithReal60fpsAsset_Optional) {
     GTEST_SKIP() << "60fps asset not available at " << k60fpsAssetPath;
   }
   auto fd = producer.TryGetFrame();
-  ASSERT_TRUE(fd.has_value());
-  EXPECT_NEAR(fd->video.metadata.duration, 1.0 / 30.0, 1e-6);
+  ASSERT_EQ(fd.status, DecodeStatus::kFrame);
+  EXPECT_NEAR(fd.frame->video.metadata.duration, 1.0 / 30.0, 1e-6);
 }
 
 // =============================================================================
@@ -1021,7 +1021,7 @@ TEST(MediaTimeContract, VfrFile_MustNotEnterDropMode) {
   int frames_decoded = 0;
   for (int i = 0; i < 100; i++) {
     auto fd = producer.TryGetFrame();
-    if (!fd) break;
+    if (fd.status != DecodeStatus::kFrame) break;
     frames_decoded++;
   }
   EXPECT_EQ(frames_decoded, 100)

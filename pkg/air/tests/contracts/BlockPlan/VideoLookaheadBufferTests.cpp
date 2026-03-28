@@ -68,15 +68,15 @@ class MockTickProducer : public ITickProducer {
 
   void AssignBlock(const FedBlock& block) override { block_ = block; }
 
-  std::optional<FrameData> TryGetFrame() override {
+  DecodeResult TryGetFrame() override {
     // Return primed frame if available.
     if (has_primed_ && primed_frame_) {
       has_primed_ = false;
-      return std::move(*primed_frame_);
+      return {DecodeStatus::kFrame, std::move(*primed_frame_)};
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
-    if (frames_remaining_ <= 0) return std::nullopt;
+    if (frames_remaining_ <= 0) return {DecodeStatus::kUnderrun, std::nullopt};
 
     // Optional decode delay (for stall simulation).
     if (decode_delay_.count() > 0) {
@@ -84,7 +84,7 @@ class MockTickProducer : public ITickProducer {
       mutex_.unlock();
       std::this_thread::sleep_for(decode_delay_);
       mutex_.lock();
-      if (frames_remaining_ <= 0) return std::nullopt;
+      if (frames_remaining_ <= 0) return {DecodeStatus::kUnderrun, std::nullopt};
     }
 
     frames_remaining_--;
@@ -100,7 +100,7 @@ class MockTickProducer : public ITickProducer {
     // Produce one audio frame per video decode.
     fd.audio.push_back(MakeAudioFrame(1024));
 
-    return fd;
+    return {DecodeStatus::kFrame, std::move(fd)};
   }
 
   void Reset() override {
@@ -716,12 +716,17 @@ TEST(VideoLookaheadBufferTest, AVFillInterlockNoSuppression) {
 
   MockTickProducer mock(64, 48, 30.0, kFrames);
 
-  auto primed_fd = mock.TryGetFrame();
-  ASSERT_TRUE(primed_fd.has_value());
-  mock.SetPrimedFrame(std::move(*primed_fd));
+  auto primed_result = mock.TryGetFrame();
+  ASSERT_EQ(primed_result.status, DecodeStatus::kFrame);
+  mock.SetPrimedFrame(std::move(*primed_result.frame));
 
-  AudioLookaheadBuffer audio_buf(2000, buffer::kHouseAudioSampleRate,
-                                  buffer::kHouseAudioChannels, 100);
+  // Audio hard_cap must hold ALL 200 frames' audio without consumer popping.
+  // Each frame = 1024 samples at 48kHz = ~21.3ms; 200 frames ≈ 4267ms.
+  // hard_cap_ms=5000 provides sufficient margin.
+  AudioLookaheadBuffer audio_buf(5000, buffer::kHouseAudioSampleRate,
+                                  buffer::kHouseAudioChannels, 100,
+                                  /*high_water_ms=*/4000,
+                                  /*hard_cap_ms=*/5000);
   // Use a large target/hard-cap so all 200 frames decode without parking.
   // consumer_selected_src stays -1; we need store_size < hard_cap to avoid park.
   // VideoLookaheadBuffer(300, 300) → hard_cap = max(300*4, 200) = 1200 frames.
@@ -764,9 +769,9 @@ TEST(VideoLookaheadBufferTest, AVFillInterlockGenerationMismatchIsAllowed) {
   constexpr int kFrames = 30;
 
   MockTickProducer mock(64, 48, 30.0, kFrames);
-  auto primed_fd = mock.TryGetFrame();
-  ASSERT_TRUE(primed_fd.has_value());
-  mock.SetPrimedFrame(std::move(*primed_fd));
+  auto primed_result = mock.TryGetFrame();
+  ASSERT_EQ(primed_result.status, DecodeStatus::kFrame);
+  mock.SetPrimedFrame(std::move(*primed_result.frame));
 
   // Create audio buffer with generation 0, then bump it to 1 BEFORE filling.
   // The fill thread will capture my_audio_gen=1 (from StartFilling), so

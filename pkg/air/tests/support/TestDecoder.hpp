@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -101,18 +102,25 @@ class TestDecoder : public producers::IProducer,
     }
   }
 
-  std::optional<FrameData> TryGetFrame() override {
+  DecodeResult TryGetFrame() override {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!has_decoder_) return std::nullopt;
+    if (!has_decoder_) return {DecodeStatus::kError, std::nullopt};
 
     // Return primed frame first
     if (has_primed_) {
       has_primed_ = false;
-      return std::move(primed_frame_);
+      return {DecodeStatus::kFrame, std::move(primed_frame_)};
     }
 
-    if (frame_index_ >= frames_per_block_) return std::nullopt;
-    return GenerateFrame();
+    // Return buffered frames from PrimeFirstTick before generating new ones.
+    if (!buffered_frames_.empty()) {
+      auto fd = std::move(buffered_frames_.front());
+      buffered_frames_.pop_front();
+      return {DecodeStatus::kFrame, std::move(fd)};
+    }
+
+    if (frame_index_ >= frames_per_block_) return {DecodeStatus::kEof, std::nullopt};
+    return {DecodeStatus::kFrame, GenerateFrame()};
   }
 
   void Reset() override {
@@ -121,6 +129,7 @@ class TestDecoder : public producers::IProducer,
     state_ = State::kEmpty;
     frame_index_ = 0;
     has_primed_ = false;
+    buffered_frames_.clear();
   }
 
   State GetState() const override { return state_; }
@@ -134,8 +143,43 @@ class TestDecoder : public producers::IProducer,
   int64_t GetFrameIndex() const override { return frame_index_; }
   void SetInterruptFlags(const InterruptFlags&) override {}
 
-  // Not used by TestDecoder but required by production callers
-  void SetAspectPolicy(runtime::AspectPolicy) {}
+  // INV-AIR-PRODUCER-ASPECT-001: No-op override (TestDecoder has no real decoder to configure).
+  void SetAspectPolicy(runtime::AspectPolicy) override {}
+
+  // INV-AIR-PRODUCER-PRIME-001: TestDecoder primes in AssignBlock.
+  // Report priming status from the already-primed frame, and accumulate
+  // audio depth from additional decode calls (matches TickProducer behavior).
+  PrimeResult PrimeFirstTick(int min_audio_prime_ms) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!has_primed_ && !has_decoder_) return {false, 0};
+    // Count audio from primed frame.
+    int64_t audio_samples = 0;
+    if (has_primed_) {
+      for (const auto& af : primed_frame_.audio) {
+        audio_samples += af.nb_samples;
+      }
+    }
+    int depth_ms = static_cast<int>(
+        (audio_samples * 1000) / buffer::kHouseAudioSampleRate);
+    if (depth_ms >= min_audio_prime_ms || min_audio_prime_ms <= 0) {
+      return {true, depth_ms};
+    }
+    // Decode additional frames for audio depth (same as TickProducer).
+    constexpr int kMaxDecodes = 60;
+    for (int i = 0; i < kMaxDecodes && depth_ms < min_audio_prime_ms; ++i) {
+      if (frame_index_ >= frames_per_block_) break;
+      auto fd = GenerateFrame();
+      if (!fd) break;
+      for (const auto& af : fd->audio) {
+        audio_samples += af.nb_samples;
+      }
+      depth_ms = static_cast<int>(
+          (audio_samples * 1000) / buffer::kHouseAudioSampleRate);
+      // Stash in buffered_frames_ for TryGetFrame to return later.
+      buffered_frames_.push_back(std::move(*fd));
+    }
+    return {depth_ms >= min_audio_prime_ms, depth_ms};
+  }
 
   // Test-only: simulate permanent probe failure (asset unresolvable).
   void ForceNoDecoder() {
@@ -221,6 +265,7 @@ class TestDecoder : public producers::IProducer,
 
   bool has_primed_ = false;
   FrameData primed_frame_;
+  std::deque<FrameData> buffered_frames_;  // INV-AIR-PRODUCER-PRIME-001: frames from PrimeFirstTick
   std::vector<SegmentBoundary> boundaries_;
 };
 
@@ -265,6 +310,53 @@ class ProbeFailProducerFactory : public IProducerFactory {
  private:
   int fail_on_nth_;
   int create_count_ = 0;
+};
+
+// DeadProducerFactory: ALL producers simulate permanent probe failure.
+// Every TryGetFrame returns kError, HasDecoder()=false, PrimeFirstTick={false,0}.
+// Use for tests that assert pad-fallback behavior from "unresolvable" assets.
+class DeadProducerFactory : public IProducerFactory {
+ public:
+  std::unique_ptr<producers::IProducer> Create(
+      int width, int height, RationalFps output_fps) override {
+    return std::make_unique<DeadDecoderTestDecoder>(width, height, output_fps);
+  }
+};
+
+// NoAudioTestDecoder: produces video frames normally but zero audio.
+// HasDecoder()=true, TryGetFrame()→kFrame with video, PrimeFirstTick→{true,0}.
+// Simulates "decoder works but audio pipeline is empty" — triggers degraded take.
+class NoAudioTestDecoder : public TestDecoder {
+ public:
+  using TestDecoder::TestDecoder;
+
+  DecodeResult TryGetFrame() override {
+    auto result = TestDecoder::TryGetFrame();
+    if (result.status == DecodeStatus::kFrame && result.frame) {
+      result.frame->audio.clear();  // Strip audio
+    }
+    return result;
+  }
+
+  PrimeResult PrimeFirstTick(int /*min_audio_prime_ms*/) override {
+    // Video is primed (from AssignBlock), but audio depth is zero.
+    // Return {false, 0} so SeamPreparer's backward-compat fallback sets
+    // met_threshold=true with actual_depth_ms=min_audio_prime_ms (enabling
+    // the swap), while PipelineManager independently records the zero audio
+    // depth for degraded-take classification.
+    return {false, 0};
+  }
+
+  bool HasAudioStream() const override { return false; }
+};
+
+// NoAudioProducerFactory: ALL producers produce video but zero audio.
+class NoAudioProducerFactory : public IProducerFactory {
+ public:
+  std::unique_ptr<producers::IProducer> Create(
+      int width, int height, RationalFps output_fps) override {
+    return std::make_unique<NoAudioTestDecoder>(width, height, output_fps);
+  }
 };
 
 }  // namespace retrovue::blockplan::test_infra

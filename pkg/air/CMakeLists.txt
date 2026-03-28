@@ -528,6 +528,9 @@ add_executable(blockplan_contract_tests
   tests/contracts/BlockPlan/SharedInvContentDeficitFillContractTests.cpp
   tests/contracts/BlockPlan/SharedInvControlPlaneCadenceContractTests.cpp
   tests/contracts/BlockPlan/Law002HardStopContractTests.cpp
+  tests/contracts/BlockPlan/EofPadTransitionContractTests.cpp
+  tests/contracts/BlockPlan/DecodeResultModelContractTests.cpp
+  tests/contracts/BlockPlan/EofPadRealSystemContractTests.cpp
 )
 
 target_link_libraries(blockplan_contract_tests

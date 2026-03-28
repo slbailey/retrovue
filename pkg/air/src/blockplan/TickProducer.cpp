@@ -242,6 +242,7 @@ void TickProducer::AssignBlock(const FedBlock& block) {
   pts_correction_ms_ = 0;  // INV-PTS-DISCONTINUITY-ABSORB-001: reset on segment switch
   prev_decoded_pts_ms_ = -1;
   decoder_ok_ = true;
+  eof_logged_ = false;  // INV-AIR-DECODE-RESULT-SCOPE-001: reset per-call EOF log gate
   open_generation_++;
   std::cout << "[TickProducer] SEGMENT_DECODER_OPEN"
             << " block_id=" << block.block_id
@@ -530,7 +531,7 @@ TickProducer::PrimeResult TickProducer::PrimeFirstTick(int min_audio_prime_ms) {
     total_decodes++;
 
     auto fd = DecodeNextFrameRaw(false);
-    if (!fd) {
+    if (fd.status != DecodeStatus::kFrame || !fd.frame) {
       null_run++;
       if (null_run >= kMaxNullRun) break;
       continue;
@@ -538,13 +539,13 @@ TickProducer::PrimeResult TickProducer::PrimeFirstTick(int min_audio_prime_ms) {
     null_run = 0;
 
     // Accumulate audio depth from this frame.
-    for (const auto& af : fd->audio) {
+    for (const auto& af : fd.frame->audio) {
       audio_samples += af.nb_samples;
     }
     depth_ms = static_cast<int>(
         (audio_samples * 1000) / buffer::kHouseAudioSampleRate);
 
-    primed_frames.push_back(std::move(*fd));
+    primed_frames.push_back(std::move(*fd.frame));
   }
 
   // Restore: first frame → primed_frame_, rest → buffered_frames_.
@@ -594,9 +595,9 @@ TickProducer::PrimeResult TickProducer::PrimeFirstTick(int min_audio_prime_ms) {
 // TryGetFrame — decode one frame, advance internal position
 // =============================================================================
 
-std::optional<FrameData> TickProducer::TryGetFrame() {
+DecodeResult TickProducer::TryGetFrame() {
   if (state_ != State::kReady) {
-    return std::nullopt;
+    return {DecodeStatus::kError, std::nullopt};
   }
 
   // INV-BLOCK-PRIME-002: return primed frame without decode.
@@ -646,7 +647,7 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
           << " frame_index_after=" << frame_index_;
       retrovue::util::Logger::Info(oss.str());
     }
-    return frame;
+    return {DecodeStatus::kFrame, std::move(frame)};
   }
 
   // INV-AUDIO-PRIME-001: return buffered frames from PrimeFirstTick.
@@ -687,7 +688,7 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
           << " path=BUFFERED";
       retrovue::util::Logger::Info(oss.str());
     }
-    return frame;
+    return {DecodeStatus::kFrame, std::move(frame)};
   }
 
   // DROP mode: decode drop_step_ input frames, emit first VIDEO only; harvest ALL audio.
@@ -700,25 +701,25 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
   // duration (e.g. 1/60s); we override so consumers (ProgramOutput, pacing) don't pop/pace 2×.
   if (resample_mode_ == ResampleMode::DROP && drop_step_ > 1) {
     auto first = DecodeNextFrameRaw(true);
-    if (!first) return std::nullopt;
+    if (first.status != DecodeStatus::kFrame) return first;
     for (int64_t i = 1; i < drop_step_; i++) {
       auto skip = DecodeNextFrameRaw(false);
-      if (skip) {
-        for (auto& af : skip->audio) {
-          first->audio.push_back(std::move(af));
+      if (skip.status == DecodeStatus::kFrame && skip.frame) {
+        for (auto& af : skip.frame->audio) {
+          first.frame->audio.push_back(std::move(af));
         }
       }
     }
     if (output_fps_.num > 0) {
-      first->video.metadata.SetDurationFromUs(output_fps_.FrameDurationUs());
+      first.frame->video.metadata.SetDurationFromUs(output_fps_.FrameDurationUs());
     }
     // INV-FPS-TICK-PTS: Output video PTS must advance by one output tick per frame.
     const int64_t this_tick_index = frame_index_ - 1;
-    first->source_frame_index = this_tick_index;
+    first.frame->source_frame_index = this_tick_index;
     const int64_t tick_pts_us = CtUs(this_tick_index);
-    const int64_t source_pts_us_drop = first->video.metadata.pts;
-    first->video.metadata.pts = tick_pts_us;
-    first->video.metadata.dts = tick_pts_us;
+    const int64_t source_pts_us_drop = first.frame->video.metadata.pts;
+    first.frame->video.metadata.pts = tick_pts_us;
+    first.frame->video.metadata.dts = tick_pts_us;
     if (diag_emit_count_ < 60) {
       std::ostringstream oss;
       oss << "[TickProducer] INV-FPS-TICK-PTS-DIAG"
@@ -732,7 +733,7 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
     diag_emit_count_++;
     if (diag_emit_count_ <= 12) {
       int audio_samples = 0;
-      for (const auto& af : first->audio) audio_samples += af.nb_samples;
+      for (const auto& af : first.frame->audio) audio_samples += af.nb_samples;
       std::ostringstream oss;
       oss << "[TickProducer] DIAG_TRYGET_DROP"
           << " emit_index=" << diag_emit_count_
@@ -740,9 +741,9 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
           << " drop_step=" << drop_step_
           << " input_frames_decoded=" << drop_step_
           << " emitted_pts_us=" << tick_pts_us
-          << " emitted_ct_ms=" << first->block_ct_ms
+          << " emitted_ct_ms=" << first.frame->block_ct_ms
           << " audio_harvested=Y"
-          << " audio_frames=" << static_cast<int>(first->audio.size())
+          << " audio_frames=" << static_cast<int>(first.frame->audio.size())
           << " audio_samples=" << audio_samples;
       retrovue::util::Logger::Info(oss.str());
     }
@@ -751,20 +752,20 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
 
   // OFF / CADENCE: one decode per output tick.
   auto fd = DecodeNextFrameRaw();
-  if (fd) {
+  if (fd.status == DecodeStatus::kFrame && fd.frame) {
     // INV-FPS-TICK-PTS: normalize all emitted frames (OFF and CADENCE)
     // onto the house CT grid so mux sees a single authoritative timebase.
     const int64_t this_tick_index_decode = frame_index_ - 1;
-    fd->source_frame_index = this_tick_index_decode;
-    const int64_t source_pts_us_decode = fd->video.metadata.pts;
+    fd.frame->source_frame_index = this_tick_index_decode;
+    const int64_t source_pts_us_decode = fd.frame->video.metadata.pts;
     if (output_fps_.num > 0) {
       const int64_t this_tick_index = this_tick_index_decode;
       const int64_t tick_pts_us = CtUs(this_tick_index);
       const int64_t output_frame_duration_us = output_fps_.FrameDurationUs();
 
-      fd->video.metadata.pts = tick_pts_us;
-      fd->video.metadata.dts = tick_pts_us;
-      fd->video.metadata.SetDurationFromUs(output_frame_duration_us);
+      fd.frame->video.metadata.pts = tick_pts_us;
+      fd.frame->video.metadata.dts = tick_pts_us;
+      fd.frame->video.metadata.SetDurationFromUs(output_frame_duration_us);
       if (diag_emit_count_ < 60) {
         const char* mode_str = (resample_mode_ == ResampleMode::OFF) ? "OFF" :
             (resample_mode_ == ResampleMode::DROP) ? "DROP" : "CADENCE";
@@ -788,9 +789,8 @@ std::optional<FrameData> TickProducer::TryGetFrame() {
           << " path=" << path_str;
       retrovue::util::Logger::Info(oss.str());
     }
-    return fd;
   }
-  return std::nullopt;
+  return fd;
 }
 
 // =============================================================================
@@ -888,57 +888,72 @@ void TickProducer::ApplySegmentTransitionFade(FrameData& fd, int64_t ct_before) 
 // DecodeNextFrameRaw — decode-only frame advancement (no delivery state)
 // =============================================================================
 
-std::optional<FrameData> TickProducer::DecodeNextFrameRaw(bool advance_output_state) {
+DecodeResult TickProducer::DecodeNextFrameRaw(bool advance_output_state) {
   if (state_ != State::kReady) {
-    return std::nullopt;
+    return {DecodeStatus::kError, std::nullopt};
   }
 
   // PAD segment: generate synthetic frame (no decoder needed).
   if (has_pad_segments_ &&
       current_segment_index_ < static_cast<int32_t>(validated_.plan.segments.size()) &&
       validated_.plan.segments[current_segment_index_].segment_type == SegmentType::kPad) {
-    return GeneratePadFrame();
+    return {DecodeStatus::kFrame, GeneratePadFrame()};
   }
 
-  if (!decoder_ok_) {
-    // INV-AIR-MEDIA-TIME: On no decoder, do not advance media_ct_ms (repeat/fallback).
+  // INV-AIR-DECODE-RESULT-SCOPE-001: No persistent EOF flag.
+  // decoder_ok_==false means the decoder was never successfully created
+  // (probe fail, validation fail, empty segments, PAD-first, open fail,
+  // seek fail).  This is an error, not EOF.  EOF is determined per-call
+  // by the decode attempt below.
+  if (!decoder_ok_ || !decoder_) {
     if (advance_output_state) frame_index_++;
-    return std::nullopt;
+    return {DecodeStatus::kError, std::nullopt};
   }
 
   buffer::Frame video_frame;
   if (!decoder_->DecodeFrameToBuffer(video_frame)) {
     if (decoder_->IsEOF()) {
-      // INV-AIR-MEDIA-TIME guardrail: EOF with media position < 80% of segment duration = violation.
-      int64_t segment_duration_ms = 0;
-      if (current_segment_index_ < static_cast<int32_t>(boundaries_.size())) {
-        const auto& b = boundaries_[current_segment_index_];
-        segment_duration_ms = b.end_ct_ms - b.start_ct_ms;
-      }
-      if (segment_duration_ms > 0 && block_ct_ms_ >= 0 &&
-          block_ct_ms_ < (segment_duration_ms * 80) / 100) {
-        std::cout << "[TickProducer] VIOLATION INV-AIR-MEDIA-TIME: decoder EOF with media_ct_ms ("
-                  << block_ct_ms_ << "ms) < 80% of segment duration (" << segment_duration_ms
-                  << "ms) — possible CT-from-tick-index bug (e.g. Medipren)"
+      // INV-AIR-DECODE-RESULT-SCOPE-001: EOF is derived per-call from
+      // decoder state.  No persistent flag is set.  Subsequent calls
+      // re-enter this path: DecodeFrameToBuffer() returns false (the
+      // decoder's internal eof_reached_ stays set), IsEOF() returns true,
+      // and kEof is returned again — all without stored state.
+      //
+      // Log and transition counter fire once (eof_logged_ gate) to avoid
+      // spam on the fill loop's repeated calls.
+      if (!eof_logged_) {
+        eof_logged_ = true;
+        // INV-AIR-MEDIA-TIME guardrail: EOF with media position < 80% of segment duration = violation.
+        int64_t segment_duration_ms = 0;
+        if (current_segment_index_ < static_cast<int32_t>(boundaries_.size())) {
+          const auto& b = boundaries_[current_segment_index_];
+          segment_duration_ms = b.end_ct_ms - b.start_ct_ms;
+        }
+        if (segment_duration_ms > 0 && block_ct_ms_ >= 0 &&
+            block_ct_ms_ < (segment_duration_ms * 80) / 100) {
+          std::cout << "[TickProducer] VIOLATION INV-AIR-MEDIA-TIME: decoder EOF with media_ct_ms ("
+                    << block_ct_ms_ << "ms) < 80% of segment duration (" << segment_duration_ms
+                    << "ms) — possible CT-from-tick-index bug (e.g. Medipren)"
+                    << " segment_index=" << current_segment_index_
+                    << " asset_uri=" << current_asset_uri_
+                    << " block_id=" << block_.block_id
+                    << std::endl;
+        }
+        std::cout << "[TickProducer] SEGMENT_EOF"
                   << " segment_index=" << current_segment_index_
                   << " asset_uri=" << current_asset_uri_
+                  << " block_ct_ms=" << block_ct_ms_
                   << " block_id=" << block_.block_id
                   << std::endl;
+        retrovue::util::GetAirMemCounters().total_segment_transitions.fetch_add(1, std::memory_order_relaxed);
+        retrovue::util::LogSegmentTransitionMemory();
       }
-      std::cout << "[TickProducer] SEGMENT_EOF"
-                << " segment_index=" << current_segment_index_
-                << " asset_uri=" << current_asset_uri_
-                << " block_ct_ms=" << block_ct_ms_
-                << " block_id=" << block_.block_id
-                << std::endl;
-      // AIR_MEM: Track segment transition and snapshot RSS.
-      retrovue::util::GetAirMemCounters().total_segment_transitions.fetch_add(1, std::memory_order_relaxed);
-      retrovue::util::LogSegmentTransitionMemory();
-      decoder_ok_ = false;
+      if (advance_output_state) frame_index_++;
+      return {DecodeStatus::kEof, std::nullopt};  // INV-AIR-EOF-NON-REPEATABLE-001
     }
-    // INV-AIR-MEDIA-TIME: On decode failure/EOF, do not advance media_ct_ms.
+    // Transient decode failure — not EOF.
     if (advance_output_state) frame_index_++;
-    return std::nullopt;
+    return {DecodeStatus::kUnderrun, std::nullopt};  // INV-AIR-UNDERRUN-REPEATABLE-001
   }
 
   // INV-AUDIO-DRAIN-001: Drain ALL pending audio from the decoder.
@@ -1017,7 +1032,7 @@ std::optional<FrameData> TickProducer::DecodeNextFrameRaw(bool advance_output_st
     }
     frame_index_++;
   }
-  return result;
+  return {DecodeStatus::kFrame, std::move(result)};
 }
 
 // =============================================================================
@@ -1084,6 +1099,7 @@ std::optional<FrameData> TickProducer::GeneratePadFrame() {
 void TickProducer::Reset() {
   decoder_.reset();
   decoder_ok_ = false;
+  eof_logged_ = false;
   current_asset_uri_.clear();
   next_frame_offset_ms_ = 0;
   current_segment_index_ = 0;
@@ -1122,6 +1138,9 @@ int64_t TickProducer::FramesPerBlock() const {
 bool TickProducer::HasDecoder() const {
   return decoder_ok_;
 }
+
+// IsSegmentEof removed — replaced by in-band DecodeResult.
+// See docs/contracts/air/DECODE_RESULT_MODEL.md
 
 RationalFps TickProducer::GetInputRationalFps() const {
   return RationalFps{input_fps_num_, input_fps_den_};

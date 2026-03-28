@@ -321,10 +321,10 @@ TEST_F(SeamProofContractTest, FrameDataCarriesMetadata) {
   EXPECT_EQ(source.FramesPerBlock(), expected_fpb)
       << "FramesPerBlock must match ceil(duration_ms * fps / 1000)";
 
-  // TryGetFrame returns nullopt (no decoder), but FrameData has new fields
+  // TryGetFrame returns non-kFrame (no decoder), but FrameData has new fields
   auto frame = source.TryGetFrame();
-  EXPECT_FALSE(frame.has_value())
-      << "TryGetFrame must return nullopt when decoder is not ok";
+  EXPECT_NE(frame.status, DecodeStatus::kFrame)
+      << "TryGetFrame must not return kFrame when decoder is not ok";
 
   // Compile-time proof: FrameData has asset_uri and block_ct_ms fields
   FrameData fd;

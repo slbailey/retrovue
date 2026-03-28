@@ -45,6 +45,7 @@ class FillerAsset:
     asset_type: str = "filler"   # "filler", "promo", "ad"
     asset_category: str | None = None
     cooldown_group: str | None = None
+    tags: tuple[str, ...] = ()
 
 
 # Default traffic policy when no YAML config exists
@@ -190,11 +191,20 @@ def _asset_matches_pool(editorial: dict[str, Any], pool_def: dict[str, Any]) -> 
                     return False
             if "contains_all" in clause:
                 if field == "tags":
-                    if not set(clause["contains_all"]).issubset(tags):
+                    from retrovue.domain.tag_normalization import expand_tag_match_set
+                    expanded = expand_tag_match_set(tags)
+                    if not set(clause["contains_all"]).issubset(expanded):
                         return False
             if "contains_any" in clause:
                 if field == "tags":
-                    if not set(clause["contains_any"]).intersection(tags):
+                    from retrovue.domain.tag_normalization import expand_tag_match_set
+                    expanded = expand_tag_match_set(tags)
+                    if not set(clause["contains_any"]).intersection(expanded):
+                        return False
+            if "excludes_any" in clause:
+                if field == "tags":
+                    from retrovue.domain.tag_normalization import expand_tag_match_set
+                    if set(clause["excludes_any"]).intersection(expand_tag_match_set(tags)):
                         return False
         else:
             # Legacy flat value: {type: "trailer"} or {tags: [a, b]}
@@ -410,18 +420,37 @@ class DatabaseAssetLibrary:
         if not rows:
             return []
 
+        # Batch-load tags from asset_tags table for pool matching.
+        # Editorial JSONB may not carry tags (they live in asset_tags).
+        from retrovue.domain.entities import AssetTag
+        asset_uuids = [r[0] for r in rows]
+        tag_rows = (
+            self._db.query(AssetTag.asset_uuid, AssetTag.tag)
+            .filter(AssetTag.asset_uuid.in_(asset_uuids))
+            .all()
+        )
+        tags_by_uuid: dict[str, set[str]] = {}
+        for t_uuid, t_tag in tag_rows:
+            tags_by_uuid.setdefault(str(t_uuid), set()).add(t_tag)
+
         candidates = []
         for asset_uuid, uri, duration_ms, payload in rows:
             editorial = payload or {}
             interstitial_type = editorial.get("interstitial_type")
             cooldown_group = editorial.get("cooldown_group")
 
+            # Merge DB tags into editorial for pool matching.
+            asset_tags = tags_by_uuid.get(str(asset_uuid), set())
+            editorial_for_match = dict(editorial)
+            if asset_tags:
+                editorial_for_match["tags"] = list(asset_tags)
+
             # INV-TRAFFIC-POOL-UNION-001: Candidate set is the union of
             # all allowed_pools. An asset is eligible if ANY pool matches.
             if use_pools:
                 matched_pools = [
                     pname for pname, pdef in pool_defs.items()
-                    if _asset_matches_pool(editorial, pdef)
+                    if _asset_matches_pool(editorial_for_match, pdef)
                 ]
                 if not matched_pools:
                     continue
@@ -448,6 +477,7 @@ class DatabaseAssetLibrary:
                 asset_type=interstitial_type,
                 asset_category=editorial.get("interstitial_category"),
                 cooldown_group=editorial.get("cooldown_group"),
+                tags=tuple(sorted(asset_tags)),
             ))
 
         random.shuffle(candidates)

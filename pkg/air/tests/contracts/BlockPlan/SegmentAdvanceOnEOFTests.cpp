@@ -95,10 +95,10 @@ class SegmentAdvanceMockProducer : public ITickProducer {
 
   void AssignBlock(const FedBlock& block) override { block_ = block; }
 
-  std::optional<FrameData> TryGetFrame() override {
+  DecodeResult TryGetFrame() override {
     if (has_primed_ && primed_frame_) {
       has_primed_ = false;
-      return std::move(*primed_frame_);
+      return {DecodeStatus::kFrame, std::move(*primed_frame_)};
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
@@ -113,13 +113,13 @@ class SegmentAdvanceMockProducer : public ITickProducer {
       fd.block_ct_ms = (episode_emitted_ - 1) * frame_duration_ms_;
       fd.source_frame_index = global_frame_index_++;
       fd.audio.push_back(MakeAudioFrame(1024));
-      return fd;
+      return {DecodeStatus::kFrame, std::move(fd)};
     }
 
-    // Phase 2: Gap (nullopt while boundary advances)
+    // Phase 2: Gap (underrun while boundary advances)
     if (gap_emitted_ < gap_frames_) {
       gap_emitted_++;
-      return std::nullopt;
+      return {DecodeStatus::kUnderrun, std::nullopt};
     }
 
     // Phase 3: Filler content
@@ -134,11 +134,11 @@ class SegmentAdvanceMockProducer : public ITickProducer {
       fd.block_ct_ms = filler_ct;
       fd.source_frame_index = global_frame_index_++;
       fd.audio.push_back(MakeAudioFrame(1024));
-      return fd;
+      return {DecodeStatus::kFrame, std::move(fd)};
     }
 
-    // Phase 4: Pad (nullopt until fence)
-    return std::nullopt;
+    // Phase 4: Pad (EOF until fence)
+    return {DecodeStatus::kEof, std::nullopt};
   }
 
   void Reset() override {}

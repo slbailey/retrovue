@@ -51,15 +51,15 @@ class StateTestProducer : public ITickProducer {
 
   void AssignBlock(const FedBlock& block) override { block_ = block; }
 
-  std::optional<FrameData> TryGetFrame() override {
+  DecodeResult TryGetFrame() override {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (frames_remaining_ <= 0) return std::nullopt;
+    if (frames_remaining_ <= 0) return {DecodeStatus::kUnderrun, std::nullopt};
 
     if (decode_delay_.count() > 0) {
       mutex_.unlock();
       std::this_thread::sleep_for(decode_delay_);
       mutex_.lock();
-      if (frames_remaining_ <= 0) return std::nullopt;
+      if (frames_remaining_ <= 0) return {DecodeStatus::kUnderrun, std::nullopt};
     }
 
     frames_remaining_--;
@@ -70,7 +70,7 @@ class StateTestProducer : public ITickProducer {
     fd.asset_uri = "state_test.mp4";
     fd.block_ct_ms = index * 33;
     fd.source_frame_index = index;
-    return fd;
+    return {DecodeStatus::kFrame, std::move(fd)};
   }
 
   void Reset() override {

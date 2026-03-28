@@ -287,12 +287,14 @@ void SeamPreparer::ProcessRequest(const SeamRequest& req) {
 
   int64_t fps_num = 30, fps_den = 1;
   auto source_base = producer_factory_->Create(req.width, req.height, req.fps);
-  if (auto* tp = dynamic_cast<TickProducer*>(source_base.get())) {
-    tp->SetAspectPolicy(req.aspect_policy);
-    tp->SetLogicalSegmentIndex(req.segment_index);
-  }
   auto* source_tp = dynamic_cast<ITickProducer*>(source_base.get());
   assert(source_tp && "Factory must produce ITickProducer");
+  // INV-AIR-PRODUCER-INTERFACE-001: Use interface for SetAspectPolicy.
+  source_tp->SetAspectPolicy(req.aspect_policy);
+  // SetLogicalSegmentIndex is TickProducer-specific (segment identity for seam math).
+  if (auto* tp = dynamic_cast<TickProducer*>(source_base.get())) {
+    tp->SetLogicalSegmentIndex(req.segment_index);
+  }
   source_tp->AssignBlock(req.block);
 
   // Checkpoint 3 — cancelled after AssignBlock, before audio prime
@@ -314,13 +316,15 @@ void SeamPreparer::ProcessRequest(const SeamRequest& req) {
   const bool is_pad = (seg_type == SegmentType::kPad);
 
   // First decode + audio prime loop (INV-AUDIO-PRIME-001)
-  TickProducer::PrimeResult prime_result;
-  if (auto* real_tp = dynamic_cast<TickProducer*>(source_base.get())) {
-    prime_result = real_tp->PrimeFirstTick(req.min_audio_prime_ms);
-  } else {
-    // TestDecoder or other non-TickProducer: priming done in AssignBlock.
-    prime_result.met_threshold = source_tp->HasPrimedFrame() || source_tp->HasDecoder();
-    prime_result.actual_depth_ms = prime_result.met_threshold ? req.min_audio_prime_ms : 0;
+  // INV-AIR-PRODUCER-INTERFACE-001: Use interface PrimeFirstTick.
+  // TickProducer overrides with real decoding; TestDecoder/others return {false,0}.
+  auto prime_result = source_tp->PrimeFirstTick(req.min_audio_prime_ms);
+  // Non-TickProducer stubs return {false,0} from the default.  If the stub
+  // has a primed frame or decoder, treat priming as met (backward compat).
+  if (!prime_result.met_threshold &&
+      (source_tp->HasPrimedFrame() || source_tp->HasDecoder())) {
+    prime_result.met_threshold = true;
+    prime_result.actual_depth_ms = req.min_audio_prime_ms;
   }
 
   // Checkpoint 4 — cancelled after audio prime; decoder was opened and primed

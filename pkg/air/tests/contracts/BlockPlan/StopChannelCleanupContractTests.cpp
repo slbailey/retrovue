@@ -73,7 +73,7 @@ class TrackingTestDecoder : public producers::IProducer,
 
   // --- ITickProducer ---
   void AssignBlock(const FedBlock& b) override { inner_.AssignBlock(b); }
-  std::optional<FrameData> TryGetFrame() override { return inner_.TryGetFrame(); }
+  DecodeResult TryGetFrame() override { return inner_.TryGetFrame(); }
   void Reset() override { inner_.Reset(); }
   State GetState() const override { return inner_.GetState(); }
   const FedBlock& GetBlock() const override { return inner_.GetBlock(); }

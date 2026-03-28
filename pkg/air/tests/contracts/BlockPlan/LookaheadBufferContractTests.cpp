@@ -107,7 +107,7 @@ class ThreadTrackingProducer : public ITickProducer {
   // ITickProducer
   void AssignBlock(const FedBlock& blk) override { block_ = blk; }
 
-  std::optional<FrameData> TryGetFrame() override {
+  DecodeResult TryGetFrame() override {
     // Record calling thread.
     {
       std::lock_guard<std::mutex> lock(tid_mutex_);
@@ -117,7 +117,7 @@ class ThreadTrackingProducer : public ITickProducer {
     // Primed frame path.
     if (has_primed_) {
       has_primed_ = false;
-      return std::move(*primed_frame_);
+      return {DecodeStatus::kFrame, std::move(*primed_frame_)};
     }
 
     // Optional decode delay.
@@ -126,7 +126,7 @@ class ThreadTrackingProducer : public ITickProducer {
     }
 
     std::lock_guard<std::mutex> lock(data_mutex_);
-    if (frames_remaining_ <= 0) return std::nullopt;
+    if (frames_remaining_ <= 0) return {DecodeStatus::kUnderrun, std::nullopt};
     frames_remaining_--;
     int idx = total_frames_ - frames_remaining_ - 1;
 
@@ -137,7 +137,7 @@ class ThreadTrackingProducer : public ITickProducer {
     fd.block_ct_ms = idx * frame_duration_ms_;
     fd.source_frame_index = idx;  // FIVS: required for indexed store insert
     fd.audio.push_back(MakeAudioFrame(1600));
-    return fd;
+    return {DecodeStatus::kFrame, std::move(fd)};
   }
 
   void Reset() override {

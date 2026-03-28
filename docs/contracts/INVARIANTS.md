@@ -498,6 +498,20 @@ Canonical contract: [delivery_hls.md](delivery_hls.md)
 | INV-SEAM-ELIGIBILITY-BOUNDED-BY-SEGMENT-001 | [invariants/air/INV-SEAM-ELIGIBILITY-BOUNDED-BY-SEGMENT-001.md](invariants/air/INV-SEAM-ELIGIBILITY-BOUNDED-BY-SEGMENT-001.md) | Derived — eligibility threshold capped by segment capacity |
 | INV-SEAM-TAKEOVER-COMMITMENT-001 | [invariants/air/INV-SEAM-TAKEOVER-COMMITMENT-001.md](invariants/air/INV-SEAM-TAKEOVER-COMMITMENT-001.md) | Primary — post-swap commit, no re-evaluation of eligibility |
 | INV-SEAM-PREP-DEADLINE-SAFE-001 | [invariants/air/INV-SEAM-PREP-DEADLINE-SAFE-001.md](invariants/air/INV-SEAM-PREP-DEADLINE-SAFE-001.md) | Derived — async prep must complete before seam consumption |
+| INV-AIR-PRODUCER-INTERFACE-001 | [air/PRODUCER_INTERFACE.md](air/PRODUCER_INTERFACE.md) | Primary — PipelineManager must not downcast factory-produced producers |
+| INV-AIR-PRODUCER-PRIME-001 | [air/PRODUCER_INTERFACE.md](air/PRODUCER_INTERFACE.md) | Primary — PrimeFirstTick must be on ITickProducer interface |
+| INV-AIR-PRODUCER-ASPECT-001 | [air/PRODUCER_INTERFACE.md](air/PRODUCER_INTERFACE.md) | Primary — SetAspectPolicy must be on ITickProducer interface |
+| INV-AIR-DECODE-RESULT-EXPLICIT-001 | [air/DECODE_RESULT_MODEL.md](air/DECODE_RESULT_MODEL.md) | Primary — TryGetFrame returns explicit DecodeResult |
+| INV-AIR-EOF-NON-REPEATABLE-001 | [air/DECODE_RESULT_MODEL.md](air/DECODE_RESULT_MODEL.md) | Primary — kEof must produce pad, not repeat |
+| INV-AIR-UNDERRUN-REPEATABLE-001 | [air/DECODE_RESULT_MODEL.md](air/DECODE_RESULT_MODEL.md) | Primary — kUnderrun may hold last frame |
+| INV-AIR-ERROR-FAILSAFE-001 | [air/DECODE_RESULT_MODEL.md](air/DECODE_RESULT_MODEL.md) | Primary — kError falls back to pad |
+| INV-AIR-DECODE-RESULT-SCOPE-001 | [air/DECODE_RESULT_MODEL.md](air/DECODE_RESULT_MODEL.md) | Primary — DecodeStatus is per-call, stateless, no persistent EOF flag |
+| INV-AIR-EOF-PAD-TRANSITION-001 | [air/EOF_PAD_TRANSITION.md](air/EOF_PAD_TRANSITION.md) | Primary — pad after decoder EOF, not repeat |
+| INV-AIR-EOF-VS-UNDERRUN-001 | [air/EOF_PAD_TRANSITION.md](air/EOF_PAD_TRANSITION.md) | Primary — EOF and underrun are distinct conditions |
+| INV-AIR-EOF-IMMEDIATE-001 | [air/EOF_PAD_TRANSITION.md](air/EOF_PAD_TRANSITION.md) | Primary — pad begins on first tick after EOF |
+| INV-AIR-TAKE-PAD-CLASSIFICATION-EXPLICIT-001 | [air/TAKE_PAD_CLASSIFICATION.md](air/TAKE_PAD_CLASSIFICATION.md) | Primary — classification reflects frame source, not slot |
+| INV-AIR-TAKE-DEAD-PRODUCER-IS-PAD-001 | [air/TAKE_PAD_CLASSIFICATION.md](air/TAKE_PAD_CLASSIFICATION.md) | Primary — dead producers must classify as pad |
+| INV-AIR-TAKE-PAD-METRICS-CONSISTENT-001 | [air/TAKE_PAD_CLASSIFICATION.md](air/TAKE_PAD_CLASSIFICATION.md) | Primary — metric counter matches fingerprint is_pad |
 
 ---
 

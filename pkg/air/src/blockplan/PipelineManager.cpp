@@ -119,8 +119,9 @@ PipelineManager::PipelineManager(
       live_(CreateProducer()),
       seam_preparer_(std::make_unique<SeamPreparer>(producer_factory_)) {
   metrics_.channel_id = ctx->channel_id;
-  // INV-ASPECT-PRESERVE-001: Propagate aspect policy to live producer
-  if (auto* tp = dynamic_cast<TickProducer*>(live_.get())) tp->SetAspectPolicy(ctx->aspect_policy);
+  // INV-ASPECT-PRESERVE-001: Propagate aspect policy to live producer.
+  // INV-AIR-PRODUCER-INTERFACE-001: Use interface method, not concrete downcast.
+  AsTickProducer(live_.get())->SetAspectPolicy(ctx->aspect_policy);
 }
 
 PipelineManager::~PipelineManager() {
@@ -978,7 +979,7 @@ void PipelineManager::Run() {
 
   // Persistent pad B chain: created once, always-ready for PAD seams (swap only).
   pad_b_producer_ = CreateProducer();
-  if (auto* tp = dynamic_cast<TickProducer*>(pad_b_producer_.get())) tp->SetAspectPolicy(ctx_->aspect_policy);
+  AsTickProducer(pad_b_producer_.get())->SetAspectPolicy(ctx_->aspect_policy);
   pad_b_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
   pad_b_video_buffer_->SetBufferLabel("PAD_B_VIDEO_BUFFER");
   int pad_a_target = bcfg.audio_target_depth_ms;
@@ -1017,7 +1018,7 @@ void PipelineManager::Run() {
       Logger::Info(oss.str()); }
     if (state_ready && has_decoder) {
       auto prime_result =
-          static_cast<TickProducer*>(live_.get())->PrimeFirstTick(kMinAudioPrimeMs);
+          AsTickProducer(live_.get())->PrimeFirstTick(kMinAudioPrimeMs);
       { std::ostringstream oss;
         oss << "[PipelineManager] PRIME_RESULT: met=" << prime_result.met_threshold
             << " depth_ms=" << prime_result.actual_depth_ms
@@ -2028,40 +2029,44 @@ void PipelineManager::Run() {
     // ==================================================================
     else if (content_seam_override_this_tick && segment_b_video_buffer_ &&
              segment_b_video_buffer_->TryPopFrame(vbf)) {
-      chosen_video = &vbf.video;
-      decision = TakeDecision::kContentA;
-      last_good_video_frame_ = vbf.video;
-      last_good_source_frame_index_ = vbf.source_frame_index;
-      has_last_good_video_frame_ = true;
-      last_good_asset_uri_ = vbf.asset_uri;
-      last_good_block_id_ = live_tp()->GetState() == ITickProducer::State::kReady
-          ? live_tp()->GetBlock().block_id : std::string();
-      last_good_offset_ms_ = vbf.block_ct_ms;
-      if (!vbf.video.data.empty()) {
-        size_t y_size = static_cast<size_t>(vbf.video.width * vbf.video.height);
-        last_good_y_crc32_ = CRC32YPlane(vbf.video.data.data(),
-                                        std::min(y_size, vbf.video.data.size()));
+      // INV-AIR-TAKE-PAD-CLASSIFICATION-EXPLICIT-001: buffer-resident pad detection.
+      if (!vbf.was_decoded && vbf.asset_uri.empty()) {
+        chosen_video = &pad_producer_->VideoFrame();
+        decision = TakeDecision::kPad;
+        pad_cause_tag = "buffer_resident_pad";
       } else {
-        last_good_y_crc32_ = 0;
+        chosen_video = &vbf.video;
+        decision = TakeDecision::kContentA;
+        last_good_video_frame_ = vbf.video;
+        last_good_source_frame_index_ = vbf.source_frame_index;
+        has_last_good_video_frame_ = true;
+        last_good_asset_uri_ = vbf.asset_uri;
+        last_good_block_id_ = live_tp()->GetState() == ITickProducer::State::kReady
+            ? live_tp()->GetBlock().block_id : std::string();
+        last_good_offset_ms_ = vbf.block_ct_ms;
+        if (!vbf.video.data.empty()) {
+          size_t y_size = static_cast<size_t>(vbf.video.width * vbf.video.height);
+          last_good_y_crc32_ = CRC32YPlane(vbf.video.data.data(),
+                                            std::min(y_size, vbf.video.data.size()));
+        } else {
+          last_good_y_crc32_ = 0;
+        }
+        { std::ostringstream oss;
+          oss << "[PipelineManager] CONTENT_SEAM_OVERRIDE"
+              << " tick=" << session_frame_index
+              << " from_segment=" << current_segment_index_
+              << " to_segment=" << content_seam_to_seg
+              << " segb_video_depth=" << segment_b_video_buffer_->DepthFrames();
+          Logger::Info(oss.str()); }
+        { std::ostringstream oss;
+          oss << "[PipelineManager] CONTENT_SEAM_FRAME_FADE_AUDIT"
+              << " tick=" << session_frame_index
+              << " was_decoded=" << vbf.was_decoded
+              << " block_ct_ms=" << vbf.block_ct_ms
+              << " segment_origin_id=" << vbf.segment_origin_id
+              << " y_crc32=" << last_good_y_crc32_;
+          Logger::Info(oss.str()); }
       }
-      { std::ostringstream oss;
-        oss << "[PipelineManager] CONTENT_SEAM_OVERRIDE"
-            << " tick=" << session_frame_index
-            << " from_segment=" << current_segment_index_
-            << " to_segment=" << content_seam_to_seg
-            << " segb_video_depth=" << segment_b_video_buffer_->DepthFrames();
-        Logger::Info(oss.str()); }
-      // INSTRUMENTATION: Log whether the popped frame has fade applied.
-      // was_decoded=true means it came from a real decode (primed or fill).
-      // block_ct_ms reveals its position in the segment timeline.
-      { std::ostringstream oss;
-        oss << "[PipelineManager] CONTENT_SEAM_FRAME_FADE_AUDIT"
-            << " tick=" << session_frame_index
-            << " was_decoded=" << vbf.was_decoded
-            << " block_ct_ms=" << vbf.block_ct_ms
-            << " segment_origin_id=" << vbf.segment_origin_id
-            << " y_crc32=" << last_good_y_crc32_;
-        Logger::Info(oss.str()); }
     }
     // Explicit repeat path first: on repeat ticks we do NOT call TryPopFrame().
     // Selection only: set decision and chosen_video; single encodeFrame after cascade.
@@ -2156,25 +2161,32 @@ void PipelineManager::Run() {
             Logger::Info(oss.str());
             first_live_pop_logged_ = true;
           }
-          chosen_video = &vbf.video;
-          decision = take_b ? TakeDecision::kContentB : TakeDecision::kContentA;
-          last_good_video_frame_ = vbf.video;
-          last_good_source_frame_index_ = vbf.source_frame_index;
-          has_last_good_video_frame_ = true;
-          last_good_asset_uri_ = vbf.asset_uri;
-          last_good_block_id_ = live_tp()->GetState() == ITickProducer::State::kReady
-              ? live_tp()->GetBlock().block_id : std::string();
-          last_good_offset_ms_ = vbf.block_ct_ms;
-          if (!vbf.video.data.empty()) {
-            size_t y_size = static_cast<size_t>(vbf.video.width * vbf.video.height);
-            last_good_y_crc32_ = CRC32YPlane(vbf.video.data.data(),
-                                              std::min(y_size, vbf.video.data.size()));
+          // INV-AIR-TAKE-PAD-CLASSIFICATION-EXPLICIT-001: buffer-resident pad detection.
+          if (!vbf.was_decoded && vbf.asset_uri.empty()) {
+            chosen_video = &pad_producer_->VideoFrame();
+            decision = TakeDecision::kPad;
+            pad_cause_tag = "buffer_resident_pad";
           } else {
-            last_good_y_crc32_ = 0;
-          }
-          if (take_b) {
-            committed_b_frame_this_tick = true;
-            degraded_take_active_ = false;
+            chosen_video = &vbf.video;
+            decision = take_b ? TakeDecision::kContentB : TakeDecision::kContentA;
+            last_good_video_frame_ = vbf.video;
+            last_good_source_frame_index_ = vbf.source_frame_index;
+            has_last_good_video_frame_ = true;
+            last_good_asset_uri_ = vbf.asset_uri;
+            last_good_block_id_ = live_tp()->GetState() == ITickProducer::State::kReady
+                ? live_tp()->GetBlock().block_id : std::string();
+            last_good_offset_ms_ = vbf.block_ct_ms;
+            if (!vbf.video.data.empty()) {
+              size_t y_size = static_cast<size_t>(vbf.video.width * vbf.video.height);
+              last_good_y_crc32_ = CRC32YPlane(vbf.video.data.data(),
+                                                std::min(y_size, vbf.video.data.size()));
+            } else {
+              last_good_y_crc32_ = 0;
+            }
+            if (take_b) {
+              committed_b_frame_this_tick = true;
+              degraded_take_active_ = false;
+            }
           }
         } else {
           // FIVS miss: hold last good frame or PAD.
@@ -2229,25 +2241,32 @@ void PipelineManager::Run() {
           Logger::Info(oss.str());
           first_live_pop_logged_ = true;
         }
-        chosen_video = &vbf.video;
-        decision = take_b ? TakeDecision::kContentB : TakeDecision::kContentA;
-        last_good_video_frame_ = vbf.video;
-        last_good_source_frame_index_ = vbf.source_frame_index;
-        has_last_good_video_frame_ = true;
-        last_good_asset_uri_ = vbf.asset_uri;
-        last_good_block_id_ = live_tp()->GetState() == ITickProducer::State::kReady
-            ? live_tp()->GetBlock().block_id : std::string();
-        last_good_offset_ms_ = vbf.block_ct_ms;
-        if (!vbf.video.data.empty()) {
-          size_t y_size = static_cast<size_t>(vbf.video.width * vbf.video.height);
-          last_good_y_crc32_ = CRC32YPlane(vbf.video.data.data(),
-                                            std::min(y_size, vbf.video.data.size()));
+        // INV-AIR-TAKE-PAD-CLASSIFICATION-EXPLICIT-001: buffer-resident pad detection.
+        if (!vbf.was_decoded && vbf.asset_uri.empty()) {
+          chosen_video = &pad_producer_->VideoFrame();
+          decision = TakeDecision::kPad;
+          pad_cause_tag = "buffer_resident_pad";
         } else {
-          last_good_y_crc32_ = 0;
-        }
-        if (take_b) {
-          committed_b_frame_this_tick = true;
-          degraded_take_active_ = false;
+          chosen_video = &vbf.video;
+          decision = take_b ? TakeDecision::kContentB : TakeDecision::kContentA;
+          last_good_video_frame_ = vbf.video;
+          last_good_source_frame_index_ = vbf.source_frame_index;
+          has_last_good_video_frame_ = true;
+          last_good_asset_uri_ = vbf.asset_uri;
+          last_good_block_id_ = live_tp()->GetState() == ITickProducer::State::kReady
+              ? live_tp()->GetBlock().block_id : std::string();
+          last_good_offset_ms_ = vbf.block_ct_ms;
+          if (!vbf.video.data.empty()) {
+            size_t y_size = static_cast<size_t>(vbf.video.width * vbf.video.height);
+            last_good_y_crc32_ = CRC32YPlane(vbf.video.data.data(),
+                                              std::min(y_size, vbf.video.data.size()));
+          } else {
+            last_good_y_crc32_ = 0;
+          }
+          if (take_b) {
+            committed_b_frame_this_tick = true;
+            degraded_take_active_ = false;
+          }
         }
       } else {
         // Legacy TryPopFrame miss: buffer temporarily empty. Hold last good
@@ -2932,7 +2951,7 @@ void PipelineManager::Run() {
               Logger::Info(oss.str()); }
             auto fresh = std::make_unique<TickProducer>(
                 ctx_->width, ctx_->height, ctx_->fps);
-            if (auto* tp = dynamic_cast<TickProducer*>(fresh.get())) tp->SetAspectPolicy(ctx_->aspect_policy);
+            fresh->SetAspectPolicy(ctx_->aspect_policy);
             AsTickProducer(fresh.get())->AssignBlock(fallback_block);
             live_ = std::move(fresh);
             swapped = true;
@@ -2985,7 +3004,7 @@ void PipelineManager::Run() {
       if (!swapped) {
         // No B available — PADDED_GAP.
         live_ = CreateProducer();
-        static_cast<TickProducer*>(live_.get())->SetAspectPolicy(ctx_->aspect_policy);
+        AsTickProducer(live_.get())->SetAspectPolicy(ctx_->aspect_policy);
         // Fresh buffers — use same video target/low as session start.
         const auto& gbcfg = ctx_->buffer_config;
         int gap_video_target = gbcfg.video_target_depth_frames > 0
@@ -3009,6 +3028,11 @@ void PipelineManager::Run() {
         next_seam_frame_ = INT64_MAX;
         next_seam_type_ = SeamType::kNone;
         past_fence = true;
+        // INV-AIR-TAKE-PAD-CLASSIFICATION-EXPLICIT-001: Clear held frame
+        // so the TAKE cascade falls to kPad during the gap.  Without this,
+        // the cascade repeats the last content frame from the outgoing block
+        // (kRepeat), producing a freeze frame instead of black.
+        has_last_good_video_frame_ = false;
         { std::lock_guard<std::mutex> lock(metrics_mutex_);
           metrics_.fence_preload_miss_count++;
           metrics_.padded_gap_count++; }
@@ -5788,7 +5812,7 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
   } else {
     // INV-SEAM-SEG-007: MISS — create B (only), then move B into A slots.
     segment_b_producer_ = CreateProducer();
-    if (auto* tp = dynamic_cast<TickProducer*>(segment_b_producer_.get())) tp->SetAspectPolicy(ctx_->aspect_policy);
+    AsTickProducer(segment_b_producer_.get())->SetAspectPolicy(ctx_->aspect_policy);
     segment_b_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
     segment_b_video_buffer_->SetBufferLabel("SEGMENT_B_VIDEO_BUFFER");
     segment_b_video_buffer_->SetSegmentOriginId(to_seg);  // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001
@@ -5934,7 +5958,7 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
         ? pad_bcfg.audio_low_water_ms
         : std::max(1, pad_a_target / 3);
     pad_b_producer_ = CreateProducer();
-    if (auto* tp = dynamic_cast<TickProducer*>(pad_b_producer_.get())) tp->SetAspectPolicy(ctx_->aspect_policy);
+    AsTickProducer(pad_b_producer_.get())->SetAspectPolicy(ctx_->aspect_policy);
     pad_b_video_buffer_ = std::make_unique<VideoLookaheadBuffer>(15, 5);
     pad_b_video_buffer_->SetBufferLabel("PAD_B_VIDEO_BUFFER");
     pad_b_audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(

@@ -81,6 +81,12 @@ class ContinuousOutputContractTest : public ::testing::Test {
   }
 
   std::unique_ptr<PipelineManager> MakeEngine() {
+    return MakeEngineWithFactory(
+        std::make_shared<test_infra::TestProducerFactory>());
+  }
+
+  std::unique_ptr<PipelineManager> MakeEngineWithFactory(
+      std::shared_ptr<IProducerFactory> factory) {
     PipelineManager::Callbacks callbacks;
     callbacks.on_block_completed = [this](const FedBlock& block, int64_t ct, int64_t) {
       std::lock_guard<std::mutex> lock(cb_mutex_);
@@ -96,7 +102,7 @@ class ContinuousOutputContractTest : public ::testing::Test {
         ctx_.get(), std::move(callbacks), test_ts_,
         test_infra::MakeTestOutputClock(ctx_->fps.num, ctx_->fps.den, test_ts_),
         PipelineManagerOptions{0},
-        std::make_shared<test_infra::TestProducerFactory>());
+        std::move(factory));
   }
 
   // Wait for session_ended callback (bounded iterations, no wall clock).
@@ -128,7 +134,9 @@ class ContinuousOutputContractTest : public ::testing::Test {
   std::mutex fp_mutex_;
   std::vector<FrameFingerprint> fingerprints_;
 
-  std::unique_ptr<PipelineManager> MakeEngineWithTrace() {
+  std::unique_ptr<PipelineManager> MakeEngineWithTrace(
+      std::shared_ptr<IProducerFactory> factory = nullptr) {
+    if (!factory) factory = std::make_shared<test_infra::TestProducerFactory>();
     PipelineManager::Callbacks callbacks;
     callbacks.on_block_completed = [this](const FedBlock& block, int64_t ct, int64_t) {
       std::lock_guard<std::mutex> lock(cb_mutex_);
@@ -147,7 +155,7 @@ class ContinuousOutputContractTest : public ::testing::Test {
     return std::make_unique<PipelineManager>(ctx_.get(), std::move(callbacks), test_ts_,
         test_infra::MakeTestOutputClock(ctx_->fps.num, ctx_->fps.den, test_ts_),
         PipelineManagerOptions{0},
-        std::make_shared<test_infra::TestProducerFactory>());
+        std::move(factory));
   }
 
   std::vector<FrameFingerprint> SnapshotFingerprints() {
@@ -341,14 +349,14 @@ TEST_F(ContinuousOutputContractTest, ProducerStateMachine) {
   EXPECT_GT(source.FramesPerBlock(), 0)
       << "FramesPerBlock must be computed even without decoder";
 
-  // TryGetFrame returns nullopt (no decoder)
+  // TryGetFrame returns non-kFrame (no decoder)
   auto frame = source.TryGetFrame();
-  EXPECT_FALSE(frame.has_value())
-      << "TryGetFrame must return nullopt when decoder is not ok";
+  EXPECT_NE(frame.status, DecodeStatus::kFrame)
+      << "TryGetFrame must not return kFrame when decoder is not ok";
 
   // Call a few more times — state stays READY
   for (int i = 0; i < 5; i++) {
-    EXPECT_FALSE(source.TryGetFrame().has_value());
+    EXPECT_NE(source.TryGetFrame().status, DecodeStatus::kFrame);
     EXPECT_EQ(source.GetState(), TickProducer::State::kReady);
   }
 
@@ -476,7 +484,8 @@ TEST_F(ContinuousOutputContractTest, PadFramesForEntireBlock) {
     ctx_->block_queue.push_back(block);
   }
 
-  engine_ = MakeEngine();
+  engine_ = MakeEngineWithFactory(
+      std::make_shared<test_infra::DeadProducerFactory>());
   engine_->Start();
 
   int64_t fence = FenceTickForBootstrapPlusBlockMs(kBootGuardMs, kStdBlockMs);
@@ -766,7 +775,8 @@ TEST_F(ContinuousOutputContractTest, PadProof_FivePadsPostFence) {
     ctx_->block_queue.push_back(block);
   }
 
-  engine_ = MakeEngineWithTrace();
+  engine_ = MakeEngineWithTrace(
+      std::make_shared<test_infra::DeadProducerFactory>());
   engine_->Start();
 
   int64_t fence_pad5 = FenceTickForBootstrapPlusBlockMs(kBootGuardMs, kStdBlockMs, 2000);
@@ -864,7 +874,7 @@ TEST_F(ContinuousOutputContractTest, PadProof_PadOnlyMicroBlock) {
   engine_ = std::make_unique<PipelineManager>(ctx_.get(), std::move(callbacks), test_ts_,
       test_infra::MakeTestOutputClock(ctx_->fps.num, ctx_->fps.den, test_ts_),
       PipelineManagerOptions{0},
-        std::make_shared<test_infra::TestProducerFactory>());
+      std::make_shared<test_infra::DeadProducerFactory>());
   engine_->Start();
 
   retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), kTargetFrames);
@@ -1638,7 +1648,7 @@ TEST_F(ContinuousOutputContractTest, PadProof_BudgetShortfall_ExactCount) {
   engine_ = std::make_unique<PipelineManager>(ctx_.get(), std::move(callbacks), test_ts_,
       test_infra::MakeTestOutputClock(ctx_->fps.num, ctx_->fps.den, test_ts_),
       PipelineManagerOptions{0},
-        std::make_shared<test_infra::TestProducerFactory>());
+      std::make_shared<test_infra::DeadProducerFactory>());
   engine_->Start();
 
   retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), kN);
@@ -1856,11 +1866,12 @@ TEST_F(ContinuousOutputContractTest, PrerollArmingNextNextBlock) {
 
   engine_ = MakeEngine();
 
-  engine_->SetPreloaderDelayHook([](const std::atomic<bool>& cancel) {
-    // Cancellable 600ms delay — check cancel every 10ms
-    for (int i = 0; i < 60 && !cancel.load(std::memory_order_acquire); ++i) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
+  // INV-AIR-TEST-HARNESS-FIDELITY-001: No real-time delay with
+  // DeterministicOutputClock.  The clock advances ticks instantly, so any
+  // wall-clock sleep races the preloader past the fence.  A no-op hook
+  // lets the preloader complete within the simulated tick budget.
+  engine_->SetPreloaderDelayHook([](const std::atomic<bool>&) {
+    // Intentional no-op: deterministic clock requires zero wall-clock delay.
   });
 
   engine_->Start();
@@ -1927,7 +1938,8 @@ TEST_F(ContinuousOutputContractTest, NulloptBurstTolerance) {
     ctx_->block_queue.push_back(block);
   }
 
-  engine_ = MakeEngine();
+  engine_ = MakeEngineWithFactory(
+      std::make_shared<test_infra::DeadProducerFactory>());
   engine_->Start();
 
   int64_t fence_nullopt = FenceTickForBootstrapPlusBlockMs(kBootGuardMs, kStdBlockMs);
@@ -1972,15 +1984,17 @@ TEST_F(ContinuousOutputContractTest, NulloptBurstTolerance) {
 TEST_F(ContinuousOutputContractTest, DegradedTakeCountTracked) {
   auto now_ms = NowMs();
 
-  // Block A: unresolvable URI.
-  FedBlock block_a = MakeSyntheticBlock("degrade-A", kShortBlockMs);
+  // Block A: no-audio producer (video OK, audio depth = 0).
+  // Use kStdBlockMs so the preloader thread has time to complete before
+  // the DeterministicOutputClock races through the fence.
+  FedBlock block_a = MakeSyntheticBlock("degrade-A", kStdBlockMs);
   block_a.start_utc_ms = now_ms;
-  block_a.end_utc_ms = now_ms + kShortBlockMs;
+  block_a.end_utc_ms = now_ms + kStdBlockMs;
 
-  // Block B: unresolvable URI.
-  FedBlock block_b = MakeSyntheticBlock("degrade-B", kShortBlockMs);
-  block_b.start_utc_ms = now_ms + kShortBlockMs;
-  block_b.end_utc_ms = now_ms + 2 * kShortBlockMs;
+  // Block B: same.
+  FedBlock block_b = MakeSyntheticBlock("degrade-B", kStdBlockMs);
+  block_b.start_utc_ms = now_ms + kStdBlockMs;
+  block_b.end_utc_ms = now_ms + 2 * kStdBlockMs;
 
   {
     std::lock_guard<std::mutex> lock(ctx_->queue_mutex);
@@ -1988,10 +2002,16 @@ TEST_F(ContinuousOutputContractTest, DegradedTakeCountTracked) {
     ctx_->block_queue.push_back(block_b);
   }
 
-  engine_ = MakeEngine();
+  // INV-AIR-TEST-HARNESS-FIDELITY-001: Use NoAudioProducerFactory so
+  // PrimeFirstTick returns zero audio depth → every TAKE is degraded.
+  engine_ = MakeEngineWithFactory(
+      std::make_shared<test_infra::NoAudioProducerFactory>());
   engine_->Start();
+  // Brief yield so the SeamPreparer worker thread can complete before
+  // DeterministicOutputClock races through the fence.
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-  int64_t fence_degrade = FenceTickForBootstrapPlusBlockMs(kBootGuardMs, 2 * kShortBlockMs);
+  int64_t fence_degrade = FenceTickForBootstrapPlusBlockMs(kBootGuardMs, 2 * kStdBlockMs);
   retrovue::blockplan::test_utils::AdvanceUntilFenceOrFail(engine_.get(), fence_degrade);
   engine_->Stop();
 

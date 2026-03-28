@@ -64,17 +64,7 @@ namespace retrovue::blockplan {
 //   Readiness is GetState() == kReady (separate from running).
 // =============================================================================
 
-struct FrameData {
-  buffer::Frame video;
-  std::vector<buffer::AudioFrame> audio;  // 0-2 frames
-  // P3.2: Metadata for seam verification
-  std::string asset_uri;
-  // INV-AIR-MEDIA-TIME: PTS-derived media content time (ms), normalized to segment start.
-  // Must NOT be computed from output FPS or frame index. On repeat/hold/pad, do not advance.
-  int64_t block_ct_ms = 0;  // media_ct_ms: decoder PTS → ms; -1 or last value for pad/repeat
-  // INV-HANDOFF-DIAG: 0-based source frame index of this emitted frame (for frame_gap logging only).
-  int64_t source_frame_index = -1;
-};
+// FrameData now defined in ITickProducer.hpp (needed by DecodeResult).
 
 class TickProducer : public producers::IProducer,
                      public ITickProducer {
@@ -88,7 +78,7 @@ class TickProducer : public producers::IProducer,
 
   // --- ITickProducer ---
   void AssignBlock(const FedBlock& block) override;
-  std::optional<FrameData> TryGetFrame() override;
+  DecodeResult TryGetFrame() override;
   void Reset() override;
   State GetState() const override;
   const FedBlock& GetBlock() const override;
@@ -117,11 +107,8 @@ class TickProducer : public producers::IProducer,
   // Returns: {met_threshold, actual_depth_ms}.
   //   met_threshold: true if audio depth >= min_audio_prime_ms (or <= 0).
   //   actual_depth_ms: accumulated audio in ms (0 if no primed frame).
-  struct PrimeResult {
-    bool met_threshold = false;
-    int actual_depth_ms = 0;
-  };
-  PrimeResult PrimeFirstTick(int min_audio_prime_ms);
+  // INV-AIR-PRODUCER-PRIME-001: Override of ITickProducer::PrimeFirstTick.
+  PrimeResult PrimeFirstTick(int min_audio_prime_ms) override;
 
   // Segment identity when this producer is built for a single-segment mini plan.
   // Set by SeamPreparer so seam frame math uses the parent block's segment index.
@@ -138,8 +125,9 @@ class TickProducer : public producers::IProducer,
   // RequestStop flag — PipelineManager reads this to respect cooperative stop.
   bool IsStopRequested() const { return stop_requested_; }
 
-  // INV-ASPECT-PRESERVE-001: Set aspect policy for decoder scaling
-  void SetAspectPolicy(runtime::AspectPolicy policy) { aspect_policy_ = policy; }
+  // INV-ASPECT-PRESERVE-001: Set aspect policy for decoder scaling.
+  // INV-AIR-PRODUCER-ASPECT-001: Override of ITickProducer::SetAspectPolicy.
+  void SetAspectPolicy(runtime::AspectPolicy policy) override { aspect_policy_ = policy; }
 
   // Test-only: inject a decoder factory so contract tests can use FakeTickProducerDecoder
   // (deterministic DROP duration/PTS tests). Production leaves this unset.
@@ -172,6 +160,7 @@ class TickProducer : public producers::IProducer,
   int64_t next_frame_offset_ms_ = 0;
   realtime::RealAssetSource assets_;
   bool decoder_ok_ = false;
+  bool eof_logged_ = false;  // INV-AIR-DECODE-RESULT-SCOPE-001: gates one-shot log on first EOF
 
   // Segment boundary tracking
   ValidatedBlockPlan validated_;
@@ -228,9 +217,10 @@ class TickProducer : public producers::IProducer,
   // extracts pending audio, advances CT based on decoded PTS.
   // When advance_output_state is false (DROP skip), decoder advances but
   // frame_index_/block_ct_ms_ are not updated.
-  // Returns nullopt on EOF, decode failure, or decoder_ok_ == false.
+  // Returns kEof on decoder EOF (per-call, stateless), kUnderrun on
+  // transient failure, kError if decoder was never created.
   // For PAD segments: returns GeneratePadFrame() (no decode needed).
-  std::optional<FrameData> DecodeNextFrameRaw(bool advance_output_state = true);
+  DecodeResult DecodeNextFrameRaw(bool advance_output_state = true);
 
   // INV-TRANSITION-004: Apply segment transition fade (in/out) to a decoded
   // FrameData based on its continuity time within the current segment.

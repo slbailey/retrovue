@@ -112,21 +112,21 @@ void VideoLookaheadBuffer::StartFilling(
     Logger::Info(oss.str()); }
   if (has_primed) {
     auto fd = producer_->TryGetFrame();
-    if (fd) {
-      const size_t primed_audio_count = fd->audio.size();
+    if (fd.status == DecodeStatus::kFrame && fd.frame) {
+      const size_t primed_audio_count = fd.frame->audio.size();
       const bool has_audio_stream = producer_->HasAudioStream();
 
       VideoBufferFrame vf;
-      vf.video = fd->video;          // copy for potential cache use
-      vf.asset_uri = std::move(fd->asset_uri);
-      vf.block_ct_ms = fd->block_ct_ms;
+      vf.video = fd.frame->video;          // copy for potential cache use
+      vf.asset_uri = std::move(fd.frame->asset_uri);
+      vf.block_ct_ms = fd.frame->block_ct_ms;
       vf.was_decoded = true;
       vf.segment_origin_id = segment_origin_id_;  // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001
-      vf.source_frame_index = fd->source_frame_index;
+      vf.source_frame_index = fd.frame->source_frame_index;
 
       // Push decoded audio to AudioLookaheadBuffer.
       if (audio_buffer_) {
-        for (auto& af : fd->audio) {
+        for (auto& af : fd.frame->audio) {
           audio_buffer_->Push(std::move(af));
         }
       }
@@ -394,6 +394,13 @@ void VideoLookaheadBuffer::FillLoop() {
   // flow again.
   bool content_gap = false;
 
+  // INV-AIR-EOF-NON-REPEATABLE-001: Track pad frames pushed after terminal EOF.
+  // Once the buffer is saturated with pad frames, the fill loop exits — there
+  // is no more work to do.  Without this, the fill loop spins on kEof, pushing
+  // identical pad frames that evict earlier content from the deque (the FIVS
+  // doesn't grow because all pads share the same source_frame_index).
+  int eof_pad_pushed = 0;
+
   { std::ostringstream oss;
     oss << "[FillLoop:" << buffer_label_ << "] ENTER"
         << " input_fps=" << input_fps_.num << "/" << input_fps_.den
@@ -454,10 +461,12 @@ void VideoLookaheadBuffer::FillLoop() {
       // Fallback to Size < target when consumer hasn't started (selected_src == -1).
       int gate_lookahead;
       int gate_store_size;
+      int gate_deque_size;
       {
         std::lock_guard<std::mutex> lock(mutex_);
         gate_lookahead = ComputeLookaheadLocked();
         gate_store_size = static_cast<int>(frame_store_.Size());
+        gate_deque_size = static_cast<int>(frames_.size());
       }
       bool is_bootstrap = fill_phase_.load(std::memory_order_relaxed) ==
           static_cast<int>(FillPhase::kBootstrap);
@@ -470,6 +479,13 @@ void VideoLookaheadBuffer::FillLoop() {
       auto should_park_for_lookahead = [&]() -> bool {
         // Memory safety: always park at hard cap regardless of lookahead.
         if (gate_store_size >= hard_cap_frames_) return true;
+        // INV-AIR-EOF-NON-REPEATABLE-001: After EOF, pad frames share the
+        // same source_frame_index, so FIVS doesn't grow. Use deque size
+        // (gate_deque_size) for parking decisions to prevent infinite spin
+        // and content eviction.
+        if (eof_pad_pushed > 0) {
+          return gate_deque_size >= target_depth_frames_;
+        }
         if (gate_lookahead == kLookaheadConsumerUnknown) {
           // INV-FIVS-LOOKAHEAD-STATE-001 R1: Pre-first-tick fallback.
           return gate_store_size >= target_depth_frames_;
@@ -516,9 +532,14 @@ void VideoLookaheadBuffer::FillLoop() {
         }
       } else if (is_bootstrap) {
         // Bootstrap: skip wait when lookahead below target or store below target.
-        if (gate_lookahead == kLookaheadConsumerUnknown
+        // INV-AIR-EOF-NON-REPEATABLE-001: After EOF, use deque size (pad frames
+        // share source_frame_index, so FIVS doesn't grow).
+        const bool bootstrap_needs_more = (eof_pad_pushed > 0)
+            ? gate_deque_size < target_depth_frames_
+            : (gate_lookahead == kLookaheadConsumerUnknown
                 ? gate_store_size < target_depth_frames_
-                : gate_lookahead < lookahead_target_) {
+                : gate_lookahead < lookahead_target_);
+        if (bootstrap_needs_more) {
           if (filling_now) skip_wait = true;
         }
       }
@@ -588,7 +609,7 @@ void VideoLookaheadBuffer::FillLoop() {
             });
           } else {
             // Steady: predicate uses lookahead for scheduling, Size for memory cap.
-            space_cv_.wait_for(lock, std::chrono::milliseconds(100), [this, stop_signal, audio_buffer, &wake_reason] {
+            space_cv_.wait_for(lock, std::chrono::milliseconds(100), [this, stop_signal, audio_buffer, &wake_reason, &eof_pad_pushed] {
               bool stopping = fill_stop_.load(std::memory_order_acquire) ||
                   (stop_signal && stop_signal->load(std::memory_order_acquire));
               if (stopping) {
@@ -597,10 +618,17 @@ void VideoLookaheadBuffer::FillLoop() {
               }
               // INV-FIVS-LOOKAHEAD-STATE-001: wake when lookahead drops below target.
               // Negative lookahead (decoder behind) MUST wake — not size fallback.
+              // INV-AIR-EOF-NON-REPEATABLE-001: After EOF, pad frames share
+              // source_frame_index so FIVS doesn't grow.  Use deque size.
               const int la = ComputeLookaheadLocked();
-              const bool need_more = (la == kLookaheadConsumerUnknown)
-                  ? static_cast<int>(frame_store_.Size()) < target_depth_frames_
-                  : la < lookahead_target_;
+              bool need_more;
+              if (eof_pad_pushed > 0) {
+                need_more = static_cast<int>(frames_.size()) < target_depth_frames_;
+              } else {
+                need_more = (la == kLookaheadConsumerUnknown)
+                    ? static_cast<int>(frame_store_.Size()) < target_depth_frames_
+                    : la < lookahead_target_;
+              }
               if (need_more) {
                 steady_filling_.store(true, std::memory_order_relaxed);
                 { std::ostringstream oss;
@@ -790,7 +818,8 @@ void VideoLookaheadBuffer::FillLoop() {
       auto decode_start = std::chrono::steady_clock::now();
       auto fd = producer->TryGetFrame();
       auto decode_end = std::chrono::steady_clock::now();
-      if (fd) {
+      // INV-AIR-DECODE-RESULT-EXPLICIT-001: Switch on explicit DecodeStatus.
+      if (fd.status == DecodeStatus::kFrame && fd.frame) {
         content_gap = false;
         // Record decode latency + FIVS stall diagnostics.
         {
@@ -806,30 +835,30 @@ void VideoLookaheadBuffer::FillLoop() {
         // FIVS STALL PROBE: Log every TryGetFrame return when consumer is ahead of decoder.
         {
           const int64_t sel = consumer_selected_src_.load(std::memory_order_relaxed);
-          if (sel >= 0 && fd->source_frame_index >= 0 && sel > fd->source_frame_index) {
+          if (sel >= 0 && fd.frame->source_frame_index >= 0 && sel > fd.frame->source_frame_index) {
             auto latency_us = std::chrono::duration_cast<std::chrono::microseconds>(
                 decode_end - decode_start).count();
             std::ostringstream oss;
             oss << "[FillLoop:" << buffer_label_ << "] STALL_DECODE"
-                << " returned_src_idx=" << fd->source_frame_index
+                << " returned_src_idx=" << fd.frame->source_frame_index
                 << " consumer_sel=" << sel
-                << " gap=" << (fd->source_frame_index - sel)
+                << " gap=" << (fd.frame->source_frame_index - sel)
                 << " decode_us=" << latency_us
-                << " will_insert=" << (fd->source_frame_index >= 0 ? "Y" : "N");
+                << " will_insert=" << (fd.frame->source_frame_index >= 0 ? "Y" : "N");
             Logger::Info(oss.str());
           }
         }
 
         // Cache for cadence repeats and hold-last.
-        last_decoded = fd->video;  // copy to cache
-        last_decoded_source_frame_index = fd->source_frame_index;
+        last_decoded = fd.frame->video;  // copy to cache
+        last_decoded_source_frame_index = fd.frame->source_frame_index;
         have_last_decoded = true;
 
-        vf.video = std::move(fd->video);  // move to buffer frame
-        vf.asset_uri = std::move(fd->asset_uri);
-        vf.block_ct_ms = fd->block_ct_ms;
+        vf.video = std::move(fd.frame->video);  // move to buffer frame
+        vf.asset_uri = std::move(fd.frame->asset_uri);
+        vf.block_ct_ms = fd.frame->block_ct_ms;
         vf.was_decoded = true;
-        vf.source_frame_index = fd->source_frame_index;
+        vf.source_frame_index = fd.frame->source_frame_index;
 
         // Bail out before pushing if stop was requested or generation changed.
         if (fill_stop_.load(std::memory_order_acquire)) {
@@ -838,32 +867,43 @@ void VideoLookaheadBuffer::FillLoop() {
         }
 
         // Push decoded audio to AudioLookaheadBuffer (generation-gated).
-        // INV-AV-FILL-INTERLOCK-001: audio MUST be pushed for every decoded frame
-        // that carries audio. The ONLY legitimate suppression is generation mismatch
-        // (stale fill thread after buffer swap). Any other suppression while video
-        // advances LatestIndex() is a hard contract violation.
-        // Detect generation mismatch BEFORE push; track whether audio was actually
-        // pushed; verify interlock after FIVS insert below.
-        // INV-AV-FILL-INTERLOCK-001: determine suppression reason BEFORE any push.
-        // Audio frames are stashed in pending_audio_frames; they will be pushed
-        // atomically with the video insert after the precondition passes below.
         const bool audio_gen_ok = (audio_buffer &&
             audio_buffer->CurrentGeneration() == my_audio_gen);
         audio_suppression_reason = audio_gen_ok
             ? AudioSuppressionReason::kNone
             : AudioSuppressionReason::kGenerationMismatch;
         audio_pushed_this_decode = false;
-        has_decoded_audio = !fd->audio.empty();
+        has_decoded_audio = !fd.frame->audio.empty();
         // Stash audio for deferred push — do NOT push yet.
-        pending_audio_frames = std::move(fd->audio);
-      } else if (have_last_decoded) {
-        // Content gap — hold last frame while TryGetFrame advances block_ct_ms
-        // toward the next segment boundary (filler/pad).
+        pending_audio_frames = std::move(fd.frame->audio);
+      } else if (fd.status == DecodeStatus::kEof || fd.status == DecodeStatus::kError) {
+        // INV-AIR-EOF-NON-REPEATABLE-001: Terminal — emit pad frame.
+        // INV-AIR-ERROR-FAILSAFE-001: Error → same as EOF for emission.
+        content_gap = true;
+        eof_pad_pushed++;
+        // Construct pad frame (broadcast black Y=0x10, UV=0x80).
+        int pad_w = have_last_decoded ? last_decoded.width : 720;
+        int pad_h = have_last_decoded ? last_decoded.height : 480;
+        int y_sz = pad_w * pad_h;
+        int uv_sz = (pad_w / 2) * (pad_h / 2);
+        vf.video.width = pad_w;
+        vf.video.height = pad_h;
+        vf.video.data.resize(static_cast<size_t>(y_sz + 2 * uv_sz));
+        std::memset(vf.video.data.data(), 0x10, static_cast<size_t>(y_sz));
+        std::memset(vf.video.data.data() + y_sz, 0x80, static_cast<size_t>(2 * uv_sz));
+        vf.was_decoded = false;
+        vf.asset_uri = "";
+        vf.source_frame_index = last_decoded_source_frame_index;
+        // Silence for audio.
+        if (audio_buffer && silence_samples_per_frame > 0) {
+          audio_buffer->Push(silence_template, my_audio_gen);
+        }
+      } else if (fd.status == DecodeStatus::kUnderrun && have_last_decoded) {
+        // INV-AIR-UNDERRUN-REPEATABLE-001: Transient — hold last frame.
         content_gap = true;
         vf.video = last_decoded;
         vf.was_decoded = false;
         vf.source_frame_index = last_decoded_source_frame_index;
-        // INV-HOLD-LAST-AUDIO: Push silence so audio buffer doesn't underflow.
         if (audio_buffer && silence_samples_per_frame > 0) {
           audio_buffer->Push(silence_template, my_audio_gen);
         }

@@ -196,8 +196,25 @@ def resolve_traffic_policy(channel_yaml: dict, block: dict) -> TrafficPolicy:
     Mapping). Defaults come from TrafficPolicy's dataclass definition.
     """
     profile = resolve_traffic_profile(channel_yaml, block)
+
+    # Resolve excluded_tags from pool definitions referenced by allowed_pools.
+    # Each pool's select.where.tags.excludes_any contributes to the exclusion set.
+    excluded_tags: list[str] = []
+    pools_section = channel_yaml.get("pools", {})
+    for pool_name in profile.get("allowed_pools", []):
+        pool_def = pools_section.get(pool_name, {})
+        excl = (
+            pool_def.get("select", {})
+            .get("where", {})
+            .get("tags", {})
+            .get("excludes_any", [])
+        )
+        if excl:
+            excluded_tags.extend(excl)
+
     return TrafficPolicy(
         allowed_types=profile["allowed_types"],
+        excluded_tags=excluded_tags if excluded_tags else None,
         default_cooldown_seconds=profile.get("default_cooldown_seconds", 3_600),
         type_cooldowns_seconds=profile.get("type_cooldowns_seconds", {}),
         max_plays_per_day=profile.get("max_plays_per_day", 0),

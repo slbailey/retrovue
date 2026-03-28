@@ -150,12 +150,12 @@ TEST(AudioDrainContract, test_full_drain_no_residual) {
   auto fix = TestFixture::Create(kAudioPerDecode);
 
   auto fd = fix.producer->TryGetFrame();
-  ASSERT_TRUE(fd.has_value()) << "TryGetFrame must succeed on first call";
+  ASSERT_TRUE(fd.frame.has_value()) << "TryGetFrame must succeed on first call";
 
   // INV-AUDIO-DRAIN-001: ALL audio frames must be captured.
-  EXPECT_EQ(static_cast<int>(fd->audio.size()), kAudioPerDecode)
+  EXPECT_EQ(static_cast<int>(fd.frame->audio.size()), kAudioPerDecode)
       << "INV-AUDIO-DRAIN-001 VIOLATED: TryGetFrame returned "
-      << fd->audio.size() << " audio frames but decoder produced "
+      << fd.frame->audio.size() << " audio frames but decoder produced "
       << kAudioPerDecode << ". Undrained audio remains in the decoder, "
       << "causing progressive A/V desync.";
 
@@ -183,10 +183,10 @@ TEST(AudioDrainContract, test_variable_audio_per_decode) {
   // Decode 5 video frames. Each should have exactly 4 audio frames.
   for (int i = 0; i < 5; i++) {
     auto fd = fix.producer->TryGetFrame();
-    ASSERT_TRUE(fd.has_value()) << "TryGetFrame failed on call " << i;
-    EXPECT_EQ(static_cast<int>(fd->audio.size()), 4)
+    ASSERT_TRUE(fd.frame.has_value()) << "TryGetFrame failed on call " << i;
+    EXPECT_EQ(static_cast<int>(fd.frame->audio.size()), 4)
         << "Decode " << i << ": expected 4 audio frames, got "
-        << fd->audio.size();
+        << fd.frame->audio.size();
   }
 
   // Verify nothing accumulated in the decoder.
@@ -205,11 +205,11 @@ TEST(AudioDrainContract, test_large_burst_fully_drained) {
   auto fix = TestFixture::Create(kAudioPerDecode, 256);
 
   auto fd = fix.producer->TryGetFrame();
-  ASSERT_TRUE(fd.has_value());
+  ASSERT_TRUE(fd.frame.has_value());
 
-  EXPECT_EQ(static_cast<int>(fd->audio.size()), kAudioPerDecode)
+  EXPECT_EQ(static_cast<int>(fd.frame->audio.size()), kAudioPerDecode)
       << "INV-AUDIO-DRAIN-001 VIOLATED: Large audio burst not fully drained. "
-      << "Got " << fd->audio.size() << ", expected " << kAudioPerDecode;
+      << "Got " << fd.frame->audio.size() << ", expected " << kAudioPerDecode;
 
   ASSERT_NE(fix.decoder_ptr, nullptr);
   EXPECT_EQ(fix.decoder_ptr->PendingAudioCount(), 0);
@@ -224,8 +224,8 @@ TEST(AudioDrainContract, test_zero_audio_no_crash) {
   auto fix = TestFixture::Create(0, 512);
 
   auto fd = fix.producer->TryGetFrame();
-  ASSERT_TRUE(fd.has_value());
-  EXPECT_EQ(fd->audio.size(), 0u);
+  ASSERT_TRUE(fd.frame.has_value());
+  EXPECT_EQ(fd.frame->audio.size(), 0u);
 }
 
 // ---------------------------------------------------------------------------
@@ -242,8 +242,8 @@ TEST(AudioDrainContract, test_cumulative_drain_no_accumulation) {
   int64_t total_audio = 0;
   for (int i = 0; i < 10; i++) {
     auto fd = fix.producer->TryGetFrame();
-    ASSERT_TRUE(fd.has_value()) << "TryGetFrame failed on call " << i;
-    total_audio += static_cast<int64_t>(fd->audio.size());
+    ASSERT_TRUE(fd.frame.has_value()) << "TryGetFrame failed on call " << i;
+    total_audio += static_cast<int64_t>(fd.frame->audio.size());
   }
 
   // With full drain: exactly 10 * 10 = 100 audio frames.
@@ -380,28 +380,28 @@ TEST(AudioDrainContract, test_decoder_backlog_from_multiple_packets) {
   // Cycle 0: expect all 7 drained.
   {
     auto fd = fix.producer->TryGetFrame();
-    ASSERT_TRUE(fd.has_value()) << "TryGetFrame failed on cycle 0";
-    EXPECT_EQ(static_cast<int>(fd->audio.size()), 7)
+    ASSERT_TRUE(fd.frame.has_value()) << "TryGetFrame failed on cycle 0";
+    EXPECT_EQ(static_cast<int>(fd.frame->audio.size()), 7)
         << "INV-AUDIO-DRAIN-001 VIOLATED: Cycle 0 produced 7 audio frames "
-        << "(multi-packet backlog) but only " << fd->audio.size()
+        << "(multi-packet backlog) but only " << fd.frame->audio.size()
         << " were drained.";
   }
 
   // Cycle 1: expect all 3 drained.
   {
     auto fd = fix.producer->TryGetFrame();
-    ASSERT_TRUE(fd.has_value()) << "TryGetFrame failed on cycle 1";
-    EXPECT_EQ(static_cast<int>(fd->audio.size()), 3)
-        << "Cycle 1: expected 3 audio frames, got " << fd->audio.size();
+    ASSERT_TRUE(fd.frame.has_value()) << "TryGetFrame failed on cycle 1";
+    EXPECT_EQ(static_cast<int>(fd.frame->audio.size()), 3)
+        << "Cycle 1: expected 3 audio frames, got " << fd.frame->audio.size();
   }
 
   // Cycle 2: expect all 11 drained.
   {
     auto fd = fix.producer->TryGetFrame();
-    ASSERT_TRUE(fd.has_value()) << "TryGetFrame failed on cycle 2";
-    EXPECT_EQ(static_cast<int>(fd->audio.size()), 11)
+    ASSERT_TRUE(fd.frame.has_value()) << "TryGetFrame failed on cycle 2";
+    EXPECT_EQ(static_cast<int>(fd.frame->audio.size()), 11)
         << "INV-AUDIO-DRAIN-001 VIOLATED: Cycle 2 produced 11 audio frames "
-        << "(multi-packet backlog) but only " << fd->audio.size()
+        << "(multi-packet backlog) but only " << fd.frame->audio.size()
         << " were drained.";
   }
 

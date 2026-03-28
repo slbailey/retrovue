@@ -18,6 +18,7 @@ class TrafficPolicy:
     """Channel-level traffic rules."""
 
     allowed_types: list[str]
+    excluded_tags: list[str] | None = None
     default_cooldown_seconds: int = 3_600
     type_cooldowns_seconds: dict[str, int] | None = None
     max_plays_per_day: int = 0
@@ -27,6 +28,8 @@ class TrafficPolicy:
             object.__setattr__(self, "allowed_types", [])
         if self.type_cooldowns_seconds is None:
             object.__setattr__(self, "type_cooldowns_seconds", {})
+        if self.excluded_tags is None:
+            object.__setattr__(self, "excluded_tags", [])
 
 
 @dataclass(frozen=True)
@@ -48,6 +51,7 @@ class TrafficCandidate:
     duration_ms: int
     asset_category: str | None = None
     cooldown_group: str | None = None
+    tags: tuple[str, ...] = ()
 
 
 def _cooldown_key_of_candidate(c: TrafficCandidate) -> str:
@@ -92,6 +96,15 @@ def evaluate_candidates(
 
     # Step 1: Allowed type filter
     eligible = [c for c in candidates if c.asset_type in allowed]
+
+    # Step 1b: Excluded tag filter
+    if policy.excluded_tags:
+        from retrovue.domain.tag_normalization import expand_tag_match_set
+        excluded = set(policy.excluded_tags)
+        eligible = [
+            c for c in eligible
+            if not (excluded & expand_tag_match_set(set(getattr(c, "tags", ()))))
+        ]
 
     # Step 2: Cooldown filter (policy stores seconds, timestamps are epoch-ms)
     if policy.default_cooldown_seconds > 0 or type_cooldowns:
