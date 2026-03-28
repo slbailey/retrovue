@@ -28,9 +28,9 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 - [x] **4a** — Audit StreamingDiagnostics fields in Python runtime + AIR C++. Found: DEAD in both.
 - [x] **4b** — Delete StreamingDiagnostics class, diagnostics field from StreamingSchema, defaults.yaml section. 26 lines removed. 330 pass.
 - [x] **4c** — Extract `_hls_diag_*` state from ProgramDirector into a `HlsDiagnosticsState` dataclass (per-channel). PD holds one instance per channel and delegates. Does NOT change behavior — makes the boundary explicit and testable. Files: `pkg/core/src/retrovue/runtime/program_director.py`. Run tests (floor 330).
-- [ ] **4d** — Verify auto-expiry (`_hls_diag_mode_until` check) is the ONLY expiry mechanism — no manual reset paths that could suppress diagnostics. Document result. Commit PHASE4_COMPLETE.md.
+- [x] **4d** — Verify auto-expiry (`_hls_diag_mode_until` check) is the ONLY expiry mechanism — no manual reset paths that could suppress diagnostics. Document result. Commit PHASE4_COMPLETE.md.
 
-## NEXT SUB-STEP: 4d
+## NEXT SUB-STEP: 5a
 
 ---
 
@@ -122,6 +122,7 @@ Future AI sessions must be unable to re-introduce these problems without visibly
 ---
 
 | 4c | 2026-03-28 | d9b02b6 | Extract _hls_diag_* into HlsDiagnosticsState dataclass; 330 pass |
+| 4d | 2026-03-28 | 5e7be6a | Expiry audit — auto-expiry sole mechanism; fix stale contract test; PHASE4_COMPLETE.md |
 ## Blockers / Notes
 - Cron was disabled for deep analysis — re-enabled after REFACTOR_STATE.md update
 - Phase 9 is mandatory — code cleanup without model lockdown is temporary
