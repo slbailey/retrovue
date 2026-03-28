@@ -1,6 +1,6 @@
 # REFACTOR_STATE.md — Live Execution State
 
-> This file is the chain link between turns. Every agent turn MUST:
+> Every agent turn MUST:
 > 1. Read this file first
 > 2. Do ONE atomic sub-step only
 > 3. Mark it done and set the next sub-step
@@ -10,8 +10,14 @@
 
 ## Overall Goal
 Aggressive (L3) complexity reduction. Single source of truth per concern.
+Full analysis: `/opt/retrovue/DEEP_ANALYSIS.md`
 Full constraints: `/opt/retrovue/SIMPLIFICATION_PLAN_V1.md`
 Branch: `refactor/simplify-single-authority-l3`
+
+## The real objective (from DEEP_ANALYSIS.md)
+Not just clean up code — lock down the authority model so it cannot drift again.
+Every phase must both REMOVE complexity AND STRENGTHEN the boundary that prevented it from forming in the first place.
+Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns that caused each problem we fixed.
 
 ---
 
@@ -19,41 +25,72 @@ Branch: `refactor/simplify-single-authority-l3`
 
 ## Sub-steps (do ONE per turn, mark [x] when done):
 
-- [x] **3a** — Audit contract files for tests that assert internal sequencing (not required invariants). Produce a candidate list of tests/classes to retire. Write findings to `/opt/retrovue/PHASE3_CONTRACT_AUDIT.md`. Do NOT delete anything yet. Run tests (must stay >= 328). DONE: 334 pass.
-- [x] **3b** — Retire 4 internal/meta tests from `test_frame_selection_cadence_contract.py`: test_buggy_cascade_violates_pop_invariant, test_buggy_consumption_ratio_is_1_0, test_accumulator_budget_bounded, test_60_to_30_cadence_half. Expected: 334-4=330 pass (floor 328). DONE: 330 pass. Commit: be7edd6.
-- [x] **3c** — Per audit: no second retirement possible within floor constraint (headroom only 2 after 3b). Update state to reflect this and move to 3d. DONE: state-only, 330 pass.
-- [x] **3d** — Move to Phase 4: Diagnostics isolation audit. DONE: produced PHASE4_DIAGNOSTICS_AUDIT.md. 330 pass. Phase 3 COMPLETE.
-
-## Phase 4 Sub-steps:
-
-- [x] **3d / Phase 4 kickoff** — Produce PHASE4_DIAGNOSTICS_AUDIT.md. 330 pass. ← DONE
-- [x] **4a** — Verify StreamingDiagnostics config fields: grep AIR C++ source for consumption of startup_events, steady_interval, recv_gap_warn_threshold_ms, recv_gap_warn_count, upstream_loop_spike_ms. Determine if dead or AIR-consumed. DONE: DEAD in both Python runtime AND AIR C++ src. No cpp/h references. Only schema.py + testing.py. Remove in 4b.
-
-- [x] **4b** — Remove StreamingDiagnostics class from schema.py, remove diagnostics field from StreamingSchema, remove from testing.py fixtures and defaults.yaml. 330 pass. DONE.
+- [x] **4a** — Audit StreamingDiagnostics fields in Python runtime + AIR C++. Found: DEAD in both.
+- [x] **4b** — Delete StreamingDiagnostics class, diagnostics field from StreamingSchema, defaults.yaml section. 26 lines removed. 330 pass.
+- [ ] **4c** — Extract `_hls_diag_*` state from ProgramDirector into a `HlsDiagnosticsState` dataclass (per-channel). PD holds one instance per channel and delegates. Does NOT change behavior — makes the boundary explicit and testable. Files: `pkg/core/src/retrovue/runtime/program_director.py`. Run tests (floor 330).
+- [ ] **4d** — Verify auto-expiry (`_hls_diag_mode_until` check) is the ONLY expiry mechanism — no manual reset paths that could suppress diagnostics. Document result. Commit PHASE4_COMPLETE.md.
 
 ## NEXT SUB-STEP: 4c
 
-## Phase 4 Sub-steps (continued):
+---
 
-- [ ] **4c** — Audit: identify next dead config field or diagnostics coupling to remove. If Phase 4 is clean, produce PHASE4_COMPLETE.md and move to Phase 5.
+## Phase 5 — Ghost Surface Deletion (ZERO RISK)
+
+- [ ] **5a** — Delete 11 ghost TODO/pass methods from PD (lines 1642–1806). Delete `SystemHealth`, `ChannelInfo`, `ChannelStatus`. Run tests (floor 330).
+- [ ] **5b** — Delete 2 dead HTTP 501 stubs (`/test/segment/...`, `/test/channel/...`). Run tests.
+- [ ] **5c** — Delete `play_content()` dead method from `BlockPlanProducer` in channel_manager.py. Run tests.
+- [ ] **5d** — Move `MockBlockPlanProvider` from `playout_session.py` to `tests/fixtures/mock_block_plan.py`. Update imports. Run tests.
+- [ ] **5e** — Delete `_build_producer_for_mode` monkeypatch wrapper in `PD._get_or_create_manager()` (4 lines, zero functional change). Run tests.
+- [ ] **5f** — Replace `_start_linger()` fallback branch with `assert self.on_linger_expired is not None`. Add test confirming ChannelManager construction without callback raises. Run tests.
+- [ ] **5g** — After all ghost deletions: update CLAUDE.md to add rule: "No TODO/pass methods. If a method is not implemented, do not create it. Ghost scaffolding is forbidden."
 
 ---
 
-## Phase 2 — COMPLETED
+## Phase 6 — Old HLS Stack Deletion (HIGH IMPACT, MEDIUM RISK)
 
-Sub-steps completed:
-- [x] **2a** — Write contract test: "CM never calls PD.stop_channel directly" (FAIL before code change).
-- [x] **2b** — Delete dead code: deferred_teardown_triggered() + poll call in PD._health_check_loop.
-- [x] **2c** — Delete dead code: compute_jip_position() from ChannelManager.
-- [x] **2d** — Delete dead code: _mock_grid_* methods from ChannelManager.
-- [x] **2e** — Invert linger callback: add on_linger_expired: Callable to ChannelManager.__init__.
-- [x] **2f** — Wire PD side: inject on_linger_expired=self._stop_channel_internal. Contract GREEN.
-- [x] **2g** — Inject MasterClock into DslScheduleService; replace 2x bare datetime.now().
-- [x] **2h** — Audit remaining datetime.now() in dsl_schedule_service.py. Result: CLEAN.
-  - No bare datetime.now() calls remain.
-  - _maybe_extend_horizon receives now_utc_ms from ChannelManager caller correctly.
-  - _purge_expired_program_schedule fallback uses self._clock.now_utc() (MasterClock injected).
-  - 334 pass, 2 pre-existing failures unrelated to this phase.
+- [ ] **6a** — Audit: confirm no active production clients use `/hls/` endpoints. Check config/defaults.yaml, IPTV M3U output, Plex lineup URLs. Document findings.
+- [ ] **6b** — Remove `/hls/{channel_id}/live.m3u8` and `/hls/{channel_id}/{segment}` endpoint handlers from PD. Remove `self._hls_manager` instantiation (line ~588) and `stop_all()` call.
+- [ ] **6c** — Delete `retrovue.streaming.hls_writer` module entirely (~492 lines).
+- [ ] **6d** — Remove `hls_manager` parameter from `ChannelStream.__init__` if only used for old stack wiring. Run tests (floor 330).
+- [ ] **6e** — After deletion: update CLAUDE.md to add rule: "There is one HLS delivery stack: SegmentRing + HlsSegmenter at /channels/. No disk-based HLS. INV-HLS-NO-DISK-IO-001 is a hard constraint."
+
+---
+
+## Phase 7 — Mock Relocation (MEDIUM IMPACT, LOW RISK)
+
+- [ ] **7a** — Move `MockGridScheduleService` and `MockAlternatingScheduleService` from `channel_manager.py` to `tests/fixtures/mock_schedule_services.py`. Update 4 import sites in `program_director.py`. Run tests.
+- [ ] **7b** — Move `Playlist`, `PlaylistSegment` from `channel_manager.py` to `retrovue/scheduling/playlist_types.py`. Update import in `scheduling/playlist_schedule_manager.py`. Run tests.
+- [ ] **7c** — Move `ProgramDirector` Protocol and `ScheduleService` Protocol from `channel_manager.py` to `retrovue/runtime/protocols.py`. Update import sites. Run tests.
+- [ ] **7d** — After relocation: update CLAUDE.md to add rule: "Production modules contain only production code. If a class is only instantiated in tests or behind mock_* flags, it belongs in tests/fixtures/, not in runtime/."
+
+---
+
+## Phase 8 — HLS Activation Unification (MEDIUM IMPACT, MEDIUM RISK)
+
+- [ ] **8a** — Write contract test: "HLS activation and raw TS activation share the same channel start code path." Test must FAIL before code change.
+- [ ] **8b** — Extract phantom management from `_ensure_channel_active_for_hls` into `_activate_hls_phantom(channel_id, mgr)` helper.
+- [ ] **8c** — Update `channels_hls_manifest` endpoint to call `start_channel()` → `_activate_hls_phantom()` instead of `_ensure_channel_active_for_hls()`.
+- [ ] **8d** — Delete `_ensure_channel_active_for_hls()` (~190 lines). Run tests (floor 330). Contract test from 8a must now PASS.
+- [ ] **8e** — Update CLAUDE.md to add rule: "There is one channel activation path: start_channel(). No parallel activation code paths. _ensure_channel_active_for_hls() must not be re-introduced."
+
+---
+
+## Phase 9 — Model Lockdown (MOST IMPORTANT FOR FUTURE CONTROL)
+
+This phase is NOT optional. It is the reason all prior phases have lasting value.
+Goal: Make CLAUDE.md, contracts, and invariants explicitly forbid every pattern we fixed.
+Future AI sessions must be unable to re-introduce these problems without visibly violating a documented rule.
+
+- [ ] **9a** — Add Authority Rule to CLAUDE.md: "For any change touching runtime behavior, define exactly one authority owner per concern (clock, segment window, lifecycle, diagnostics). If a change introduces a second authority for any concern, stop and redesign."
+- [ ] **9b** — Add Complexity Budget Rule to CLAUDE.md: "Every non-trivial change must include: what logic is removed, what logic is added, net effect on moving parts. Net-new abstractions require justification. Prefer deletion over layering."
+- [ ] **9c** — Add Ghost Prohibition to CLAUDE.md: "No TODO/pass/NotImplemented scaffolding in production code. If its not implemented, dont create it. Ghost methods are forbidden — they create false API surface."
+- [ ] **9d** — Add Production Boundary Rule to CLAUDE.md: "Production modules contain only production code. Mocks, fixtures, and test harnesses belong in tests/fixtures/. Never in runtime/."
+- [ ] **9e** — Add Required PR Header to CLAUDE.md: Every change must declare: (1) authority concern touched, (2) complexity budget (removed/added/net), (3) contracts affected, (4) rollback unit.
+- [ ] **9f** — Add new invariant: INV-SINGLE-ACTIVATION-PATH-001 — "ProgramDirector.start_channel() is the sole channel activation entry point. No parallel activation paths may exist."
+- [ ] **9g** — Add new invariant: INV-NO-GHOST-METHODS-001 — "No production module may contain unimplemented (pass/TODO) method stubs. Ghost scaffolding is a contract violation."
+- [ ] **9h** — Final: produce REFACTOR_COMPLETE.md with: all-clear status, what was done, what the codebase looks like now, prompt language updates for CLAUDE.md, lessons learned. This is the document handed to Steve.
+
+## NEXT SUB-STEP (after 4c): Continue from current position.
 
 ---
 
@@ -64,23 +101,28 @@ Sub-steps completed:
 | 0b | 2026-03-28 | a0168ea | Added REFACTOR_STATE.md |
 | 1 | 2026-03-28 | 2488974 | Authority overlap map produced |
 | 1b | 2026-03-28 | 293c545 | REFACTOR_STATE.md updated to phase 2 |
-| wip | 2026-03-28 | 0683216 | Safety check committed leftover AIR files from pre-branch work |
-| 2a | 2026-03-28 | 27d1982 | Contract test INV-LIFECYCLE-PD-SOLE-TEARDOWN-001 added (6 tests RED as expected, 328 still pass) |
-| 2b | 2026-03-28 | c81d328 | Deleted deferred_teardown_triggered() and PD poll block (13 lines removed; 330 pass) |
+| wip | 2026-03-28 | 0683216 | Safety check committed leftover AIR files |
+| wip2 | 2026-03-28 | 0687f01 | Safety check recovery (second) |
+| 2a | 2026-03-28 | 27d1982 | Contract test INV-LIFECYCLE-PD-SOLE-TEARDOWN-001 (6 RED) |
+| 2b | 2026-03-28 | c81d328 | Deleted deferred_teardown_triggered() dead code; 330 pass |
 | 2c | 2026-03-28 | 39ded8f | Deleted compute_jip_position() 58 lines; 331 pass |
-| 2d | 2026-03-28 | 522b298 | Deleted _mock_grid_* methods; 333 pass |
-| 2e | 2026-03-28 | e396513 | Add on_linger_expired callback to ChannelManager, invert linger dep; 333 pass |
-| 2f | 2026-03-28 | 1ce56d8 | Wire PD: inject on_linger_expired=self._stop_channel_internal; 334 pass, contract GREEN |
-| 2g | 2026-03-28 | 652521f | Inject MasterClock into DslScheduleService; replace 2x bare datetime.now(); 334 pass |
-| 2h | 2026-03-28 | 0f326e1 | Audit dsl_schedule_service.py datetime.now() — CLEAN; Phase 2 complete; 334 pass |
-| 3c | 2026-03-28 | 72b9237 | State-only: confirmed no second test retirement within floor; 330 pass |
-| 3d | 2026-03-28 | TBD | Phase 4 kickoff: produced PHASE4_DIAGNOSTICS_AUDIT.md; 5 diag subsystems audited; 3 CLEAN, 1 needs verification (StreamingDiagnostics), 1 deprecated; 330 pass |
-| 4b | 2026-03-28 | TBD | Remove StreamingDiagnostics class+field from schema.py, testing.py, defaults.yaml (26 lines deleted); 330 pass |
+| 2d | 2026-03-28 | 522b298 | Deleted _mock_grid_* from ChannelManager; 333 pass |
+| 2e | 2026-03-28 | e396513 | Add on_linger_expired callback to ChannelManager |
+| 2f | 2026-03-28 | 1ce56d8 | Wire PD: inject on_linger_expired; contract GREEN; 334 pass |
+| 2g | 2026-03-28 | 652521f | Inject MasterClock into DslScheduleService |
+| 2h | 2026-03-28 | 0f326e1 | Audit dsl_schedule_service datetime.now() — CLEAN; Phase 2 complete |
+| 3a | 2026-03-28 | (in 0f326e1) | Phase 3 contract audit; PHASE3_CONTRACT_AUDIT.md |
+| 3b | 2026-03-28 | be7edd6 | Retire 4 internal tests from test_frame_selection_cadence_contract.py; 330 pass |
+| 3c | 2026-03-28 | (state only) | No more retirements viable within floor; Phase 3 complete |
+| 3d | 2026-03-28 | 59db9ec | Transition to Phase 4; produce PHASE4_DIAGNOSTICS_AUDIT.md |
+| 4a | 2026-03-28 | (in 59db9ec) | StreamingDiagnostics audit — DEAD in both Python and AIR C++ |
+| 4b | 2026-03-28 | 0cb53e2 | Delete StreamingDiagnostics, schema field, defaults.yaml section; 330 pass |
+| deep | 2026-03-28 | 9e9d5d8 | DEEP_ANALYSIS.md — full architectural diagnosis, revised phase plan |
 
 ---
 
 ## Blockers / Notes
-- Timeout was 300s — increased to 600s
-- One atomic action per turn rule added to prevent timeout mid-work
-- AIR files in wip commit (0683216) are pre-existing uncommitted work from main, not part of refactor
-- 2 pre-existing test failures in test_interstitial_enrichment.py (unmatched_directory and known_type_directory filler defaults) — NOT caused by this branch
+- Cron was disabled for deep analysis — re-enabled after REFACTOR_STATE.md update
+- Phase 9 is mandatory — code cleanup without model lockdown is temporary
+- Each phase now ends with a CLAUDE.md update to prevent re-introduction
+- Test floor: 330 passing (up from baseline 328)
