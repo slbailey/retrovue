@@ -61,6 +61,7 @@ from retrovue.runtime.config import (
     DEFAULT_PROGRAM_FORMAT,
     InlineChannelConfigProvider,
 )
+from retrovue.runtime.consumption_adapters import HlsConsumptionAdapter, TsConsumptionAdapter
 
 try:
     from retrovue.runtime.settings import RuntimeSettings  # type: ignore
@@ -620,6 +621,11 @@ class ProgramDirector:
             duration_s=_diag["duration_seconds"],
             ring_max_events=_diag["ring_max_events"],
         )
+
+        # Phase 8b: HLS phantom state is owned by HlsConsumptionAdapter.
+        # ProgramDirector delegates all phantom tracking to this adapter.
+        self._hls_adapter = HlsConsumptionAdapter(logger=self._logger)
+        self._ts_adapter = TsConsumptionAdapter(logger=self._logger)
 
         # Evidence pipeline configuration
         _ev = _ch_cfg["evidence"]
@@ -1710,17 +1716,15 @@ class ProgramDirector:
         import time as _time
 
         # INV-HLS-PHANTOM-DRAIN-KEEPS-CHANNEL-ALIVE-001: Exactly one phantom
-        # per channel. Use _hls_activity_lock to serialize check-and-register
-        # so concurrent manifest requests cannot create duplicate phantoms.
-        with self._hls_activity_lock:
-            if channel_id in self._hls_phantom_sessions:
+        # per channel. HlsConsumptionAdapter owns phantom state and serializes
+        # check-and-register so concurrent manifest requests cannot create duplicates.
+        with self._hls_adapter.activity_lock:
+            if self._hls_adapter.is_phantom_active(channel_id):
                 # Phantom already active — just refresh activity and return
-                self._hls_last_activity[channel_id] = _time.monotonic()
+                self._hls_adapter.touch_activity(channel_id)
                 return self._resolve_channel_manager(channel_id)
             # Reserve the slot immediately so concurrent requests see it
-            phantom_id = f"hls-v2-phantom-{channel_id}-{uuid.uuid4().hex[:8]}"
-            self._hls_phantom_sessions[channel_id] = phantom_id
-            self._hls_last_activity[channel_id] = _time.monotonic()
+            phantom_id = self._hls_adapter.reserve_phantom_slot(channel_id)
         loop = asyncio.get_running_loop()
 
         def _startup():
@@ -1791,9 +1795,7 @@ class ProgramDirector:
 
         if mgr is None:
             # Startup failed — clean up the reserved slot
-            with self._hls_activity_lock:
-                self._hls_phantom_sessions.pop(channel_id, None)
-                self._hls_last_activity.pop(channel_id, None)
+            self._hls_adapter.release_phantom_slot(channel_id)
             return None
 
         # Wait for fanout to establish so bytes start flowing to the segmenter
@@ -1814,69 +1816,14 @@ class ProgramDirector:
                 mgr.tune_out(phantom_id)
             except Exception:
                 pass
-            with self._hls_activity_lock:
-                self._hls_phantom_sessions.pop(channel_id, None)
-                self._hls_last_activity.pop(channel_id, None)
+            self._hls_adapter.release_phantom_slot(channel_id)
             return None
 
         # Subscribe phantom to fanout and start drain thread.
         # This keeps the ChannelStream subscriber list non-empty so AIR bytes
         # continue flowing through the fanout → HlsSegmenter tee path.
-        phantom_queue = fanout.subscribe(phantom_id)
-
-        def _drain_hls_v2_phantom():
-            IDLE_CHECK_INTERVAL = 5.0
-            idle_timeout = getattr(mgr, "LINGER_SECONDS", 20)
-            self._logger.info(
-                "[HLS-v2-phantom %s] started, idle_timeout=%ds", channel_id, idle_timeout,
-            )
-            while True:
-                # Sleep between checks — the BytesBoundedQueue's drop_oldest
-                # policy handles overflow silently. We don't need to drain at
-                # wire rate; we just need to stay subscribed and periodically
-                # confirm the stream is alive.
-                _time.sleep(IDLE_CHECK_INTERVAL)
-
-                # Pull one chunk to confirm stream is alive (non-blocking)
-                try:
-                    chunk = phantom_queue.get(timeout=0.01)
-                    if not chunk:
-                        break  # EOF
-                except Exception:
-                    pass  # queue empty or timeout — stream may be starting
-
-                # Check if any HLS client is still active
-                with self._hls_activity_lock:
-                    last = self._hls_last_activity.get(channel_id, 0)
-                idle_seconds = _time.monotonic() - last
-                if idle_seconds > idle_timeout:
-                    self._logger.info(
-                        "[HLS-v2-phantom %s] no client activity for %.0fs, disconnecting",
-                        channel_id, idle_seconds,
-                    )
-                    break
-
-            # Cleanup
-            self._logger.info(
-                "[HLS-v2-phantom %s] tearing down phantom viewer %s", channel_id, phantom_id,
-            )
-            try:
-                mgr.tune_out(phantom_id)
-            except Exception:
-                pass
-            try:
-                fanout.unsubscribe(phantom_id)
-            except Exception:
-                pass
-            with self._hls_activity_lock:
-                self._hls_phantom_sessions.pop(channel_id, None)
-                self._hls_last_activity.pop(channel_id, None)
-
-        threading.Thread(
-            target=_drain_hls_v2_phantom,
-            daemon=True,
-            name=f"hls-v2-phantom-{channel_id}",
-        ).start()
+        # Phase 8b: phantom management is now owned by HlsConsumptionAdapter.
+        self._hls_adapter._activate_phantom(channel_id, phantom_id, mgr, fanout)
 
         return mgr
 
@@ -2582,8 +2529,7 @@ class ProgramDirector:
                 session_mgr.touch(sid)
 
             # Refresh phantom activity so drain thread keeps channel alive
-            with self._hls_activity_lock:
-                self._hls_last_activity[channel_id] = __import__("time").monotonic()
+            self._hls_adapter.touch_activity(channel_id)
 
             ring_count = ring.count() if ring is not None else 0
             self._hls_diag_record(
@@ -2681,8 +2627,7 @@ class ProgramDirector:
                 session_mgr.touch(sid)
 
             # Refresh phantom activity so drain thread keeps channel alive
-            with self._hls_activity_lock:
-                self._hls_last_activity[channel_id] = __import__("time").monotonic()
+            self._hls_adapter.touch_activity(channel_id)
 
             self._hls_diag_record(
                 channel_id,

@@ -30,7 +30,7 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 - [x] **4c** — Extract `_hls_diag_*` state from ProgramDirector into a `HlsDiagnosticsState` dataclass (per-channel). PD holds one instance per channel and delegates. Does NOT change behavior — makes the boundary explicit and testable. Files: `pkg/core/src/retrovue/runtime/program_director.py`. Run tests (floor 330).
 - [x] **4d** — Verify auto-expiry (`_hls_diag_mode_until` check) is the ONLY expiry mechanism — no manual reset paths that could suppress diagnostics. Document result. Commit PHASE4_COMPLETE.md.
 
-## NEXT SUB-STEP: 8b — Extract HLS phantom management from _ensure_channel_active_for_hls into HlsConsumptionAdapter._activate_phantom(channel_id, mgr) helper in runtime/consumption_adapters.py. This is the first code change for Phase 8 — the 4 RED contract tests from 8a must move toward GREEN.
+## NEXT SUB-STEP: 8c — Extract raw TS fanout management into TsConsumptionAdapter._wire_fanout(channel_id, mgr) helper. TsConsumptionAdapter stub already exists in consumption_adapters.py from 8b.
 
 ## Phase 6g — HLS Contract Test Migration (TABLED — do after Phase 7)
 
@@ -91,7 +91,7 @@ Reframed: HLS and TS are two consumption adapters over one PD-owned lifecycle.
 Not just path merger — defines the correct mental model going forward.
 
 - [x] **8a** — Write contract test: "Channel lifecycle is PD-owned; HLS and TS are consumption adapters that share the same CM activation path." Must FAIL before code change.
-- [ ] **8b** — Extract HLS phantom management from _ensure_channel_active_for_hls into HlsConsumptionAdapter._activate_phantom(channel_id, mgr) helper.
+- [x] **8b** — Create consumption_adapters.py with HlsConsumptionAdapter + TsConsumptionAdapter stub. Move phantom state (_hls_phantom_sessions, _hls_last_activity, _hls_activity_lock) from PD into HlsConsumptionAdapter. PD delegates via self._hls_adapter. 3/4 RED tests GREEN. 255 pass.
 - [ ] **8c** — Extract raw TS fanout management into TsConsumptionAdapter._wire_fanout(channel_id, mgr) helper.
 - [ ] **8d** — Both adapters call PD.start_channel() as the single lifecycle entry point. Delete _ensure_channel_active_for_hls() body (~190 lines). Run tests (floor 330). Contract test from 8a must PASS.
 - [ ] **8e** — Update CLAUDE.md: "Channel lifecycle is PD-owned. HLS and TS are consumption adapters. There is one lifecycle path: start_channel(). Adapters add consumption-model behavior (phantom, fanout) but do not own lifecycle."
