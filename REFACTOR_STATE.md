@@ -41,7 +41,7 @@ Branch: `refactor/simplify-single-authority-l3`
 | wip | 2026-03-28 | 0683216 | Safety check committed leftover AIR files from pre-branch work |
 | 2a | 2026-03-28 | 27d1982 | Contract test INV-LIFECYCLE-PD-SOLE-TEARDOWN-001 added (6 tests RED as expected, 328 still pass) |
 | 2b | 2026-03-28 | c81d328 | Deleted deferred_teardown_triggered() and PD poll block (13 lines removed; 330 pass) |
-| 2c | 2026-03-28 | (pending) | Deleted compute_jip_position() 58 lines; 331 pass |
+| 2c | 2026-03-28 | 39ded8f | Deleted compute_jip_position() 58 lines; 331 pass |
 
 ---
 
