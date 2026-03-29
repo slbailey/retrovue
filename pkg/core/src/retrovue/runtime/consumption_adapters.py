@@ -162,6 +162,127 @@ class HlsConsumptionAdapter:
             return self._hls_last_activity.get(channel_id, 0)
 
 
+
+    async def activate(self, channel_id: str, session_id: str, pd: "Any") -> "Any | None":
+        """Activate a channel for HLS consumption.
+
+        INV-SINGLE-ACTIVATION-PATH-001: Routes channel lifecycle through
+        PD.start_channel() (the sole lifecycle entry point). This adapter
+        adds HLS-specific phantom session behavior but does NOT own lifecycle.
+
+        Moved from PD._ensure_channel_active_for_hls() in Phase 8d.
+
+        Args:
+            channel_id: Channel to activate.
+            session_id: HLS session id for phantom viewer.
+            pd: ProgramDirector instance (provides lifecycle + fanout APIs).
+
+        Returns:
+            ChannelManager on success, None on failure.
+        """
+        import asyncio
+
+        # INV-HLS-PHANTOM-DRAIN-KEEPS-CHANNEL-ALIVE-001: Exactly one phantom
+        # per channel. Serialized by activity_lock.
+        with self.activity_lock:
+            if self.is_phantom_active(channel_id):
+                # Phantom already active — just refresh activity and return
+                self.touch_activity(channel_id)
+                return pd._resolve_channel_manager(channel_id)
+            # Reserve the slot immediately so concurrent requests see it
+            phantom_id = self.reserve_phantom_slot(channel_id)
+
+        loop = asyncio.get_running_loop()
+        adapter = self
+
+        def _startup() -> "Any | None":
+            # INV-SINGLE-ACTIVATION-PATH-001: Use start_channel() — the sole
+            # lifecycle entry point — not a parallel _resolve_or_create path.
+            try:
+                mgr = pd.start_channel(channel_id)
+            except Exception:
+                return None
+            if mgr is None:
+                return None
+
+            mgr.tune_in(phantom_id, {"channel_id": channel_id, "hls": True})
+
+            # AIR immediately writes to the UDS socket after startup.
+            # If nobody reads within ~200ms, SocketSink overflows → detach
+            # → session ends (reason=stopped) → crash-loop.
+            # Fix: grab the accepted socket from the queue and construct
+            # the ChannelStream directly with it (via SocketTsSource),
+            # bypassing the slow factory retry loop.
+            import time as _t
+            from retrovue.runtime.channel_stream import ChannelStream, SocketTsSource
+
+            producer = getattr(mgr, "active_producer", None)
+            reader_queue = getattr(producer, "reader_socket_queue", None) if producer else None
+
+            if reader_queue is not None:
+                try:
+                    t0 = _t.monotonic()
+                    sock = reader_queue.get(timeout=5.0)
+                    adapter._logger.info(
+                        "[HLS %s] Socket acquired from queue in %.0fms",
+                        channel_id, (_t.monotonic() - t0) * 1000,
+                    )
+                    _hls_seg = getattr(mgr, "hls_segmenter", None)
+                    fanout = ChannelStream(
+                        channel_id=channel_id,
+                        ts_source_factory=lambda stop_event=None, s=sock: SocketTsSource(s),
+                        hls_segmenter=_hls_seg,
+                    )
+                    pd._fanout_buffers[channel_id] = fanout
+                except Exception as exc:
+                    adapter._logger.warning(
+                        "[HLS %s] direct fanout creation failed: %s", channel_id, exc,
+                    )
+
+            return mgr
+
+        # INV-CHANNEL-STARTUP-CONCURRENCY-001: Acquire startup semaphore
+        await pd._startup_semaphore.acquire()
+        try:
+            mgr = await loop.run_in_executor(pd._startup_executor, _startup)
+        except Exception as exc:
+            adapter._logger.warning(
+                "HLS activation failed for channel %s: %s", channel_id, exc,
+            )
+            mgr = None
+        finally:
+            pd._startup_semaphore.release()
+
+        if mgr is None:
+            # Startup failed — clean up the reserved slot
+            self.release_phantom_slot(channel_id)
+            return None
+
+        # Wait for fanout to establish so bytes start flowing to the segmenter
+        fanout = None
+        for _ in range(10):
+            fanout = pd._get_or_create_fanout_buffer(channel_id, mgr)
+            if fanout and fanout.is_running():
+                break
+            await asyncio.sleep(1)
+
+        if fanout is None:
+            # Startup failed — clean up phantom
+            adapter._logger.warning(
+                "[HLS-v2 %s] activation failed (no fanout), cleaning up phantom %s",
+                channel_id, phantom_id,
+            )
+            try:
+                mgr.tune_out(phantom_id)
+            except Exception:
+                pass
+            self.release_phantom_slot(channel_id)
+            return None
+
+        # Subscribe phantom to fanout and start drain thread.
+        self._activate_phantom(channel_id, phantom_id, mgr, fanout)
+        return mgr
+
 class TsConsumptionAdapter:
     """Owns raw TS fanout wiring.
 

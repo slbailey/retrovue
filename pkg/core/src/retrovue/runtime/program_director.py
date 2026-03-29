@@ -1699,134 +1699,6 @@ class ProgramDirector:
         except Exception:
             return None
 
-    async def _ensure_channel_active_for_hls(self, channel_id: str, session_id: str) -> "Any | None":
-        """Ensure a channel is active by tuning in an HLS phantom viewer.
-
-        INV-HLS-FIRST-VIEWER-ACTIVATES-CHANNEL-001: Uses the same channel
-        activation path as raw TS viewers — _get_or_create_manager + tune_in.
-        Does NOT create a parallel lifecycle.
-
-        INV-HLS-PHANTOM-DRAIN-KEEPS-CHANNEL-ALIVE-001: Subscribes a phantom
-        to the ChannelStream fanout so the byte pipeline stays alive while
-        HLS clients poll. Exactly one phantom per channel. The phantom drain
-        thread disconnects when no HLS client has polled recently.
-
-        Returns the ChannelManager on success, None on failure.
-        """
-        import time as _time
-
-        # INV-HLS-PHANTOM-DRAIN-KEEPS-CHANNEL-ALIVE-001: Exactly one phantom
-        # per channel. HlsConsumptionAdapter owns phantom state and serializes
-        # check-and-register so concurrent manifest requests cannot create duplicates.
-        with self._hls_adapter.activity_lock:
-            if self._hls_adapter.is_phantom_active(channel_id):
-                # Phantom already active — just refresh activity and return
-                self._hls_adapter.touch_activity(channel_id)
-                return self._resolve_channel_manager(channel_id)
-            # Reserve the slot immediately so concurrent requests see it
-            phantom_id = self._hls_adapter.reserve_phantom_slot(channel_id)
-        loop = asyncio.get_running_loop()
-
-        def _startup():
-            mgr = self._resolve_or_create_channel_manager(channel_id)
-            if mgr is None:
-                return None
-
-            # tune_in triggers _ensure_producer_running → starts AIR.
-            # AIR immediately writes to the UDS socket. If nobody reads
-            # within ~200ms, AIR's SocketSink overflows → detach → session
-            # ends with reason=stopped → crash-loop.
-            #
-            # Fix: start a pre-drain thread that grabs the accepted socket
-            # from the queue and reads from it immediately, preventing
-            # backpressure. The ChannelStream reader will take over later
-            # via the normal reconnect path.
-            import time as _t
-
-            mgr.tune_in(phantom_id, {"channel_id": channel_id, "hls": True})
-
-            # AIR immediately writes to the UDS socket after startup.
-            # If nobody reads within ~200ms, SocketSink overflows → detach
-            # → session ends (reason=stopped) → crash-loop.
-            #
-            # Fix: grab the accepted socket from the queue and construct
-            # the ChannelStream directly with it (via SocketTsSource),
-            # bypassing the slow factory retry loop. This ensures the
-            # reader thread starts draining immediately.
-            import time as _t
-            from retrovue.runtime.channel_stream import SocketTsSource
-
-            producer = getattr(mgr, "active_producer", None)
-            reader_queue = getattr(producer, "reader_socket_queue", None) if producer else None
-
-            if reader_queue is not None:
-                try:
-                    t0 = _t.monotonic()
-                    sock = reader_queue.get(timeout=5.0)
-                    self._logger.info(
-                        "[HLS %s] Socket acquired from queue in %.0fms",
-                        channel_id, (_t.monotonic() - t0) * 1000,
-                    )
-                    _hls_seg = getattr(mgr, "hls_segmenter", None)
-                    fanout = ChannelStream(
-                        channel_id=channel_id,
-                        ts_source_factory=lambda stop_event=None, s=sock: SocketTsSource(s),
-                        hls_segmenter=_hls_seg,
-                    )
-                    self._fanout_buffers[channel_id] = fanout
-                except Exception as exc:
-                    self._logger.warning(
-                        "[HLS %s] direct fanout creation failed: %s", channel_id, exc,
-                    )
-
-            return mgr
-
-        # INV-CHANNEL-STARTUP-CONCURRENCY-001: Acquire startup semaphore
-        await self._startup_semaphore.acquire()
-        try:
-            mgr = await loop.run_in_executor(self._startup_executor, _startup)
-        except Exception as exc:
-            self._logger.warning(
-                "HLS activation failed for channel %s: %s", channel_id, exc,
-            )
-            mgr = None
-        finally:
-            self._startup_semaphore.release()
-
-        if mgr is None:
-            # Startup failed — clean up the reserved slot
-            self._hls_adapter.release_phantom_slot(channel_id)
-            return None
-
-        # Wait for fanout to establish so bytes start flowing to the segmenter
-        fanout = None
-        for _ in range(10):
-            fanout = self._get_or_create_fanout_buffer(channel_id, mgr)
-            if fanout and fanout.is_running():
-                break
-            await asyncio.sleep(1)
-
-        if fanout is None:
-            # Startup failed — clean up phantom
-            self._logger.warning(
-                "[HLS-v2 %s] activation failed (no fanout), cleaning up phantom %s",
-                channel_id, phantom_id,
-            )
-            try:
-                mgr.tune_out(phantom_id)
-            except Exception:
-                pass
-            self._hls_adapter.release_phantom_slot(channel_id)
-            return None
-
-        # Subscribe phantom to fanout and start drain thread.
-        # This keeps the ChannelStream subscriber list non-empty so AIR bytes
-        # continue flowing through the fanout → HlsSegmenter tee path.
-        # Phase 8b: phantom management is now owned by HlsConsumptionAdapter.
-        self._hls_adapter._activate_phantom(channel_id, phantom_id, mgr, fanout)
-
-        return mgr
-
     def _get_or_create_fanout_buffer(self, channel_id: str, manager: Any) -> Optional[ChannelStream]:
         """
         Phase 8c: Get or create FanoutBuffer (ChannelStream) for a channel.
@@ -2415,7 +2287,7 @@ class ProgramDirector:
             if not is_active:
                 # Activate channel in background — don't block the response.
                 asyncio.ensure_future(
-                    self._ensure_channel_active_for_hls(channel_id, sid)
+                    self._hls_adapter.activate(channel_id, sid, self)
                 )
 
             ring = getattr(mgr, "hls_segment_ring", None) if mgr else None
