@@ -18,7 +18,7 @@ class Settings(BaseSettings):
 
     # Database settings (keep existing)
     database_url: str = Field(
-        default="postgresql+psycopg://retrovue:***REDACTED_PASSWORD***@192.168.1.50:5432/retrovue",
+        default=None,  # REQUIRED: must be set via DATABASE_URL env var (secrets.env)
         alias="DATABASE_URL",
     )
     # NEW: optional test DB
