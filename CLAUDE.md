@@ -355,3 +355,62 @@ guesswork. Every refactor that touches lifecycle must preserve or extend this
 observability, never remove it.
 
 Reference invariant: INV-LIFECYCLE-OBSERVABILITY-001 in docs/contracts/INVARIANTS.md
+
+────────────────────────
+AUTHORITY RULE (INV-AUTHORITY-SINGLE-OWNER-001)
+────────────────────────
+For any change touching runtime behavior, exactly one component must own each concern.
+
+The four authority domains in Retrovue Core:
+- Clock/timebase authority → MasterClock (runtime/clock.py)
+- Segment window authority → SegmentRing (runtime/hls/segment_ring.py)
+- Channel lifecycle authority → ProgramDirector (runtime/program_director.py)
+- Diagnostics authority → HlsDiagnosticsState (per-channel, held by PD)
+
+Rules:
+- Before making any change, name the authority domain it touches.
+- If a change introduces a second decision-maker for any domain, stop and redesign.
+- Components may READ from an authority domain. Only the designated owner may WRITE.
+- Cross-domain changes must be staged: one domain per PR unless explicitly coordinated.
+
+Forbidden patterns:
+- A component other than MasterClock inventing or bypassing wall-clock time for playout decisions.
+- A component other than SegmentRing owning the HLS sliding window state.
+- A component other than ProgramDirector making teardown decisions.
+- Diagnostics state scattered across multiple methods in PD rather than delegated to HlsDiagnosticsState.
+
+Why: Authority overlap is the root cause of "fix one, break three" regression cycles.
+When two components can both make the same decision, their state diverges silently.
+
+────────────────────────
+COMPLEXITY BUDGET RULE
+────────────────────────
+Every non-trivial change must justify its net effect on moving parts.
+
+Before implementing any feature or fix, state:
+1. What logic is being REMOVED (files, classes, methods, lines)
+2. What logic is being ADDED (same)
+3. Net moving parts: is the system simpler or more complex after this change?
+
+Rules:
+- Net-new abstractions require explicit justification. "We might need this later" is not justification.
+- Prefer deletion over layering. If fixing a problem requires adding a new layer, first ask whether an existing layer can be removed.
+- If a change touches more than one authority domain, split it into staged changes.
+- If a fix requires changes in 3+ components, treat it as an architecture problem first — not a patch.
+
+Forbidden patterns:
+- Adding a new class without removing an equivalent amount of complexity elsewhere.
+- Creating parallel implementations "just in case" (dual stacks, dual paths, dual authorities).
+- Defensive coding that silently handles misconfiguration instead of asserting loudly.
+
+────────────────────────
+REQUIRED CHANGE HEADER
+────────────────────────
+Every non-trivial PR or change set must include this header in its commit message or PR description:
+
+Authority domain touched: [clock | segment-window | lifecycle | diagnostics | http | scheduling | producer | none]
+Complexity budget: removed=[X lines/classes] added=[Y lines/classes] net=[simpler/same/more complex]
+Contracts affected: [list invariant IDs or "none"]
+Rollback unit: [why this change can be reverted independently]
+
+Changes that cannot answer these four questions are not ready to merge.
