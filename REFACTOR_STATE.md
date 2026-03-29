@@ -30,7 +30,7 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 - [x] **4c** — Extract `_hls_diag_*` state from ProgramDirector into a `HlsDiagnosticsState` dataclass (per-channel). PD holds one instance per channel and delegates. Does NOT change behavior — makes the boundary explicit and testable. Files: `pkg/core/src/retrovue/runtime/program_director.py`. Run tests (floor 330).
 - [x] **4d** — Verify auto-expiry (`_hls_diag_mode_until` check) is the ONLY expiry mechanism — no manual reset paths that could suppress diagnostics. Document result. Commit PHASE4_COMPLETE.md.
 
-## NEXT SUB-STEP: 8.5c
+## NEXT SUB-STEP: 8.5d
 
 ## Phase 6g — HLS Contract Test Migration (TABLED — do after Phase 7)
 
@@ -103,7 +103,7 @@ Required before Phase 9 so we can validate the refactor worked.
 
 - [x] **8.5a** — Add structured log events (DEBUG level, gated) at: channel activation, first segment produced, viewer join/leave, linger start/expire, teardown.
 - [x] **8.5b** — Add correlation ID (session_id) flowing: PD activation -> CM lifecycle -> HLS phantom -> segments. Must appear in all log lines for a viewer session.
-- [ ] **8.5c** — Validate end-to-end: start a channel, join as viewer, leave, confirm full lifecycle traceable in logs. Commit with test.
+- [x] **8.5c** — Validate end-to-end: start a channel, join as viewer, leave, confirm full lifecycle traceable in logs. Commit with test.
 - [ ] **8.5d** — Update CLAUDE.md: "Runtime lifecycle transitions must emit structured log events at DEBUG level. Viewer sessions must carry a correlation ID traceable end-to-end."
 
 
