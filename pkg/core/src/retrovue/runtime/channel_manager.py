@@ -369,6 +369,8 @@ class ChannelManager:
         # INV-CHANNEL-LIVENESS-RECOVERY-001: Recovery state
         self._recovery_attempts: int = 0
         self._recovery_timer: threading.Timer | None = None
+        # Phase 8.5a: track first segment so we emit the lifecycle event once.
+        self._first_segment_logged: bool = False
 
         # Channel configuration (set by daemon when creating manager)
         self.channel_config: ChannelConfig | None = None
@@ -453,7 +455,41 @@ class ChannelManager:
         if self._hls_segmenter is not None:
             last = self._hls_segmenter.last_completed_index()
             if last is not None:
+                prev = self._hls_segment_counter
                 self._hls_segment_counter = last + 1
+                # Phase 8.5a: emit first_segment event exactly once per activation.
+                if prev == 0 and last == 0 and not self._first_segment_logged:
+                    self._first_segment_logged = True
+                    self._emit_lifecycle_event(
+                        "first_segment",
+                        segment_index=last,
+                        viewer_count=self.runtime_state.viewer_count,
+                    )
+
+    # ------------------------------------------------------------------
+    # Phase 8.5a: Structured lifecycle event emission (DEBUG, gated)
+    # ------------------------------------------------------------------
+
+    def _emit_lifecycle_event(self, event: str, **fields: object) -> None:
+        """Emit a structured DEBUG lifecycle event. All fields are key=value.
+
+        Events:
+            channel_activated  — producer started successfully
+            first_segment      — first HLS segment pushed to ring
+            viewer_join        — viewer session registered
+            viewer_leave       — viewer session removed
+            linger_start       — linger grace period started
+            linger_expire      — linger fired, no viewers remain
+            linger_cancel      — linger cancelled (viewer reconnected)
+            teardown           — stop_channel() entered
+        """
+        if not self._logger.isEnabledFor(10):  # logging.DEBUG == 10
+            return
+        parts = " ".join(f"{k}={v}" for k, v in fields.items())
+        self._logger.debug(
+            "[lifecycle] channel=%s event=%s %s",
+            self.channel_id, event, parts,
+        )
 
     def stop_channel(self, reason: str = "channel_stop") -> None:
         """
@@ -465,6 +501,7 @@ class ChannelManager:
         "last_viewer_left" only when stopping due to viewer count 1→0; use
         "channel_stop" for admin/explicit stop.
         """
+        self._emit_lifecycle_event("teardown", reason=reason, viewer_count=self.runtime_state.viewer_count)
         self._logger.debug(
             "[teardown] stopping producer for channel %s (reason=%s)", self.channel_id, reason
         )
@@ -478,6 +515,8 @@ class ChannelManager:
         self._channel_state = "STOPPED"
         self._teardown_reason = None
         self._pending_fatal = None
+        # Phase 8.5a: reset so first_segment fires again on re-activation.
+        self._first_segment_logged = False
         # Clear stale HLS window so reconnect cannot consume prior-activation manifest/segments.
         if self._hls_segment_ring is not None:
             self._hls_segment_ring.clear()
@@ -537,6 +576,11 @@ class ChannelManager:
             old_count = self.runtime_state.viewer_count
             self.runtime_state.viewer_count = len(self.viewer_sessions)
             # Log for debugging "who" was counted as a viewer (e.g. phantom vs real TS client).
+            self._emit_lifecycle_event(
+                "viewer_join",
+                session_id=session_id,
+                viewer_count=self.runtime_state.viewer_count,
+            )
             self._logger.info(
                 "[viewer_join] channel=%s session_id=%s viewer_count=%d",
                 self.channel_id, session_id, self.runtime_state.viewer_count,
@@ -577,6 +621,11 @@ class ChannelManager:
             old_count = self.runtime_state.viewer_count
             self.runtime_state.viewer_count = len(self.viewer_sessions)
             # Log for debugging "who" was counted as a viewer when they left.
+            self._emit_lifecycle_event(
+                "viewer_leave",
+                session_id=session_id,
+                viewer_count=self.runtime_state.viewer_count,
+            )
             self._logger.info(
                 "[viewer_leave] channel=%s session_id=%s viewer_count=%d (was %d)",
                 self.channel_id, session_id, self.runtime_state.viewer_count, old_count,
@@ -641,6 +690,7 @@ class ChannelManager:
         """Start linger grace period. Producer stays alive until timeout."""
         if self._linger_handle is not None:
             return  # already lingering
+        self._emit_lifecycle_event("linger_start", linger_seconds=self.LINGER_SECONDS, viewer_count=self.runtime_state.viewer_count)
         self._logger.debug(
             "[channel %s] LINGER_STARTED %ds", self.channel_id, self.LINGER_SECONDS
         )
@@ -663,6 +713,7 @@ class ChannelManager:
         self._linger_handle = None
         self._linger_deadline = None
         if self.runtime_state.viewer_count == 0:
+            self._emit_lifecycle_event("linger_expire", viewer_count=0)
             self._logger.info(
                 "[channel %s] LINGER_EXPIRED (0 viewers); stopping producer and tearing down",
                 self.channel_id,
@@ -677,6 +728,7 @@ class ChannelManager:
             self._linger_handle.cancel()
             self._linger_handle = None
             self._linger_deadline = None
+            self._emit_lifecycle_event("linger_cancel", viewer_count=self.runtime_state.viewer_count)
             self._logger.info(
                 "[channel %s] LINGER_CANCELLED viewer_reconnected", self.channel_id
             )
@@ -807,6 +859,12 @@ class ChannelManager:
             )
 
         # Producer is up. Record runtime state.
+        self._emit_lifecycle_event(
+            "channel_activated",
+            mode=required_mode,
+            viewer_count=self.runtime_state.viewer_count,
+            jip_offset_ms=jip_offset_ms,
+        )
         self.runtime_state.producer_status = "running"
         self.runtime_state.producer_started_at = station_time
         self.runtime_state.stream_endpoint = self.active_producer.get_stream_endpoint()
