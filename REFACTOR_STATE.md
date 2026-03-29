@@ -106,6 +106,29 @@ Required before Phase 9 so we can validate the refactor worked.
 - [ ] **8.5c** — Validate end-to-end: start a channel, join as viewer, leave, confirm full lifecycle traceable in logs. Commit with test.
 - [ ] **8.5d** — Update CLAUDE.md: "Runtime lifecycle transitions must emit structured log events at DEBUG level. Viewer sessions must carry a correlation ID traceable end-to-end."
 
+
+## Phase 10 — HLS Test Suite Restoration (MANDATORY before all-clear)
+
+When the old HLS stack was deleted, ~194 contract tests were retired instead of
+being migrated to the new API. This was the wrong call. Those tests covered real
+invariants (no disk I/O, bounded segment window, discontinuity markers, manifest format).
+The new system behaves correctly but we no longer have automated proof.
+
+This phase rewrites those tests against the new HlsSegmenter + SegmentRing API.
+Full migration plan: /opt/retrovue/HLS_TEST_MIGRATION_PLAN.md
+
+- [ ] **10a** — Rewrite tests/contracts/hls_delivery/conftest.py (shared fixtures, new API)
+- [ ] **10b** — Rewrite test_segment_ring.py
+- [ ] **10c** — Rewrite test_segment_production.py
+- [ ] **10d** — Rewrite test_manifest.py
+- [ ] **10e** — Rewrite test_channel_lifecycle.py
+- [ ] **10f** — Rewrite test_delivery_endpoints.py
+- [ ] **10g** — Rewrite pkg/core/tests/contracts/runtime/test_inv_hls_no_disk_io.py
+- [ ] **10h** — Rewrite test_inv_hls_discontinuity_marker.py
+
+Success: all ~194 HLS contract tests pass against new API. Test count rises from 256 back to ~450+.
+This phase is REQUIRED before issuing the all-clear to Steve.
+
 ## Phase 9 — Model Lockdown (MOST IMPORTANT FOR FUTURE CONTROL)
 
 This phase is NOT optional. It is the reason all prior phases have lasting value.
