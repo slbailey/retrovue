@@ -297,3 +297,33 @@ Violating this rule blurs the boundary between production behavior and test beha
 makes production modules harder to audit, and can cause mocks to silently run in production.
 
 Reference invariant: INV-PRODUCTION-BOUNDARY-001 in docs/contracts/INVARIANTS.md
+
+────────────────────────
+CONSUMPTION ADAPTER MODEL (INV-SINGLE-ACTIVATION-PATH-001)
+────────────────────────
+Channel lifecycle is owned exclusively by ProgramDirector.
+
+Rules:
+- There is ONE channel activation entry point: ProgramDirector.start_channel().
+- HLS and TS are consumption adapters over the PD-owned lifecycle.
+- Consumption adapters add consumption-model behavior (phantom session tracking,
+  fanout wiring) but do NOT own or duplicate lifecycle logic.
+- Adapters call start_channel() to activate; they do not maintain their own
+  activation path, active-channel registry, or teardown path.
+
+Consumption adapters:
+- HlsConsumptionAdapter — manages phantom sessions, activity tracking, expiry
+- TsConsumptionAdapter — manages raw TS fanout wiring
+
+Forbidden patterns:
+- A second activation entry point (e.g. _ensure_channel_active_for_hls() that
+  bypasses start_channel())
+- An adapter that directly instantiates a ChannelManager or owns its lifecycle
+- Duplicate active-channel state in an adapter that diverges from PD's registry
+- Any class that re-implements PD.start_channel() logic
+
+If a new consumption model is added (e.g. DASH, HLS-LL): create a new
+ConsumptionAdapter subclass. Do not add lifecycle logic to ProgramDirector —
+add consumption behavior to the adapter.
+
+Reference invariant: INV-SINGLE-ACTIVATION-PATH-001 in docs/contracts/INVARIANTS.md
