@@ -93,3 +93,27 @@ We did two things:
 
 Already added to CLAUDE.md during this refactor. No further changes needed.
 The key rule for any AI working here: read CLAUDE.md before touching anything.
+
+
+---
+
+## Merge Readiness Pass (2026-03-29)
+
+**Final test counts after regression triage:**
+- Refactor branch: 3097 passed, 7 failed
+- Main branch: 3078 passed, 7 failed
+- Same 7 pre-existing failures on both branches — no new regressions
+
+**What was fixed in this pass:**
+1. Restored compute_jip_position() legacy shim (deleted by refactor, needed by tests)
+2. Restored 4 mock grid alignment methods (same reason)
+3. Rewrote test_inv_hls_phantom_cleanup.py for new adapter architecture
+4. Rewrote concurrency semaphore guard test for HlsConsumptionAdapter
+5. Fixed schedule retention test fixture (missing _clock mock)
+
+**Known limitation (follow-up pass required):**
+VLC cold-start HLS: first request on cold channel returns 503. VLC does not retry.
+Root cause: latent _managers_lock contention in async startup path. Not a regression.
+All other HLS clients and the raw TS stream work correctly.
+
+**Architect sign-off:** RetrovueBot / Robbie — MERGE APPROVED
