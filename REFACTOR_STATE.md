@@ -30,7 +30,7 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 - [x] **4c** — Extract `_hls_diag_*` state from ProgramDirector into a `HlsDiagnosticsState` dataclass (per-channel). PD holds one instance per channel and delegates. Does NOT change behavior — makes the boundary explicit and testable. Files: `pkg/core/src/retrovue/runtime/program_director.py`. Run tests (floor 330).
 - [x] **4d** — Verify auto-expiry (`_hls_diag_mode_until` check) is the ONLY expiry mechanism — no manual reset paths that could suppress diagnostics. Document result. Commit PHASE4_COMPLETE.md.
 
-## NEXT SUB-STEP: 10g
+## NEXT SUB-STEP: 10h
 
 ## Phase 8.5 COMPLETE — Phase 10 (HLS Test Suite Restoration) begins
 
@@ -125,7 +125,7 @@ Full migration plan: /opt/retrovue/HLS_TEST_MIGRATION_PLAN.md
 - [x] **10d** — Rewrite test_manifest.py
 - [x] **10e** — Rewrite test_channel_lifecycle.py
 - [x] **10f** — Rewrite test_delivery_endpoints.py
-- [ ] **10g** — Rewrite pkg/core/tests/contracts/runtime/test_inv_hls_no_disk_io.py
+- [x] **10g** — Rewrite pkg/core/tests/contracts/runtime/test_inv_hls_no_disk_io.py
 - [ ] **10h** — Rewrite test_inv_hls_discontinuity_marker.py
 
 Success: all ~194 HLS contract tests pass against new API. Test count rises from 256 back to ~450+.
@@ -213,4 +213,5 @@ Future AI sessions must be unable to re-introduce these problems without visibly
 | 10c | 2026-03-29 | cbad54f | Rewrite test_segment_production.py (20 tests): IDENTITY, IMMUTABLE, KEYFRAME, SELFCONTAINED, DURATION-BOUNDS, INDEX-GUARD; 299 pass, 2 pre-existing failures, 0 regressions |
 | 10d | 2026-03-29 | 5b8af68 | Rewrite test_manifest.py (25 tests): LIVE, SEQUENCE, PDT, DETERMINISTIC, VALID-PLAYLIST, SEQUENCE-MONOTONIC, DISCONTINUITY-MARKER; 324 pass, 2 pre-existing failures, 0 regressions |
 | 10e | 2026-03-29 | 7391b22 | Rewrite test_channel_lifecycle.py (10 tests): RESTART-DISCONTINUITY, PRODUCER-SEGMENT-FLOW, NO-ORPHAN-PRODUCER; 334 pass, 2 pre-existing failures, 0 regressions |
-| 10f | 2026-03-29 | (pending) | Rewrite test_delivery_endpoints.py (23 tests): MANIFEST-LIVE, BYTE-IDENTITY, LIFECYCLE-READY, SESSION-TOUCH, CONTENT-TYPE, SEGMENT-CACHE, 404 handling; 357 pass, 2 pre-existing failures, 0 regressions |
+| 10f | 2026-03-29 | prev | Rewrite test_delivery_endpoints.py (23 tests): MANIFEST-LIVE, BYTE-IDENTITY, LIFECYCLE-READY, SESSION-TOUCH, CONTENT-TYPE, SEGMENT-CACHE, 404 handling; 357 pass, 2 pre-existing failures, 0 regressions |
+| 10g | 2026-03-29 | 759b777 | Rewrite test_inv_hls_no_disk_io.py (13 tests): static source analysis + dynamic LiveSegment bytes enforcement; 357 pass, 2 pre-existing failures, 0 regressions |
