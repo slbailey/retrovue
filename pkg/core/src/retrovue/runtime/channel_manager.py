@@ -603,6 +603,61 @@ class ChannelManager:
 
         return playout_plan
 
+    # Mock grid: alignment & offset calculation — compatibility shims restored from main
+    # These were deleted by the refactor but are required by contract tests.
+
+    def _floor_to_grid(self, now: "datetime") -> "datetime":
+        """Calculate the grid block start time (floor to nearest grid boundary)."""
+        grid_minutes = self._mock_grid_block_minutes
+        block_minute = (now.minute // grid_minutes) * grid_minutes
+        return now.replace(minute=block_minute, second=0, microsecond=0)
+
+    def _calculate_join_offset(
+        self,
+        now: "datetime",
+        block_start: "datetime",
+        program_duration_seconds: float,
+    ) -> tuple[str, float]:
+        """Calculate join-in-progress offset for viewer tuning in mid-block."""
+        elapsed = (now - block_start).total_seconds()
+        if elapsed < program_duration_seconds:
+            return ("program", int(elapsed * 1000))
+        else:
+            return ("filler", int((elapsed - program_duration_seconds) * 1000))
+
+    def _calculate_filler_offset(
+        self,
+        master_clock: "datetime",
+        filler_epoch: "datetime",
+        filler_duration_seconds: float,
+    ) -> float:
+        """Calculate filler offset for continuous virtual stream."""
+        from datetime import datetime, timezone
+        if filler_epoch is None:
+            filler_epoch = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        time_diff = (master_clock - filler_epoch).total_seconds()
+        return time_diff % filler_duration_seconds
+
+    def _determine_active_content(
+        self,
+        now: "datetime",
+        block_start: "datetime",
+        program_duration_seconds: float,
+    ) -> tuple[str, str, float]:
+        """Determine which content is active (program or filler) and calculate join offset."""
+        content_type, start_pts_ms = self._calculate_join_offset(
+            now, block_start, program_duration_seconds
+        )
+        if content_type == "program":
+            asset_path = self._mock_grid_program_asset_path
+        else:
+            asset_path = self._mock_grid_filler_asset_path
+        if not asset_path:
+            raise ChannelManagerError(
+                f"Phase 0: {content_type} asset path not configured for channel {self.channel_id}"
+            )
+        return (content_type, asset_path, start_pts_ms)
+
     def viewer_join(self, session_id: str, session_info: dict[str, Any]) -> None:
         """
         Called when a viewer starts watching this channel.
