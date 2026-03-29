@@ -30,7 +30,7 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 - [x] **4c** — Extract `_hls_diag_*` state from ProgramDirector into a `HlsDiagnosticsState` dataclass (per-channel). PD holds one instance per channel and delegates. Does NOT change behavior — makes the boundary explicit and testable. Files: `pkg/core/src/retrovue/runtime/program_director.py`. Run tests (floor 330).
 - [x] **4d** — Verify auto-expiry (`_hls_diag_mode_until` check) is the ONLY expiry mechanism — no manual reset paths that could suppress diagnostics. Document result. Commit PHASE4_COMPLETE.md.
 
-## NEXT SUB-STEP: 9a
+## NEXT SUB-STEP: COMPLETE -- All phases done. Branch ready to merge.
 
 ## Phase 10 COMPLETE — All HLS contract tests restored. Phase 9 (Model Lockdown) begins.
 
@@ -139,14 +139,14 @@ This phase is NOT optional. It is the reason all prior phases have lasting value
 Goal: Make CLAUDE.md, contracts, and invariants explicitly forbid every pattern we fixed.
 Future AI sessions must be unable to re-introduce these problems without visibly violating a documented rule.
 
-- [ ] **9a** — Add Authority Rule to CLAUDE.md: "For any change touching runtime behavior, define exactly one authority owner per concern (clock, segment window, lifecycle, diagnostics). If a change introduces a second authority for any concern, stop and redesign."
-- [ ] **9b** — Add Complexity Budget Rule to CLAUDE.md: "Every non-trivial change must include: what logic is removed, what logic is added, net effect on moving parts. Net-new abstractions require justification. Prefer deletion over layering."
-- [ ] **9c** — Add Ghost Prohibition to CLAUDE.md: "No TODO/pass/NotImplemented scaffolding in production code. If its not implemented, dont create it. Ghost methods are forbidden — they create false API surface."
-- [ ] **9d** — Add Production Boundary Rule to CLAUDE.md: "Production modules contain only production code. Mocks, fixtures, and test harnesses belong in tests/fixtures/. Never in runtime/."
-- [ ] **9e** — Add Required PR Header to CLAUDE.md: Every change must declare: (1) authority concern touched, (2) complexity budget (removed/added/net), (3) contracts affected, (4) rollback unit.
-- [ ] **9f** — Add new invariant: INV-SINGLE-ACTIVATION-PATH-001 — "ProgramDirector.start_channel() is the sole channel activation entry point. No parallel activation paths may exist."
-- [ ] **9g** — Add new invariant: INV-NO-GHOST-METHODS-001 — "No production module may contain unimplemented (pass/TODO) method stubs. Ghost scaffolding is a contract violation."
-- [ ] **9h** — Final: produce REFACTOR_COMPLETE.md with: all-clear status, what was done, what the codebase looks like now, prompt language updates for CLAUDE.md, lessons learned. This is the document handed to Steve.
+- [x] **9a** — Add Authority Rule to CLAUDE.md: "For any change touching runtime behavior, define exactly one authority owner per concern (clock, segment window, lifecycle, diagnostics). If a change introduces a second authority for any concern, stop and redesign."
+- [x] **9b** — Add Complexity Budget Rule to CLAUDE.md: "Every non-trivial change must include: what logic is removed, what logic is added, net effect on moving parts. Net-new abstractions require justification. Prefer deletion over layering."
+- [x] **9c** — Add Ghost Prohibition to CLAUDE.md: "No TODO/pass/NotImplemented scaffolding in production code. If its not implemented, dont create it. Ghost methods are forbidden — they create false API surface."
+- [x] **9d** — Add Production Boundary Rule to CLAUDE.md: "Production modules contain only production code. Mocks, fixtures, and test harnesses belong in tests/fixtures/. Never in runtime/."
+- [x] **9e** — Add Required PR Header to CLAUDE.md: Every change must declare: (1) authority concern touched, (2) complexity budget (removed/added/net), (3) contracts affected, (4) rollback unit.
+- [x] **9f** — Add new invariant: INV-SINGLE-ACTIVATION-PATH-001 — "ProgramDirector.start_channel() is the sole channel activation entry point. No parallel activation paths may exist."
+- [x] **9g** — Add new invariant: INV-NO-GHOST-METHODS-001 — "No production module may contain unimplemented (pass/TODO) method stubs. Ghost scaffolding is a contract violation."
+- [x] **9h** — Final: produce REFACTOR_COMPLETE.md with: all-clear status, what was done, what the codebase looks like now, prompt language updates for CLAUDE.md, lessons learned. This is the document handed to Steve.
 
 ## NEXT SUB-STEP (after 4c): Continue from current position — now 4d.
 
