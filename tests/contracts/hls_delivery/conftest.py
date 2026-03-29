@@ -158,3 +158,78 @@ def extract_segment_indices(playlist: str) -> list[int]:
         for line in playlist.splitlines()
         if (m := re.match(r"seg_(\d{5})\.ts", line.strip()))
     ]
+
+
+# ---------------------------------------------------------------------------
+# New-API shared factory helpers (Phase 10 — test suite restoration)
+# ---------------------------------------------------------------------------
+# Module-level helpers (not pytest fixtures) importable from any test file
+# in this package. Gates Phase 10 sub-steps 10b–10f.
+# ---------------------------------------------------------------------------
+
+from retrovue.runtime.hls.segment_ring import SegmentRing, LiveSegment
+from retrovue.runtime.hls.segmenter import HlsSegmenter
+from retrovue.runtime.hls.manifest_generator import ManifestGenerator
+
+
+def make_ring(capacity: int = 10, manifest_window: int = 5) -> SegmentRing:
+    """Create a SegmentRing with sane test defaults."""
+    return SegmentRing(capacity=capacity, manifest_window=manifest_window)
+
+
+def make_segmenter(
+    ring: SegmentRing | None = None,
+    target_ms: int = 2000,
+    starting_index: int = 0,
+    channel_id: str = "test-ch",
+    timebase_utc_ms: int = 1_700_000_000_000,
+) -> "tuple[HlsSegmenter, SegmentRing]":
+    """Create an HlsSegmenter + SegmentRing pair with blockplan timebase set.
+
+    Returns (segmenter, ring) so callers hold both references.
+    """
+    if ring is None:
+        ring = make_ring()
+    seg = HlsSegmenter(
+        channel_id=channel_id,
+        segment_ring=ring,
+        target_duration_ms=target_ms,
+        starting_index=starting_index,
+    )
+    seg.set_blockplan_timebase(
+        start_utc_ms=timebase_utc_ms,
+        active_block_start_utc_ms=timebase_utc_ms,
+        active_block_end_utc_ms=timebase_utc_ms + 3_600_000,
+    )
+    return seg, ring
+
+
+def feed_n_segments(
+    seg: HlsSegmenter,
+    n: int,
+    target_dur: float = 2.5,
+    pcr_offset: float = 0.0,
+) -> None:
+    """Feed enough synthetic TS data to produce exactly *n* completed segments.
+
+    New-API equivalent of the retired old-stack feed_n_segments helper.
+
+    Args:
+        seg: The HlsSegmenter instance to feed.
+        n: Number of completed segments to produce.
+        target_dur: Duration per synthetic segment (seconds).
+        pcr_offset: PCR start time for the first packet (seconds).
+    """
+    for i in range(n):
+        pcr_start = pcr_offset + i * target_dur
+        data = generate_segment_data(duration=target_dur, pcr_start=pcr_start)
+        seg.feed(data)
+    # Present the next keyframe to flush/finalise the last segment
+    final_pcr = pcr_offset + n * target_dur
+    trigger = make_ts_packet(pid=0x100, keyframe=True, pcr=final_pcr)
+    seg.feed(trigger)
+
+
+def get_playlist(ring: SegmentRing, channel_id: str = "test-ch") -> str:
+    """Return the current M3U8 manifest for *ring*."""
+    return ManifestGenerator(channel_id).generate(ring) or ""

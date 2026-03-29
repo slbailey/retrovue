@@ -30,7 +30,7 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 - [x] **4c** — Extract `_hls_diag_*` state from ProgramDirector into a `HlsDiagnosticsState` dataclass (per-channel). PD holds one instance per channel and delegates. Does NOT change behavior — makes the boundary explicit and testable. Files: `pkg/core/src/retrovue/runtime/program_director.py`. Run tests (floor 330).
 - [x] **4d** — Verify auto-expiry (`_hls_diag_mode_until` check) is the ONLY expiry mechanism — no manual reset paths that could suppress diagnostics. Document result. Commit PHASE4_COMPLETE.md.
 
-## NEXT SUB-STEP: 10a
+## NEXT SUB-STEP: 10b
 
 ## Phase 8.5 COMPLETE — Phase 10 (HLS Test Suite Restoration) begins
 
@@ -119,7 +119,7 @@ The new system behaves correctly but we no longer have automated proof.
 This phase rewrites those tests against the new HlsSegmenter + SegmentRing API.
 Full migration plan: /opt/retrovue/HLS_TEST_MIGRATION_PLAN.md
 
-- [ ] **10a** — Rewrite tests/contracts/hls_delivery/conftest.py (shared fixtures, new API)
+- [x] **10a** — Rewrite tests/contracts/hls_delivery/conftest.py (shared fixtures, new API)
 - [ ] **10b** — Rewrite test_segment_ring.py
 - [ ] **10c** — Rewrite test_segment_production.py
 - [ ] **10d** — Rewrite test_manifest.py
