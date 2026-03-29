@@ -182,6 +182,11 @@ class HlsConsumptionAdapter:
         """
         import asyncio
 
+        self._logger.debug(
+            "[HLS] PHANTOM_ACTIVATE sid=%s channel=%s",
+            session_id, channel_id,
+        )
+
         # INV-HLS-PHANTOM-DRAIN-KEEPS-CHANNEL-ALIVE-001: Exactly one phantom
         # per channel. Serialized by activity_lock.
         with self.activity_lock:

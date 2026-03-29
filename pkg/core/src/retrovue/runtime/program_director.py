@@ -1873,6 +1873,10 @@ class ProgramDirector:
 
             # Create session ID for this viewer
             session_id = str(uuid.uuid4())
+            self._logger.debug(
+                "[HTTP] STREAM_START id=%s channel=%s",
+                session_id, channel_id,
+            )
 
             # INV-CHANNEL-STARTUP-NONBLOCKING-001 + CONCURRENCY-001: Acquire
             # semaphore, then offload manager acquisition + tune_in to the
@@ -2274,6 +2278,10 @@ class ProgramDirector:
             """
             sid = session or f"hls-anon-{uuid.uuid4().hex[:8]}"
             req_id = uuid.uuid4().hex[:10]
+            self._logger.debug(
+                "[HLS] SESSION_START sid=%s req_id=%s channel=%s",
+                sid, req_id, channel_id,
+            )
             mgr = self._resolve_channel_manager(channel_id)
 
             # Determine whether the channel is active

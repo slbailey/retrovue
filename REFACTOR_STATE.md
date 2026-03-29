@@ -102,7 +102,7 @@ Goal: be able to trace a single viewer session from tune-in to tune-out in the l
 Required before Phase 9 so we can validate the refactor worked.
 
 - [x] **8.5a** — Add structured log events (DEBUG level, gated) at: channel activation, first segment produced, viewer join/leave, linger start/expire, teardown.
-- [ ] **8.5b** — Add correlation ID (session_id) flowing: PD activation -> CM lifecycle -> HLS phantom -> segments. Must appear in all log lines for a viewer session.
+- [x] **8.5b** — Add correlation ID (session_id) flowing: PD activation -> CM lifecycle -> HLS phantom -> segments. Must appear in all log lines for a viewer session.
 - [ ] **8.5c** — Validate end-to-end: start a channel, join as viewer, leave, confirm full lifecycle traceable in logs. Commit with test.
 - [ ] **8.5d** — Update CLAUDE.md: "Runtime lifecycle transitions must emit structured log events at DEBUG level. Viewer sessions must carry a correlation ID traceable end-to-end."
 
