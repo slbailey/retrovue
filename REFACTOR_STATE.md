@@ -30,7 +30,7 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 - [x] **4c** — Extract `_hls_diag_*` state from ProgramDirector into a `HlsDiagnosticsState` dataclass (per-channel). PD holds one instance per channel and delegates. Does NOT change behavior — makes the boundary explicit and testable. Files: `pkg/core/src/retrovue/runtime/program_director.py`. Run tests (floor 330).
 - [x] **4d** — Verify auto-expiry (`_hls_diag_mode_until` check) is the ONLY expiry mechanism — no manual reset paths that could suppress diagnostics. Document result. Commit PHASE4_COMPLETE.md.
 
-## NEXT SUB-STEP: 8e — Update CLAUDE.md: "Channel lifecycle is PD-owned. HLS and TS are consumption adapters. There is one lifecycle path: start_channel(). Adapters add consumption-model behavior (phantom, fanout) but do not own lifecycle."
+## NEXT SUB-STEP: 8.5a — Add structured log events (DEBUG level, gated) at: channel activation, first segment produced, viewer join/leave, linger start/expire, teardown.
 
 ## Phase 6g — HLS Contract Test Migration (TABLED — do after Phase 7)
 
@@ -94,7 +94,7 @@ Not just path merger — defines the correct mental model going forward.
 - [x] **8b** — Create consumption_adapters.py with HlsConsumptionAdapter + TsConsumptionAdapter stub. Move phantom state (_hls_phantom_sessions, _hls_last_activity, _hls_activity_lock) from PD into HlsConsumptionAdapter. PD delegates via self._hls_adapter. 3/4 RED tests GREEN. 255 pass.
 - [x] **8c** — Extract raw TS fanout management into TsConsumptionAdapter._wire_fanout(channel_id, mgr) helper.
 - [x] **8d** — Both adapters call PD.start_channel() as the single lifecycle entry point. Delete _ensure_channel_active_for_hls() body (~190 lines). Run tests (floor 330). Contract test from 8a must PASS.
-- [ ] **8e** — Update CLAUDE.md: "Channel lifecycle is PD-owned. HLS and TS are consumption adapters. There is one lifecycle path: start_channel(). Adapters add consumption-model behavior (phantom, fanout) but do not own lifecycle."
+- [x] **8e** — Update CLAUDE.md: "Channel lifecycle is PD-owned. HLS and TS are consumption adapters. There is one lifecycle path: start_channel(). Adapters add consumption-model behavior (phantom, fanout) but do not own lifecycle."
 
 ## Phase 8.5 — Observability Hardening (BEFORE process gates)
 
@@ -182,3 +182,4 @@ Future AI sessions must be unable to re-introduce these problems without visibly
 | 7d | 2026-03-28 | f94ff7e | Add INV-PRODUCTION-BOUNDARY-001 to CLAUDE.md + INVARIANTS.md; register INV-NO-GHOST-METHODS-001 in index; 252 pass, 2 pre-existing failures, no regressions |
 | 8a | 2026-03-28 | 5c95a37 | Contract test INV-SINGLE-ACTIVATION-PATH-001 (4 RED): ensure_channel_active_for_hls removed, phantom tracking in adapter, HlsConsumptionAdapter exists, TsConsumptionAdapter exists; 252 pass, 4 new RED (intentional), 2 pre-existing failures unchanged |
 | 8d | 2026-03-28 | edf2c66 | Move _ensure_channel_active_for_hls into HlsConsumptionAdapter.activate(); INV-SINGLE-ACTIVATION-PATH-001 GREEN; 256 pass, 2 pre-existing failures, 0 regressions |
+| 8e | 2026-03-28 | b461058 | CLAUDE.md consumption adapter model rule added (INV-SINGLE-ACTIVATION-PATH-001); Phase 8 complete; 256 pass, 2 pre-existing failures, 0 regressions |
