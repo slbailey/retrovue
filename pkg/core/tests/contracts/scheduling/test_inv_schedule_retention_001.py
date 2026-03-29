@@ -13,6 +13,10 @@ def _build_service_for_purge() -> DslScheduleService:
     svc._extending = False
     svc._channel_slug = "test-channel"
     svc._last_program_schedule_purge_utc_ms = 0
+    # _clock added by refactor branch to _purge_expired_program_schedule
+    mock_clock = MagicMock()
+    mock_clock.now_utc.return_value = datetime(2026, 3, 29, 12, 0, 0, tzinfo=timezone.utc)
+    svc._clock = mock_clock
     return svc
 
 

@@ -92,22 +92,30 @@ class TestInvChannelStartupConcurrency001:
 
     # Tier: 1 | Structural invariant
     def test_hls_playlist_has_semaphore_guard(self):
-        """hls_playlist() MUST check _startup_semaphore.locked() before startup.
+        """HLS activation MUST acquire _startup_semaphore before starting a channel.
 
-        AST scan of the nested hls_playlist function verifies the
-        semaphore capacity check is present, ensuring fail-fast 503
-        when at concurrency limit.
+        The new HLS architecture uses HlsConsumptionAdapter.activate() which
+        acquires the semaphore via await pd._startup_semaphore.acquire().
+        This replaces the old hls_playlist() fail-fast locked() check.
+
+        INV-CHANNEL-STARTUP-CONCURRENCY-001: Concurrency bound must be enforced
+        on the HLS startup path.
         """
-        parent_src = _get_register_endpoints_source()
-        func_src = _extract_nested_function_source(parent_src, "hls_playlist")
-        assert func_src is not None, (
-            "hls_playlist() nested function not found in _register_endpoints"
-        )
+        import inspect, textwrap
+        from retrovue.runtime.consumption_adapters import HlsConsumptionAdapter
+        src = textwrap.dedent(inspect.getsource(HlsConsumptionAdapter.activate))
 
-        assert _source_contains_attr_call(func_src, "_startup_semaphore", "locked"), (
-            "INV-CHANNEL-STARTUP-CONCURRENCY-001 violated: hls_playlist() "
-            "does not check self._startup_semaphore.locked() — "
-            "no fail-fast guard for startup stampede"
+        assert "_startup_semaphore" in src, (
+            "INV-CHANNEL-STARTUP-CONCURRENCY-001 violated: HlsConsumptionAdapter.activate() "
+            "does not reference _startup_semaphore — HLS startup path has no concurrency bound"
+        )
+        assert "acquire" in src, (
+            "INV-CHANNEL-STARTUP-CONCURRENCY-001 violated: HlsConsumptionAdapter.activate() "
+            "does not call semaphore.acquire() — HLS activation is unbounded"
+        )
+        assert "release" in src, (
+            "INV-CHANNEL-STARTUP-CONCURRENCY-001 violated: HlsConsumptionAdapter.activate() "
+            "does not release the semaphore — semaphore may leak on completion"
         )
 
     # Tier: 1 | Structural invariant
