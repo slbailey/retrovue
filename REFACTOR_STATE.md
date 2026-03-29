@@ -30,7 +30,7 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 - [x] **4c** — Extract `_hls_diag_*` state from ProgramDirector into a `HlsDiagnosticsState` dataclass (per-channel). PD holds one instance per channel and delegates. Does NOT change behavior — makes the boundary explicit and testable. Files: `pkg/core/src/retrovue/runtime/program_director.py`. Run tests (floor 330).
 - [x] **4d** — Verify auto-expiry (`_hls_diag_mode_until` check) is the ONLY expiry mechanism — no manual reset paths that could suppress diagnostics. Document result. Commit PHASE4_COMPLETE.md.
 
-## NEXT SUB-STEP: 10c
+## NEXT SUB-STEP: 10d
 
 ## Phase 8.5 COMPLETE — Phase 10 (HLS Test Suite Restoration) begins
 
@@ -121,7 +121,7 @@ Full migration plan: /opt/retrovue/HLS_TEST_MIGRATION_PLAN.md
 
 - [x] **10a** — Rewrite tests/contracts/hls_delivery/conftest.py (shared fixtures, new API)
 - [x] **10b** — Rewrite test_segment_ring.py
-- [ ] **10c** — Rewrite test_segment_production.py
+- [x] **10c** — Rewrite test_segment_production.py
 - [ ] **10d** — Rewrite test_manifest.py
 - [ ] **10e** — Rewrite test_channel_lifecycle.py
 - [ ] **10f** — Rewrite test_delivery_endpoints.py
@@ -210,3 +210,4 @@ Future AI sessions must be unable to re-introduce these problems without visibly
 | 8e | 2026-03-28 | b461058 | CLAUDE.md consumption adapter model rule added (INV-SINGLE-ACTIVATION-PATH-001); Phase 8 complete; 256 pass, 2 pre-existing failures, 0 regressions |
 
 | 10b | 2026-03-29 | 48009f5 | Rewrite test_segment_ring.py (12 tests) against HlsSegmenter+SegmentRing API; 279 pass, 2 pre-existing failures, 0 regressions |
+| 10c | 2026-03-29 | cbad54f | Rewrite test_segment_production.py (20 tests): IDENTITY, IMMUTABLE, KEYFRAME, SELFCONTAINED, DURATION-BOUNDS, INDEX-GUARD; 299 pass, 2 pre-existing failures, 0 regressions |
