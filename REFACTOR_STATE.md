@@ -30,7 +30,7 @@ Phase 9 is mandatory: CLAUDE.md + contracts must explicitly forbid the patterns 
 - [x] **4c** — Extract `_hls_diag_*` state from ProgramDirector into a `HlsDiagnosticsState` dataclass (per-channel). PD holds one instance per channel and delegates. Does NOT change behavior — makes the boundary explicit and testable. Files: `pkg/core/src/retrovue/runtime/program_director.py`. Run tests (floor 330).
 - [x] **4d** — Verify auto-expiry (`_hls_diag_mode_until` check) is the ONLY expiry mechanism — no manual reset paths that could suppress diagnostics. Document result. Commit PHASE4_COMPLETE.md.
 
-## NEXT SUB-STEP: 10b
+## NEXT SUB-STEP: 10c
 
 ## Phase 8.5 COMPLETE — Phase 10 (HLS Test Suite Restoration) begins
 
@@ -120,7 +120,7 @@ This phase rewrites those tests against the new HlsSegmenter + SegmentRing API.
 Full migration plan: /opt/retrovue/HLS_TEST_MIGRATION_PLAN.md
 
 - [x] **10a** — Rewrite tests/contracts/hls_delivery/conftest.py (shared fixtures, new API)
-- [ ] **10b** — Rewrite test_segment_ring.py
+- [x] **10b** — Rewrite test_segment_ring.py
 - [ ] **10c** — Rewrite test_segment_production.py
 - [ ] **10d** — Rewrite test_manifest.py
 - [ ] **10e** — Rewrite test_channel_lifecycle.py
@@ -208,3 +208,5 @@ Future AI sessions must be unable to re-introduce these problems without visibly
 | 8a | 2026-03-28 | 5c95a37 | Contract test INV-SINGLE-ACTIVATION-PATH-001 (4 RED): ensure_channel_active_for_hls removed, phantom tracking in adapter, HlsConsumptionAdapter exists, TsConsumptionAdapter exists; 252 pass, 4 new RED (intentional), 2 pre-existing failures unchanged |
 | 8d | 2026-03-28 | edf2c66 | Move _ensure_channel_active_for_hls into HlsConsumptionAdapter.activate(); INV-SINGLE-ACTIVATION-PATH-001 GREEN; 256 pass, 2 pre-existing failures, 0 regressions |
 | 8e | 2026-03-28 | b461058 | CLAUDE.md consumption adapter model rule added (INV-SINGLE-ACTIVATION-PATH-001); Phase 8 complete; 256 pass, 2 pre-existing failures, 0 regressions |
+
+| 10b | 2026-03-29 | 48009f5 | Rewrite test_segment_ring.py (12 tests) against HlsSegmenter+SegmentRing API; 279 pass, 2 pre-existing failures, 0 regressions |
