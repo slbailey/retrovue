@@ -365,6 +365,7 @@ Canonical contract: [schedule_block_program_reference.md](schedule_block_program
 | INV-ASPECT-PRESERVE-001 | [invariants/core/runtime/INV-ASPECT-PRESERVE-001.md](invariants/core/runtime/INV-ASPECT-PRESERVE-001.md) | LAW-RUNTIME-AUTHORITY |
 | INV-NO-GHOST-METHODS-001 | [invariants/core/runtime/INV-NO-GHOST-METHODS-001.md](invariants/core/runtime/INV-NO-GHOST-METHODS-001.md) | LAW-SIMPLICITY |
 | INV-PRODUCTION-BOUNDARY-001 | [invariants/core/runtime/INV-PRODUCTION-BOUNDARY-001.md](invariants/core/runtime/INV-PRODUCTION-BOUNDARY-001.md) | LAW-SIMPLICITY |
+| INV-LIFECYCLE-OBSERVABILITY-001 | [invariants/core/runtime/INV-LIFECYCLE-OBSERVABILITY-001.md](invariants/core/runtime/INV-LIFECYCLE-OBSERVABILITY-001.md) | LAW-SIMPLICITY, LAW-LIVENESS |
 | INV-HLS-NO-DISK-IO-001 | [invariants/core/runtime/INV-HLS-NO-DISK-IO-001.md](invariants/core/runtime/INV-HLS-NO-DISK-IO-001.md) | LAW-LIVENESS |
 | INV-HLS-QUIET-POLLING-001 | [invariants/core/runtime/INV-HLS-QUIET-POLLING-001.md](invariants/core/runtime/INV-HLS-QUIET-POLLING-001.md) | LAW-LIVENESS |
 | INV-BLEED-NO-GAP-001 | [invariants/core/runtime/INV-BLEED-NO-GAP-001.md](invariants/core/runtime/INV-BLEED-NO-GAP-001.md) | LAW-LIVENESS, LAW-GRID |

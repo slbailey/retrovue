@@ -327,3 +327,31 @@ ConsumptionAdapter subclass. Do not add lifecycle logic to ProgramDirector —
 add consumption behavior to the adapter.
 
 Reference invariant: INV-SINGLE-ACTIVATION-PATH-001 in docs/contracts/INVARIANTS.md
+
+────────────────────────
+OBSERVABILITY RULE (INV-LIFECYCLE-OBSERVABILITY-001)
+────────────────────────
+Runtime lifecycle transitions must emit structured log events at DEBUG level.
+
+Rules:
+- Every state transition in the channel lifecycle must log a structured event.
+  Required transitions: channel activation, first segment produced, viewer join,
+  viewer leave, linger start, linger expire, teardown.
+- Every viewer session must carry a correlation ID (session_id) that flows end-to-end:
+  PD activation → ChannelManager lifecycle → HLS phantom tracking → segments.
+- All log lines for a viewer session must include the session_id for traceability.
+- Log events must use structured fields (not free-form strings) so they are
+  parseable by log aggregators.
+
+Forbidden patterns:
+- Lifecycle transitions with no log event (silent state changes are untraceable).
+- Viewer session handling that does not propagate a correlation ID.
+- Free-form log strings for lifecycle events (use key=value structured fields).
+- Log events that omit the session_id when one exists in scope.
+
+Why: Without structured, correlation-ID-tagged events, it is impossible to trace a
+viewer session end-to-end through the logs. Debugging production issues becomes
+guesswork. Every refactor that touches lifecycle must preserve or extend this
+observability, never remove it.
+
+Reference invariant: INV-LIFECYCLE-OBSERVABILITY-001 in docs/contracts/INVARIANTS.md
