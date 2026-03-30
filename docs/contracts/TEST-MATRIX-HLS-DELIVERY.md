@@ -148,6 +148,15 @@ Maps HLS delivery invariants to concrete test scenarios.
 | INV-HLS-RESTART-DISCONTINUITY-001 | First segment after restart carries discontinuity flag | `test_inv_hls_channel_runtime.py::test_restart_discontinuity_flag` |
 | INV-HLS-RESTART-DISCONTINUITY-001 | PTS tracker resets on restart | `test_inv_hls_channel_runtime.py::test_pts_tracker_reset_on_restart` |
 | INV-HLS-RESTART-DISCONTINUITY-001 | Segment index continues from counter, not zero | `test_inv_hls_channel_runtime.py::test_index_continues_after_restart` |
+| INV-HLS-RING-STALENESS-RECOVERY-001 | Stale ring returns 503, not 200 with old segments | `test_hls_stale_ring_recovery.py::test_stale_ring_returns_503` |
+| INV-HLS-RING-STALENESS-RECOVERY-001 | Fresh ring within threshold returns normal 200 | `test_hls_stale_ring_recovery.py::test_fresh_ring_returns_200` |
+| INV-HLS-RING-STALENESS-RECOVERY-001 | Stale ring triggers re-activation flag | `test_hls_stale_ring_recovery.py::test_stale_ring_triggers_reactivation` |
+| INV-HLS-RING-STALENESS-RECOVERY-001 | Empty ring still returns 503 (no regression) | `test_hls_stale_ring_recovery.py::test_empty_ring_still_503` |
+| INV-HLS-READINESS-001 | Ring below playable window → not ready | `test_hls_readiness.py::test_below_threshold_not_ready` |
+| INV-HLS-READINESS-001 | Playable window reached → readiness signal set | `test_hls_readiness.py::test_threshold_reached_sets_signal` |
+| INV-HLS-READINESS-001 | Readiness persists after threshold crossed | `test_hls_readiness.py::test_readiness_persists` |
+| INV-HLS-READINESS-001 | Ring clear resets readiness | `test_hls_readiness.py::test_clear_resets_readiness` |
+| INV-HLS-READINESS-001 | Warm channel serves immediately (no await) | `test_hls_readiness.py::test_warm_channel_no_await` |
 
 ---
 

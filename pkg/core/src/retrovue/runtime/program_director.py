@@ -2293,21 +2293,49 @@ class ProgramDirector:
                 is_active = has_viewers or has_producer
 
             if not is_active:
-                # Activate channel in background — don't block the response.
-                asyncio.ensure_future(
-                    self._hls_adapter.activate(channel_id, sid, self)
-                )
+                # INV-HLS-COLD-START-CONNECT-GUARANTEED-001: Await activation
+                # so the first manifest request returns 200 with a valid
+                # playlist — do not fire-and-forget.
+                mgr = await self._hls_adapter.activate(channel_id, sid, self)
 
             ring = getattr(mgr, "hls_segment_ring", None) if mgr else None
             gen = getattr(mgr, "hls_manifest_generator", None) if mgr else None
+
+            # INV-HLS-READINESS-001: Do not serve a playlist until the
+            # ring has a playable window.  Warm path: is_set() returns
+            # True immediately — no await, no delay.
+            if ring is not None and not ring.ready.is_set():
+                # Keep phantom alive while we wait for segments —
+                # without this touch, the phantom's idle timeout fires
+                # before the readiness gate completes on cold start.
+                self._hls_adapter.touch_activity(channel_id)
+                ready = await ring.ready.wait(timeout=10.0)
+                if not ready:
+                    # Keep phantom alive for client retry — refresh
+                    # the idle clock so it survives another 20s.
+                    self._hls_adapter.touch_activity(channel_id)
+                    self._hls_diag_record(
+                        channel_id,
+                        "HLS_SERVE_SNAPSHOT",
+                        req_id=req_id,
+                        path="manifest",
+                        status=503,
+                        ring_count=ring.count(),
+                        is_active=is_active,
+                        readiness_timeout=True,
+                    )
+                    return Response(
+                        content="Channel starting — not ready yet",
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        headers={"Retry-After": "2"},
+                    )
 
             # Try to generate a manifest with real segments
             playlist = gen.generate(ring) if (gen and ring) else None
 
             if playlist is None:
                 # INV-HLS-LIFECYCLE-SEGMENT-READY-001:
-                # During startup (or reconnect), return 503 + Retry-After
-                # until at least one completed segment is available.
+                # Startup timed out or ring still empty — 503.
                 ring_count = ring.count() if ring is not None else 0
                 self._hls_diag_record(
                     channel_id,
@@ -2321,8 +2349,46 @@ class ProgramDirector:
                 return Response(
                     content="Playlist not ready yet",
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    headers={"Retry-After": "1"},
+                    headers={"Retry-After": "2"},
                 )
+
+            # INV-HLS-RING-STALENESS-RECOVERY-001: Detect dead pipeline.
+            # If the newest segment is older than 4× target_segment_duration,
+            # the byte pipeline is dead — serve 503 instead of stale data.
+            # Clearing the ring ensures the next request triggers
+            # re-activation via the normal cold-start path.
+            _HLS_STALENESS_THRESHOLD_MS = 24_000  # 4 × 6000 ms default
+            if ring is not None:
+                _window = ring.window()
+                if _window:
+                    _newest = _window[-1]
+                    _newest_end_ms = _newest.wall_clock_start_utc_ms + _newest.duration_ms
+                    _now_utc_ms = int(time.time() * 1000)
+                    _age_ms = _now_utc_ms - _newest_end_ms
+                    if _age_ms > _HLS_STALENESS_THRESHOLD_MS:
+                        self._logger.warning(
+                            "INV-HLS-RING-STALENESS-RECOVERY-001: "
+                            "channel=%s ring stale (age=%dms, threshold=%dms), "
+                            "clearing ring and returning 503",
+                            channel_id, _age_ms, _HLS_STALENESS_THRESHOLD_MS,
+                        )
+                        ring.clear()
+                        self._hls_diag_record(
+                            channel_id,
+                            "HLS_SERVE_SNAPSHOT",
+                            req_id=req_id,
+                            path="manifest",
+                            status=503,
+                            ring_count=0,
+                            is_active=is_active,
+                            stale=True,
+                            age_ms=_age_ms,
+                        )
+                        return Response(
+                            content="Playlist stale — pipeline recovery",
+                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            headers={"Retry-After": "2"},
+                        )
 
             # INV-HLS-ENDPOINT-SESSION-TOUCH-001: Touch on success only
             session_mgr = getattr(mgr, "hls_session_manager", None)

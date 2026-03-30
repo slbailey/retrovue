@@ -14,11 +14,88 @@ Canonical contract: docs/contracts/delivery_hls.md §2
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+
+class ReadyEvent:
+    """Thread-safe readiness signal with native async wait.
+
+    INV-HLS-READINESS-001:
+
+    - is_set() is thread-safe (synchronous callers, tests, any thread).
+    - set() is thread-safe (called from the fanout thread in push()).
+    - clear() is thread-safe (called from clear() on teardown).
+    - wait() is async — awaits an asyncio.Event without blocking the
+      event loop and without run_in_executor.
+
+    Loop ownership:
+        The asyncio.Event is created lazily on the first wait() call,
+        which runs on the event loop thread.  set()/clear() from non-loop
+        threads use loop.call_soon_threadsafe() to mutate the asyncio.Event
+        safely.  A threading flag tracks the canonical state so is_set()
+        works from any thread without touching the asyncio.Event.
+    """
+
+    __slots__ = ("_flag", "_flag_lock", "_loop", "_async_event")
+
+    def __init__(self) -> None:
+        # Canonical state — readable from any thread.
+        self._flag: bool = False
+        self._flag_lock = threading.Lock()
+        # Async plumbing — created lazily on the event loop thread.
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._async_event: asyncio.Event | None = None
+
+    def is_set(self) -> bool:
+        """Thread-safe synchronous check."""
+        return self._flag
+
+    def set(self) -> None:
+        """Signal readiness from any thread."""
+        with self._flag_lock:
+            if self._flag:
+                return  # Already set — idempotent.
+            self._flag = True
+        # Poke the async event so any waiter wakes up.
+        if self._loop is not None and self._async_event is not None:
+            self._loop.call_soon_threadsafe(self._async_event.set)
+
+    def clear(self) -> None:
+        """Reset readiness from any thread."""
+        with self._flag_lock:
+            self._flag = False
+        if self._loop is not None and self._async_event is not None:
+            self._loop.call_soon_threadsafe(self._async_event.clear)
+
+    async def wait(self, timeout: float | None = None) -> bool:
+        """Await readiness without blocking the event loop.
+
+        Returns True if ready, False if timeout expired.
+        Creates the asyncio.Event on first call (binds to the running loop).
+        """
+        # Fast path — already ready, no async machinery needed.
+        if self._flag:
+            return True
+
+        # Lazy init: create asyncio.Event on the event loop thread.
+        loop = asyncio.get_running_loop()
+        if self._async_event is None or self._loop is not loop:
+            self._loop = loop
+            self._async_event = asyncio.Event()
+            # Sync state: if flag was set between is_set() above and now.
+            if self._flag:
+                self._async_event.set()
+
+        try:
+            await asyncio.wait_for(self._async_event.wait(), timeout=timeout)
+            return True
+        except asyncio.TimeoutError:
+            return False
 
 
 @dataclass(frozen=True)
@@ -76,9 +153,15 @@ class SegmentRing:
     INV-HLS-RING-WINDOW-VALID-001: Post-push consistency verified.
     INV-HLS-RING-EVICTION-GRACE-001: capacity > manifest_window + 1.
     INV-HLS-NO-DISK-IO-001: All storage is in-memory.
+    INV-HLS-READINESS-001: Readiness signal for playable playlist window.
     """
 
-    def __init__(self, capacity: int, manifest_window: int) -> None:
+    def __init__(
+        self,
+        capacity: int,
+        manifest_window: int,
+        min_ready_segments: int = 3,
+    ) -> None:
         # INV-HLS-RING-EVICTION-GRACE-001: capacity must exceed manifest window + 1
         if capacity <= manifest_window + 1:
             raise ValueError(
@@ -94,6 +177,12 @@ class SegmentRing:
         self._manifest_window = manifest_window
         self._lock = threading.Lock()
 
+        # INV-HLS-READINESS-001: Readiness signal — set when the ring
+        # first contains a playable playlist window.  What constitutes
+        # "playable" is configured here, not in the contract layer.
+        self._min_ready_segments = max(min_ready_segments, 2)
+        self._ready = ReadyEvent()
+
         # Ordered dict by index — segments stored in insertion order.
         # Using a plain dict (Python 3.7+ insertion-ordered) for simplicity.
         self._segments: dict[int, LiveSegment] = {}
@@ -105,6 +194,11 @@ class SegmentRing:
     @property
     def manifest_window(self) -> int:
         return self._manifest_window
+
+    @property
+    def ready(self) -> ReadyEvent:
+        """INV-HLS-READINESS-001: Readiness signal for playable playlist window."""
+        return self._ready
 
     def push(self, segment: LiveSegment) -> None:
         """Add a segment. Evict oldest if over capacity.
@@ -123,6 +217,10 @@ class SegmentRing:
 
             # INV-HLS-RING-WINDOW-VALID-001: post-push consistency
             self._check_consistency_locked()
+
+            # INV-HLS-READINESS-001: set readiness when playable window reached
+            if not self._ready.is_set() and len(self._segments) >= self._min_ready_segments:
+                self._ready.set()
 
     def get(self, index: int) -> LiveSegment | None:
         """Return segment by index, or None if not present.
@@ -161,9 +259,12 @@ class SegmentRing:
 
         Used when a channel activation is torn down so reconnect cannot
         observe stale manifest windows from the prior activation.
+
+        INV-HLS-READINESS-001: Reset readiness so next activation starts unready.
         """
         with self._lock:
             self._segments.clear()
+            self._ready.clear()
     def count(self) -> int:
         """Return the number of segments currently in the ring."""
         with self._lock:
