@@ -85,19 +85,49 @@ class HlsConsumptionAdapter:
         def _drain_hls_v2_phantom() -> None:
             IDLE_CHECK_INTERVAL = 5.0
             idle_timeout = getattr(mgr, "LINGER_SECONDS", 20)
+            # INV-HLS-PHANTOM-BYTE-FLOW-LIVENESS-001:
+            # If no bytes flow through the phantom queue for > BYTE_FLOW_TIMEOUT_S,
+            # the upstream ChannelStream has stopped. Exit the drain loop so
+            # tune_out() fires and viewer_count drops — allowing clean teardown
+            # and re-activation on next manifest request.
+            BYTE_FLOW_TIMEOUT_S = 30.0
+            last_got_data = _time.monotonic()
             self._logger.info(
-                "[HLS-v2-phantom %s] started, idle_timeout=%ds", channel_id, idle_timeout,
+                "[HLS-v2-phantom %s] started, idle_timeout=%ds, byte_flow_timeout=%.0fs",
+                channel_id, idle_timeout, BYTE_FLOW_TIMEOUT_S,
             )
             while True:
                 _time.sleep(IDLE_CHECK_INTERVAL)
 
-                # Pull one chunk to confirm stream is alive (non-blocking)
+                # Check fanout liveness directly (fastest path)
+                if not fanout.is_running():
+                    self._logger.warning(
+                        "INV-HLS-PHANTOM-BYTE-FLOW-LIVENESS-001: "
+                        "[HLS-v2-phantom %s] fanout is no longer running, exiting drain loop",
+                        channel_id,
+                    )
+                    break
+
+                # Pull one chunk to confirm bytes are flowing (non-blocking)
                 try:
                     chunk = phantom_queue.get(timeout=0.01)
                     if not chunk:
                         break  # EOF
+                    # Got real data — reset byte-flow liveness clock
+                    last_got_data = _time.monotonic()
                 except Exception:
-                    pass  # queue empty or timeout — stream may be starting
+                    pass  # queue empty or timeout — normal between segments
+
+                # INV-HLS-PHANTOM-BYTE-FLOW-LIVENESS-001: byte-flow dead check
+                byte_flow_dead_s = _time.monotonic() - last_got_data
+                if byte_flow_dead_s > BYTE_FLOW_TIMEOUT_S:
+                    self._logger.warning(
+                        "INV-HLS-PHANTOM-BYTE-FLOW-LIVENESS-001: "
+                        "[HLS-v2-phantom %s] no bytes for %.0fs (threshold=%.0fs), "
+                        "pipeline dead — exiting drain loop",
+                        channel_id, byte_flow_dead_s, BYTE_FLOW_TIMEOUT_S,
+                    )
+                    break
 
                 # Check if any HLS client is still active
                 with self._hls_activity_lock:
@@ -190,7 +220,7 @@ class HlsConsumptionAdapter:
         # INV-HLS-PHANTOM-DRAIN-KEEPS-CHANNEL-ALIVE-001: Exactly one phantom
         # per channel. Serialized by activity_lock.
         with self.activity_lock:
-            if self.is_phantom_active(channel_id):
+            if channel_id in self._hls_phantom_sessions:
                 # Phantom already active — just refresh activity and return
                 self.touch_activity(channel_id)
                 return pd._resolve_channel_manager(channel_id)
