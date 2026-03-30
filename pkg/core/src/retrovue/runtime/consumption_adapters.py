@@ -6,6 +6,13 @@ INV-SINGLE-ACTIVATION-PATH-001:
     HLS and TS are consumption adapters that add consumption-model behavior
     (phantom, fanout) but do NOT own channel lifecycle.
 
+INV-HLS-ACTIVITY-LOCK-ASYNC-SAFE-001:
+    activate() is an async coroutine running on the uvicorn event loop.
+    It MUST NOT acquire a threading.Lock directly — doing so blocks the
+    event loop when a drain thread holds the lock, hanging all HTTP requests.
+    The async check-and-reserve path uses asyncio.Lock (_hls_activity_alock).
+    The sync drain path keeps threading.Lock (_hls_activity_lock).
+
 HlsConsumptionAdapter owns:
     - Phantom session state (_hls_phantom_sessions, _hls_last_activity, _hls_activity_lock)
     - _activate_phantom(): starts/refreshes phantom viewer for a channel
@@ -15,6 +22,7 @@ TsConsumptionAdapter will own (Phase 8c):
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 import time as _time
@@ -42,7 +50,16 @@ class HlsConsumptionAdapter:
         # Canonical phantom state — owned here, not in ProgramDirector.
         self._hls_phantom_sessions: dict[str, str] = {}  # channel_id -> phantom_id
         self._hls_last_activity: dict[str, float] = {}   # channel_id -> monotonic timestamp
+        # INV-HLS-ACTIVITY-LOCK-ASYNC-SAFE-001:
+        # Two locks guard the same phantom state dict for different callers:
+        #   _hls_activity_lock   — threading.Lock for sync paths (phantom drain
+        #                          thread, touch_activity, is_phantom_active).
+        #   _hls_activity_alock  — asyncio.Lock for async paths (activate()).
+        # The async path MUST NOT acquire a threading.Lock directly on the
+        # event loop thread; doing so blocks the loop when a drain thread
+        # holds the lock, causing HTTP request hangs.
         self._hls_activity_lock = threading.Lock()
+        self._hls_activity_alock: "asyncio.Lock | None" = None  # lazy-init on first await
 
     # ------------------------------------------------------------------
     # Public interface used by ProgramDirector
@@ -183,8 +200,20 @@ class HlsConsumptionAdapter:
 
     @property
     def activity_lock(self) -> threading.Lock:
-        """Expose the activity lock for ProgramDirector's atomic check-and-reserve."""
+        """Expose the threading lock for sync callers (drain thread, touch_activity)."""
         return self._hls_activity_lock
+
+    def _get_activity_alock(self) -> "asyncio.Lock":
+        """Return the asyncio.Lock for async callers (activate()).
+
+        INV-HLS-ACTIVITY-LOCK-ASYNC-SAFE-001: Must only be called from the
+        event loop thread.  Lazy-init so construction (which may happen off
+        the loop) does not create a lock bound to the wrong loop.
+        """
+        import asyncio
+        if self._hls_activity_alock is None:
+            self._hls_activity_alock = asyncio.Lock()
+        return self._hls_activity_alock
 
     def get_last_activity(self, channel_id: str) -> float:
         """Return last activity timestamp for a channel (0.0 if never touched)."""
@@ -210,21 +239,26 @@ class HlsConsumptionAdapter:
         Returns:
             ChannelManager on success, None on failure.
         """
-        import asyncio
-
         self._logger.debug(
             "[HLS] PHANTOM_ACTIVATE sid=%s channel=%s",
             session_id, channel_id,
         )
 
         # INV-HLS-PHANTOM-DRAIN-KEEPS-CHANNEL-ALIVE-001: Exactly one phantom
-        # per channel. Serialized by activity_lock.
-        with self.activity_lock:
+        # per channel. Serialized by _hls_activity_alock (asyncio.Lock) so
+        # this coroutine never blocks the event loop on a threading.Lock.
+        # INV-HLS-ACTIVITY-LOCK-ASYNC-SAFE-001: async path uses asyncio.Lock.
+        async with self._get_activity_alock():
             if channel_id in self._hls_phantom_sessions:
                 # Phantom already active — just refresh activity and return
                 self.touch_activity(channel_id)
                 return pd._resolve_channel_manager(channel_id)
-            # Reserve the slot immediately so concurrent requests see it
+            # Reserve the slot immediately so concurrent requests see it.
+            # reserve_phantom_slot uses threading.Lock internally — safe here
+            # because we're inside the asyncio.Lock which serialises async
+            # callers, and the threading.Lock acquisition is instantaneous
+            # (no contention from drain thread at this point: drain only holds
+            # threading.Lock briefly at cleanup, not here).
             phantom_id = self.reserve_phantom_slot(channel_id)
 
         loop = asyncio.get_running_loop()
@@ -308,10 +342,15 @@ class HlsConsumptionAdapter:
             self.release_phantom_slot(channel_id)
             return None
 
-        # Wait for fanout to establish so bytes start flowing to the segmenter
+        # Wait for fanout to establish so bytes start flowing to the segmenter.
+        # INV-HLS-ACTIVITY-LOCK-ASYNC-SAFE-001: _get_or_create_fanout_buffer
+        # acquires _fanout_lock (threading.Lock). Run it in an executor so
+        # the event loop thread is never blocked by lock contention.
         fanout = None
         for _ in range(10):
-            fanout = pd._get_or_create_fanout_buffer(channel_id, mgr)
+            fanout = await loop.run_in_executor(
+                None, pd._get_or_create_fanout_buffer, channel_id, mgr
+            )
             if fanout and fanout.is_running():
                 break
             await asyncio.sleep(1)
