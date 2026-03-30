@@ -226,16 +226,31 @@ class HlsConsumptionAdapter:
 
             if reader_queue is not None:
                 try:
-                    t0 = _t.monotonic()
-                    sock = reader_queue.get(timeout=5.0)
-                    adapter._logger.info(
-                        "[HLS %s] Socket acquired from queue in %.0fms",
-                        channel_id, (_t.monotonic() - t0) * 1000,
-                    )
                     _hls_seg = getattr(mgr, "hls_segmenter", None)
+
+                    def _hls_ts_source_factory(stop_event=None, _mgr=mgr, _cid=channel_id):
+                        # INV-CHANNEL-STREAM-RECONNECT-001: resolve the *current*
+                        # producer's queue at call time so reconnect after AIR
+                        # restart picks up the new producer's socket — not the
+                        # stale socket captured at HLS activation time.
+                        import queue as _q
+                        _producer = getattr(_mgr, "active_producer", None)
+                        _rq = getattr(_producer, "reader_socket_queue", None) if _producer else None
+                        if _rq is None:
+                            raise RuntimeError(
+                                "No reader_socket_queue for %s" % _cid
+                            )
+                        t0 = _t.monotonic()
+                        sock = _rq.get(timeout=5.0)
+                        adapter._logger.info(
+                            "[HLS %s] Socket acquired from queue in %.0fms",
+                            _cid, (_t.monotonic() - t0) * 1000,
+                        )
+                        return SocketTsSource(sock)
+
                     fanout = ChannelStream(
                         channel_id=channel_id,
-                        ts_source_factory=lambda stop_event=None, s=sock: SocketTsSource(s),
+                        ts_source_factory=_hls_ts_source_factory,
                         hls_segmenter=_hls_seg,
                     )
                     pd._fanout_buffers[channel_id] = fanout
