@@ -1,0 +1,46 @@
+# Systems-layer routing: authority, timebase, cross-cutting constraints (sparse by design)
+
+- type: constrained_by
+  from: { kind: service, id: master-clock }
+  to: { kind: invariant, id: INV-AUTHORITY-SINGLE-OWNER-001 }
+  note: Orchestration clock slice; sole wall-clock writer for Core orchestration decisions
+
+- type: depends_on
+  from: { kind: service, id: program-director }
+  to: { kind: service, id: master-clock }
+  note: Activation and HTTP orchestration read authoritative orchestration time
+
+- type: constrained_by
+  from: { kind: service, id: program-director }
+  to: { kind: invariant, id: INV-NO-GHOST-METHODS-001 }
+  note: Production runtime module; no ghost / stub methods in shipped paths
+
+- type: constrained_by
+  from: { kind: service, id: air-playout-engine }
+  to: { kind: invariant, id: INV-NO-GHOST-METHODS-001 }
+  note: Production engine binary; same prohibition on unimplemented surface in shipped code
+
+- type: constrained_by
+  from: { kind: entity, id: segment-ring }
+  to: { kind: invariant, id: INV-AUTHORITY-SINGLE-OWNER-001 }
+  note: HLS segment window authority slice (paired with manifest side on hls-segmenter)
+
+- type: constrained_by
+  from: { kind: service, id: hls-segmenter }
+  to: { kind: invariant, id: INV-AUTHORITY-SINGLE-OWNER-001 }
+  note: Manifest generation paired with segment-ring window authority; single-stack HLS
+
+- type: constrained_by
+  from: { kind: service, id: program-director }
+  to: { kind: invariant, id: INV-AUTHORITY-SINGLE-OWNER-001 }
+  note: Channel lifecycle + per-channel diagnostics slices (summary; see invariant + CLAUDE.md)
+
+- type: constrained_by
+  from: { kind: service, id: channel-manager }
+  to: { kind: invariant, id: INV-AUTHORITY-SINGLE-OWNER-001 }
+  note: Runtime supervision slice; must not duplicate clock, ring, or parallel lifecycle registry
+
+- type: constrained_by
+  from: { kind: service, id: importer }
+  to: { kind: invariant, id: INV-PRODUCTION-BOUNDARY-001 }
+  note: Production ingest modules vs tests/fixtures; layout discipline

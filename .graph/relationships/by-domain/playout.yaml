@@ -1,0 +1,69 @@
+- type: drives
+  from: { kind: service, id: program-director }
+  to: { kind: service, id: channel-manager }
+  note: Activation and supervision; single entry path per INV-SINGLE-ACTIVATION-PATH-001
+
+- type: consumes
+  from: { kind: service, id: channel-manager }
+  to: { kind: entity, id: playlog }
+  note: Primary execution input; broadcast-accurate automation/event stream from scheduling horizon
+
+- type: depends_on
+  from: { kind: service, id: block-plan-producer }
+  to: { kind: entity, id: playlog }
+  note: Feeds BlockPlan from resolved execution timing in the playlog spine, not from playlist as root
+
+- type: consumes
+  from: { kind: service, id: hls-segmenter }
+  to: { kind: entity, id: segment-ring }
+
+- type: depends_on
+  from: { kind: service, id: hls-consumption-adapter }
+  to: { kind: service, id: program-director }
+
+- type: depends_on
+  from: { kind: service, id: ts-consumption-adapter }
+  to: { kind: service, id: program-director }
+
+- type: owns
+  from: { kind: service, id: block-plan-producer }
+  to: { kind: entity, id: block-plan }
+  note: Core authority over BlockPlan message stream fed to AIR; AIR executes only
+
+- type: depends_on
+  from: { kind: service, id: playout-session }
+  to: { kind: service, id: channel-manager }
+
+- type: drives
+  from: { kind: service, id: channel-manager }
+  to: { kind: service, id: air-playout-engine }
+
+- type: consumes
+  from: { kind: service, id: air-playout-engine }
+  to: { kind: entity, id: block-plan }
+  note: BlockPlan mode; consumes fed blocks via gRPC contract
+
+- type: constrained_by
+  from: { kind: service, id: channel-manager }
+  to: { kind: invariant, id: INV-CHANNELMANAGER-NO-PLANNING-001 }
+
+- type: constrained_by
+  from: { kind: service, id: channel-manager }
+  to: { kind: invariant, id: INV-EPG-NONAUTHORITATIVE-FOR-PLAYOUT-001 }
+
+- type: constrained_by
+  from: { kind: service, id: hls-consumption-adapter }
+  to: { kind: invariant, id: INV-SINGLE-ACTIVATION-PATH-001 }
+
+- type: constrained_by
+  from: { kind: service, id: ts-consumption-adapter }
+  to: { kind: invariant, id: INV-SINGLE-ACTIVATION-PATH-001 }
+
+- type: constrained_by
+  from: { kind: service, id: hls-segmenter }
+  to: { kind: invariant, id: INV-HLS-NO-DISK-IO-001 }
+
+- type: constrained_by
+  from: { kind: entity, id: segment-ring }
+  to: { kind: invariant, id: INV-HLS-NO-DISK-IO-001 }
+  note: In-memory segment store obligation applies to the ring and handlers

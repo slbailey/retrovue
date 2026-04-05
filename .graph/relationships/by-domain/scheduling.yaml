@@ -1,0 +1,32 @@
+# Allowed edge types: owns | produces | consumes | drives | depends_on | constrained_by | forbids
+# IDs: entity slug, service slug, INV-*, or ambiguity slug
+
+- type: owns
+  from: { kind: service, id: playlist-schedule-manager }
+  to: { kind: entity, id: playlist }
+  note: Exclusive writer of PSM playlist-shaped rows; convenience artifact—not playlog/execution authority
+
+- type: depends_on
+  from: { kind: service, id: playlist-schedule-manager }
+  to: { kind: entity, id: execution-entry }
+  note: Input horizon depends on implementation phase; contract locks output shape
+
+- type: depends_on
+  from: { kind: entity, id: schedule-day }
+  to: { kind: entity, id: schedule-plan }
+
+- type: depends_on
+  from: { kind: entity, id: transmission-log }
+  to: { kind: entity, id: schedule-day }
+
+- type: depends_on
+  from: { kind: entity, id: execution-entry }
+  to: { kind: entity, id: transmission-log }
+
+- type: depends_on
+  from: { kind: entity, id: epg }
+  to: { kind: entity, id: schedule-day }
+
+- type: constrained_by
+  from: { kind: service, id: playlist-schedule-manager }
+  to: { kind: invariant, id: INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 }

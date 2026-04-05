@@ -1,0 +1,46 @@
+# Planning must not bypass ChannelManager to reach AIR
+
+- type: forbids
+  from: { kind: service, id: playlist-schedule-manager }
+  to: { kind: service, id: air-playout-engine }
+  note: INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001
+
+# Scheduling → playout execution bridge (truth spine: execution plan → playlog)
+
+- type: depends_on
+  from: { kind: entity, id: playlog }
+  to: { kind: entity, id: execution-entry }
+  note: Playlog/events materialize from the locked execution plan horizon; not from playlist as authority
+
+# Ingest → scheduling eligibility (read-only conceptual)
+
+- type: depends_on
+  from: { kind: entity, id: program }
+  to: { kind: entity, id: asset }
+  note: Scheduling resolves to eligible catalog material; not a runtime library call from ChannelManager
+
+# Ambiguity anchors (disambiguation nodes)
+
+- type: depends_on
+  from: { kind: ambiguity, id: dual-meaning-producer }
+  to: { kind: service, id: block-plan-producer }
+
+- type: depends_on
+  from: { kind: ambiguity, id: dual-meaning-producer }
+  to: { kind: service, id: air-playout-engine }
+
+- type: depends_on
+  from: { kind: ambiguity, id: schedule-manager-vs-playlist-schedule-manager }
+  to: { kind: service, id: playlist-schedule-manager }
+
+- type: depends_on
+  from: { kind: ambiguity, id: collection-vs-container }
+  to: { kind: entity, id: container }
+
+- type: depends_on
+  from: { kind: ambiguity, id: collection-vs-container }
+  to: { kind: entity, id: zone }
+
+- type: depends_on
+  from: { kind: ambiguity, id: program-director-import-alias }
+  to: { kind: service, id: program-director }

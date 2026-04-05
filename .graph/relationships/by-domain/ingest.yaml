@@ -1,0 +1,25 @@
+- type: produces
+  from: { kind: service, id: importer }
+  to: { kind: entity, id: asset }
+  note: Via discovery and persistence pipeline
+
+- type: depends_on
+  from: { kind: service, id: importer }
+  to: { kind: entity, id: source }
+
+- type: depends_on
+  from: { kind: service, id: importer }
+  to: { kind: entity, id: container }
+
+- type: depends_on
+  from: { kind: entity, id: discovered-item }
+  to: { kind: entity, id: container }
+
+- type: depends_on
+  from: { kind: entity, id: asset }
+  to: { kind: entity, id: discovered-item }
+  note: Typical derivation; dedup paths omitted
+
+- type: constrained_by
+  from: { kind: service, id: importer }
+  to: { kind: invariant, id: INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001 }

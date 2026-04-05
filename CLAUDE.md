@@ -186,6 +186,7 @@ AUTHORITATIVE DOCUMENTS
 - pkg/air/CLAUDE.md  → AIR ontology and rules
 - docs/contracts/    → Canonical behavioral contracts (system-wide)
 - docs/contracts/INVARIANTS.md → Single authoritative invariant index
+- **docs/KNOWLEDGE_GRAPH.md** → How AI agents must use **`.graph/`** (start at **`.graph/INDEX.md`**) for architecture, boundaries, and graph-first workflow before code
 
 These documents define “what is allowed”.
 Implementation must conform.
