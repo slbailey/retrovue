@@ -1,6 +1,7 @@
 """
 Contract tests: Channel Reconciliation — INV-CHANNEL-CONFIG-SOURCE-OF-TRUTH,
-INV-CHANNEL-RECONCILE-DELETE, INV-CHANNEL-RECONCILE-IDEMPOTENT
+INV-CHANNEL-RECONCILE-DELETE, INV-CHANNEL-RECONCILE-IDEMPOTENT,
+INV-CHANNEL-RECONCILE-EMPTY-GUARD
 
 Validates that reconciling channels against a YAML slug set creates missing
 channels, deletes removed channels (with all derived state), and is idempotent.
@@ -247,7 +248,7 @@ class TestChannelConfigSourceOfTruth:
 
                 # YAML set does not include the DB channel
                 yaml_slugs: set[str] = set()
-                reconcile_channels(db, yaml_slugs)
+                reconcile_channels(db, yaml_slugs, allow_full_purge=True)
 
                 assert _count(db, "channels") == 0, (
                     "INV-CHANNEL-CONFIG-SOURCE-OF-TRUTH: channel absent from "
@@ -314,8 +315,8 @@ class TestChannelReconcileDelete:
                 assert _count(db, "programs") >= 1
                 assert _count(db, "zones") >= 1
 
-                # Reconcile with empty YAML — channel removed
-                reconcile_channels(db, set())
+                # Reconcile with empty YAML — channel removed (explicit purge)
+                reconcile_channels(db, set(), allow_full_purge=True)
 
                 for table in CHANNEL_SCOPED_TABLES:
                     assert _count(db, table) == 0, (
@@ -391,7 +392,7 @@ class TestChannelReconcileDelete:
                 ch = _make_channel(db, slug="will-die")
                 _make_full_broadcast_state(db, ch, asset)
 
-                reconcile_channels(db, set())
+                reconcile_channels(db, set(), allow_full_purge=True)
 
                 assert _count(db, "sources") == sources_before
                 assert _count(db, "collections") == collections_before
@@ -422,7 +423,7 @@ class TestChannelReconcileDelete:
                 assert _count_where(db, "traffic_play_log", "channel_slug", ch.slug) >= 1
                 assert _count_where(db, "playlist_events", "channel_slug", ch.slug) >= 1
 
-                reconcile_channels(db, set())
+                reconcile_channels(db, set(), allow_full_purge=True)
 
                 for table in NON_FK_TABLES:
                     assert _count(db, table) == 0, (
@@ -512,6 +513,74 @@ class TestChannelReconcileIdempotent:
             with db_session() as db:
                 sp = db.begin_nested()
 
+                reconcile_channels(db, set())
+                assert _count(db, "channels") == 0
+
+                sp.rollback()
+
+        except Exception as e:
+            if "does not exist" in str(e):
+                pytest.skip(f"Required table not yet migrated: {e}")
+            raise
+
+
+# ===========================================================================
+# INV-CHANNEL-RECONCILE-EMPTY-GUARD — Empty config must not purge existing channels
+# ===========================================================================
+
+
+class TestChannelReconcileEmptyGuard:
+    """INV-CHANNEL-RECONCILE-EMPTY-GUARD: Empty config set raises when channels exist."""
+
+    def test_empty_config_with_existing_channels_raises(self):
+        """Calling reconcile with empty set when DB has channels MUST raise RuntimeError."""
+        try:
+            with db_session() as db:
+                sp = db.begin_nested()
+
+                _make_channel(db, slug="existing-channel")
+                assert _count(db, "channels") >= 1
+
+                with pytest.raises(RuntimeError, match="empty.*config.*set"):
+                    reconcile_channels(db, set())
+
+                # Channel must survive — no deletion occurred
+                assert _count(db, "channels") >= 1
+
+                sp.rollback()
+
+        except Exception as e:
+            if "does not exist" in str(e):
+                pytest.skip(f"Required table not yet migrated: {e}")
+            raise
+
+    def test_empty_config_with_allow_full_purge(self):
+        """Explicit allow_full_purge=True permits deletion of all channels."""
+        try:
+            with db_session() as db:
+                sp = db.begin_nested()
+
+                _make_channel(db, slug="purge-me")
+                assert _count(db, "channels") >= 1
+
+                # Explicit opt-in: no error raised
+                reconcile_channels(db, set(), allow_full_purge=True)
+                assert _count(db, "channels") == 0
+
+                sp.rollback()
+
+        except Exception as e:
+            if "does not exist" in str(e):
+                pytest.skip(f"Required table not yet migrated: {e}")
+            raise
+
+    def test_empty_config_empty_db_no_error(self):
+        """Empty config on empty DB is fine — no guard needed."""
+        try:
+            with db_session() as db:
+                sp = db.begin_nested()
+
+                # No channels in DB, empty config — should succeed without error
                 reconcile_channels(db, set())
                 assert _count(db, "channels") == 0
 

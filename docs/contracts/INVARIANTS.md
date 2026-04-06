@@ -357,6 +357,7 @@ Canonical contract: [schedule_block_program_reference.md](schedule_block_program
 | INV-CHANNEL-CONFIG-SOURCE-OF-TRUTH | [channel_reconciliation.md](channel_reconciliation.md) | LAW-CONTENT-AUTHORITY |
 | INV-CHANNEL-RECONCILE-DELETE | [channel_reconciliation.md](channel_reconciliation.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
 | INV-CHANNEL-RECONCILE-IDEMPOTENT | [channel_reconciliation.md](channel_reconciliation.md) | LAW-CONTENT-AUTHORITY |
+| INV-CHANNEL-RECONCILE-EMPTY-GUARD | [channel_reconciliation.md](channel_reconciliation.md) | LAW-CONTENT-AUTHORITY |
 
 ### Runtime
 

@@ -440,6 +440,17 @@ class DslScheduleService:
         # Step 2: Check PlaylistEvent for filled version BY BLOCK_ID
         filled = self._get_filled_block_by_id(block.block_id)
         if filled is not None:
+            # INV-CROSS-DAY-CARRY-IN-SURVIVES-RESTART-001: PlaylistEvent may
+            # store original grid times.  The in-memory timeline has pushed
+            # times (contiguity-enforced).  Return filled segments with
+            # in-memory timing so blocks remain contiguous.
+            if filled.start_utc_ms != block.start_utc_ms or filled.end_utc_ms != block.end_utc_ms:
+                from dataclasses import replace as dc_replace
+                filled = dc_replace(
+                    filled,
+                    start_utc_ms=block.start_utc_ms,
+                    end_utc_ms=block.end_utc_ms,
+                )
             return filled
 
         # Step 3: Fill synchronously
@@ -484,10 +495,13 @@ class DslScheduleService:
                             transition_out_duration_ms=int(s.get("transition_out_duration_ms", 0)),
                             gain_db=s.get("gain_db", 0.0),
                         ))
+                    # INV-CROSS-DAY-CARRY-IN-SURVIVES-RESTART-001: Use
+                    # in-memory timing (pushed forward) over DB timing
+                    # (original grid) for the block envelope.
                     cached = ScheduledBlock(
                         block_id=row.block_id,
-                        start_utc_ms=row.start_utc_ms,
-                        end_utc_ms=row.end_utc_ms,
+                        start_utc_ms=block.start_utc_ms,
+                        end_utc_ms=block.end_utc_ms,
                         segments=tuple(segments),
                     )
 
@@ -1248,6 +1262,13 @@ class DslScheduleService:
 
         loaded_blocks.sort(key=lambda b: b.start_utc_ms)
 
+        # INV-CROSS-DAY-CARRY-IN-SURVIVES-RESTART-001: Blocks loaded from
+        # schedule_items may overlap across broadcast day boundaries (each
+        # day is compiled independently with grid-boundary start times).
+        # Enforce contiguity by cascading push-forward across the entire
+        # timeline.
+        loaded_blocks = self._enforce_timeline_contiguity(loaded_blocks)
+
         with self._lock:
             self._blocks = loaded_blocks
             self._compiled_days = loaded_days
@@ -1897,7 +1918,15 @@ class DslScheduleService:
         cached = self._get_cached_schedule(channel_id, broadcast_day)
         if cached is not None:
             logger.debug("Using cached schedule for %s/%s", channel_id, broadcast_day)
-            return self._hydrate_schedule(cached, channel_id, broadcast_day)
+            blocks = self._hydrate_schedule(cached, channel_id, broadcast_day)
+            # INV-CROSS-DAY-CARRY-IN-SURVIVES-RESTART-001: Cached blocks have
+            # original grid times.  Apply push-forward so they don't overlap
+            # with prior-day carry-in.
+            if effective_day_open_ms > 0:
+                blocks = self._push_forward_scheduled_blocks(
+                    blocks, effective_day_open_ms, broadcast_day,
+                )
+            return blocks
 
         dsl_text = Path(self._dsl_path).read_text()
         dsl = parse_dsl(dsl_text)
@@ -2104,6 +2133,120 @@ class DslScheduleService:
             )
 
         schedule["program_blocks"] = surviving
+
+    @staticmethod
+    def _push_forward_scheduled_blocks(
+        blocks: list[ScheduledBlock],
+        effective_day_open_ms: int,
+        broadcast_day: str,
+    ) -> list[ScheduledBlock]:
+        """Push cached ScheduledBlocks forward past prior-day overlap.
+
+        INV-CROSS-DAY-CARRY-IN-SURVIVES-RESTART-001: When blocks are loaded
+        from the schedule cache, they have original grid times that may
+        overlap with prior-day carry-in.  This applies the same push-forward
+        logic as _apply_overlap_push_forward, but on ScheduledBlock objects
+        instead of program_block dicts.
+
+        Blocks fully subsumed by the carry-in window are dropped.
+        The first surviving block is pushed to effective_day_open_ms.
+        Subsequent blocks cascade forward to remain contiguous.
+        """
+        from dataclasses import replace as dc_replace
+
+        result: list[ScheduledBlock] = []
+        cursor_ms = effective_day_open_ms
+
+        for block in blocks:
+            block_dur_ms = block.end_utc_ms - block.start_utc_ms
+
+            if block.end_utc_ms <= effective_day_open_ms:
+                logger.info(
+                    "INV-CROSS-DAY-CARRY-IN-001: Dropping subsumed cached "
+                    "block %s (%d-%d) for broadcast_day=%s (effective_open=%d)",
+                    block.block_id, block.start_utc_ms, block.end_utc_ms,
+                    broadcast_day, effective_day_open_ms,
+                )
+                continue
+
+            if block.start_utc_ms < cursor_ms:
+                push_ms = cursor_ms - block.start_utc_ms
+                new_start = cursor_ms
+                new_end = new_start + block_dur_ms
+                logger.info(
+                    "INV-CROSS-DAY-CARRY-IN-001: Pushed cached block %s "
+                    "start %d → %d (+%dms) for broadcast_day=%s",
+                    block.block_id, block.start_utc_ms, new_start,
+                    push_ms, broadcast_day,
+                )
+                block = dc_replace(block, start_utc_ms=new_start, end_utc_ms=new_end)
+
+            result.append(block)
+            cursor_ms = block.end_utc_ms
+
+        if len(result) < len(blocks):
+            logger.info(
+                "INV-CROSS-DAY-CARRY-IN-001: Dropped %d subsumed cached "
+                "blocks from %s (prior-day block owns time before %d)",
+                len(blocks) - len(result), broadcast_day, effective_day_open_ms,
+            )
+
+        return result
+
+    @staticmethod
+    def _enforce_timeline_contiguity(
+        blocks: list[ScheduledBlock],
+    ) -> list[ScheduledBlock]:
+        """Enforce contiguity across the entire in-memory timeline.
+
+        INV-CROSS-DAY-CARRY-IN-SURVIVES-RESTART-001: When blocks from
+        multiple broadcast days are loaded from schedule_items, they may
+        overlap across day boundaries because each day was compiled with
+        independent grid-boundary start times.  This method cascades
+        push-forward across the sorted block list so all blocks are
+        contiguous: block[i].end == block[i+1].start.
+
+        Blocks fully subsumed by a prior block are dropped.
+        Partially overlapping blocks are pushed forward.
+        """
+        if not blocks:
+            return blocks
+
+        from dataclasses import replace as dc_replace
+
+        result: list[ScheduledBlock] = [blocks[0]]
+        dropped = 0
+        pushed = 0
+
+        for block in blocks[1:]:
+            prev = result[-1]
+            block_dur_ms = block.end_utc_ms - block.start_utc_ms
+
+            if block.end_utc_ms <= prev.end_utc_ms:
+                # Fully subsumed by previous block — drop
+                dropped += 1
+                continue
+
+            if block.start_utc_ms < prev.end_utc_ms:
+                # Partial overlap — push forward
+                new_start = prev.end_utc_ms
+                new_end = new_start + block_dur_ms
+                block = dc_replace(
+                    block, start_utc_ms=new_start, end_utc_ms=new_end,
+                )
+                pushed += 1
+
+            result.append(block)
+
+        if dropped or pushed:
+            logger.info(
+                "INV-CROSS-DAY-CARRY-IN-001: Timeline contiguity enforced: "
+                "%d blocks dropped, %d blocks pushed forward "
+                "(%d → %d blocks)",
+                dropped, pushed, len(blocks), len(result),
+            )
+
+        return result
 
     def _expand_schedule_to_blocks(self, schedule: dict, resolver: CatalogAssetResolver) -> list[ScheduledBlock]:
         """Expand compiled program blocks into ScheduledBlocks with empty filler placeholders.

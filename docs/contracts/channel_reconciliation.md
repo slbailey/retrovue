@@ -113,3 +113,70 @@ Run reconciliation twice with the same YAML set. Assert no errors. Assert channe
 ## Enforcement Evidence
 
 TODO
+
+---
+
+# INV-CHANNEL-RECONCILE-EMPTY-GUARD — Empty config set must not purge existing channels
+
+Status: Invariant
+Authority Level: Infrastructure
+Derived From: `LAW-CONTENT-AUTHORITY`
+
+## Purpose
+
+Protects `LAW-CONTENT-AUTHORITY` by preventing silent, total channel destruction during startup. If `load_all_schedules()` returns an empty set due to a configuration loading failure, `reconcile_channels()` MUST NOT delete all existing database channels.
+
+## Guarantee
+
+If `yaml_channel_slugs` is empty AND the database contains one or more channels, `reconcile_channels()` MUST raise a `RuntimeError` rather than proceeding with deletion. The caller MUST explicitly opt into full purge by passing `allow_full_purge=True`.
+
+## Preconditions
+
+The caller MUST hold a database session with read access (to check existing channel count).
+
+## Observability
+
+A `RuntimeError` with a clear message is raised. The database remains unchanged.
+
+## Deterministic Testability
+
+Create one or more channels in the database. Call `reconcile_channels(db, set())` without `allow_full_purge`. Assert `RuntimeError` is raised. Assert channel count is unchanged.
+
+## Failure Semantics
+
+**Infrastructure fault.** Proceeding with an empty config set against a populated database is a destructive misconfiguration, not an intentional operation.
+
+## Required Tests
+
+- `pkg/core/tests/contracts/test_channel_reconciliation.py`
+
+## Enforcement Evidence
+
+TODO
+
+---
+
+# Startup Sequence — Channel Reconciliation Context
+
+The following documents the startup sequence in `ProgramDirector._background_prewarm()` where channel reconciliation executes. This is the ONLY path where `reconcile_channels()` is called during normal startup.
+
+## Sequence
+
+```
+load_all_schedules()
+    → reconcile_channels(db, configured_ids)   ← INV-CHANNEL-RECONCILE-EMPTY-GUARD fires here
+        → _prewarm_channel_schedules()
+            → _init_playlog_daemons()
+```
+
+1. **`load_all_schedules()`** — Reads YAML schedule definitions from disk. Returns the set of configured channel IDs. If this returns empty due to a transient config failure, the empty-guard prevents reconciliation from proceeding.
+
+2. **`reconcile_channels(db, configured_ids)`** — Compares configured channel IDs against the database. Creates missing channels, deletes removed channels with all derived state. Protected by INV-CHANNEL-RECONCILE-EMPTY-GUARD against accidental total purge.
+
+3. **`_prewarm_channel_schedules()`** — Compiles schedule horizons for all configured channels. Requires reconciliation to have completed so the DB channel set is consistent with YAML.
+
+4. **`_init_playlog_daemons()`** — Starts background playlog maintenance threads. Requires channel schedules to be pre-warmed.
+
+## Invariant
+
+The ordering is strict: each step depends on the prior step's completion. Reordering or skipping steps violates the startup contract.

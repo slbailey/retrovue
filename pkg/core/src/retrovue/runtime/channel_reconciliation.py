@@ -1,6 +1,7 @@
 """
 Channel reconciliation — INV-CHANNEL-CONFIG-SOURCE-OF-TRUTH,
-INV-CHANNEL-RECONCILE-DELETE, INV-CHANNEL-RECONCILE-IDEMPOTENT
+INV-CHANNEL-RECONCILE-DELETE, INV-CHANNEL-RECONCILE-IDEMPOTENT,
+INV-CHANNEL-RECONCILE-EMPTY-GUARD
 
 Reconciles the database channel set against the operator-provided YAML
 slug set. Creates missing channels, deletes removed channels with all
@@ -22,13 +23,22 @@ from retrovue.domain.entities import Channel
 logger = logging.getLogger(__name__)
 
 
-def reconcile_channels(db: Session, yaml_channel_slugs: set[str]) -> None:
+def reconcile_channels(
+    db: Session,
+    yaml_channel_slugs: set[str],
+    *,
+    allow_full_purge: bool = False,
+) -> None:
     """Reconcile database channels against the YAML-declared slug set.
 
     Channels in the database but absent from ``yaml_channel_slugs`` are
     deleted along with all derived broadcast state. Channels in
     ``yaml_channel_slugs`` but absent from the database are created with
     minimal defaults.
+
+    INV-CHANNEL-RECONCILE-EMPTY-GUARD: If ``yaml_channel_slugs`` is empty
+    and channels exist in the database, raises ``RuntimeError`` unless
+    ``allow_full_purge`` is explicitly ``True``.
 
     The caller owns the transaction — this function does not commit or
     roll back.
@@ -38,6 +48,14 @@ def reconcile_channels(db: Session, yaml_channel_slugs: set[str]) -> None:
     db_slug_map = {ch.slug: ch for ch in db_channels}
     db_slugs = set(db_slug_map.keys())
     db_before = len(db_slugs)
+
+    # INV-CHANNEL-RECONCILE-EMPTY-GUARD: prevent accidental total purge
+    if not yaml_channel_slugs and db_slugs and not allow_full_purge:
+        raise RuntimeError(
+            f"reconcile_channels: empty config set would delete all "
+            f"{len(db_slugs)} existing channel(s). If this is intentional, "
+            f"pass allow_full_purge=True. Aborting to prevent data loss."
+        )
 
     # --- Delete channels not in YAML ---
     slugs_to_remove = db_slugs - yaml_channel_slugs
