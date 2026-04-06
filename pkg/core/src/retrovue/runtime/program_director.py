@@ -2304,15 +2304,11 @@ class ProgramDirector:
             # ring has a playable window.  Warm path: is_set() returns
             # True immediately — no await, no delay.
             if ring is not None and not ring.ready.is_set():
-                # Keep phantom alive while we wait for segments —
-                # without this touch, the phantom's idle timeout fires
-                # before the readiness gate completes on cold start.
-                self._hls_adapter.touch_activity(channel_id)
                 ready = await ring.ready.wait(timeout=10.0)
                 if not ready:
-                    # Keep phantom alive for client retry — refresh
-                    # the idle clock so it survives another 20s.
-                    self._hls_adapter.touch_activity(channel_id)
+                    # INV-HLS-PHANTOM-CLEANUP-001: Do NOT touch_activity
+                    # on 503 paths — the phantom idle timer must not be
+                    # refreshed by failed requests.
                     self._hls_diag_record(
                         channel_id,
                         "HLS_SERVE_SNAPSHOT",

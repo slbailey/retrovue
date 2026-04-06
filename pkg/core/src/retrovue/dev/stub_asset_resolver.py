@@ -91,7 +91,7 @@ class StubAssetResolver:
         """Shared query engine that tracks per-filter exclusion reasons."""
         from retrovue.domain.tag_normalization import expand_tag_match_set
 
-        # Collection filter: return only assets in the named collection
+        # Container filter: return only assets in the named container
         collection = match.get("collection")
         if collection and collection in self._collections:
             candidate_ids = self._collections[collection]

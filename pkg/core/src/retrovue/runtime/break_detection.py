@@ -86,15 +86,11 @@ def detect_breaks(
     all_opps = chapter_opps + boundary_opps + algo_opps
     all_opps.sort(key=lambda o: o.position_ms)
 
-    # INV-BREAK-WEIGHT-001: Chapter breaks get monotonically increasing
-    # weights by position (1, 2, 3, ...) so later breaks receive
-    # proportionally more filler budget.  Non-chapter breaks use equal
-    # weights (1.0).
-    for idx, opp in enumerate(all_opps, start=1):
-        if opp.source == "chapter":
-            opp.weight = float(idx)
-        else:
-            opp.weight = 1.0
+    # INV-BREAK-BUDGET-EQUAL-001: All breaks use equal weights (1.0)
+    # by default. Weighted distribution requires explicit operator
+    # configuration via channel DSL — undeclared weighting is prohibited.
+    for opp in all_opps:
+        opp.weight = 1.0
 
     return BreakPlan(
         opportunities=all_opps,

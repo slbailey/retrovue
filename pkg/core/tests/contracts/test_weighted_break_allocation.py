@@ -1,6 +1,7 @@
 """
-Contract test: INV-BREAK-WEIGHT-001 — Weighted break budget allocation.
+Contract test: Weighted break budget allocation.
 
+INV-BREAK-BUDGET-EQUAL-001: Equal distribution by default.
 Break durations must be proportional to BreakOpportunity.weight.
 Sum of all break durations must equal break_plan.break_budget_ms.
 Remainder milliseconds distributed starting from highest-weight break.
@@ -118,8 +119,13 @@ class TestAllocateWeightedBudget:
 class TestExpanderUsesWeightedAllocation:
     """Verify expand_program_block produces weight-proportional filler durations."""
 
-    def test_chapter_breaks_weighted_fillers(self):
-        """3 chapter breaks with monotonic weights produce increasing filler durations."""
+    def test_chapter_breaks_equal_fillers_by_default(self):
+        """INV-BREAK-BUDGET-EQUAL-001: chapter breaks use equal weights by default.
+
+        Monotonically increasing weights are only permitted when explicitly
+        declared in the channel DSL. Without operator configuration, all
+        breaks receive equal budget share.
+        """
         block = expand_program_block(
             asset_id="ep1", asset_uri="/ep1.mp4",
             start_utc_ms=START_MS, slot_duration_ms=1_800_000,
@@ -129,10 +135,9 @@ class TestExpanderUsesWeightedAllocation:
         fillers = [s for s in block.segments if s.segment_type == "filler"]
         assert len(fillers) == 3
         filler_durations = [f.segment_duration_ms for f in fillers]
-        # Weights assigned as 1.0, 2.0, 3.0 by detect_breaks (monotonic by position)
-        # Budget = 480_000, weights [1,2,3], sum=6
-        # Durations: [80_000, 160_000, 240_000]
-        assert filler_durations == [80_000, 160_000, 240_000]
+        # Equal weights (1.0 each), budget = 480_000, 3 breaks
+        # Durations: [160_000, 160_000, 160_000]
+        assert filler_durations == [160_000, 160_000, 160_000]
 
     def test_filler_total_equals_budget(self):
         """Sum of all filler durations equals break budget."""
