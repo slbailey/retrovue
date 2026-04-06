@@ -153,6 +153,7 @@ class DbProgressionRunStore:
         exhaustion_policy: str,
     ) -> SerialRunInfo:
         from retrovue.domain.entities import ProgressionRun
+        from sqlalchemy.exc import IntegrityError
 
         row = ProgressionRun(
             run_id=run_id,
@@ -165,7 +166,23 @@ class DbProgressionRunStore:
             is_active=True,
         )
         self._db.add(row)
-        self._db.flush()
+        try:
+            self._db.flush()
+        except IntegrityError:
+            # A ProgressionRun with this (channel_id, run_id) already exists
+            # (e.g. created by a prior day's compilation within the same
+            # horizon build).  Roll back the failed INSERT and return the
+            # existing record.
+            self._db.rollback()
+            existing = self.load(channel_id, run_id)
+            if existing is not None:
+                logger.info(
+                    "ProgressionRun already exists: channel=%s run_id=%s — reusing",
+                    channel_id, run_id,
+                )
+                return existing
+            # If load also fails (shouldn't happen), re-raise
+            raise
 
         logger.info(
             "Created ProgressionRun: channel=%s run_id=%s anchor=%s days=%s policy=%s",
