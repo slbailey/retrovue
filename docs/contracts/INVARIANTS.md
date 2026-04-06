@@ -79,6 +79,7 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | INV-CHANNEL-TIMELINE-CONTINUITY-001 | [invariants/core/cross-cutting/INV-CHANNEL-TIMELINE-CONTINUITY-001.md](invariants/core/cross-cutting/INV-CHANNEL-TIMELINE-CONTINUITY-001.md) | LAW-CLOCK, LAW-TIMELINE |
 | INV-BROADCASTDAY-PROJECTION-TRACEABLE-001 | [invariants/core/cross-cutting/INV-BROADCASTDAY-PROJECTION-TRACEABLE-001.md](invariants/core/cross-cutting/INV-BROADCASTDAY-PROJECTION-TRACEABLE-001.md) | LAW-DERIVATION, LAW-RUNTIME-AUTHORITY |
 | INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001 | [invariants/core/cross-cutting/INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001.md](invariants/core/cross-cutting/INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001.md) | LAW-IMMUTABILITY, LAW-DERIVATION |
+| INV-PLAYLOG-NO-RETROACTIVE-FILL-001 | [invariants/core/cross-cutting/INV-PLAYLOG-NO-RETROACTIVE-FILL-001.md](invariants/core/cross-cutting/INV-PLAYLOG-NO-RETROACTIVE-FILL-001.md) | LAW-RUNTIME-AUTHORITY, LAW-CLOCK |
 
 ### Scheduling — Multi-channel
 
@@ -86,6 +87,19 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 |-----------|------|--------------|
 | INV-MULTICHANNEL-ISOLATION-001 | [invariants/core/scheduling/INV-MULTICHANNEL-ISOLATION-001.md](invariants/core/scheduling/INV-MULTICHANNEL-ISOLATION-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
 | INV-MULTICHANNEL-SEED-INDEPENDENCE-001 | [invariants/core/scheduling/INV-MULTICHANNEL-SEED-INDEPENDENCE-001.md](invariants/core/scheduling/INV-MULTICHANNEL-SEED-INDEPENDENCE-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+
+### Scheduling — Compilation & Restart
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-STARTUP-POISON-DETECTION-001 | [invariants/core/scheduling/INV-STARTUP-POISON-DETECTION-001.md](invariants/core/scheduling/INV-STARTUP-POISON-DETECTION-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-REVISION-NONEMPTY-PROGRAMMED-001 | [invariants/core/scheduling/INV-REVISION-NONEMPTY-PROGRAMMED-001.md](invariants/core/scheduling/INV-REVISION-NONEMPTY-PROGRAMMED-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-COMPILE-NO-FUTURE-INFLUENCE-001 | [invariants/core/scheduling/INV-COMPILE-NO-FUTURE-INFLUENCE-001.md](invariants/core/scheduling/INV-COMPILE-NO-FUTURE-INFLUENCE-001.md) | LAW-DERIVATION, LAW-IMMUTABILITY |
+| INV-COMPILE-CHRONOLOGICAL-ORDER-001 | [invariants/core/scheduling/INV-COMPILE-CHRONOLOGICAL-ORDER-001.md](invariants/core/scheduling/INV-COMPILE-CHRONOLOGICAL-ORDER-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
+| INV-COMPILE-NO-HORIZON-GLOBAL-001 | [invariants/core/scheduling/INV-COMPILE-NO-HORIZON-GLOBAL-001.md](invariants/core/scheduling/INV-COMPILE-NO-HORIZON-GLOBAL-001.md) | LAW-DERIVATION, LAW-IMMUTABILITY |
+| INV-COMPILE-DETERMINISTIC-001 | [invariants/core/scheduling/INV-COMPILE-DETERMINISTIC-001.md](invariants/core/scheduling/INV-COMPILE-DETERMINISTIC-001.md) | LAW-IMMUTABILITY, LAW-CONTENT-AUTHORITY |
+| INV-RUNTIME-CACHE-DERIVED-001 | [invariants/core/scheduling/INV-RUNTIME-CACHE-DERIVED-001.md](invariants/core/scheduling/INV-RUNTIME-CACHE-DERIVED-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
+| INV-CARRY-IN-DAY-MINUS-ONE-ONLY-001 | [invariants/core/scheduling/INV-CARRY-IN-DAY-MINUS-ONE-ONLY-001.md](invariants/core/scheduling/INV-CARRY-IN-DAY-MINUS-ONE-ONLY-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
 
 ### Scheduling — Execution Boundary
 
@@ -314,6 +328,7 @@ Canonical contract: [schedule_constraints.md](schedule_constraints.md)
 | INV-EPG-VIEWER-INDEPENDENT-001 | [invariants/core/epg/INV-EPG-VIEWER-INDEPENDENT-001.md](invariants/core/epg/INV-EPG-VIEWER-INDEPENDENT-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
 | INV-EPG-PROGRAM-CONTINUITY-001 | [invariants/core/epg/INV-EPG-PROGRAM-CONTINUITY-001.md](invariants/core/epg/INV-EPG-PROGRAM-CONTINUITY-001.md) | LAW-GRID, LAW-DERIVATION |
 | INV-EPG-DURATION-VISIBILITY-001 | [invariants/core/epg/INV-EPG-DURATION-VISIBILITY-001.md](invariants/core/epg/INV-EPG-DURATION-VISIBILITY-001.md) | LAW-GRID, LAW-DERIVATION |
+| INV-EPG-HORIZON-COVERAGE-001 | [invariants/core/epg/INV-EPG-HORIZON-COVERAGE-001.md](invariants/core/epg/INV-EPG-HORIZON-COVERAGE-001.md) | LAW-DERIVATION, LAW-LIVENESS |
 
 ### Asset — Entity Integrity
 

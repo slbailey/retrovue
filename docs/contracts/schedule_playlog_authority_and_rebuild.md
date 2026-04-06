@@ -531,6 +531,35 @@ Examples:
 
 ---
 
+## 8a. Downtime Gap Policy
+
+**Design decision:** Playlog gaps during downtime are accepted and intentional. The system MUST NOT retroactively backfill as-run records for time periods when no playout instance was active.
+
+### Rationale
+
+RetroVue channels only materialize when viewers exist. During downtime:
+
+- No viewers are connected.
+- No playout instance is running.
+- No content is being emitted.
+- Therefore, nothing actually aired.
+
+An empty playlog during downtime is **truthful** — it accurately reflects that no playout occurred. Fabricating gap-fill records would violate the principle that the playlog records execution truth (what was actually emitted to viewers), not editorial projection (what the schedule says should have aired).
+
+### Behavior on resume
+
+When the system resumes after downtime:
+
+1. **Schedule timeline** has advanced through the gap (wall-clock authority per `LAW-CLOCK`). The schedule correctly reflects what *should* air at the current time.
+2. **Playlog** does not retroactively fill the gap period. Only the current block (the one airing at resume time) is backfilled from its actual start point within the playout session.
+3. **EPG** remains correct because it derives from the schedule, not the playlog. The EPG for past time slots is accurate — it shows what was *scheduled*, which is the correct editorial record. The playlog shows what was *emitted*, which for the gap period is: nothing.
+
+### Invariant
+
+This policy is protected by **INV-PLAYLOG-NO-RETROACTIVE-FILL-001**: the playlog MUST NOT fabricate as-run records for time periods when no playout instance was active.
+
+---
+
 ## 9. Invariant Seeds
 
 The following candidate invariants are to be formalized in the next step. Each is directly testable.

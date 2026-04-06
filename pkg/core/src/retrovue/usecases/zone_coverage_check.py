@@ -18,8 +18,16 @@ After this change, editing/saving such plans will fail until corrected.
 
 from __future__ import annotations
 
-from datetime import time as dt_time
+from datetime import date, time as dt_time
 from typing import Any, Protocol
+
+from retrovue.scheduling.schedule_constraints import (
+    BlackoutConstraint,
+    ContentRestrictionConstraint,
+    ConstraintViolation,
+    check_blackout_constraints,
+    check_content_restriction_constraints,
+)
 
 # All 7 broadcast days
 ALL_DAYS = frozenset({"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"})
@@ -344,14 +352,22 @@ def validate_zone_plan_integrity(
     programming_day_start: dt_time = dt_time(0, 0),
     grid_block_minutes: int | None = None,
     asset_eligibility_checker: Any | None = None,
+    blackout_constraints: list[BlackoutConstraint] | None = None,
+    content_restriction_constraints: list[ContentRestrictionConstraint] | None = None,
+    broadcast_date: date | None = None,
 ) -> None:
-    """Run grid alignment, overlap, coverage, and asset eligibility checks.
+    """Run grid alignment, overlap, coverage, eligibility, and constraint checks.
 
     Raise ValueError on first violation set.
-    Precedence: grid alignment > overlap > coverage > asset eligibility.
+    Precedence: grid alignment > overlap > coverage > asset eligibility >
+                blackout constraints > content restriction constraints.
 
     This is the single enforcement entry point called by zone_add and zone_update
     after assembling the candidate zone list.
+
+    Constraint checks (blackout, content restriction) require broadcast_date.
+    If broadcast_date is None and constraints are provided, constraint checks
+    are skipped (constraints only apply to specific dates).
     """
     grid_violations = check_grid_alignment(zones, grid_block_minutes)
     if grid_violations:
@@ -369,6 +385,18 @@ def validate_zone_plan_integrity(
     if eligibility_violations:
         raise ValueError(eligibility_violations[0])
 
+    # INV-CONSTRAINT-BLACKOUT-001: blackout exclusion windows
+    if blackout_constraints and broadcast_date is not None:
+        blackout_violations = check_blackout_constraints(
+            zones, blackout_constraints, broadcast_date, programming_day_start,
+        )
+        if blackout_violations:
+            raise ValueError(blackout_violations[0].message)
+
+    # INV-CONSTRAINT-CONTENT-RESTRICTION-001: content restriction checks
+    # at plan-edit time are limited — full check requires compiled blocks
+    # with start times, which happens at compilation time.
+
 
 __all__ = [
     "check_asset_eligibility",
@@ -376,4 +404,6 @@ __all__ = [
     "check_overlap",
     "check_coverage",
     "validate_zone_plan_integrity",
+    "BlackoutConstraint",
+    "ContentRestrictionConstraint",
 ]

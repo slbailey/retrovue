@@ -1798,6 +1798,72 @@ class DslScheduleService:
             return False
 
     @staticmethod
+    def get_horizon_epg(
+        *,
+        blocks: list,
+        compiled_days: set[str],
+        horizon_days: int,
+        clock_now: datetime,
+        channel_id: str,
+        window_start: datetime,
+        window_end: datetime,
+    ) -> list[dict]:
+        """Horizon-aware EPG: serves the full compiled horizon.
+
+        INV-EPG-HORIZON-COVERAGE-001: For dates within [now, now + HORIZON_DAYS],
+        returns non-empty EPG if the scheduler daemon has compiled that date.
+        For dates beyond the horizon, returns [].
+
+        INV-EPG-READS-CANONICAL-SCHEDULE-001: DB is the preferred source.
+        Falls back to in-memory blocks only when DB has no data.
+
+        INV-SCHEDULE-PREWARM-001: MUST NOT trigger compilation.
+        """
+        # Step 1: Try canonical DB path first
+        db_result = DslScheduleService.get_canonical_epg(
+            channel_id, window_start, window_end,
+        )
+        if db_result is not None:
+            return db_result
+
+        # Step 2: Check horizon bounds
+        horizon_end = (clock_now + timedelta(days=horizon_days)).date()
+        requested_date = window_start.date()
+        if requested_date > horizon_end:
+            return []
+
+        # Step 3: Check if the requested date has been compiled in memory
+        requested_date_str = requested_date.isoformat()
+        if requested_date_str not in compiled_days:
+            return []
+
+        # Step 4: Derive EPG from in-memory blocks (compiled but not persisted)
+        window_start_ms = int(window_start.timestamp() * 1000)
+        window_end_ms = int(window_end.timestamp() * 1000)
+
+        out: list[dict] = []
+        for block in blocks:
+            if block.end_utc_ms <= window_start_ms or block.start_utc_ms >= window_end_ms:
+                continue
+            for seg in block.segments:
+                if seg.segment_type in ("filler", "padding", "pad"):
+                    continue
+                start_dt = datetime.fromtimestamp(
+                    block.start_utc_ms / 1000, tz=timezone.utc,
+                )
+                out.append({
+                    "start_at": start_dt.isoformat(),
+                    "slot_duration_sec": block.duration_ms // 1000,
+                    "asset_id": seg.asset_uri,
+                    "collection": None,
+                    "content_type": seg.segment_type,
+                })
+                break  # one EPG entry per block
+
+        out.sort(key=lambda x: x["start_at"])
+        return out
+
+    @staticmethod
     def _hash_dsl(dsl_text: str) -> str:
         return hashlib.sha256(dsl_text.encode("utf-8")).hexdigest()
 

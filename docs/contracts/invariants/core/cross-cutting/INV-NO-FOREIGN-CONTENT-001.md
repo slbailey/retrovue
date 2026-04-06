@@ -36,7 +36,7 @@ At each layer: inject an asset reference that is absent from the upstream author
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_constitution.py` (CROSS-FOREIGN-001, CROSS-FOREIGN-002, CROSS-FOREIGN-003)
+- `pkg/core/tests/contracts/scheduling/test_inv_no_foreign_content.py` (CROSS-FOREIGN-001, CROSS-FOREIGN-002, CROSS-FOREIGN-003)
 
 ## Enforcement Evidence
 
@@ -44,4 +44,4 @@ At each layer: inject an asset reference that is absent from the upstream author
 - `TestInvExecutionDerivedFromScheduleday001` in `test_scheduling_constitution.py` rejects execution entries without valid upstream lineage and accepts entries with proper derivation chain.
 - `TestInvScheduledayDerivationTraceable001` in `test_scheduling_constitution.py` rejects unanchored ScheduleDay records (no `plan_id`) and accepts properly anchored records — preventing foreign content injection at the ScheduleDay layer.
 - **Override exemption:** Operator overrides are the only permitted exception; `TestInvOverrideRecordPrecedesArtifact001` proves that overrides must carry an explicit override record.
-- Dedicated contract tests (CROSS-FOREIGN-001/002/003) for per-layer foreign-content rejection are referenced in `## Required Tests` but not yet implemented in the current tree.
+- Dedicated contract tests CROSS-FOREIGN-001/002/003 are now implemented in `test_inv_no_foreign_content.py` with per-layer validation (ScheduleDay, TransmissionLog, ExecutionEntry) and operator-override exemption — all 7 tests PASS.

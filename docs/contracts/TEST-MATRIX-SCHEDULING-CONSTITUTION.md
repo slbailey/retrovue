@@ -1,6 +1,6 @@
 # Test Matrix: Scheduling Constitution
 
-**Scope:** Deterministic-clock validation of all 6 constitutional Laws and 34 Invariants governing the RetroVue scheduling pipeline.
+**Scope:** Deterministic-clock validation of all 6 constitutional Laws and 42 Invariants governing the RetroVue scheduling pipeline.
 
 **Authoritative inputs:**
 - `docs/contracts/laws/LAW-*.md` (6 laws)
@@ -184,6 +184,8 @@ These invariants have structural enforcement in production code and passing cont
 | INV-CHANNEL-STARTUP-NONBLOCKING-001 | 4 (manager survives teardown + retune skips build_initial + build_initial idempotent + startup executor bounded) | **PASS** | `_stop_channel_internal()` preserves manager; `_build_initial()` idempotency guard; bounded `_startup_executor` in `program_director.py` |
 | INV-SCHEDULE-PREWARM-001 | 3 (AST: no load_schedule in _get_or_create_manager + AST: no load_schedule in _get_dsl_service + prewarm method exists and calls load_schedule) | **PASS** | `_get_dsl_service()` creates without loading; `_prewarm_channel_schedules()` loads at startup; `_get_or_create_manager()` assumes schedule ready |
 | INV-CHANNEL-STARTUP-CONCURRENCY-001 | 3 (AST: stream_channel has semaphore locked check + AST: hls_playlist has semaphore locked check + startup_semaphore and executor are bounded) | **PASS** | `_startup_semaphore` caps concurrent startups; `_startup_executor` bounded thread pool; handlers fail-fast 503 at capacity |
+| INV-CONSTRAINT-BLACKOUT-001 | 7 (asset in blackout rejected + date range pass + day filter pass + time window pass + empty asset_ids blocks all + disabled zone ignored + no constraints pass) | **PASS** | `check_blackout_constraints()` in `schedule_constraints.py`; integrated into `validate_zone_plan_integrity()` |
+| INV-CONSTRAINT-EVALUATION-IDEMPOTENT-001 | 3 (blackout idempotent + adjacency idempotent + content restriction idempotent) | **PASS** | All constraint functions are pure functions with no side effects |
 
 #### Tier 2 — Scheduling Logic
 
@@ -192,6 +194,8 @@ These invariants have structural enforcement in production code and passing cont
 | INV-BLEED-NO-GAP-001 | 11 (contiguity + compaction + grid alignment + enclosed overlap pushes forward + misalignment + revalidation + gap + naive dt + non-UTC + day boundary + three-marathon cascade) | **PASS** | `_validate_grid_alignment()` and compaction pass in `schedule_compiler.py` |
 | INV-MARATHON-CROSSMIDNIGHT-001 | 4 (produces blocks + start after 22:00 + end resolves next day + fills window) | **PASS** | Cross-midnight detection in `_compile_movie_marathon()` in `schedule_compiler.py` |
 | INV-TIER2-COMPILATION-CONSISTENCY-001 | 2 (current compilation not stale + consecutive blocks contiguous) | **PASS** | `get_block_at()` returns current compilation; `_compile_and_cache()` in `dsl_schedule_service.py` |
+| INV-CONSTRAINT-ADJACENCY-001 | 8 (symmetric violation + reverse order + directional a_before_b + directional b_before_a pass + non-adjacent pass + non-matching pass + single block pass + no constraints pass) | **PASS** | `check_adjacency_constraints()` in `schedule_constraints.py` |
+| INV-CONSTRAINT-CONTENT-RESTRICTION-001 | 6 (outside window rejected + within window passes + non-matching classification + day filter pass + no constraints + empty blocks) | **PASS** | `check_content_restriction_constraints()` in `schedule_constraints.py` |
 
 #### Tier 3 — Runtime and Integration
 
@@ -235,6 +239,8 @@ All test definitions in sections 6–7 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-CHANNEL-STARTUP-NONBLOCKING-001 | `TestInvChannelStartupNonblocking001` | `test_manager_survives_teardown`, `test_retune_after_teardown_skips_build_initial`, `test_build_initial_idempotent`, `test_startup_executor_is_bounded` | PASS |
 | INV-SCHEDULE-PREWARM-001 | `TestInvSchedulePrewarm001` | `test_get_or_create_manager_no_load_schedule`, `test_get_dsl_service_no_load_schedule`, `test_prewarm_method_calls_load_schedule` | PASS |
 | INV-CHANNEL-STARTUP-CONCURRENCY-001 | `TestInvChannelStartupConcurrency001` | `test_stream_channel_has_semaphore_guard`, `test_hls_playlist_has_semaphore_guard`, `test_startup_semaphore_and_executor_bounded` | PASS |
+| INV-CONSTRAINT-BLACKOUT-001 | `TestInvConstraintBlackout001` | `test_asset_in_blackout_window_rejected`, `test_asset_outside_blackout_date_range_passes`, `test_asset_on_non_matching_day_filter_passes`, `test_non_overlapping_time_windows_pass`, `test_empty_asset_ids_blocks_all_zone_assets`, `test_disabled_zone_ignored`, `test_no_constraints_returns_empty` | PASS |
+| INV-CONSTRAINT-EVALUATION-IDEMPOTENT-001 | `TestInvConstraintEvaluationIdempotent001` | `test_blackout_evaluation_idempotent`, `test_adjacency_evaluation_idempotent`, `test_content_restriction_evaluation_idempotent` | PASS |
 
 #### Tier 2 — Scheduling Logic
 
@@ -246,6 +252,22 @@ All test definitions in sections 6–7 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-CROSS-DAY-CARRY-IN-001 | `TestEffectiveDayOpenMs`, `TestPushForward`, `TestCarryInPropagation`, `TestMergeTimeGuardrail` | 20 tests (effective_day_open_ms computation, push-forward contiguity, cascade, subsumed block removal, propagation across empty days, merge-time guardrail defense-in-depth) | PASS |
 | INV-MULTICHANNEL-ISOLATION-001 | `TestMultiChannelDerivationIsolation`, `TestMultiChannelCompilationIsolation` | 6 tests (parametrized per-channel derivation chain, no shared artifacts, channel_id field isolation, sequential compilation independence) | PASS |
 | INV-MULTICHANNEL-SEED-INDEPENDENCE-001 | `TestMultiChannelSeedIndependence` | 3 tests (different seeds, deterministic seeds, different asset selections) | PASS |
+| INV-CONSTRAINT-ADJACENCY-001 | `TestInvConstraintAdjacency001` | `test_symmetric_adjacency_violation`, `test_symmetric_adjacency_reverse_order`, `test_directional_adjacency_a_before_b_violated`, `test_directional_adjacency_b_before_a_passes`, `test_non_adjacent_blocks_pass`, `test_non_matching_classifications_pass`, `test_single_block_passes`, `test_no_constraints_returns_empty` | PASS |
+| INV-CONSTRAINT-CONTENT-RESTRICTION-001 | `TestInvConstraintContentRestriction001` | `test_restricted_content_outside_window_rejected`, `test_restricted_content_within_window_passes`, `test_non_matching_classification_passes`, `test_day_filter_non_matching_passes`, `test_no_constraints_returns_empty`, `test_empty_blocks_returns_empty` | PASS |
+| INV-COMPILE-NO-FUTURE-INFLUENCE-001 | `TestFutureContamination` | `test_future_revision_does_not_suppress_target_day` | PASS |
+| INV-COMPILE-CHRONOLOGICAL-ORDER-001 | `TestChronologicalOrder` | `test_both_missing_days_get_blocks` | PASS |
+| INV-COMPILE-NO-HORIZON-GLOBAL-001 | `TestHorizonGlobalCarryIn` | `test_d_minus_1_and_future_day_do_not_cross_contaminate` | PASS |
+| INV-COMPILE-DETERMINISTIC-001 | `TestTimelineRestartIdentical` | `test_enforce_contiguity_is_deterministic`, `test_push_forward_is_deterministic`, `test_contiguity_preserves_block_identity` | PASS |
+| INV-REVISION-NONEMPTY-PROGRAMMED-001 | `TestRevisionNonemptyGuard` | `test_normal_compile_produces_nonempty_revision` | PASS |
+| INV-STARTUP-POISON-DETECTION-001 | `TestEmptyRevisionPoisoning` | `test_empty_revision_does_not_produce_working_channel`, `test_empty_revision_is_superseded_after_recovery` | PASS |
+| INV-RUNTIME-CACHE-DERIVED-001 | `TestTimelineSingleAuthority` | `test_build_initial_uses_load_existing_timeline`, `test_load_existing_timeline_returns_blocks_and_day_sets` | PASS |
+| INV-CARRY-IN-DAY-MINUS-ONE-ONLY-001 | `TestHorizonGlobalCarryIn` | `test_d_minus_1_and_future_day_do_not_cross_contaminate` | PASS |
+| INV-EPG-HORIZON-COVERAGE-001 | `TestInvEpgHorizonCoverage001Tier2` | `test_compiled_day_returns_epg_from_in_memory_blocks`, `test_beyond_horizon_returns_empty_list`, `test_within_horizon_no_compiled_blocks_returns_empty`, `test_db_data_preferred_over_in_memory`, `test_no_compilation_triggered` | PASS |
+| INV-EXECUTIONENTRY-MASTERCLOCK-ALIGNED-001 | `TestInvExecutionentryMasterclockAligned001` | `test_playlog_002_timestamps_match_injected_clock`, `test_playlog_003_different_clocks_produce_different_timestamps`, `test_multiple_entries_all_clock_derived` | PASS |
+| INV-SCHEDULEDAY-NO-GAPS-001 | `TestInvScheduledayNoGaps001` | `test_sched_day_005_plan_gap_raises_fault`, `test_sched_day_006_full_coverage_no_gap`, `test_internal_gap_detected`, `test_single_slot_day_raises_gap` | PASS |
+| INV-NO-FOREIGN-CONTENT-001 | `TestInvNoForeignContent001` | `test_cross_foreign_001_foreign_asset_in_scheduleday_rejected`, `test_cross_foreign_001_eligible_assets_pass`, `test_cross_foreign_002_foreign_asset_in_transmission_log_rejected`, `test_cross_foreign_002_eligible_assets_pass`, `test_cross_foreign_003_foreign_asset_in_execution_entry_rejected`, `test_cross_foreign_003_eligible_assets_pass`, `test_cross_foreign_003_operator_override_exempt` | PASS |
+| INV-NO-MID-PROGRAM-CUT-001 | `TestInvNoMidProgramCut001` | `test_cross_001_90min_no_breakpoints_no_cut`, `test_cross_001_90min_cut_detected`, `test_cross_002_120min_spans_4_blocks_no_cut`, `test_cross_002_120min_cut_detected`, `test_program_with_breakpoints_allows_cut` | PASS |
+| INV-PLAYLOG-NO-RETROACTIVE-FILL-001 | TODO | TODO | TODO |
 
 #### Tier 3 — Runtime and Integration
 
@@ -253,6 +275,7 @@ All test definitions in sections 6–7 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 |---|---|---|---|
 | INV-CHANNEL-LIVENESS-RECOVERY-001 | `TestInvChannelLivenessRecovery001` | `test_channel_manager_has_recovery_handler`, `test_stopped_with_viewers_schedules_restart`, `test_last_viewer_left_no_restart`, `test_lookahead_exhausted_no_restart`, `test_stopped_zero_viewers_no_restart`, `test_error_with_viewers_schedules_restart`, `test_backoff_increases`, `test_max_attempts_gives_up`, `test_recovery_counter_resets_on_successful_start` | PASS |
 | INV-MULTICHANNEL-ISOLATION-001 | `TestConcurrentCompilationIsolation` | `test_concurrent_3_channels_no_contamination`, `test_concurrent_repeated_stability` | PASS |
+| INV-EPG-HORIZON-COVERAGE-001 | `TestInvEpgHorizonCoverage001Tier3` | `test_horizon_extends_as_daemon_compiles` | PASS |
 
 ### Full Matrix (Aspirational + Implemented)
 
@@ -279,6 +302,8 @@ All test definitions in sections 6–7 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-BLOCK-SEGMENT-CONSERVATION-001 | BLOCK-CONSERVATION-001..004 | ScheduledBlock |
 | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 (structural) | PLAYLOG-BATCHED-003, PLAYLOG-BATCHED-004, PLAYLOG-BATCHED-005 | PlaylistEvent |
 | INV-HLS-DISCONTINUITY-MARKER-001 (structural) | HLS-DISCONT-001 | Runtime — HLS |
+| INV-CONSTRAINT-BLACKOUT-001 | CONSTRAINT-BLACKOUT-001..007 | ScheduleConstraints |
+| INV-CONSTRAINT-EVALUATION-IDEMPOTENT-001 | CONSTRAINT-IDEMPOTENT-001..003 | ScheduleConstraints |
 
 #### Tier 2 — Scheduling Logic
 
@@ -304,6 +329,17 @@ All test definitions in sections 6–7 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-ASRUN-TRACEABILITY-001 | CROSS-003, CROSS-004 | Cross-cutting |
 | INV-HLS-DISCONTINUITY-MARKER-001 (logic) | HLS-DISCONT-002, HLS-DISCONT-003 | Runtime — HLS |
 | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 (logic) | PLAYLOG-BATCHED-001, PLAYLOG-BATCHED-002, PLAYLOG-BATCHED-006 | PlaylistEvent |
+| INV-CONSTRAINT-ADJACENCY-001 | CONSTRAINT-ADJ-001..008 | ScheduleConstraints |
+| INV-CONSTRAINT-CONTENT-RESTRICTION-001 | CONSTRAINT-RESTRICT-001..006 | ScheduleConstraints |
+| INV-COMPILE-NO-FUTURE-INFLUENCE-001 | COMPILE-FUTURE-001 | ScheduleCompiler |
+| INV-COMPILE-CHRONOLOGICAL-ORDER-001 | COMPILE-CHRONO-001 | ScheduleCompiler |
+| INV-COMPILE-NO-HORIZON-GLOBAL-001 | COMPILE-HORIZON-001 | ScheduleCompiler |
+| INV-COMPILE-DETERMINISTIC-001 | COMPILE-DETERM-001..003 | ScheduleCompiler |
+| INV-REVISION-NONEMPTY-PROGRAMMED-001 | REVISION-NONEMPTY-001 | ScheduleRevision |
+| INV-STARTUP-POISON-DETECTION-001 | STARTUP-POISON-001, STARTUP-POISON-002 | Cross-cutting |
+| INV-RUNTIME-CACHE-DERIVED-001 | CACHE-DERIVED-001, CACHE-DERIVED-002 | ScheduleCompiler |
+| INV-CARRY-IN-DAY-MINUS-ONE-ONLY-001 | CARRY-IN-D1-001 | ScheduleCompiler |
+| INV-PLAYLOG-NO-RETROACTIVE-FILL-001 | PLAYLOG-NO-RETRO-001 | Cross-cutting |
 
 #### Tier 3 — Runtime and Integration
 
@@ -2057,6 +2093,12 @@ The following domain tables group tests by functional area. Each test is classif
 | TL-CONT-002 | INV-TIMELINE-CONTINUITY-001 | LAW-GRID | No uncovered time between first block start and last block end |
 | TL-EPG-001 | INV-TIMELINE-EPG-PLAYOUT-AGREE-001 | LAW-CONTENT-AUTHORITY | EPG program title matches playout block content at same T |
 | TL-EPG-002 | INV-TIMELINE-EPG-PLAYOUT-AGREE-001 | LAW-CONTENT-AUTHORITY | EPG start time matches playout block start time at same T |
+| TL-EPG-HC-001 | INV-EPG-HORIZON-COVERAGE-001 | LAW-DERIVATION, LAW-LIVENESS | Compiled-but-unpersisted day returns EPG data from in-memory blocks |
+| TL-EPG-HC-002 | INV-EPG-HORIZON-COVERAGE-001 | LAW-DERIVATION | Date beyond horizon returns empty list (not error) |
+| TL-EPG-HC-003 | INV-EPG-HORIZON-COVERAGE-001 | LAW-DERIVATION | Date within horizon with no compiled blocks returns empty list |
+| TL-EPG-HC-004 | INV-EPG-HORIZON-COVERAGE-001, INV-EPG-READS-CANONICAL-SCHEDULE-001 | LAW-DERIVATION | DB data preferred over in-memory blocks |
+| TL-EPG-HC-005 | INV-EPG-HORIZON-COVERAGE-001, INV-SCHEDULE-PREWARM-001 | LAW-LIVENESS | EPG read path does not trigger compilation |
+| TL-EPG-HC-006 | INV-EPG-HORIZON-COVERAGE-001 | LAW-DERIVATION, LAW-LIVENESS | EPG horizon extends as scheduler daemon compiles future days |
 | TL-BOUND-001 | INV-TIMELINE-BOUNDARY-IMMUTABLE-001 | LAW-IMMUTABILITY | Timeline entries with start < T₍boundary₎ unchanged after scheduling operation |
 | TL-BOUND-002 | INV-TIMELINE-BOUNDARY-IMMUTABLE-001 | LAW-IMMUTABILITY | Boundary established before scheduling operation begins |
 | TL-JIP-001 | INV-TIMELINE-RESTART-IDENTICAL-001, INV-TIMELINE-LONGFORM-INVIOLATE-001 | LAW-CONTENT-AUTHORITY, LAW-TIMELINE | JIP offset (T₂ - Tₛ) consistent across restart for same program |

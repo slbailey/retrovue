@@ -31,7 +31,7 @@ Generate a ScheduleDay from a plan that has a known gap (upstream `INV-PLAN-FULL
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_constitution.py::TestInvScheduledayNoGaps001`
+- `pkg/core/tests/contracts/scheduling/test_inv_scheduleday_no_gaps.py::TestInvScheduledayNoGaps001`
 
 ## Enforcement Evidence
 

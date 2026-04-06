@@ -30,11 +30,11 @@ Inject a deterministic clock set to a known time T. Generate an ExecutionEntry. 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_playlog_masterclock_aligned.py`
+- `pkg/core/tests/contracts/scheduling/test_inv_playlog_masterclock_aligned.py`
 
 ## Enforcement Evidence
 
 - `HorizonManager` and `ScheduleManagerService` accept an explicit clock dependency (injected `MasterClock` or `DeterministicClock`) — `ExecutionEntry` timestamps (`start_utc_ms`, `end_utc_ms`) are derived from this injected clock, not from `datetime.utcnow()` or equivalent.
 - **Testable by clock substitution:** All contract tests in `test_scheduling_constitution.py` use `contract_clock` (a `DeterministicClock` fixture) — timestamp derivation from a non-injected source would produce non-deterministic test failures, providing continuous regression coverage.
 - `TestInvTransmissionlogGridAlignment001` in `test_scheduling_constitution.py` validates grid-aligned timestamps are clock-derived (rejects off-grid, accepts PDS rollover and cross-midnight).
-- Dedicated contract test (`test_inv_playlog_masterclock_aligned.py`) is referenced in `## Required Tests` but not yet implemented in the current tree.
+- Dedicated contract test `test_inv_playlog_masterclock_aligned.py` is now implemented with PLAYLOG-002, PLAYLOG-003, and a full-day derivation test — all PASS.
