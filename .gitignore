@@ -198,3 +198,11 @@ Teaser.mp4
 secrets.env
 youtube_credentials.json
 youtube_token.json
+
+# SSH keys and config
+.ssh/
+id_ed25519
+id_ed25519.pub
+id_rsa
+id_rsa.pub
+known_hosts

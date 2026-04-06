@@ -39,6 +39,7 @@ Always merge `relationships/cross-domain.yaml` when tracing cross-domain seams.
 | container | entity | `entities/ingest/container.md` | ingest | `by-domain/ingest.yaml`, `cross-domain.yaml` (ambiguity) |
 | discovered-item | entity | `entities/ingest/discovered-item.md` | ingest | `by-domain/ingest.yaml` |
 | asset | entity | `entities/ingest/asset.md` | ingest | `by-domain/ingest.yaml`, `cross-domain.yaml` |
+| production-server | entity | `entities/systems/production-server.md` | systems | — |
 
 ---
 
