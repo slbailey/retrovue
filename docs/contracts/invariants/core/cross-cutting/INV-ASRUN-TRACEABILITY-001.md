@@ -50,6 +50,7 @@ Create an AsRun record without a `playlog_event_id`. Assert creation is rejected
 ## Required Tests
 
 - `pkg/core/tests/contracts/test_inv_asrun_traceability.py`
+- `pkg/core/tests/contracts/scheduling/test_inv_asrun_traceability.py` (CROSS-003: orphan rejected, CROSS-004: full chain traversable)
 
 ## Enforcement Evidence
 
