@@ -37,4 +37,7 @@ Planning fault. EPG/playout disagreement when EPG recompiles independently.
 
 ## Enforcement Evidence
 
-TODO
+- `web/api/epg.py` calls `DslScheduleService.get_canonical_epg()` — no `compile_schedule` import or call.
+- `program_director.py:get_epg_all` calls `DslScheduleService.get_canonical_epg()` — no `compile_schedule` call.
+- AST-inspection contract tests enforce both modules: `test_pd_epg_handler_does_not_call_compile_schedule`, `test_epg_api_module_does_not_call_compile_schedule`.
+- Timezone contract test enforces no hardcoded `America/New_York` in `epg.py`: `test_epg_api_module_does_not_hardcode_timezone`.

@@ -112,7 +112,7 @@ class TestInvEpgReadsCanonical001:
     """INV-EPG-READS-CANONICAL-SCHEDULE-001 contract tests."""
 
     # Tier: 2 | Scheduling logic invariant
-    def test_epg_module_does_not_import_compile_schedule(self):
+    def test_pd_epg_handler_does_not_call_compile_schedule(self):
         """The /api/epg handler in program_director.py MUST NOT call
         compile_schedule(). Verified via AST inspection."""
         pd_path = SRC_ROOT / "runtime" / "program_director.py"
@@ -139,6 +139,46 @@ class TestInvEpgReadsCanonical001:
         assert violations == [], (
             f"EPG handler calls compile_schedule() directly:\n"
             + "\n".join(f"  - {v}" for v in violations)
+        )
+
+    # Tier: 2 | Scheduling logic invariant
+    def test_epg_api_module_does_not_call_compile_schedule(self):
+        """web/api/epg.py MUST NOT call compile_schedule().
+        All EPG data must come from the canonical DB schedule.
+        Verified via AST inspection of the entire module."""
+        epg_path = SRC_ROOT / "web" / "api" / "epg.py"
+        source = epg_path.read_text()
+        tree = ast.parse(source, filename=str(epg_path))
+
+        violations = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                func = node.func
+                if isinstance(func, ast.Name) and func.id == "compile_schedule":
+                    violations.append(
+                        f"epg.py:{node.lineno} — compile_schedule() call"
+                    )
+                elif isinstance(func, ast.Attribute) and func.attr == "compile_schedule":
+                    violations.append(
+                        f"epg.py:{node.lineno} — compile_schedule() call"
+                    )
+
+        assert violations == [], (
+            f"web/api/epg.py calls compile_schedule() directly, "
+            f"violating INV-EPG-READS-CANONICAL-SCHEDULE-001:\n"
+            + "\n".join(f"  - {v}" for v in violations)
+        )
+
+    # Tier: 2 | Scheduling logic invariant
+    def test_epg_api_module_does_not_hardcode_timezone(self):
+        """web/api/epg.py MUST NOT hardcode America/New_York.
+        It must use each channel's schedule_config['channel_tz']."""
+        epg_path = SRC_ROOT / "web" / "api" / "epg.py"
+        source = epg_path.read_text()
+
+        assert "America/New_York" not in source, (
+            "epg.py hardcodes America/New_York instead of reading "
+            "channel_tz from channel schedule_config"
         )
 
     # Tier: 2 | Scheduling logic invariant
