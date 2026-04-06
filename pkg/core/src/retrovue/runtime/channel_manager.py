@@ -405,6 +405,8 @@ class ChannelManager:
 
         # INV-VIEWER-LIFECYCLE: Thread-safe viewer count transitions
         self._viewer_lock: threading.Lock = threading.Lock()
+        # INV-LIFECYCLE-OBSERVABILITY-001: session that triggered current channel activation
+        self._trigger_session_id: str | None = None
 
         # BlockPlan only
         self._blockplan_mode: bool = True
@@ -514,6 +516,7 @@ class ChannelManager:
                     self._first_segment_logged = True
                     self._emit_lifecycle_event(
                         "first_segment",
+                        event_scope="channel",
                         segment_index=last,
                         viewer_count=self.runtime_state.viewer_count,
                     )
@@ -522,25 +525,29 @@ class ChannelManager:
     # Phase 8.5a: Structured lifecycle event emission (DEBUG, gated)
     # ------------------------------------------------------------------
 
-    def _emit_lifecycle_event(self, event: str, **fields: object) -> None:
+    def _emit_lifecycle_event(self, event: str, *, event_scope: str, **fields: object) -> None:
         """Emit a structured DEBUG lifecycle event. All fields are key=value.
 
+        INV-LIFECYCLE-OBSERVABILITY-001: every event includes event_scope.
+        Session-scoped events carry session_id; channel-scoped events carry
+        channel_id and optionally trigger_session_id.
+
         Events:
-            channel_activated  — producer started successfully
-            first_segment      — first HLS segment pushed to ring
-            viewer_join        — viewer session registered
-            viewer_leave       — viewer session removed
-            linger_start       — linger grace period started
-            linger_expire      — linger fired, no viewers remain
-            linger_cancel      — linger cancelled (viewer reconnected)
-            teardown           — stop_channel() entered
+            channel_activated  — producer started successfully (channel)
+            first_segment      — first HLS segment pushed to ring (channel)
+            viewer_join        — viewer session registered (session)
+            viewer_leave       — viewer session removed (session)
+            linger_start       — linger grace period started (channel)
+            linger_expire      — linger fired, no viewers remain (channel)
+            linger_cancel      — linger cancelled (viewer reconnected) (channel)
+            teardown           — stop_channel() entered (channel)
         """
         if not self._logger.isEnabledFor(10):  # logging.DEBUG == 10
             return
         parts = " ".join(f"{k}={v}" for k, v in fields.items())
         self._logger.debug(
-            "[lifecycle] channel=%s event=%s %s",
-            self.channel_id, event, parts,
+            "[lifecycle] channel=%s event=%s event_scope=%s %s",
+            self.channel_id, event, event_scope, parts,
         )
 
     def stop_channel(self, reason: str = "channel_stop") -> None:
@@ -553,7 +560,7 @@ class ChannelManager:
         "last_viewer_left" only when stopping due to viewer count 1→0; use
         "channel_stop" for admin/explicit stop.
         """
-        self._emit_lifecycle_event("teardown", reason=reason, viewer_count=self.runtime_state.viewer_count)
+        self._emit_lifecycle_event("teardown", event_scope="channel", reason=reason, viewer_count=self.runtime_state.viewer_count)
         self._logger.debug(
             "[teardown] stopping producer for channel %s (reason=%s)", self.channel_id, reason
         )
@@ -685,6 +692,7 @@ class ChannelManager:
             # Log for debugging "who" was counted as a viewer (e.g. phantom vs real TS client).
             self._emit_lifecycle_event(
                 "viewer_join",
+                event_scope="session",
                 session_id=session_id,
                 viewer_count=self.runtime_state.viewer_count,
             )
@@ -707,7 +715,7 @@ class ChannelManager:
                     "INV-VIEWER-LIFECYCLE-001: First viewer joined channel %s, starting AIR",
                     self.channel_id
                 )
-                self.on_first_viewer()
+                self.on_first_viewer(trigger_session_id=session_id)
 
             # If we have an active producer, surface its endpoint for new viewers.
             if self.active_producer:
@@ -730,6 +738,7 @@ class ChannelManager:
             # Log for debugging "who" was counted as a viewer when they left.
             self._emit_lifecycle_event(
                 "viewer_leave",
+                event_scope="session",
                 session_id=session_id,
                 viewer_count=self.runtime_state.viewer_count,
             )
@@ -745,7 +754,7 @@ class ChannelManager:
                     "INV-VIEWER-LIFECYCLE-002: Last viewer left channel %s, stopping AIR",
                     self.channel_id
                 )
-                self.on_last_viewer()
+                self.on_last_viewer(trigger_session_id=session_id)
 
     # Phase 0 Contract Methods
     def tune_in(self, session_id: str, session_info: dict[str, Any] | None = None) -> None:
@@ -769,20 +778,22 @@ class ChannelManager:
         """
         self.viewer_leave(session_id)
 
-    def on_first_viewer(self) -> None:
+    def on_first_viewer(self, trigger_session_id: str | None = None) -> None:
         """
         Phase 0 contract: Called when the first viewer connects (viewer count goes 0 -> 1).
-        
+
         This ensures the Producer is started when the first viewer arrives.
         """
         if self.runtime_state.viewer_count == 0:
             return  # Not actually first viewer
-        
+
+        # Store trigger_session_id for channel_activated event in _ensure_producer_running
+        self._trigger_session_id = trigger_session_id
         # Ensure producer is running for first viewer
         if self.runtime_state.viewer_count == 1:
             self._ensure_producer_running()
 
-    def on_last_viewer(self) -> None:
+    def on_last_viewer(self, trigger_session_id: str | None = None) -> None:
         """
         Phase 0 contract: Called when the last viewer disconnects (viewer count goes 1 -> 0).
 
@@ -791,13 +802,19 @@ class ChannelManager:
         """
         if self.runtime_state.viewer_count != 0:
             return  # Not actually last viewer
-        self._start_linger()
+        self._start_linger(trigger_session_id=trigger_session_id)
 
-    def _start_linger(self) -> None:
+    def _start_linger(self, trigger_session_id: str | None = None) -> None:
         """Start linger grace period. Producer stays alive until timeout."""
         if self._linger_handle is not None:
             return  # already lingering
-        self._emit_lifecycle_event("linger_start", linger_seconds=self.LINGER_SECONDS, viewer_count=self.runtime_state.viewer_count)
+        linger_fields: dict[str, object] = {
+            "linger_seconds": self.LINGER_SECONDS,
+            "viewer_count": self.runtime_state.viewer_count,
+        }
+        if trigger_session_id is not None:
+            linger_fields["trigger_session_id"] = trigger_session_id
+        self._emit_lifecycle_event("linger_start", event_scope="channel", **linger_fields)
         self._logger.debug(
             "[channel %s] LINGER_STARTED %ds", self.channel_id, self.LINGER_SECONDS
         )
@@ -820,7 +837,7 @@ class ChannelManager:
         self._linger_handle = None
         self._linger_deadline = None
         if self.runtime_state.viewer_count == 0:
-            self._emit_lifecycle_event("linger_expire", viewer_count=0)
+            self._emit_lifecycle_event("linger_expire", event_scope="channel", viewer_count=0)
             self._logger.info(
                 "[channel %s] LINGER_EXPIRED (0 viewers); stopping producer and tearing down",
                 self.channel_id,
@@ -835,7 +852,7 @@ class ChannelManager:
             self._linger_handle.cancel()
             self._linger_handle = None
             self._linger_deadline = None
-            self._emit_lifecycle_event("linger_cancel", viewer_count=self.runtime_state.viewer_count)
+            self._emit_lifecycle_event("linger_cancel", event_scope="channel", viewer_count=self.runtime_state.viewer_count)
             self._logger.info(
                 "[channel %s] LINGER_CANCELLED viewer_reconnected", self.channel_id
             )
@@ -966,11 +983,18 @@ class ChannelManager:
             )
 
         # Producer is up. Record runtime state.
+        activated_fields: dict[str, object] = {
+            "mode": required_mode,
+            "viewer_count": self.runtime_state.viewer_count,
+            "jip_offset_ms": jip_offset_ms,
+        }
+        trigger_sid = getattr(self, "_trigger_session_id", None)
+        if trigger_sid is not None:
+            activated_fields["trigger_session_id"] = trigger_sid
         self._emit_lifecycle_event(
             "channel_activated",
-            mode=required_mode,
-            viewer_count=self.runtime_state.viewer_count,
-            jip_offset_ms=jip_offset_ms,
+            event_scope="channel",
+            **activated_fields,
         )
         self.runtime_state.producer_status = "running"
         self.runtime_state.producer_started_at = station_time
