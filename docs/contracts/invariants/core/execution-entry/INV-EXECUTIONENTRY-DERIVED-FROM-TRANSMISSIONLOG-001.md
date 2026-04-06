@@ -33,6 +33,7 @@ Attempt to create an ExecutionEntry without a PlaylistEvent reference and withou
 ## Required Tests
 
 - `pkg/core/tests/contracts/test_scheduling_constitution.py::TestInvExecutionentryDerivedFromTransmissionlog001`
+- `pkg/core/tests/contracts/scheduling/test_inv_execution_entry_derivation.py` (PLAYLOG-008: orphan rejected, PLAYLOG-009: override accepted)
 
 ## Enforcement Evidence
 

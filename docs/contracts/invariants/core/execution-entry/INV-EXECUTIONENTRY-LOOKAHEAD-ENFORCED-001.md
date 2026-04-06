@@ -40,6 +40,7 @@ Using FakeAdvancingClock: advance the clock without simulating any playout consu
 - `pkg/core/tests/contracts/test_inv_horizon_proactive_extend.py` (TPX-005: idempotent per tick; no duplicate at same clock)
 - `pkg/core/tests/contracts/test_inv_horizon_execution_min.py` (THEM-001: depth meets minimum after initialization)
 - `pkg/core/tests/contracts/test_inv_horizon_execution_min.py` (THEM-002: depth maintained across 24h walk)
+- `pkg/core/tests/contracts/scheduling/test_inv_horizon_clock_driven.py` (HORIZON-001: clock-driven extension, HORIZON-002: no redundant extension)
 
 ## Enforcement Evidence
 

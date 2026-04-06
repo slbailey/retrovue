@@ -38,6 +38,7 @@ Using a deterministic clock: construct an ExecutionEntry sequence extending to t
 - `pkg/core/tests/contracts/test_inv_horizon_execution_min.py` (THEM-002: depth maintained across 48-block 24-hour walk)
 - `pkg/core/tests/contracts/test_inv_horizon_execution_min.py` (THEM-003: pipeline failure produces observable depth deficit and planning fault)
 - `pkg/core/tests/contracts/test_inv_horizon_execution_min.py` (THEM-004: depth maintained across programming day boundary)
+- `pkg/core/tests/contracts/scheduling/test_inv_execution_entry_lookahead.py` (PLAYLOG-004: shortfall triggers extension, PLAYLOG-005: exact depth compliant)
 
 ## Enforcement Evidence
 

@@ -34,6 +34,7 @@ Construct an ExecutionEntry sequence with a deliberate 10-minute gap at a known 
 ## Required Tests
 
 - `pkg/core/tests/contracts/test_scheduling_constitution.py::TestInvExecutionentryNoGaps001`
+- `pkg/core/tests/contracts/scheduling/test_inv_execution_entry_no_gaps_runtime.py` (PLAYLOG-006: gap detected, PLAYLOG-007: upstream traceability)
 
 ## Enforcement Evidence
 
