@@ -58,7 +58,7 @@ def _make_asset(**overrides) -> MagicMock:
         duration_ms=None,
         video_codec=None,
         audio_codec=None,
-        container=None,
+        container_format=None,
         markers=[],
         last_enricher_checksum=None,
         updated_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
@@ -117,7 +117,7 @@ class TestEnrichAssetClearsMetadata:
             duration_ms=1_320_000,
             video_codec="h264",
             audio_codec="aac",
-            container="mp4",
+            container_format="mp4",
         )
         enricher = _make_enricher(labels_to_add=[
             "duration_ms:900000",
@@ -133,7 +133,7 @@ class TestEnrichAssetClearsMetadata:
         assert asset.duration_ms is None
         assert asset.video_codec is None
         assert asset.audio_codec is None
-        assert asset.container is None
+        assert asset.container_format is None
         assert asset.state == "enriching"
         assert result.new_state == "enriching"
 
@@ -145,7 +145,7 @@ class TestEnrichAssetClearsMetadata:
             duration_ms=1_320_000,
             video_codec="h264",
             audio_codec="aac",
-            container="mp4",
+            container_format="mp4",
         )
         enricher = _make_enricher()  # produces no labels
         pipeline = [(0, "noop", enricher)]
@@ -155,7 +155,7 @@ class TestEnrichAssetClearsMetadata:
         assert asset.duration_ms is None
         assert asset.video_codec is None
         assert asset.audio_codec is None
-        assert asset.container is None
+        assert asset.container_format is None
         assert asset.state == "enriching"
         assert result.new_state == "enriching"
 

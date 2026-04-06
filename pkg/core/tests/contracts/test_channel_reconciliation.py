@@ -513,6 +513,10 @@ class TestChannelReconcileIdempotent:
             with db_session() as db:
                 sp = db.begin_nested()
 
+                # Clear any pre-existing channels so the system is truly empty
+                db.execute(text("DELETE FROM channels"))
+                db.flush()
+
                 reconcile_channels(db, set())
                 assert _count(db, "channels") == 0
 
@@ -581,6 +585,10 @@ class TestChannelReconcileEmptyGuard:
                 sp = db.begin_nested()
 
                 # No channels in DB, empty config — should succeed without error
+                # Clear any pre-existing channels so the DB is truly empty
+                db.execute(text("DELETE FROM channels"))
+                db.flush()
+
                 reconcile_channels(db, set())
                 assert _count(db, "channels") == 0
 

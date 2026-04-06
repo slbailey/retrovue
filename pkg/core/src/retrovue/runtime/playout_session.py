@@ -36,8 +36,13 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 import grpc
+from grpc_health.v1 import health_pb2, health_pb2_grpc
 
 from retrovue.runtime.clock import MasterClock
+
+# INV-GRPC-HEALTH-CHECK-001: Default readiness timeout (seconds).
+# Overridden by playout.grpc.readiness_timeout_seconds config key.
+DEFAULT_READINESS_TIMEOUT_SECONDS = 10.0
 
 
 class FeedResult(Enum):
@@ -251,6 +256,7 @@ class PlayoutSession:
         on_session_end: Optional[Callable[[str], None]] = None,
         on_block_started: Optional[Callable[[str], None]] = None,
         evidence_endpoint: str = "",
+        readiness_timeout_seconds: float = DEFAULT_READINESS_TIMEOUT_SECONDS,
     ):
         """
         Initialize PlayoutSession.
@@ -266,6 +272,7 @@ class PlayoutSession:
             on_session_end: Callback when session ends (receives reason)
             on_block_started: Callback when a block starts (receives block_id)
             evidence_endpoint: host:port for evidence gRPC, empty = disabled
+            readiness_timeout_seconds: playout.grpc.readiness_timeout_seconds
         """
         self.channel_id = channel_id
         self.channel_id_int = channel_id_int
@@ -278,6 +285,7 @@ class PlayoutSession:
         self.on_session_end = on_session_end
         self.on_block_started = on_block_started
         self._evidence_endpoint = evidence_endpoint
+        self._readiness_timeout_seconds = readiness_timeout_seconds
 
         self._state = SessionState()
         self._lock = threading.Lock()
@@ -373,9 +381,13 @@ class PlayoutSession:
                         env=popen_env,
                     )
 
-                # Wait for gRPC to be ready (longer timeout under heaptrack)
-                _grpc_timeout = 30.0 if _os.environ.get("AIR_MEM_HEAPTRACK") else 10.0
-                if not self._wait_for_grpc(timeout_s=_grpc_timeout):
+                # INV-GRPC-HEALTH-CHECK-001: Configurable readiness timeout.
+                # playout.grpc.readiness_timeout_seconds (default 10.0s),
+                # extended under heaptrack profiling.
+                _readiness_timeout = self._readiness_timeout_seconds
+                if _os.environ.get("AIR_MEM_HEAPTRACK"):
+                    _readiness_timeout = max(_readiness_timeout, 30.0)
+                if not self._wait_for_grpc(timeout_s=_readiness_timeout):
                     raise RuntimeError("AIR gRPC did not become ready")
 
                 # Attach stream (UDS socket)
@@ -393,20 +405,38 @@ class PlayoutSession:
                 return False
 
     def _wait_for_grpc(self, timeout_s: float) -> bool:
-        """Wait for AIR gRPC to become ready."""
+        """Wait for AIR gRPC to become ready using health check probing.
+
+        INV-GRPC-HEALTH-CHECK-001: Uses grpc.health.v1.Health/Check with
+        service name 'retrovue.playout.v1.PlayoutControl' instead of
+        GetVersion for readiness detection.
+
+        The readiness_timeout is configurable via
+        playout.grpc.readiness_timeout_seconds (default 10.0s).
+        """
         deadline = time.time() + timeout_s
         while time.time() < deadline:
             try:
                 self._grpc_channel = grpc.insecure_channel(self._state.grpc_addr)
                 self._stub = playout_pb2_grpc.PlayoutControlStub(self._grpc_channel)
 
-                # Try GetVersion to check connectivity
-                response = self._stub.GetVersion(
-                    playout_pb2.ApiVersionRequest(),
-                    timeout=2.0
+                # INV-GRPC-HEALTH-CHECK-001: Probe health service for readiness
+                health_stub = health_pb2_grpc.HealthStub(self._grpc_channel)
+                request = health_pb2.HealthCheckRequest(
+                    service="retrovue.playout.v1.PlayoutControl",
                 )
-                logger.debug(f"[PlayoutSession:{self.channel_id}] AIR version: {response.version}")
-                return True
+                response = health_stub.Check(request, timeout=2.0)
+                if response.status == health_pb2.HealthCheckResponse.SERVING:
+                    logger.debug(
+                        "[PlayoutSession:%s] AIR health check: SERVING",
+                        self.channel_id,
+                    )
+                    return True
+                logger.debug(
+                    "[PlayoutSession:%s] AIR health check: status=%s, retrying",
+                    self.channel_id, response.status,
+                )
+                time.sleep(0.2)
             except grpc.RpcError:
                 time.sleep(0.2)
         return False

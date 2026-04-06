@@ -9,8 +9,8 @@ schedule data contaminates earlier-day compilation.
 Uses real DslScheduleService, real DB, real compilation pipeline.
 No mocking of core scheduling logic.
 
-Expected behavior against CURRENT code: FAIL (bug reproduction)
-Expected behavior after fix: PASS
+These tests validate that the current implementation correctly
+isolates per-day compilation and carry-in from future-day data.
 """
 
 from __future__ import annotations
@@ -208,27 +208,15 @@ def _make_service(dsl_path: str, slug: str, broadcast_day: str) -> DslScheduleSe
 
 @pytest.mark.contract
 class TestIntegrationFutureContamination:
-    """Reproduces the real outage: future-day blocks contaminate
-    earlier-day compilation via global carry-in accumulator."""
+    """Validates that future-day blocks do not contaminate
+    earlier-day compilation via carry-in accumulator.
+    INV-COMPILE-NO-FUTURE-INFLUENCE-001."""
 
     def test_future_day_revision_suppresses_target_day_blocks(self):
-        """BUG REPRODUCTION:
-        - DB has revision for D+2 (Mar 29) with 48 items
-        - DB has NO revision for D (Mar 27) or D+1 (Mar 28)
-        - Service starts with broadcast_day=Mar 27, horizon=3 days
-
-        CURRENT BEHAVIOR (BUG):
-        - _load_existing_timeline loads Mar 29 blocks
-        - loaded_blocks[-1].end_utc_ms = Mar 30 06:00
-        - Missing days = [Mar 27, Mar 28]
-        - Mar 27 compile: carry-in = Mar 30 06:00 → ALL blocks dropped
-        - Mar 28 compile: carry-in = Mar 30 06:00 → ALL blocks dropped
-        - Channel has zero blocks → 503
-
-        CORRECT BEHAVIOR (after fix):
-        - Mar 27 compile: carry-in from Mar 26 (none → 0) → 48 blocks
-        - Mar 28 compile: carry-in from Mar 27 (ending Mar 28 06:00) → 48 blocks
-        """
+        """When DB has revision for D+2 but NOT for D or D+1,
+        D must produce blocks from its own DSL compilation with
+        carry-in from D-1 only (none → 0), not from D+2.
+        INV-COMPILE-NO-FUTURE-INFLUENCE-001."""
         slug = f"test-future-contam-{uuid_mod.uuid4().hex[:8]}"
         dsl_path = _make_dsl_file(slug)
 
@@ -282,8 +270,9 @@ class TestIntegrationFutureContamination:
                 _cleanup(db, slug)
 
     def test_target_day_with_d_minus_1_and_future_day(self):
-        """Correct scenario: D-1 exists, D+2 exists, D is missing.
-        D must use D-1 carry-in, not D+2."""
+        """When D-1 and D+2 both have revisions but D is missing,
+        carry-in for D must come from D-1 only, not D+2.
+        INV-CARRY-IN-AUTHORITY-001."""
         slug = f"test-d-minus-1-future-{uuid_mod.uuid4().hex[:8]}"
         dsl_path = _make_dsl_file(slug)
 
@@ -330,11 +319,13 @@ class TestIntegrationFutureContamination:
 
 @pytest.mark.contract
 class TestIntegrationHorizonCarryIn:
-    """Verifies that carry-in is per-day, not horizon-global."""
+    """Verifies that carry-in is per-day, not horizon-global.
+    INV-COMPILE-DAY-ISOLATION-001."""
 
     def test_loaded_blocks_from_multiple_days_do_not_cross_contaminate(self):
-        """When DB has days D-1 and D+2 but not D,
-        the carry-in for D must come from D-1 only."""
+        """Loading blocks from multiple days must not allow D+N blocks
+        to influence D's carry-in computation.
+        INV-COMPILE-DAY-ISOLATION-001."""
         slug = f"test-horizon-carry-{uuid_mod.uuid4().hex[:8]}"
         dsl_path = _make_dsl_file(slug)
 

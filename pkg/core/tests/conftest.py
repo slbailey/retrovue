@@ -56,5 +56,8 @@ def _force_test_db(monkeypatch):
 
     monkeypatch.setattr(db_module, "SessionLocal", TestSessionLocal)
 
+    # uow.session() uses late-binding via db module, so patching
+    # db_module.SessionLocal is sufficient.
+
     # optional: make get_engine() return the test engine when called again
     monkeypatch.setattr(db_module, "get_engine", lambda for_test=False, db_url=None: engine)

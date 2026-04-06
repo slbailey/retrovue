@@ -15,7 +15,7 @@ from collections.abc import Generator
 
 from sqlalchemy.orm import Session
 
-from .db import SessionLocal
+from . import db as _db_module
 
 
 @contextlib.contextmanager
@@ -36,7 +36,7 @@ def session() -> Generator[Session, None, None]:
             db.add(some_object)
             # transaction will be committed automatically on success
     """
-    db = SessionLocal()
+    db = _db_module.SessionLocal()
     try:
         yield db
         db.commit()
@@ -60,7 +60,7 @@ def get_db() -> Generator[Session, None, None]:
             # perform database operations
             # transaction will be committed automatically on success
     """
-    db = SessionLocal()
+    db = _db_module.SessionLocal()
     try:
         yield db
         db.commit()

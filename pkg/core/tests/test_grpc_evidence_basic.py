@@ -34,20 +34,23 @@ _SRC_DIR = str(Path(__file__).resolve().parents[1] / "src")
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
-from retrovue.runtime.evidence_server import EvidenceServicer  # noqa: E402
+from retrovue.runtime.evidence_server import DurableAckStore, EvidenceServicer  # noqa: E402
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 
 @pytest.fixture()
-def evidence_server():
+def evidence_server(tmp_path):
     """Start evidence gRPC server on an ephemeral port, yield (server, port)."""
     from concurrent import futures
 
+    asrun_dir = str(tmp_path / "asrun")
+    ack_dir = str(tmp_path / "ack")
+    ack_store = DurableAckStore(ack_dir=ack_dir)
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
     pb2_grpc.add_ExecutionEvidenceServiceServicer_to_server(
-        EvidenceServicer(), server
+        EvidenceServicer(ack_store=ack_store, asrun_dir=asrun_dir), server
     )
     port = server.add_insecure_port("[::]:0")
     server.start()

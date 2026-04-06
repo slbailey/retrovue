@@ -86,6 +86,7 @@ def test_block_completed_delta_follows_injected_clock():
         ts_socket_path=Path("/tmp/notused"),
         program_format={"width": 1920, "height": 1080, "frame_rate": "30/1"},
         clock=clock,
+        air_binary_path=Path("/dev/null"),
     )
     # Ensure event loop can run (no real gRPC)
     session._stub = None

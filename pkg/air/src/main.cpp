@@ -165,7 +165,15 @@ void RunServer(const ServerConfig& config) {
 
   // Start the server
   std::unique_ptr<grpc::Server> server(builder.BuildAndStart());
-  
+
+  // INV-GRPC-HEALTH-CHECK-001: Report SERVING for the PlayoutControl service.
+  // Core uses this specific service name for readiness probing.
+  auto* health_svc = server->GetHealthCheckService();
+  if (health_svc) {
+    health_svc->SetServingStatus(
+        "retrovue.playout.v1.PlayoutControl", true);
+  }
+
   std::cout << "==============================================================" << std::endl;
   std::cout << "RetroVue Playout Engine (Phase 3)" << std::endl;
   std::cout << "==============================================================" << std::endl;

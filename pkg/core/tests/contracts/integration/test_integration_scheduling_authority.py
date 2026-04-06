@@ -20,9 +20,9 @@ Invariants under test:
   INV-STARTUP-POISON-DETECTION-001
   INV-REVISION-NONEMPTY-PROGRAMMED-001
 
-Some tests are EXPECTED TO FAIL against the current implementation.
-They reproduce real outage conditions documented in
-  docs/analysis/source_of_truth_current_state.md
+All tests validate that the current implementation correctly handles
+these invariants. See docs/contracts/test-scenarios/TIMELINE-INVARIANT-TEST-SCENARIOS.md
+for the full scenario descriptions.
 """
 
 from __future__ import annotations
@@ -304,8 +304,7 @@ def _blocks_in_range(blocks: list[ScheduledBlock], start_ms: int, end_ms: int) -
 #   5. Compiles Mar 28 with carry-in = Mar 30 06:00 → ALL 48 blocks dropped
 #   6. _blocks contains only Mar 29's blocks
 #
-# Expected CURRENT behavior: FAIL (Mar 27 has zero blocks)
-# Expected FIXED behavior: PASS (Mar 27 has 48 blocks)
+# Expected behavior: Mar 27 produces blocks from DSL compilation (PASS)
 # ===========================================================================
 
 
@@ -358,8 +357,7 @@ class TestFutureContamination:
 # Correct carry-in for Mar 27: end of Mar 26's last block = Mar 27 06:00
 # Bug carry-in for Mar 27:     end of Mar 29's last block = Mar 30 06:00
 #
-# Expected CURRENT behavior: FAIL (global accumulator contaminates)
-# Expected FIXED behavior: PASS (per-day carry-in used)
+# Expected behavior: Per-day carry-in correctly isolates D from D+2 (PASS)
 # ===========================================================================
 
 
@@ -419,8 +417,7 @@ class TestHorizonGlobalCarryIn:
 # Correct order: compile Mar 27 first, use its output as carry-in for Mar 28
 # Wrong order: compile both with the same global carry-in
 #
-# Expected CURRENT behavior: FAIL (both days get future carry-in)
-# Expected FIXED behavior: PASS (chronological, each day uses D-1 output)
+# Expected behavior: Both missing days compile with correct carry-in (PASS)
 # ===========================================================================
 
 
@@ -487,8 +484,7 @@ class TestChronologicalOrder:
 # Contract requirement: System must detect the empty revision, supersede it,
 # and rebuild. If rebuild fails, fail fast.
 #
-# Expected CURRENT behavior: FAIL (empty revision blocks recovery)
-# Expected FIXED behavior: PASS (auto-supersede + rebuild)
+# Expected behavior: Empty revision detected, superseded, rebuilt (PASS)
 # ===========================================================================
 
 

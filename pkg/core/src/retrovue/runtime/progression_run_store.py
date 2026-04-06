@@ -165,15 +165,25 @@ class DbProgressionRunStore:
             exhaustion_policy=exhaustion_policy,
             is_active=True,
         )
-        self._db.add(row)
         try:
-            self._db.flush()
+            # Use a nested savepoint so that a UniqueViolation only
+            # rolls back the INSERT, preserving the rest of the
+            # transaction's flushed work.
+            # CRITICAL: add() MUST be inside begin_nested() — if it is
+            # outside, the savepoint creation triggers a pre-flush that
+            # sends the INSERT without savepoint protection, corrupting
+            # the transaction on conflict.
+            with self._db.begin_nested():
+                self._db.add(row)
+                self._db.flush()
         except IntegrityError:
-            # A ProgressionRun with this (channel_id, run_id) already exists
-            # (e.g. created by a prior day's compilation within the same
-            # horizon build).  Roll back the failed INSERT and return the
-            # existing record.
-            self._db.rollback()
+            # A ProgressionRun with this (channel_id, run_id) already
+            # exists.  The savepoint rollback undid only the failed
+            # INSERT.  Expunge the pending object and load the winner.
+            try:
+                self._db.expunge(row)
+            except Exception:
+                pass
             existing = self.load(channel_id, run_id)
             if existing is not None:
                 logger.info(
