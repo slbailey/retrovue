@@ -44,3 +44,10 @@
 - type: depends_on
   from: { kind: ambiguity, id: program-director-import-alias }
   to: { kind: service, id: program-director }
+
+# Evidence server cross-domain: playout service depends on systems clock authority
+
+- type: depends_on
+  from: { kind: service, id: evidence-server }
+  to: { kind: service, id: master-clock }
+  note: Clock authority for ACK timestamps and evidence processing (RETA-11 injection)

@@ -568,13 +568,17 @@ Canonical contract: [delivery_hls.md](delivery_hls.md)
 
 ## Shared
 
-| Invariant | File |
-|-----------|------|
-| INV-AUDIO-CONTINUITY-NO-DROP | [invariants/shared/INV-AUDIO-CONTINUITY-NO-DROP.md](invariants/shared/INV-AUDIO-CONTINUITY-NO-DROP.md) |
-| INV-CONTENT-DEFICIT-FILL | [invariants/shared/INV-CONTENT-DEFICIT-FILL.md](invariants/shared/INV-CONTENT-DEFICIT-FILL.md) |
-| INV-CONTROL-PLANE-CADENCE | [invariants/shared/INV-CONTROL-PLANE-CADENCE.md](invariants/shared/INV-CONTROL-PLANE-CADENCE.md) |
-| INV-LOUDNESS-NORMALIZED-001 | [invariants/shared/INV-LOUDNESS-NORMALIZED-001.md](invariants/shared/INV-LOUDNESS-NORMALIZED-001.md) |
-| INV-TIME-AUTHORITY-SINGLE-SOURCE | [invariants/shared/INV-TIME-AUTHORITY-SINGLE-SOURCE.md](invariants/shared/INV-TIME-AUTHORITY-SINGLE-SOURCE.md) |
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-AUDIO-CONTINUITY-NO-DROP | [invariants/shared/INV-AUDIO-CONTINUITY-NO-DROP.md](invariants/shared/INV-AUDIO-CONTINUITY-NO-DROP.md) | LAW-LIVENESS |
+| INV-CONTENT-DEFICIT-FILL | [invariants/shared/INV-CONTENT-DEFICIT-FILL.md](invariants/shared/INV-CONTENT-DEFICIT-FILL.md) | LAW-LIVENESS |
+| INV-CONTROL-PLANE-CADENCE | [invariants/shared/INV-CONTROL-PLANE-CADENCE.md](invariants/shared/INV-CONTROL-PLANE-CADENCE.md) | LAW-LIVENESS |
+| INV-LOUDNESS-NORMALIZED-001 | [invariants/shared/INV-LOUDNESS-NORMALIZED-001.md](invariants/shared/INV-LOUDNESS-NORMALIZED-001.md) | LAW-LIVENESS |
+| INV-TIME-AUTHORITY-SINGLE-SOURCE | [invariants/shared/INV-TIME-AUTHORITY-SINGLE-SOURCE.md](invariants/shared/INV-TIME-AUTHORITY-SINGLE-SOURCE.md) | LAW-CLOCK |
+| INV-GRPC-DEADLINE-POLICY-001 | [invariants/shared/INV-GRPC-DEADLINE-POLICY-001.md](invariants/shared/INV-GRPC-DEADLINE-POLICY-001.md) | LAW-LIVENESS, LAW-CLOCK |
+| INV-GRPC-FEED-BACKPRESSURE-001 | [invariants/shared/INV-GRPC-FEED-BACKPRESSURE-001.md](invariants/shared/INV-GRPC-FEED-BACKPRESSURE-001.md) | LAW-LIVENESS |
+| INV-GRPC-GRACEFUL-DRAIN-001 | [invariants/shared/INV-GRPC-GRACEFUL-DRAIN-001.md](invariants/shared/INV-GRPC-GRACEFUL-DRAIN-001.md) | LAW-LIVENESS, LAW-CLOCK |
+| INV-GRPC-HEALTH-CHECK-001 | [invariants/shared/INV-GRPC-HEALTH-CHECK-001.md](invariants/shared/INV-GRPC-HEALTH-CHECK-001.md) | LAW-LIVENESS |
 
 ---
 

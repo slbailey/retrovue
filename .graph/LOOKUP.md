@@ -57,6 +57,7 @@ Always merge `relationships/cross-domain.yaml` when tracing cross-domain seams.
 | playout-session | service | `services/playout/playout-session.md` | playout | `by-domain/playout.yaml` |
 | air-playout-engine | service | `services/playout/air-playout-engine.md` | playout | `by-domain/playout.yaml`, `cross-domain.yaml`, `by-domain/systems.yaml` |
 | importer | service | `services/ingest/importer.md` | ingest | `by-domain/ingest.yaml`, `by-domain/systems.yaml` |
+| evidence-server | service | `services/playout/evidence-server.md` | playout | `by-domain/playout.yaml`, `cross-domain.yaml` |
 | master-clock | service | `services/systems/master-clock.md` | systems | `by-domain/systems.yaml` |
 
 ---
@@ -75,6 +76,10 @@ Always merge `relationships/cross-domain.yaml` when tracing cross-domain seams.
 | INV-NO-GHOST-METHODS-001 | invariant | `invariants/systems/INV-NO-GHOST-METHODS-001.md` | systems | `by-domain/systems.yaml` |
 | INV-LIFECYCLE-OBSERVABILITY-001 | invariant | `invariants/playout/INV-LIFECYCLE-OBSERVABILITY-001.md` | playout | `by-domain/playout.yaml` |
 | INV-PRODUCTION-BOUNDARY-001 | invariant | `invariants/systems/INV-PRODUCTION-BOUNDARY-001.md` | systems | `by-domain/systems.yaml` |
+| INV-GRPC-DEADLINE-POLICY-001 | invariant | `invariants/playout/INV-GRPC-DEADLINE-POLICY-001.md` | playout | `by-domain/playout.yaml` |
+| INV-GRPC-FEED-BACKPRESSURE-001 | invariant | `invariants/playout/INV-GRPC-FEED-BACKPRESSURE-001.md` | playout | `by-domain/playout.yaml` |
+| INV-GRPC-GRACEFUL-DRAIN-001 | invariant | `invariants/playout/INV-GRPC-GRACEFUL-DRAIN-001.md` | playout | `by-domain/playout.yaml` |
+| INV-GRPC-HEALTH-CHECK-001 | invariant | `invariants/playout/INV-GRPC-HEALTH-CHECK-001.md` | playout | `by-domain/playout.yaml` |
 
 ---
 

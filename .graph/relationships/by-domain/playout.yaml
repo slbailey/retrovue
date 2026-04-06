@@ -82,3 +82,37 @@
   from: { kind: service, id: hls-consumption-adapter }
   to: { kind: invariant, id: INV-LIFECYCLE-OBSERVABILITY-001 }
   note: Phantom session tracking must emit structured events with session_id
+
+# gRPC hardening invariants (RETA-29 / RETA-48 / RETA-49 / RETA-51)
+
+- type: constrained_by
+  from: { kind: service, id: playout-session }
+  to: { kind: invariant, id: INV-GRPC-DEADLINE-POLICY-001 }
+  note: Every PlayoutControl RPC must carry a gRPC deadline
+
+- type: constrained_by
+  from: { kind: service, id: playout-session }
+  to: { kind: invariant, id: INV-GRPC-FEED-BACKPRESSURE-001 }
+  note: Feed must respect QUEUE_FULL and wait for boundary events
+
+- type: constrained_by
+  from: { kind: service, id: playout-session }
+  to: { kind: invariant, id: INV-GRPC-GRACEFUL-DRAIN-001 }
+  note: Stop must drain current block and wait for SessionEnded
+
+- type: constrained_by
+  from: { kind: service, id: playout-session }
+  to: { kind: invariant, id: INV-GRPC-HEALTH-CHECK-001 }
+  note: Readiness probing uses grpc.health.v1.Health, not GetVersion
+
+- type: constrained_by
+  from: { kind: service, id: air-playout-engine }
+  to: { kind: invariant, id: INV-GRPC-HEALTH-CHECK-001 }
+  note: AIR must implement grpc.health.v1.Health with service-level granularity
+
+# Evidence server (gRPC evidence transport)
+
+- type: consumes
+  from: { kind: service, id: evidence-server }
+  to: { kind: service, id: air-playout-engine }
+  note: Receives execution evidence via bidirectional gRPC stream
