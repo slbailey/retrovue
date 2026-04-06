@@ -111,19 +111,13 @@ the immediate window.
 - `INV-PLAYLOG-PREFILL-001` — Ad fill happens at playlog plan generation, never at feed time
 - `INV-CHANNEL-NO-COMPILE-001` — ChannelManager never compiles schedules or fills ads
 
-## Implementation Status (2026-02-18)
+## Implementation Notes
 
-### Completed
-- [x] Program schedule: ProgramLogDay stores segmented_blocks (content + break opportunities)
-- [x] Playlog Plan: PlaylistBuilderDaemon fills ads and writes to PlaylistEvent
-- [x] Consumer: DslScheduleService.get_block_at reads playlog plan first
-- [x] Wiring: ProgramDirector starts PlaylistBuilderDaemon per DSL channel
-- [x] INV-TRAFFIC-LATE-BIND-001 retired, replaced by INV-PLAYLOG-PREFILL-001
-- [x] JIP ad continuity: re-join returns same ads from PlaylistEvent
+Core architectural elements are in place: `PlaylistBuilderDaemon` writes to
+`PlaylistEvent`, `DslScheduleService` reads from the playlog plan,
+`ProgramDirector` starts daemons per DSL channel, and
+`_fill_block_at_feed_time` has been removed.
 
-### Remaining
-- [ ] Recompile all channels' ProgramLogDay caches (only cheers-24-7 done)
-- [ ] Schedule horizon daemon (program schedule rolling — currently manual/on-demand)
-- [ ] Remove _fill_block_at_feed_time from ChannelManager (already absent post-revert)
-- [ ] Eviction policy for old PlaylistEvent entries
-- [ ] Health endpoint exposing PlaylistBuilderDaemon status
+For current implementation status and remaining work, see the project task
+tracker — not this document. Architecture docs describe *what* and *why*;
+task trackers own *progress*.

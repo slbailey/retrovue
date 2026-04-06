@@ -70,7 +70,7 @@ CORE PIPELINES
 FIRST-CLASS DOMAIN OBJECTS
 ────────────────────────
 Catalog:
-- Source, Collection, DiscoveredItem, Asset, ProviderRef
+- Source, Container, DiscoveredItem, Asset, ProviderRef
 
 Scheduling:
 - Channel (grid_block_minutes, block_start_offsets_minutes, programming_day_start)
