@@ -244,12 +244,15 @@ All test definitions in sections 6–7 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-MARATHON-CROSSMIDNIGHT-001 | `TestInvMarathonCrossmidnight001` | 4 tests (produces blocks, start after 22:00, end resolves next day, fills window) | PASS |
 | INV-TIER2-COMPILATION-CONSISTENCY-001 | `TestInvTier2CompilationConsistency001` | `test_get_block_at_returns_current_compilation_not_stale_txlog`, `test_consecutive_blocks_are_contiguous` | PASS |
 | INV-CROSS-DAY-CARRY-IN-001 | `TestEffectiveDayOpenMs`, `TestPushForward`, `TestCarryInPropagation`, `TestMergeTimeGuardrail` | 20 tests (effective_day_open_ms computation, push-forward contiguity, cascade, subsumed block removal, propagation across empty days, merge-time guardrail defense-in-depth) | PASS |
+| INV-MULTICHANNEL-ISOLATION-001 | `TestMultiChannelDerivationIsolation`, `TestMultiChannelCompilationIsolation` | 6 tests (parametrized per-channel derivation chain, no shared artifacts, channel_id field isolation, sequential compilation independence) | PASS |
+| INV-MULTICHANNEL-SEED-INDEPENDENCE-001 | `TestMultiChannelSeedIndependence` | 3 tests (different seeds, deterministic seeds, different asset selections) | PASS |
 
 #### Tier 3 — Runtime and Integration
 
 | Invariant | Test Class | Test Method(s) | Status |
 |---|---|---|---|
 | INV-CHANNEL-LIVENESS-RECOVERY-001 | `TestInvChannelLivenessRecovery001` | `test_channel_manager_has_recovery_handler`, `test_stopped_with_viewers_schedules_restart`, `test_last_viewer_left_no_restart`, `test_lookahead_exhausted_no_restart`, `test_stopped_zero_viewers_no_restart`, `test_error_with_viewers_schedules_restart`, `test_backoff_increases`, `test_max_attempts_gives_up`, `test_recovery_counter_resets_on_successful_start` | PASS |
+| INV-MULTICHANNEL-ISOLATION-001 | `TestConcurrentCompilationIsolation` | `test_concurrent_3_channels_no_contamination`, `test_concurrent_repeated_stability` | PASS |
 
 ### Full Matrix (Aspirational + Implemented)
 

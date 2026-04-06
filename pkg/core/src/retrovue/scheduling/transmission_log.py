@@ -60,7 +60,7 @@ def derive_transmission_log(
 
         entries.append(
             TransmissionLogEntry(
-                entry_id=f"tl-{schedule_day.programming_day_date.isoformat()}-{i:03d}",
+                entry_id=f"tl-{channel_id}-{schedule_day.programming_day_date.isoformat()}-{i:03d}",
                 channel_id=channel_id,
                 broadcast_day=schedule_day.programming_day_date,
                 start_utc_ms=start_ms,

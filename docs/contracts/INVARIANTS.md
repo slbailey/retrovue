@@ -80,6 +80,13 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | INV-BROADCASTDAY-PROJECTION-TRACEABLE-001 | [invariants/core/cross-cutting/INV-BROADCASTDAY-PROJECTION-TRACEABLE-001.md](invariants/core/cross-cutting/INV-BROADCASTDAY-PROJECTION-TRACEABLE-001.md) | LAW-DERIVATION, LAW-RUNTIME-AUTHORITY |
 | INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001 | [invariants/core/cross-cutting/INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001.md](invariants/core/cross-cutting/INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001.md) | LAW-IMMUTABILITY, LAW-DERIVATION |
 
+### Scheduling — Multi-channel
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-MULTICHANNEL-ISOLATION-001 | [invariants/core/scheduling/INV-MULTICHANNEL-ISOLATION-001.md](invariants/core/scheduling/INV-MULTICHANNEL-ISOLATION-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-MULTICHANNEL-SEED-INDEPENDENCE-001 | [invariants/core/scheduling/INV-MULTICHANNEL-SEED-INDEPENDENCE-001.md](invariants/core/scheduling/INV-MULTICHANNEL-SEED-INDEPENDENCE-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+
 ### Scheduling — Execution Boundary
 
 | Invariant | File | Derived From |
@@ -282,6 +289,17 @@ Canonical contract: [schedule_block_program_reference.md](schedule_block_program
 | INV-TIMELINE-CONTINUITY-001 | [invariants/core/scheduling/INV-TIMELINE-CONTINUITY-001.md](invariants/core/scheduling/INV-TIMELINE-CONTINUITY-001.md) | LAW-GRID, LAW-LIVENESS, LAW-TIMELINE |
 | INV-TIMELINE-EPG-PLAYOUT-AGREE-001 | [invariants/core/scheduling/INV-TIMELINE-EPG-PLAYOUT-AGREE-001.md](invariants/core/scheduling/INV-TIMELINE-EPG-PLAYOUT-AGREE-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
 | INV-TIMELINE-BOUNDARY-IMMUTABLE-001 | [invariants/core/scheduling/INV-TIMELINE-BOUNDARY-IMMUTABLE-001.md](invariants/core/scheduling/INV-TIMELINE-BOUNDARY-IMMUTABLE-001.md) | LAW-IMMUTABILITY, LAW-CONTENT-AUTHORITY, LAW-TIMELINE |
+
+### Scheduling — Schedule Constraints
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-CONSTRAINT-BLACKOUT-001 | [invariants/core/schedule-constraints/INV-CONSTRAINT-BLACKOUT-001.md](invariants/core/schedule-constraints/INV-CONSTRAINT-BLACKOUT-001.md) | LAW-CONTENT-AUTHORITY, LAW-ELIGIBILITY |
+| INV-CONSTRAINT-ADJACENCY-001 | [invariants/core/schedule-constraints/INV-CONSTRAINT-ADJACENCY-001.md](invariants/core/schedule-constraints/INV-CONSTRAINT-ADJACENCY-001.md) | LAW-CONTENT-AUTHORITY, LAW-GRID |
+| INV-CONSTRAINT-CONTENT-RESTRICTION-001 | [invariants/core/schedule-constraints/INV-CONSTRAINT-CONTENT-RESTRICTION-001.md](invariants/core/schedule-constraints/INV-CONSTRAINT-CONTENT-RESTRICTION-001.md) | LAW-CONTENT-AUTHORITY, LAW-GRID |
+| INV-CONSTRAINT-EVALUATION-IDEMPOTENT-001 | [invariants/core/schedule-constraints/INV-CONSTRAINT-EVALUATION-IDEMPOTENT-001.md](invariants/core/schedule-constraints/INV-CONSTRAINT-EVALUATION-IDEMPOTENT-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
+
+Canonical contract: [schedule_constraints.md](schedule_constraints.md)
 
 ### EPG
 

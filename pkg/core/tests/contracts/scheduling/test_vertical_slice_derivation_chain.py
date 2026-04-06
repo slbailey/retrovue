@@ -42,7 +42,8 @@ from retrovue.scheduling.execution_entry import (
 # Fixture constants
 # ---------------------------------------------------------------------------
 
-CHANNEL_ID = "test-channel-001"
+CHANNEL_IDS = ["test-channel-001", "test-channel-002", "test-channel-003"]
+CHANNEL_ID = CHANNEL_IDS[0]  # default for non-parametrized helpers
 PLAN_ID = "test-plan-001"
 GRID_BLOCK_MINUTES = 30
 PROGRAMMING_DAY_START = time(6, 0)  # 06:00
@@ -386,3 +387,93 @@ class TestVerticalSliceEndToEnd:
         assert sorted_exec[0].start_utc_ms == BROADCAST_DAY_START_UTC_MS
         expected_end = BROADCAST_DAY_START_UTC_MS + 24 * 3600 * 1000
         assert sorted_exec[-1].end_utc_ms == expected_end
+
+
+# ===========================================================================
+# Step 5: Multi-channel isolation (INV-MULTICHANNEL-ISOLATION-001)
+# ===========================================================================
+
+
+class TestMultiChannelDerivationIsolation:
+    """INV-MULTICHANNEL-ISOLATION-001: channels compile independently with
+    no state leakage across the derivation chain.
+
+    INV-MULTICHANNEL-SEED-INDEPENDENCE-001: different channel_ids produce
+    different channel_id fields on all artifacts.
+    """
+
+    @pytest.mark.parametrize("channel_id", CHANNEL_IDS)
+    def test_derivation_chain_per_channel(self, channel_id: str):
+        """Full derivation chain produces artifacts tagged with the correct channel_id."""
+        schedule_day = _build_fixture_schedule_day()
+
+        tl_entries = derive_transmission_log(
+            channel_id=channel_id,
+            schedule_day=schedule_day,
+            broadcast_day_start_utc_ms=BROADCAST_DAY_START_UTC_MS,
+            grid_block_minutes=GRID_BLOCK_MINUTES,
+        )
+        for entry in tl_entries:
+            assert entry.channel_id == channel_id, (
+                f"INV-MULTICHANNEL-ISOLATION-001-VIOLATED: "
+                f"TransmissionLogEntry.channel_id={entry.channel_id}, "
+                f"expected={channel_id}"
+            )
+
+        exec_entries = derive_execution_entries(tl_entries)
+        for ex in exec_entries:
+            assert ex.channel_id == channel_id, (
+                f"INV-MULTICHANNEL-ISOLATION-001-VIOLATED: "
+                f"ExecutionEntry.channel_id={ex.channel_id}, "
+                f"expected={channel_id}"
+            )
+
+    def test_channels_do_not_share_artifacts(self):
+        """Artifacts from channel A MUST NOT appear in channel B's output."""
+        schedule_day = _build_fixture_schedule_day()
+
+        all_channel_entries: dict[str, list[ExecutionEntry]] = {}
+        for ch_id in CHANNEL_IDS:
+            tl = derive_transmission_log(
+                channel_id=ch_id,
+                schedule_day=schedule_day,
+                broadcast_day_start_utc_ms=BROADCAST_DAY_START_UTC_MS,
+                grid_block_minutes=GRID_BLOCK_MINUTES,
+            )
+            all_channel_entries[ch_id] = derive_execution_entries(tl)
+
+        # Each channel's entry_ids must be disjoint
+        for i, ch_a in enumerate(CHANNEL_IDS):
+            ids_a = {e.entry_id for e in all_channel_entries[ch_a]}
+            for ch_b in CHANNEL_IDS[i + 1:]:
+                ids_b = {e.entry_id for e in all_channel_entries[ch_b]}
+                overlap = ids_a & ids_b
+                assert not overlap, (
+                    f"INV-MULTICHANNEL-ISOLATION-001-VIOLATED: "
+                    f"channels {ch_a} and {ch_b} share entry_ids: {overlap}"
+                )
+
+    def test_channel_id_field_isolation(self):
+        """Every artifact in each channel's chain carries only that channel's id."""
+        schedule_day = _build_fixture_schedule_day()
+
+        for ch_id in CHANNEL_IDS:
+            tl = derive_transmission_log(
+                channel_id=ch_id,
+                schedule_day=schedule_day,
+                broadcast_day_start_utc_ms=BROADCAST_DAY_START_UTC_MS,
+                grid_block_minutes=GRID_BLOCK_MINUTES,
+            )
+            execs = derive_execution_entries(tl)
+
+            other_ids = set(CHANNEL_IDS) - {ch_id}
+            for entry in tl:
+                assert entry.channel_id not in other_ids, (
+                    f"INV-MULTICHANNEL-ISOLATION-001-VIOLATED: "
+                    f"TL entry {entry.entry_id} has foreign channel_id={entry.channel_id}"
+                )
+            for ex in execs:
+                assert ex.channel_id not in other_ids, (
+                    f"INV-MULTICHANNEL-ISOLATION-001-VIOLATED: "
+                    f"Exec entry {ex.entry_id} has foreign channel_id={ex.channel_id}"
+                )
