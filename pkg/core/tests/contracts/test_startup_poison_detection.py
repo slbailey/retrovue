@@ -36,6 +36,25 @@ except ImportError:
         allow_module_level=True,
     )
 
+# Guard: skip if the required DB tables have not been migrated.
+try:
+    from sqlalchemy import inspect as sa_inspect
+    from retrovue.infra.db import engine
+
+    _inspector = sa_inspect(engine)
+    _required_tables = {"channels", "schedule_revisions", "schedule_items"}
+    _existing = set(_inspector.get_table_names())
+    if not _required_tables.issubset(_existing):
+        pytest.skip(
+            f"DB tables missing ({_required_tables - _existing}); run alembic upgrade head",
+            allow_module_level=True,
+        )
+except Exception:
+    pytest.skip(
+        "Cannot inspect DB for required tables",
+        allow_module_level=True,
+    )
+
 
 # ---------------------------------------------------------------------------
 # Helpers
