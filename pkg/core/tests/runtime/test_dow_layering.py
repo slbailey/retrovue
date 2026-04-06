@@ -11,7 +11,8 @@ from datetime import date, datetime, timezone as tz_mod
 import pytest
 
 from retrovue.config.testing import TEST_RESOLVED_CONFIG
-from retrovue.runtime.asset_resolver import AssetMetadata, StubAssetResolver
+from retrovue.runtime.asset_resolver import AssetMetadata
+from retrovue.dev.stub_asset_resolver import StubAssetResolver
 from retrovue.runtime.schedule_compiler import (
     compile_schedule,
     parse_dsl,

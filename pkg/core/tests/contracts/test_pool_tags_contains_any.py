@@ -18,7 +18,8 @@ from __future__ import annotations
 import pytest
 
 try:
-    from retrovue.runtime.asset_resolver import AssetMetadata, StubAssetResolver
+    from retrovue.runtime.asset_resolver import AssetMetadata
+    from retrovue.dev.stub_asset_resolver import StubAssetResolver
     from retrovue.runtime.pool_dsl_normalize import normalize_pool_definition
 except ImportError:
     pytest.skip(

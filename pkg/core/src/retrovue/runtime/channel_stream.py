@@ -403,35 +403,6 @@ class SocketTsSource:
         return self._connected and self.sock is not None
 
 
-class FakeTsSource:
-    """Fake TS source for tests (generates dummy TS data)."""
-
-    def __init__(self, chunk_size: int = 188 * 10):
-        self.chunk_size = chunk_size
-        self._closed = False
-
-    def read(self, size: int) -> bytes:
-        """Generate fake TS data."""
-        if self._closed:
-            return b""
-        # Generate minimal valid TS packet header + payload
-        # TS packet = 188 bytes: sync byte (0x47) + header + payload
-        chunk = b"\x47" + b"\x00" * min(size - 1, 187)
-        if size > 188:
-            # Multiple TS packets
-            packets_needed = (size + 187) // 188
-            chunk = chunk * packets_needed
-            chunk = chunk[:size]
-        return chunk
-
-    def close(self) -> None:
-        """Mark source as closed."""
-        self._closed = True
-
-    def get_socket(self) -> Optional[socket.socket]:
-        return None
-
-
 class ChannelStream:
     """
     Per-channel TS stream: upstream (AIR UDS) → ring buffer → downstream (HTTP clients).
@@ -595,7 +566,7 @@ class ChannelStream:
                     self._current_reconnect_delay_index = 0
                     return True
             else:
-                # SocketTsSource (Air) or FakeTsSource: already connected / no connect
+                # SocketTsSource (Air) or test source: already connected / no connect
                 self._logger.debug(
                     "TS source ready for channel %s (socket from queue)",
                     self.channel_id,

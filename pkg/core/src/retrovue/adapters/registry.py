@@ -8,7 +8,10 @@ Plugins self-register when imported, allowing for a modular architecture.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from .enrichers.base import Enricher, EnricherConfig, EnricherNotFoundError
 from .enrichers.ffprobe_enricher import FFprobeEnricher
@@ -250,26 +253,7 @@ def list_enrichers() -> list[Enricher]:
             instance = enricher_class()
             enricher_instances.append(instance)
         except Exception:
-            # If we can't create an instance, create a mock enricher with just the name
-            class MockEnricher(Enricher):
-                def __init__(self, name: str) -> None:
-                    self.name = name
-                    self.config: dict[str, Any] = {}
-                    self.scope = "ingest"
-
-                def enrich(self, discovered_item: DiscoveredItem) -> DiscoveredItem:
-                    return discovered_item
-
-                @classmethod
-                def get_config_schema(cls) -> EnricherConfig:
-                    return EnricherConfig(
-                        required_params=[],
-                        optional_params=[],
-                        scope="ingest",
-                        description="Mock enricher for testing",
-                    )
-
-            enricher_instances.append(MockEnricher(name))
+            logger.warning("Failed to instantiate enricher %r; skipping", name, exc_info=True)
     return enricher_instances
 
 

@@ -26,7 +26,8 @@ import requests
 
 pytestmark = pytest.mark.skip(reason="E2E test requires Air binary and runtime environment")
 
-from retrovue.runtime.channel_stream import ChannelStream, FakeTsSource
+from retrovue.runtime.channel_stream import ChannelStream
+from tests.fixtures.channel_stream_fixtures import FakeTsSource
 from retrovue.runtime.program_director import ProgramDirector
 from retrovue.config.testing import TEST_RESOLVED_CONFIG
 from retrovue.runtime.producer.base import (

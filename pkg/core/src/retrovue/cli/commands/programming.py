@@ -22,7 +22,7 @@ def compile_cmd(
     seed: int = typer.Option(42, "--seed", help="Random seed for deterministic selection"),
 ) -> None:
     """Compile a Programming DSL YAML file into a Program Schedule JSON (grid-aligned program blocks only)."""
-    from retrovue.runtime.asset_resolver import StubAssetResolver
+    from retrovue.dev.stub_asset_resolver import StubAssetResolver
     from retrovue.runtime.schedule_compiler import (
         CompileError,
         ValidationError,
@@ -72,7 +72,7 @@ def validate_cmd(
     dsl_file: str = typer.Argument(..., help="Path to DSL YAML file"),
 ) -> None:
     """Validate a Programming DSL YAML file without compiling."""
-    from retrovue.runtime.asset_resolver import StubAssetResolver
+    from retrovue.dev.stub_asset_resolver import StubAssetResolver
     from retrovue.runtime.schedule_compiler import parse_dsl, validate_dsl
 
     path = Path(dsl_file)

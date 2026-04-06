@@ -22,7 +22,7 @@ class ScheduleService(Protocol):
     """Read-only schedule accessor.
 
     Implementations: DslScheduleService (production), MockGridScheduleService,
-    MockAlternatingScheduleService (dev harness), FakeScheduleService (tests).
+    MockAlternatingScheduleService (retrovue.dev), FakeScheduleService (tests).
     Authority: retrovue/runtime/protocols.py
     """
 

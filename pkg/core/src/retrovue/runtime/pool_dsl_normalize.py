@@ -1,5 +1,5 @@
 """
-Normalize declarative pool definitions for CatalogAssetResolver / StubAssetResolver.
+Normalize declarative pool definitions for CatalogAssetResolver / StubAssetResolver (retrovue.dev).
 
 Canonical YAML uses select.where (docs/contracts/dsl_consolidation_plan.md).
 The catalog query layer still consumes flat ``match`` criteria; this module

@@ -15,7 +15,8 @@ import time
 import pytest
 import requests
 
-from retrovue.runtime.channel_stream import ChannelStream, FakeTsSource
+from retrovue.runtime.channel_stream import ChannelStream
+from tests.fixtures.channel_stream_fixtures import FakeTsSource
 from retrovue.runtime.program_director import ProgramDirector
 from retrovue.config.testing import TEST_RESOLVED_CONFIG
 

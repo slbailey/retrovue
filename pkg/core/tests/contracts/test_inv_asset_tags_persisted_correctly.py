@@ -24,7 +24,8 @@ try:
         expand_tag_match_set,
         normalize_tag_set,
     )
-    from retrovue.runtime.asset_resolver import AssetMetadata, StubAssetResolver
+    from retrovue.runtime.asset_resolver import AssetMetadata
+    from retrovue.dev.stub_asset_resolver import StubAssetResolver
 except ImportError:
     pytest.skip(
         "retrovue dependencies not available",

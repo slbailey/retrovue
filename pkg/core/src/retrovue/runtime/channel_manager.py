@@ -41,7 +41,7 @@ from uvicorn import Config, Server
 from .clock import MasterClock
 from .schedule_types import ScheduledBlock, ScheduledSegment
 from .producer.base import Producer, ProducerMode, ProducerStatus, ContentSegment, ProducerState
-from .channel_stream import ChannelStream, FakeTsSource, SocketTsSource, generate_ts_stream
+from .channel_stream import ChannelStream, SocketTsSource, generate_ts_stream
 from .config import (
     ChannelConfig,
     ChannelConfigProvider,

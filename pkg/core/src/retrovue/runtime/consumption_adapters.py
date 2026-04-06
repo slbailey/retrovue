@@ -414,10 +414,11 @@ class TsConsumptionAdapter:
         """
         import queue as _queue
         import time as _time
-        from retrovue.runtime.channel_stream import ChannelStream, FakeTsSource, SocketTsSource
+        from retrovue.runtime.channel_stream import ChannelStream, SocketTsSource
 
-        # Test mode: no real producer, use FakeTsSource
+        # Test mode: no real producer, use FakeTsSource from test fixtures
         if test_mode and manager is None:
+            from tests.fixtures.channel_stream_fixtures import FakeTsSource
             def ts_source_factory(_stop_event=None) -> FakeTsSource:
                 return FakeTsSource()
             return ChannelStream(channel_id=channel_id, ts_source_factory=ts_source_factory)

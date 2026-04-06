@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import pytest
 
-from retrovue.runtime.asset_resolver import AssetMetadata, StubAssetResolver
+from retrovue.runtime.asset_resolver import AssetMetadata
+from retrovue.dev.stub_asset_resolver import StubAssetResolver
 from retrovue.runtime.program_assembly import assemble_schedule_block
 
 

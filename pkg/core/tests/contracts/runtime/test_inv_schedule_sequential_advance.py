@@ -27,7 +27,8 @@ from retrovue.runtime.schedule_compiler import (
     channel_seed,
     parse_dsl,
 )
-from retrovue.runtime.asset_resolver import AssetMetadata, StubAssetResolver
+from retrovue.runtime.asset_resolver import AssetMetadata
+from retrovue.dev.stub_asset_resolver import StubAssetResolver
 from retrovue.runtime.progression_cursor import (
     CursorStore,
     ProgressionCursor,

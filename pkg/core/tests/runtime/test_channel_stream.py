@@ -14,11 +14,11 @@ import pytest
 
 from retrovue.runtime.channel_stream import (
     ChannelStream,
-    FakeTsSource,
     generate_ts_stream,
     RECV_GAP_WARN_THRESHOLD_MS,
     RECV_GAP_WARN_COUNT,
 )
+from tests.fixtures.channel_stream_fixtures import FakeTsSource
 
 
 def test_channel_stream_multiple_subscribers_same_bytes():

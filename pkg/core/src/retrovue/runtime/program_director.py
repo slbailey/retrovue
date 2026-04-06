@@ -50,7 +50,6 @@ from retrovue.runtime.clock import MasterClock, RealTimeMasterClock
 from retrovue.runtime.pace import PaceController
 from retrovue.runtime.channel_stream import (
     ChannelStream,
-    FakeTsSource,
     SocketTsSource,
     generate_ts_stream,
     generate_ts_stream_async,
@@ -809,7 +808,7 @@ class ProgramDirector:
             BlockPlanProducer,
             ChannelManager,
         )
-        from retrovue.runtime.mock_schedule_services import (
+        from retrovue.dev.mock_schedule_services import (
             MockAlternatingScheduleService,
             MockGridScheduleService,
         )
@@ -846,7 +845,7 @@ class ProgramDirector:
         self._channel_config_provider = channel_config_provider
         # Mock A/B without config file: provide minimal blockplan config for test-1.
         if self._channel_config_provider is None and self._mock_schedule_ab_mode:
-            from retrovue.runtime.mock_schedule_services import MockAlternatingScheduleService
+            from retrovue.dev.mock_schedule_services import MockAlternatingScheduleService
             test1_config = ChannelConfig(
                 channel_id=MockAlternatingScheduleService.MOCK_AB_CHANNEL_ID,
                 number=1,
@@ -868,7 +867,7 @@ class ProgramDirector:
         # Embedded mock A/B or grid: use the single embedded schedule service for that channel.
         if self._schedule_service is not None:
             if self._mock_schedule_ab_mode:
-                from retrovue.runtime.mock_schedule_services import MockAlternatingScheduleService
+                from retrovue.dev.mock_schedule_services import MockAlternatingScheduleService
                 if channel_id == MockAlternatingScheduleService.MOCK_AB_CHANNEL_ID:
                     return self._schedule_service
             if self._mock_schedule_grid_mode:
@@ -1169,7 +1168,7 @@ class ProgramDirector:
                 return []
             return self._channel_config_provider.list_channel_ids()
         if self._mock_schedule_ab_mode:
-            from retrovue.runtime.mock_schedule_services import MockAlternatingScheduleService
+            from retrovue.dev.mock_schedule_services import MockAlternatingScheduleService
             channel_id = MockAlternatingScheduleService.MOCK_AB_CHANNEL_ID
             success, _ = self._schedule_service.load_schedule(channel_id)
             return [channel_id] if success else []
@@ -1742,7 +1741,7 @@ class ProgramDirector:
 
             # Delegate ChannelStream construction to TsConsumptionAdapter.
             # Phase 8c: construction logic (socket queue, socket_path fallback,
-            # FakeTsSource test path) lives in TsConsumptionAdapter._wire_fanout().
+            # test-mode source path) lives in TsConsumptionAdapter._wire_fanout().
             fanout = self._ts_adapter._wire_fanout(
                 channel_id,
                 manager=manager,
@@ -2363,7 +2362,7 @@ class ProgramDirector:
                 if _window:
                     _newest = _window[-1]
                     _newest_end_ms = _newest.wall_clock_start_utc_ms + _newest.duration_ms
-                    _now_utc_ms = int(time.time() * 1000)
+                    _now_utc_ms = int(self._embedded_clock.now_utc().timestamp() * 1000)
                     _age_ms = _now_utc_ms - _newest_end_ms
                     if _age_ms > _HLS_STALENESS_THRESHOLD_MS:
                         self._logger.warning(

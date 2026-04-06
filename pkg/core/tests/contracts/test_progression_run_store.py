@@ -27,7 +27,8 @@ from retrovue.runtime.serial_episode_resolver import (
     WEEKEND,
 )
 from retrovue.config.testing import TEST_RESOLVED_CONFIG
-from retrovue.runtime.asset_resolver import AssetMetadata, StubAssetResolver
+from retrovue.runtime.asset_resolver import AssetMetadata
+from retrovue.dev.stub_asset_resolver import StubAssetResolver
 from retrovue.runtime.program_assembly import assemble_schedule_block, _MIGRATION_EPOCH
 from retrovue.runtime.schedule_compiler import compile_schedule
 
