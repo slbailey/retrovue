@@ -99,9 +99,11 @@ class ContractClockFixture:
 
 
 def pytest_collection_modifyitems(items):
-    """Add 'contract' marker to every test in tests/contracts/ (CI default)."""
+    """Add 'contract' marker to tests in tests/contracts/ only (CI default)."""
+    contracts_dir = str(__import__("pathlib").Path(__file__).resolve().parent)
     for item in items:
-        item.add_marker(pytest.mark.contract)
+        if str(item.fspath).startswith(contracts_dir):
+            item.add_marker(pytest.mark.contract)
 
 
 @pytest.fixture
