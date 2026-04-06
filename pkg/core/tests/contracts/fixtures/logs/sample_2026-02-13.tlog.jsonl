@@ -1,0 +1,4 @@
+{"event_id": "BLK-001", "block_id": "BLK-001", "type": "BLOCK", "scheduled_start_utc": "2026-02-13T14:00:00Z", "scheduled_duration_ms": 1800000}
+{"event_id": "EVT-0001", "block_id": "BLK-001", "type": "PROGRAM", "scheduled_start_utc": "2026-02-13T14:00:00Z", "scheduled_duration_ms": 1350000}
+{"event_id": "EVT-0002", "block_id": "BLK-001", "type": "AD", "scheduled_start_utc": "2026-02-13T14:22:30Z", "scheduled_duration_ms": 30000}
+{"event_id": "BLK-001-FENCE", "block_id": "BLK-001", "type": "FENCE", "scheduled_start_utc": "2026-02-13T14:30:00Z", "scheduled_duration_ms": 0}

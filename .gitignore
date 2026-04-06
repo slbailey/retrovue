@@ -43,6 +43,7 @@ Thumbs.db
 *.temp
 # Log directories
 **/logs/
+!pkg/core/tests/contracts/fixtures/logs/
 pkg/air/logs/
 pkg/core/logs/
 # FFmpeg concat files from retrovue-core

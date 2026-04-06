@@ -1,0 +1,13 @@
+# RETROVUE TRANSMISSION LOG
+# CHANNEL: test-channel-01
+# DATE: 2026-02-13
+# TIMEZONE_DISPLAY: US/Eastern
+# GENERATED_UTC: 2026-02-13T13:00:00Z
+# TRANSMISSION_LOG_ID: tlog-golden-001
+# VERSION: 1
+TIME     DUR      TYPE     EVENT_ID                         TITLE_ASSET
+-------- -------- -------- -------------------------------- -----------
+09:00:00 00:30:00 BLOCK    BLK-001                          UTC_START=2026-02-13T14:00:00Z UTC_END=2026-02-13T14:30:00Z
+09:00:00 00:22:30 PROGRAM  EVT-0001                         The Evening Show [asset-001]
+09:22:30 00:00:30 AD       EVT-0002                         Buy Widgets! [asset-002]
+09:30:00 00:00:00 FENCE    BLK-001-FENCE                    UTC_END=2026-02-13T14:30:00Z

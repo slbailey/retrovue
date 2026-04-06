@@ -1,0 +1,12 @@
+# RETROVUE AS-RUN LOG
+# CHANNEL: test-channel-01
+# DATE: 2026-02-13
+# OPENED_UTC: 2026-02-13T14:00:00Z
+# ASRUN_LOG_ID: asrun-golden-001
+# VERSION: 1
+ACTUAL   DUR      STATUS     TYPE     EVENT_ID                         NOTES
+-------- -------- ---------- -------- -------------------------------- -----
+09:00:00 00:00:00 START      BLOCK    BLK-001                          (block open)
+09:00:00 00:22:30 AIRED      PROGRAM  EVT-0001                         ontime=Y fallback=0
+09:22:30 00:00:30 AIRED      AD       EVT-0002                         ontime=Y fallback=0
+09:30:00 00:00:00 FENCE      BLOCK    BLK-001-FENCE                    swap_tick=900 fence_tick=10800 primed_success=Y truncated_by_fence=N early_exhaustion=N
