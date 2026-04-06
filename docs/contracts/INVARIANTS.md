@@ -381,6 +381,8 @@ Canonical contract: [schedule_block_program_reference.md](schedule_block_program
 | INV-CHANNEL-LIVENESS-RECOVERY-001 | [invariants/core/runtime/INV-CHANNEL-LIVENESS-RECOVERY-001.md](invariants/core/runtime/INV-CHANNEL-LIVENESS-RECOVERY-001.md) | LAW-LIVENESS |
 | INV-DAEMON-SESSION-SCOPE-001 | [invariants/core/runtime/INV-DAEMON-SESSION-SCOPE-001.md](invariants/core/runtime/INV-DAEMON-SESSION-SCOPE-001.md) | LAW-LIVENESS |
 | INV-BREAK-V2-SINGLE-CHAPTER-001 | [invariants/core/runtime/INV-BREAK-V2-SINGLE-CHAPTER-001.md](invariants/core/runtime/INV-BREAK-V2-SINGLE-CHAPTER-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-AUTHORITY-SINGLE-OWNER-001 | [invariants/core/runtime/INV-AUTHORITY-SINGLE-OWNER-001.md](invariants/core/runtime/INV-AUTHORITY-SINGLE-OWNER-001.md) | LAW-RUNTIME-AUTHORITY, LAW-CLOCK |
+| INV-SINGLE-ACTIVATION-PATH-001 | [invariants/core/runtime/INV-SINGLE-ACTIVATION-PATH-001.md](invariants/core/runtime/INV-SINGLE-ACTIVATION-PATH-001.md) | LAW-RUNTIME-AUTHORITY, LAW-LIVENESS |
 
 ### Delivery — HLS Segment Production
 

@@ -31,6 +31,14 @@ Without structured, correlation-ID-tagged events, it is impossible to trace a
 viewer session end-to-end through logs. Debugging production issues becomes
 guesswork. Every refactor touching lifecycle must preserve or extend observability.
 
+## Required Tests
+
+- `pkg/core/tests/contracts/runtime/test_inv_lifecycle_observability_session_manager.py`
+  - V8a: first_viewer emits structured DEBUG
+  - V8b: last_viewer emits structured DEBUG
+  - V8c: reap_expiration emits structured DEBUG
+  - No INFO-level lifecycle events
+
 ## Added
 
 Phase 8.5d (2026-03-28) — Observability Hardening phase

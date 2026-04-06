@@ -24,8 +24,12 @@ import threading
 from concurrent import futures
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import grpc
+
+if TYPE_CHECKING:
+    from retrovue.runtime.clock import MasterClock as MasterClockType
 
 # Proto stubs live in pkg/core/core/proto/retrovue/; add to path for import.
 _CORE_ROOT = Path(__file__).resolve().parents[3]  # pkg/core
@@ -217,8 +221,12 @@ class DurableAckStore:
     Stores highest acked_sequence in memory and persists to disk.
     """
 
-    def __init__(self, ack_dir: str = DEFAULT_ACK_DIR):
+    def __init__(self, ack_dir: str = DEFAULT_ACK_DIR, clock: MasterClockType | None = None):
         self._ack_dir = ack_dir
+        if clock is None:
+            from retrovue.runtime.clock import MasterClock
+            clock = MasterClock()
+        self._clock = clock
         self._lock = threading.Lock()
         # (channel_id, playout_session_id) → acked_sequence
         self._acks: dict[tuple[str, str], int] = {}
@@ -258,7 +266,7 @@ class DurableAckStore:
     def _persist_to_disk(self, channel_id: str, session_id: str, seq: int) -> None:
         path = self._ack_path(channel_id, session_id)
         path.parent.mkdir(parents=True, exist_ok=True)
-        now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        now_utc = self._clock.now_utc().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
         content = f"acked_sequence={seq}\nupdated_utc={now_utc}\n"
         tmp = path.with_suffix(".ack.tmp")
         tmp.write_text(content)
@@ -272,9 +280,13 @@ class AsRunWriter:
     sequentially.
     """
 
-    def __init__(self, channel_id: str, asrun_dir: str = DEFAULT_ASRUN_DIR):
+    def __init__(self, channel_id: str, asrun_dir: str = DEFAULT_ASRUN_DIR, clock: MasterClockType | None = None):
         self._channel_id = channel_id
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if clock is None:
+            from retrovue.runtime.clock import MasterClock
+            clock = MasterClock()
+        self._clock = clock
+        today = self._clock.now_utc().strftime("%Y-%m-%d")
         # Broadcast-day start (midnight UTC) for display-time computation.
         # ACTUAL times are computed relative to this epoch; hours MAY exceed
         # 23 when execution crosses midnight (v0.2 §3).
@@ -291,7 +303,7 @@ class AsRunWriter:
 
         # Write header if file is new.
         if not self._asrun_path.exists() or self._asrun_path.stat().st_size == 0:
-            now_utc = datetime.now(timezone.utc).isoformat() + "Z"
+            now_utc = self._clock.now_utc().isoformat() + "Z"
             header = (
                 "# RETROVUE AS-RUN LOG\n"
                 f"# CHANNEL: {channel_id}\n"

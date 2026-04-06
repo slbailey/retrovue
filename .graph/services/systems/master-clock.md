@@ -18,7 +18,7 @@ Environment, test doubles in CI only outside production.
 
 ## Downstream outputs
 
-Timestamps consumed by `program-director`, HLS segment timing, feed deadlines, etc.
+Timestamps consumed by `program-director`, `evidence-server` (as-run and ack timestamps), HLS segment timing, feed deadlines, etc.
 
 ## Must NOT do
 

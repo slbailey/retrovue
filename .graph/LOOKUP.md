@@ -72,6 +72,7 @@ Always merge `relationships/cross-domain.yaml` when tracing cross-domain seams.
 | INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001 | invariant | `invariants/ingest/INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001.md` | ingest | `by-domain/ingest.yaml` |
 | INV-AUTHORITY-SINGLE-OWNER-001 | invariant | `invariants/systems/INV-AUTHORITY-SINGLE-OWNER-001.md` | systems | `by-domain/systems.yaml` |
 | INV-NO-GHOST-METHODS-001 | invariant | `invariants/systems/INV-NO-GHOST-METHODS-001.md` | systems | `by-domain/systems.yaml` |
+| INV-LIFECYCLE-OBSERVABILITY-001 | invariant | `invariants/playout/INV-LIFECYCLE-OBSERVABILITY-001.md` | playout | `by-domain/playout.yaml` |
 | INV-PRODUCTION-BOUNDARY-001 | invariant | `invariants/systems/INV-PRODUCTION-BOUNDARY-001.md` | systems | `by-domain/systems.yaml` |
 
 ---

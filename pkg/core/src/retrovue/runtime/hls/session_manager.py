@@ -94,8 +94,8 @@ class HlsSessionManager:
             if is_new and len(self._sessions) == 1:
                 # 0→1 transition: first viewer
                 self._first_viewer_count += 1
-                self._log.info(
-                    "[HLS %s] First viewer: session %s (transition #%d)",
+                self._log.debug(
+                    "[lifecycle] channel=%s event=first_viewer session_id=%s transition_count=%d",
                     self._channel_id, session_id, self._first_viewer_count,
                 )
                 if self._on_viewer_join is not None:
@@ -112,8 +112,8 @@ class HlsSessionManager:
             del self._sessions[session_id]
             if len(self._sessions) == 0:
                 self._last_viewer_count += 1
-                self._log.info(
-                    "[HLS %s] Last viewer left: session %s (transition #%d)",
+                self._log.debug(
+                    "[lifecycle] channel=%s event=last_viewer session_id=%s transition_count=%d",
                     self._channel_id, session_id, self._last_viewer_count,
                 )
                 if self._on_viewer_leave is not None:
@@ -149,9 +149,12 @@ class HlsSessionManager:
 
             if expired and len(self._sessions) == 0:
                 self._last_viewer_count += 1
-                self._log.info(
-                    "[HLS %s] All viewers expired (%d reaped, transition #%d)",
-                    self._channel_id, len(expired), self._last_viewer_count,
+                self._log.debug(
+                    "[lifecycle] channel=%s event=reap_expiration session_id=%s reaped_count=%d transition_count=%d",
+                    self._channel_id,
+                    ",".join(expired),
+                    len(expired),
+                    self._last_viewer_count,
                 )
                 if self._on_viewer_leave is not None:
                     self._on_viewer_leave()

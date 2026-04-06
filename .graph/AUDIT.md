@@ -32,3 +32,4 @@ Run after RetroVue contract changes, graph edits, or before a release. Goal: cat
 | Date | Notes |
 |------|-------|
 | 2026-04-06 | First full audit pass. 47 YAML edges verified, zero orphans/duplicates. Two invariants (INV-AUTHORITY-SINGLE-OWNER-001, INV-SINGLE-ACTIVATION-PATH-001) flagged as missing from INVARIANTS.md — escalated to Systems Lead. Stale "Collection" terminology fixed in onboarding docs. |
+| 2026-04-06 | Post-RETA-11/12 review. Added INV-LIFECYCLE-OBSERVABILITY-001 graph stub + 3 constrained_by edges in playout.yaml. Updated master-clock downstream to include evidence-server (RETA-11 clock injection). LOOKUP.md updated. |

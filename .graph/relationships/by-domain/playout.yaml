@@ -67,3 +67,18 @@
   from: { kind: entity, id: segment-ring }
   to: { kind: invariant, id: INV-HLS-NO-DISK-IO-001 }
   note: In-memory segment store obligation applies to the ring and handlers
+
+- type: constrained_by
+  from: { kind: service, id: program-director }
+  to: { kind: invariant, id: INV-LIFECYCLE-OBSERVABILITY-001 }
+  note: Lifecycle transitions (activation, teardown, linger) must emit structured DEBUG events with session_id
+
+- type: constrained_by
+  from: { kind: service, id: channel-manager }
+  to: { kind: invariant, id: INV-LIFECYCLE-OBSERVABILITY-001 }
+  note: Viewer join/leave and segment events must carry correlation ID
+
+- type: constrained_by
+  from: { kind: service, id: hls-consumption-adapter }
+  to: { kind: invariant, id: INV-LIFECYCLE-OBSERVABILITY-001 }
+  note: Phantom session tracking must emit structured events with session_id
