@@ -152,7 +152,9 @@ Create one or more channels in the database. Call `reconcile_channels(db, set())
 
 ## Enforcement Evidence
 
-TODO
+- `TestChannelReconcileEmptyGuard::test_empty_config_with_existing_channels_raises` — guard raises RuntimeError
+- `TestChannelReconcileEmptyGuard::test_empty_config_with_allow_full_purge` — explicit purge permitted
+- `TestChannelReconcileEmptyGuard::test_empty_config_with_no_existing_channels` — empty DB is no-op
 
 ---
 

@@ -30,4 +30,6 @@ Query "what is scheduled at time T on channel C" through three interfaces: playb
 
 ## Enforcement Evidence
 
-TODO
+- `TestTimelineSingleAuthority::test_build_initial_uses_load_existing_timeline` — _build_initial has _load_existing_timeline for DB loading
+- `TestTimelineSingleAuthority::test_load_existing_timeline_returns_blocks_and_day_sets` — signature accepts channel_id, start_date, horizon_days
+- `TestTimelineSingleAuthority::test_save_compiled_schedule_refuses_existing_revision` — delegates to revision writer with conflict resolution

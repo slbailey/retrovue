@@ -30,4 +30,6 @@ Record the output of "what block covers time T" for every T in the compiled hori
 
 ## Enforcement Evidence
 
-TODO
+- `TestTimelineRestartIdentical::test_enforce_contiguity_is_deterministic` — contiguity enforcement is idempotent (stable across restarts)
+- `TestTimelineRestartIdentical::test_push_forward_is_deterministic` — push-forward is idempotent
+- `TestTimelineRestartIdentical::test_contiguity_preserves_block_identity` — block IDs and segments survive enforcement

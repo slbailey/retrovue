@@ -30,4 +30,6 @@ Compile a timeline covering [T₀, T₁). Trigger a subsequent compilation (hori
 
 ## Enforcement Evidence
 
-TODO
+- `TestTimelineAppendOnly::test_save_compiled_schedule_uses_conflict_resolution` — _save_compiled_schedule delegates to write_active_revision with ON CONFLICT DO NOTHING
+- `TestTimelineAppendOnly::test_contiguity_enforcement_does_not_reorder_blocks` — block order preserved
+- `TestTimelineAppendOnly::test_push_forward_does_not_modify_earlier_blocks` — original blocks not mutated

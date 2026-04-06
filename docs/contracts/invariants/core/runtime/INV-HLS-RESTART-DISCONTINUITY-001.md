@@ -25,8 +25,13 @@ First segment after restart missing discontinuity flag; PTS tracker not reset; s
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_channel_runtime.py`
+- `pkg/core/tests/contracts/test_inv_hls_channel_runtime.py`
 
 ## Enforcement Evidence
 
-TODO
+- `TestHlsRestartDiscontinuity::test_initial_construction_forces_discontinuity` — new segmenter forces discontinuity
+- `TestHlsRestartDiscontinuity::test_reset_for_restart_forces_discontinuity` — reset sets _force_next_discontinuity=True
+- `TestHlsRestartDiscontinuity::test_reset_for_restart_resets_pts_tracking` — PTS state cleared
+- `TestHlsRestartDiscontinuity::test_reset_for_restart_continues_index` — index continues from next_index
+- `TestHlsRestartDiscontinuity::test_reset_clears_accumulation_buffer` — buffers cleared
+- `TestHlsRestartDiscontinuity::test_reset_reopens_closed_segmenter` — closed segmenter reopened

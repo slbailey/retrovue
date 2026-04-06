@@ -30,4 +30,8 @@ Compile a multi-day timeline. For every pair of adjacent blocks (ordered by star
 
 ## Enforcement Evidence
 
-TODO
+- `TestTimelineContinuity::test_contiguous_blocks_remain_contiguous` — already-contiguous blocks unchanged
+- `TestTimelineContinuity::test_overlapping_blocks_become_contiguous` — overlaps resolved to contiguous sequence
+- `TestTimelineContinuity::test_multi_day_blocks_become_contiguous` — cross-day overlaps resolved
+- `TestTimelineContinuity::test_single_block_is_trivially_contiguous` — single block passes through
+- `TestTimelineContinuity::test_empty_timeline_is_trivially_contiguous` — empty list returns empty

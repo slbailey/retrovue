@@ -30,4 +30,9 @@ On day D, schedule a program ending at time Tₑ where Tₑ is past day D+1's br
 
 ## Enforcement Evidence
 
-TODO
+- `TestTimelineCarryInPreserved::test_day_open_respects_carry_in` — effective day open equals carry-in end
+- `TestTimelineCarryInPreserved::test_subsequent_day_blocks_start_after_carry_in` — all blocks start >= carry-in end
+- `TestTimelineCarryInPreserved::test_fully_subsumed_blocks_are_dropped` — blocks inside carry-in dropped
+- `TestTimelineCarryInPreserved::test_carry_in_with_no_overlap_preserves_all_blocks` — no overlap means all survive
+- `TestTimelineCarryInPreserved::test_get_prior_day_end_ms_finds_last_block` — prior day boundary found
+- `TestTimelineCarryInPreserved::test_no_prior_day_blocks_returns_zero` — no prior blocks returns 0
