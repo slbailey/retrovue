@@ -7,16 +7,11 @@ that implement standardized confirmation and safety logic.
 Modules:
 - confirmation: Interactive destructive confirmation logic (C-1 through C-14)
 - source_delete_ops: Source deletion operations (B-4 through B-8, D-1 through D-10)
+
+Cross-domain ingest workflows were relocated to retrovue.workflows/ in Phase 1
+of the Asset Domain Alignment Plan (RETA-69).
 """
 
-from .collection_ingest_service import (
-    ContainerIngestResult,
-    ContainerIngestService,
-    IngestStats,
-    resolve_container_selector,
-    validate_ingestible_with_importer,
-    validate_prerequisites,
-)
 from .confirmation import (
     PendingDeleteSummary,
     SourceImpact,
@@ -32,13 +27,6 @@ from .source_delete_ops import (
     perform_source_deletions,
     resolve_source_selector,
     source_is_protected_for_prod_delete,
-)
-from .source_ingest_service import (
-    SourceIngestResult,
-    SourceIngestService,
-)
-from .source_ingest_service import (
-    resolve_source_selector as resolve_source_selector_for_ingest,
 )
 
 __all__ = [
@@ -56,15 +44,4 @@ __all__ = [
     "perform_source_deletions",
     "resolve_source_selector",
     "source_is_protected_for_prod_delete",
-    # Container ingest service exports
-    "ContainerIngestResult",
-    "ContainerIngestService",
-    "IngestStats",
-    "resolve_container_selector",
-    "validate_ingestible_with_importer",
-    "validate_prerequisites",
-    # Source ingest service exports
-    "SourceIngestResult",
-    "SourceIngestService",
-    "resolve_source_selector_for_ingest",
 ]

@@ -1580,7 +1580,7 @@ def source_ingest(
         retrovue source ingest plex-5063d926 --json
         retrovue source ingest "My Plex Server" --dry-run
     """
-    from ._ops.source_ingest_service import SourceIngestService
+    from retrovue.workflows.source_ingest import SourceIngestService
 
     with session() as db:
         try:

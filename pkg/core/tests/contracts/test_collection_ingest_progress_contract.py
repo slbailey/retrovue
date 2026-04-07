@@ -13,7 +13,7 @@ def test_dry_run_emits_early_feedback():
     with patch("retrovue.cli.commands.collection.session") as mock_session, \
          patch("retrovue.cli.commands.collection.resolve_container_selector") as mock_resolve, \
          patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer, \
-         patch("retrovue.cli.commands._ops.collection_ingest_service.ContainerIngestService") as mock_service:
+         patch("retrovue.workflows.container_ingest.ContainerIngestService") as mock_service:
 
         db = MagicMock()
         mock_session.return_value.__enter__.return_value = db

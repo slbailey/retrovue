@@ -70,7 +70,7 @@ class TestSourceIngestDataContract:
     def _make_mock_svc_class(self):
         """Create a mock SourceIngestService class whose instances return a
         successful SourceIngestResult from ingest_source()."""
-        from retrovue.cli.commands._ops.source_ingest_service import (
+        from retrovue.workflows.source_ingest import (
             SourceIngestResult,
             SourceIngestStats,
         )
@@ -113,7 +113,7 @@ class TestSourceIngestDataContract:
         assert result.exit_code == 0
         assert "No ingestible collections" in result.stdout
 
-    @patch('retrovue.cli.commands._ops.source_ingest_service.SourceIngestService')
+    @patch('retrovue.workflows.source_ingest.SourceIngestService')
     @patch('retrovue.cli.commands.source.session')
     def test_d3_eligible_collections_succeed_no_db_writes(self, mock_session, mock_svc_cls):
         """Eligible collections exist -> exit 0, warning/output allowed, no DB writes."""
@@ -142,7 +142,7 @@ class TestSourceIngestDataContract:
         assert result.exit_code == 0
         assert len(db.added) == 0
 
-    @patch('retrovue.cli.commands._ops.source_ingest_service.SourceIngestService')
+    @patch('retrovue.workflows.source_ingest.SourceIngestService')
     @patch('retrovue.cli.commands.source.session')
     def test_d6_dry_run_with_eligible_succeeds_no_writes(self, mock_session, mock_svc_cls):
         """Dry-run with eligible collections -> exit 0, no DB writes."""
@@ -162,7 +162,7 @@ class TestSourceIngestDataContract:
         # Nothing to do; if we reached here without referencing service paths, contract holds.
         assert True
 
-    @patch('retrovue.cli.commands._ops.source_ingest_service.SourceIngestService')
+    @patch('retrovue.workflows.source_ingest.SourceIngestService')
     @patch('retrovue.cli.commands.source.session')
     def test_d10_never_persists_in_discovery_only(self, mock_session, mock_svc_cls):
         """Discovery-only: exit 0 with eligible collections; no DB writes."""
@@ -186,7 +186,7 @@ class TestSourceIngestDataContract:
         assert result.exit_code == 0
         assert "No ingestible collections" in result.stdout
 
-    @patch('retrovue.cli.commands._ops.source_ingest_service.SourceIngestService')
+    @patch('retrovue.workflows.source_ingest.SourceIngestService')
     @patch('retrovue.cli.commands.source.session')
     def test_d12_sync_enabled_ingestible_present_succeeds(self, mock_session, mock_svc_cls):
         """Eligible collections present -> ingest succeeds (exit 0)."""
@@ -200,7 +200,7 @@ class TestSourceIngestDataContract:
     # test-db with eligible collections not applicable; flag not supported
     # dry-run + test-db precedence not applicable; test-db not supported
 
-    @patch('retrovue.cli.commands._ops.source_ingest_service.SourceIngestService')
+    @patch('retrovue.workflows.source_ingest.SourceIngestService')
     @patch('retrovue.cli.commands.source.session')
     def test_d15_no_source_level_records_created(self, mock_session, mock_svc_cls):
         """With eligible collections, exit 0; no unintended source-level DB writes."""
@@ -211,7 +211,7 @@ class TestSourceIngestDataContract:
         assert result.exit_code == 0
         assert len(db.added) == 0
 
-    @patch('retrovue.cli.commands._ops.source_ingest_service.SourceIngestService')
+    @patch('retrovue.workflows.source_ingest.SourceIngestService')
     @patch('retrovue.cli.commands.source.session')
     def test_d16_text_stats_or_summary_present_when_eligible(self, mock_session, mock_svc_cls):
         """With eligible collections, exit 0; summary or ingest-related output present."""
@@ -222,7 +222,7 @@ class TestSourceIngestDataContract:
         assert result.exit_code == 0
         assert "Ingest" in result.output or "ingest" in result.output or "collection" in result.output
 
-    @patch('retrovue.cli.commands._ops.source_ingest_service.SourceIngestService')
+    @patch('retrovue.workflows.source_ingest.SourceIngestService')
     @patch('retrovue.cli.commands.source.session')
     def test_d17_eligible_collections_succeed(self, mock_session, mock_svc_cls):
         """Eligible collections -> ingest succeeds (exit 0)."""

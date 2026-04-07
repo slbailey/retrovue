@@ -84,7 +84,7 @@ class TestSourceIngestContract:
     def _make_mock_svc_class(self):
         """Create a mock SourceIngestService class whose instances return a
         successful SourceIngestResult from ingest_source()."""
-        from retrovue.cli.commands._ops.source_ingest_service import (
+        from retrovue.workflows.source_ingest import (
             SourceIngestResult,
             SourceIngestStats,
         )
@@ -135,7 +135,7 @@ class TestSourceIngestContract:
         db = self._make_db(containers=[self.collection1, self.collection2])
         with (
             patch('retrovue.cli.commands.source.session') as mock_session,
-            patch('retrovue.cli.commands._ops.source_ingest_service.SourceIngestService',
+            patch('retrovue.workflows.source_ingest.SourceIngestService',
                   self._make_mock_svc_class()),
         ):
             self._patch_session(mock_session, db)
@@ -160,7 +160,7 @@ class TestSourceIngestContract:
         db = self._make_db(containers=[self.collection1, self.collection2])
         with (
             patch('retrovue.cli.commands.source.session') as mock_session,
-            patch('retrovue.cli.commands._ops.source_ingest_service.SourceIngestService',
+            patch('retrovue.workflows.source_ingest.SourceIngestService',
                   self._make_mock_svc_class()),
         ):
             self._patch_session(mock_session, db)
@@ -226,7 +226,7 @@ class TestSourceIngestContract:
         db = self._make_db(containers=[self.collection1, self.collection2])
         with (
             patch('retrovue.cli.commands.source.session') as mock_session,
-            patch('retrovue.cli.commands._ops.source_ingest_service.SourceIngestService',
+            patch('retrovue.workflows.source_ingest.SourceIngestService',
                   self._make_mock_svc_class()),
         ):
             self._patch_session(mock_session, db)
@@ -240,7 +240,7 @@ class TestSourceIngestContract:
         db = self._make_db(containers=[self.collection1])
         with (
             patch('retrovue.cli.commands.source.session') as mock_session,
-            patch('retrovue.cli.commands._ops.source_ingest_service.SourceIngestService',
+            patch('retrovue.workflows.source_ingest.SourceIngestService',
                   self._make_mock_svc_class()),
         ):
             self._patch_session(mock_session, db)

@@ -55,7 +55,7 @@ class TestCollectionIngestContract:
         """
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection._get_db_context", return_value=self._make_session_cm()), \
-             patch("retrovue.cli.commands._ops.collection_ingest_service.ContainerIngestService"), \
+             patch("retrovue.workflows.container_ingest.ContainerIngestService"), \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer:
             
             mock_collection = MagicMock()
@@ -314,7 +314,7 @@ class TestCollectionIngestContract:
         """
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection._get_db_context", return_value=self._make_session_cm()), \
-             patch("retrovue.cli.commands._ops.collection_ingest_service.ContainerIngestService"):
+             patch("retrovue.workflows.container_ingest.ContainerIngestService"):
             
             mock_collection = MagicMock()
             mock_collection.uuid = collection_id
@@ -735,7 +735,7 @@ class TestCollectionIngestContract:
             mock_resolve.return_value = mock_collection
             
             # Mock service to raise ValueError for prerequisite failure
-            with patch("retrovue.cli.commands._ops.collection_ingest_service.ContainerIngestService") as mock_service, \
+            with patch("retrovue.workflows.container_ingest.ContainerIngestService") as mock_service, \
                  patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer:
                 
                 mock_importer = MagicMock()
@@ -1208,7 +1208,7 @@ class TestCollectionIngestDuplicateHandling:
     @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_b16_duplicate_detection_prevents_second_asset_record(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """B-16: Duplicate detection MUST prevent creating a second Asset record for the same canonical identity."""
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestResult,
             IngestStats,
         )
@@ -1267,7 +1267,7 @@ class TestCollectionIngestDuplicateHandling:
     @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_b16_duplicate_detection_silent_operation(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """B-16: Duplicate encounters MUST NOT be treated as operator-visible errors."""
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestResult,
             IngestStats,
         )
@@ -1315,7 +1315,7 @@ class TestCollectionIngestDuplicateHandling:
     @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_b17_skip_unchanged_assets(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """B-17: Assets with unchanged content AND unchanged enrichers MUST be skipped."""
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestResult,
             IngestStats,
         )
@@ -1360,7 +1360,7 @@ class TestCollectionIngestDuplicateHandling:
     @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_b17_skip_unchanged_assets_json_output(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """B-17: JSON output MUST include correct assets_skipped count."""
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestResult,
             IngestStats,
         )
@@ -1410,7 +1410,7 @@ class TestCollectionIngestDuplicateHandling:
     @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_b18_update_changed_content(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """B-18: Assets with changed content MUST be updated."""
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestResult,
             IngestStats,
         )
@@ -1455,7 +1455,7 @@ class TestCollectionIngestDuplicateHandling:
     @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_b18_update_changed_enrichers(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """B-18: Assets with unchanged content but changed enrichers MUST be updated."""
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestResult,
             IngestStats,
         )
@@ -1500,7 +1500,7 @@ class TestCollectionIngestDuplicateHandling:
     @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_b18_update_changed_content_and_enrichers(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """B-18: Assets with both changed content and enrichers MUST be updated."""
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestResult,
             IngestStats,
         )
@@ -1580,7 +1580,7 @@ class TestCollectionIngestTimeTrackingAndStatistics:
         """B-19: Upon successful completion, last_ingest_time MUST be updated to current timestamp."""
         from datetime import datetime
 
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestResult,
             IngestStats,
         )
@@ -1631,7 +1631,7 @@ class TestCollectionIngestTimeTrackingAndStatistics:
         """B-19: last_ingest_time MUST be updated even if all assets were skipped."""
         from datetime import datetime
 
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestResult,
             IngestStats,
         )
@@ -1682,7 +1682,7 @@ class TestCollectionIngestTimeTrackingAndStatistics:
     @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_b20_output_includes_statistics_distinguishing_asset_types(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """B-20: Output MUST include statistics distinguishing between new, skipped, and updated assets."""
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestResult,
             IngestStats,
         )
@@ -1733,7 +1733,7 @@ class TestCollectionIngestTimeTrackingAndStatistics:
         """B-21: JSON output MUST include last_ingest_time field."""
         from datetime import datetime
 
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestResult,
             IngestStats,
         )
@@ -1974,7 +1974,7 @@ class TestMilestone2CAssetPersistence:
         return imp
 
     def test_persist_new_assets_when_missing(self):
-        from retrovue.cli.commands._ops.collection_ingest_service import ContainerIngestService
+        from retrovue.workflows.container_ingest import ContainerIngestService
         from retrovue.domain.entities import Asset
         from tests.contracts._fakes import FakeDB
 
@@ -2000,7 +2000,7 @@ class TestMilestone2CAssetPersistence:
         assert len(asset_adds) == 2
 
     def test_skip_duplicates_by_canonical_hash(self):
-        from retrovue.cli.commands._ops.collection_ingest_service import ContainerIngestService
+        from retrovue.workflows.container_ingest import ContainerIngestService
         from retrovue.domain.entities import Asset
         from tests.contracts._fakes import FakeDB
 

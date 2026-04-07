@@ -43,7 +43,7 @@ class TestCollectionIngestDataContract:
         """
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection._get_db_context") as mock_get_db_context, \
-             patch("retrovue.cli.commands._ops.collection_ingest_service.ContainerIngestService") as mock_service:
+             patch("retrovue.workflows.container_ingest.ContainerIngestService") as mock_service:
             
             mock_db_cm = MagicMock()
             mock_db = MagicMock()
@@ -85,7 +85,7 @@ class TestCollectionIngestDataContract:
         """
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection._get_db_context") as mock_get_db_context, \
-             patch("retrovue.cli.commands._ops.collection_ingest_service.ContainerIngestService") as mock_service:
+             patch("retrovue.workflows.container_ingest.ContainerIngestService") as mock_service:
             
             mock_db_cm = MagicMock()
             mock_db = MagicMock()
@@ -180,7 +180,7 @@ class TestCollectionIngestDataContract:
         """
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection.session") as mock_session, \
-             patch("retrovue.cli.commands._ops.collection_ingest_service.ContainerIngestService") as mock_service, \
+             patch("retrovue.workflows.container_ingest.ContainerIngestService") as mock_service, \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer:
             
             mock_db = MagicMock()
@@ -350,7 +350,7 @@ class TestCollectionIngestDataContract:
         """
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection.session") as mock_session, \
-             patch("retrovue.cli.commands._ops.collection_ingest_service.ContainerIngestService") as mock_service, \
+             patch("retrovue.workflows.container_ingest.ContainerIngestService") as mock_service, \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer:
             
             mock_db = MagicMock()
@@ -399,7 +399,7 @@ class TestCollectionIngestDataContract:
         """
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection._get_db_context") as mock_get_db_context, \
-             patch("retrovue.cli.commands._ops.collection_ingest_service.ContainerIngestService") as mock_service:
+             patch("retrovue.workflows.container_ingest.ContainerIngestService") as mock_service:
             
             mock_db_cm = MagicMock()
             mock_db = MagicMock()
@@ -475,7 +475,7 @@ class TestCollectionIngestDataContract:
         """
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection.session") as mock_session, \
-             patch("retrovue.cli.commands._ops.collection_ingest_service.ContainerIngestService") as mock_service, \
+             patch("retrovue.workflows.container_ingest.ContainerIngestService") as mock_service, \
              patch("retrovue.cli.commands.collection.get_importer") as mock_get_importer:
             
             mock_db = MagicMock()
@@ -550,7 +550,7 @@ class TestCollectionIngestDataContract:
         """
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection._get_db_context") as mock_get_db_context, \
-             patch("retrovue.cli.commands._ops.collection_ingest_service.ContainerIngestService") as mock_service:
+             patch("retrovue.workflows.container_ingest.ContainerIngestService") as mock_service:
             
             mock_db_cm = MagicMock()
             mock_db = MagicMock()
@@ -590,7 +590,7 @@ class TestCollectionIngestDataContract:
         """
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection._get_db_context") as mock_get_db_context, \
-             patch("retrovue.cli.commands._ops.collection_ingest_service.ContainerIngestService") as mock_service:
+             patch("retrovue.workflows.container_ingest.ContainerIngestService") as mock_service:
             
             mock_db_cm = MagicMock()
             mock_db = MagicMock()
@@ -635,7 +635,7 @@ class TestCollectionIngestDataContract:
         """
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection._get_db_context") as mock_get_db_context, \
-             patch("retrovue.cli.commands._ops.collection_ingest_service.ContainerIngestService") as mock_service:
+             patch("retrovue.workflows.container_ingest.ContainerIngestService") as mock_service:
             
             mock_db_cm = MagicMock()
             mock_db = MagicMock()
@@ -672,7 +672,7 @@ class TestCollectionIngestDataContract:
         """
         collection_id = str(uuid.uuid4())
         with patch("retrovue.cli.commands.collection._get_db_context") as mock_get_db_context, \
-             patch("retrovue.cli.commands._ops.collection_ingest_service.ContainerIngestService") as mock_service:
+             patch("retrovue.workflows.container_ingest.ContainerIngestService") as mock_service:
             
             mock_db_cm = MagicMock()
             mock_db = MagicMock()
@@ -742,7 +742,7 @@ class TestCollectionIngestDuplicateHandlingDataContract:
     @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_d9_canonical_identity_uniqueness_within_collection(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """D-9: For a given collection, there MUST be at most one Asset per canonical identity."""
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestResult,
             IngestStats,
         )
@@ -797,7 +797,7 @@ class TestCollectionIngestDuplicateHandlingDataContract:
     @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_d10_content_change_detection_skips_unchanged(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """D-10: Assets with unchanged content MUST be skipped."""
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestResult,
             IngestStats,
         )
@@ -845,7 +845,7 @@ class TestCollectionIngestDuplicateHandlingDataContract:
     @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_d10_content_change_detection_updates_changed(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """D-10: Assets with changed content MUST be updated."""
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestResult,
             IngestStats,
         )
@@ -894,7 +894,7 @@ class TestCollectionIngestDuplicateHandlingDataContract:
     @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_d11_reingestion_on_content_change(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """D-11: Content changes MUST trigger re-ingestion."""
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestResult,
             IngestStats,
         )
@@ -943,7 +943,7 @@ class TestCollectionIngestDuplicateHandlingDataContract:
     @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_d11_reingestion_on_enricher_change(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """D-11: Enricher changes MUST trigger re-ingestion."""
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestResult,
             IngestStats,
         )
@@ -992,7 +992,7 @@ class TestCollectionIngestDuplicateHandlingDataContract:
     @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_d12_enricher_change_detection_compares_config(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """D-12: Enricher change detection MUST compare current collection enricher config with asset's last-ingested config."""
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestResult,
             IngestStats,
         )
@@ -1076,7 +1076,7 @@ class TestCollectionIngestAssetLifecycleAndTimeTracking:
     @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_d13_new_assets_start_in_new_state(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """D-13: Every new Asset MUST begin in lifecycle state 'new' and MUST NOT be in 'ready' state at creation time."""
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestResult,
             IngestStats,
         )
@@ -1127,7 +1127,7 @@ class TestCollectionIngestAssetLifecycleAndTimeTracking:
     @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_d14_updated_assets_reset_to_new_if_ready(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """D-14: Updated assets MUST have their lifecycle state reset to 'new' if they were previously in 'ready' state."""
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestResult,
             IngestStats,
         )
@@ -1182,7 +1182,7 @@ class TestCollectionIngestAssetLifecycleAndTimeTracking:
         """D-15: The collection's last_ingest_time field MUST be updated atomically within the same transaction as asset creation/updates."""
         from datetime import datetime
 
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestResult,
             IngestStats,
         )
@@ -1235,7 +1235,7 @@ class TestCollectionIngestAssetLifecycleAndTimeTracking:
         """D-16: The last_ingest_time update MUST occur regardless of whether any assets were actually ingested, updated, or skipped."""
         from datetime import datetime
 
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestResult,
             IngestStats,
         )
@@ -1286,7 +1286,7 @@ class TestCollectionIngestAssetLifecycleAndTimeTracking:
     @patch('retrovue.cli.commands.collection.ContainerIngestService')
     def test_d17_asset_update_timestamps_refreshed_on_reingestion(self, mock_service_class, mock_resolve, mock_get_importer, mock_session):
         """D-17: Asset update timestamps MUST be refreshed when assets are re-ingested due to content or enricher changes."""
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestResult,
             IngestStats,
         )

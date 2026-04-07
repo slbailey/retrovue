@@ -10,7 +10,7 @@ import json
 
 import typer
 
-import retrovue.cli.commands._ops.collection_ingest_service as collection_ingest_service
+import retrovue.workflows.container_ingest as collection_ingest_service
 
 from ...adapters.registry import get_importer  # noqa: F401 — used by construct_importer_for_collection re-export
 from ...infra.db import get_sessionmaker
