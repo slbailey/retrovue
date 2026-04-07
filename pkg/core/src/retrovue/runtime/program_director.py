@@ -1160,8 +1160,11 @@ class ProgramDirector:
                     )
                     last_refreeze = now
 
-                # --- Periodic memory telemetry ---
-                if now - last_mem_telemetry >= self._MEM_TELEMETRY_INTERVAL_S:
+                # --- Periodic memory telemetry (RETROVUE_DIAG=1 to enable) ---
+                if (
+                    os.environ.get("RETROVUE_DIAG", "0") == "1"
+                    and now - last_mem_telemetry >= self._MEM_TELEMETRY_INTERVAL_S
+                ):
                     last_mem_telemetry = now
                     try:
                         import resource
@@ -1370,8 +1373,12 @@ class ProgramDirector:
         holding the GIL.  With 12k+ catalog objects this can take 100-200ms,
         starving the upstream reader thread (UPSTREAM_LOOP select_ms spikes).
 
+        Gated by RETROVUE_DIAG=1 (off by default in production).
         Idempotent: skips if already installed (multiple start() calls).
         """
+        if os.environ.get("RETROVUE_DIAG", "0") != "1":
+            return
+
         sentinel = "_retrovue_gc_telemetry"
         for cb in gc.callbacks:
             if getattr(cb, "__name__", "") == sentinel:
