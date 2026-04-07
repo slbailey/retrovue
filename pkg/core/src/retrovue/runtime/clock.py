@@ -153,7 +153,7 @@ class MasterClock:
     @staticmethod
     def _resolve_timezone(tz: str | tzinfo | None) -> tzinfo:
         if tz is None:
-            return datetime.now().astimezone().tzinfo or timezone.utc
+            return datetime.now(timezone.utc).astimezone().tzinfo or timezone.utc
         if isinstance(tz, tzinfo):
             return tz
         try:

@@ -36,7 +36,7 @@ class MasterClock:
     def __post_init__(self) -> None:
         self._clock = RealTimeMasterClock()
         self._baseline = datetime.now(UTC)
-        self._local_tz = datetime.now().astimezone().tzinfo or UTC
+        self._local_tz = datetime.now(UTC).astimezone().tzinfo or UTC
         self.timezone_cache: dict[str, tzinfo] = {}
 
     def _apply_precision(self, dt: datetime) -> datetime:

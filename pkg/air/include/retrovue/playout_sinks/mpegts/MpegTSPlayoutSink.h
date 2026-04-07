@@ -10,7 +10,6 @@
 #include "retrovue/playout_sinks/mpegts/SinkConfig.h"
 #include "retrovue/playout_sinks/mpegts/SinkStats.h"
 #include "retrovue/playout_sinks/mpegts/MpegTSEncoder.h"
-#include "retrovue/playout_sinks/mpegts/TSMuxer.h"
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/timing/MasterClock.h"
 
@@ -38,16 +37,6 @@ class MpegTSPlayoutSink : public IPlayoutSink {
       std::shared_ptr<timing::MasterClock> master_clock
   );
 
-  // Test constructor: allows dependency injection of encoder and muxer
-  // For testing only - allows injecting stub encoder/muxer
-  MpegTSPlayoutSink(
-      const SinkConfig& config,
-      buffer::FrameRingBuffer& input_buffer,
-      std::shared_ptr<timing::MasterClock> master_clock,
-      std::unique_ptr<MpegTSEncoder> encoder,
-      std::unique_ptr<TSMuxer> muxer
-  );
-  
   ~MpegTSPlayoutSink() override;
 
   // IPlayoutSink interface
@@ -114,9 +103,8 @@ class MpegTSPlayoutSink : public IPlayoutSink {
   std::atomic<bool> client_connected_{false};
   std::thread accept_thread_;
 
-  // Encoder and Muxer
+  // Encoder
   std::unique_ptr<MpegTSEncoder> encoder_;
-  std::unique_ptr<TSMuxer> muxer_;
 
   // PTS mapping state
   // pts_zero_utc_us is set on first frame: master_clock_->now_utc_us() - frame.pts

@@ -12,10 +12,11 @@
 2. [Architecture Overview](#architecture-overview)
 3. [gRPC Interfaces](#grpc-interfaces)
 4. [First-Class Components](#first-class-components)
-5. [Component Relationships](#component-relationships)
-6. [Directory Structure](#directory-structure)
-7. [Key Documentation](#key-documentation)
-8. [Build and Test](#build-and-test)
+5. [Mux Authority](#mux-authority)
+6. [Component Relationships](#component-relationships)
+7. [Directory Structure](#directory-structure)
+8. [Key Documentation](#key-documentation)
+9. [Build and Test](#build-and-test)
 
 ---
 
@@ -162,6 +163,25 @@ PlayoutControlImpl → PlayoutInterface → PlayoutEngine
 
 ---
 
+## Mux Authority
+
+**EncoderPipeline is the sole authority for MPEG-TS muxing.** No other component may perform packet interleaving, timestamp ordering, or TS emission.
+
+| Concern | Owner | Location |
+|---------|-------|----------|
+| MPEG-TS packet muxing | EncoderPipeline | `playout_sinks/mpegts/EncoderPipeline.hpp/.cpp` |
+| DTS-order packet interleaving | MuxInterleaver (owned by EncoderPipeline) | `playout_sinks/mpegts/MuxInterleaver.hpp` |
+| H.264 + AAC encoding | EncoderPipeline | via FFmpeg `AVFormatContext` |
+
+**Prohibited:**
+- No second mux path, wrapper, or alternate TS emitter may exist.
+- No component outside EncoderPipeline may write MPEG-TS packets.
+- TSMuxer (stub) was deleted (April 2026) — it was a no-op placeholder that violated INV-NO-GHOST-METHODS-001. Its test double StubMuxer was also removed.
+
+This decision was made explicitly (April 2026) to eliminate a competing conceptual mux path. EncoderPipeline (2,479 lines) is real; TSMuxer was dead code.
+
+---
+
 ## Component Relationships
 
 - **PlayoutControlImpl** → **PlayoutInterface** → **PlayoutEngine**.  
@@ -192,7 +212,7 @@ pkg/air/
 │   ├── buffer/          FrameRingBuffer.h
 │   ├── decode/          FFmpegDecoder.h, FrameProducer.h (legacy/decode layer)
 │   ├── output/          OutputBus.h, IOutputSink.h, MpegTSOutputSink.h
-│   ├── playout_sinks/   IPlayoutSink.h, mpegts/* (legacy MpegTSPlayoutSink, EncoderPipeline, TSMuxer, TsOutputSink - used by MpegTSOutputSink)
+│   ├── playout_sinks/   IPlayoutSink.h, mpegts/* (legacy MpegTSPlayoutSink, EncoderPipeline, TsOutputSink - used by MpegTSOutputSink)
 │   ├── producers/       IProducer.h, file/FileProducer.h, programmatic/ProgrammaticProducer.h
 │   ├── renderer/        ProgramOutput.h
 │   ├── runtime/         PlayoutEngine, PlayoutInterface, PlayoutControl, ProducerBus, TimingLoop, ProgramFormat, AspectPolicy
@@ -203,7 +223,7 @@ pkg/air/
 │   ├── buffer/          FrameRingBuffer.cpp
 │   ├── decode/          FFmpegDecoder, FrameProducer
 │   ├── output/          OutputBus.cpp, MpegTSOutputSink.cpp
-│   ├── playout_sinks/   mpegts/* (EncoderPipeline, TSMuxer, MpegTSEncoder, TsOutputSink - used by MpegTSOutputSink)
+│   ├── playout_sinks/   mpegts/* (EncoderPipeline, MpegTSEncoder, TsOutputSink - used by MpegTSOutputSink)
 │   ├── producers/       file/FileProducer, programmatic/ProgrammaticProducer
 │   ├── renderer/        ProgramOutput.cpp
 │   ├── runtime/         PlayoutEngine, PlayoutInterface, PlayoutControl, ProducerBus, TimingLoop, ProgramFormat
