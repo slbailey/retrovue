@@ -76,7 +76,7 @@ class TestFullIngestReconciliation:
     """R-1: Full collection ingest soft-deletes assets not in discovered set."""
 
     def test_removed_asset_soft_deleted(self):
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestService,
         )
 
@@ -96,21 +96,21 @@ class TestFullIngestReconciliation:
         importer.name = "test"
 
         with patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.canonical_key_for",
+            "retrovue.workflows.container_ingest.canonical_key_for",
             return_value="key_a",
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.canonical_hash",
+            "retrovue.workflows.container_ingest.canonical_hash",
             return_value="hash_a",
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.handle_ingest",
+            "retrovue.workflows.container_ingest.handle_ingest",
             return_value={"resolved_fields": {}},
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.persist_asset_metadata",
+            "retrovue.workflows.container_ingest.persist_asset_metadata",
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.load_catalog_state_for_container",
+            "retrovue.workflows.container_ingest.load_catalog_state_for_container",
             return_value={"hash_gone": stale_asset},
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.enqueue_processor_jobs",
+            "retrovue.workflows.container_ingest.enqueue_processor_jobs",
         ):
             # Make scalar return None (no existing asset for the discovered item)
             db.scalar.return_value = None
@@ -135,7 +135,7 @@ class TestFullIngestReconciliation:
         state='ready' leaked into CatalogAssetResolver pool, producing
         block plans with non-existent file URIs that wedged AIR.
         """
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestService,
         )
 
@@ -155,21 +155,21 @@ class TestFullIngestReconciliation:
         importer.name = "test"
 
         with patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.canonical_key_for",
+            "retrovue.workflows.container_ingest.canonical_key_for",
             return_value="key_a",
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.canonical_hash",
+            "retrovue.workflows.container_ingest.canonical_hash",
             return_value="hash_a",
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.handle_ingest",
+            "retrovue.workflows.container_ingest.handle_ingest",
             return_value={"resolved_fields": {}},
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.persist_asset_metadata",
+            "retrovue.workflows.container_ingest.persist_asset_metadata",
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.load_catalog_state_for_container",
+            "retrovue.workflows.container_ingest.load_catalog_state_for_container",
             return_value={"hash_gone": stale_asset},
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.enqueue_processor_jobs",
+            "retrovue.workflows.container_ingest.enqueue_processor_jobs",
         ):
             db.scalar.return_value = None
 
@@ -197,7 +197,7 @@ class TestScopedIngestNoDelete:
     """R-2: Scoped ingest (title/season/episode) does NOT delete anything."""
 
     def test_title_scoped_ingest_skips_reconciliation(self):
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestService,
         )
 
@@ -212,18 +212,18 @@ class TestScopedIngestNoDelete:
         importer.name = "test"
 
         with patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.canonical_key_for",
+            "retrovue.workflows.container_ingest.canonical_key_for",
             return_value="key_a",
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.canonical_hash",
+            "retrovue.workflows.container_ingest.canonical_hash",
             return_value="hash_a",
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.handle_ingest",
+            "retrovue.workflows.container_ingest.handle_ingest",
             return_value={"resolved_fields": {}},
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.persist_asset_metadata",
+            "retrovue.workflows.container_ingest.persist_asset_metadata",
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.enqueue_processor_jobs",
+            "retrovue.workflows.container_ingest.enqueue_processor_jobs",
         ):
             db.scalar.return_value = None
 
@@ -246,7 +246,7 @@ class TestDryRunReconciliation:
     """R-3: Dry-run reports removals without mutating."""
 
     def test_dry_run_counts_but_does_not_delete(self):
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestService,
         )
 
@@ -263,19 +263,19 @@ class TestDryRunReconciliation:
         importer.name = "test"
 
         with patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.canonical_key_for",
+            "retrovue.workflows.container_ingest.canonical_key_for",
             return_value="key_a",
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.canonical_hash",
+            "retrovue.workflows.container_ingest.canonical_hash",
             return_value="hash_a",
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.handle_ingest",
+            "retrovue.workflows.container_ingest.handle_ingest",
             return_value={"resolved_fields": {}},
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.load_catalog_state_for_container",
+            "retrovue.workflows.container_ingest.load_catalog_state_for_container",
             return_value={"hash_gone": stale_asset},
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.persist_asset_metadata",
+            "retrovue.workflows.container_ingest.persist_asset_metadata",
         ):
             db.scalar.return_value = None
 
@@ -300,7 +300,7 @@ class TestEmptyDiscoverySafety:
     """R-4: Empty discovery does NOT delete anything."""
 
     def test_empty_discovery_preserves_all_assets(self):
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestService,
         )
 
@@ -337,7 +337,7 @@ class TestReAddRestoresAsset:
     """R-7: When a discovered item matches a soft-deleted asset by canonical_key_hash, restore and enqueue."""
 
     def test_restored_asset_counted_as_ingested(self):
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestService,
         )
 
@@ -360,24 +360,24 @@ class TestReAddRestoresAsset:
         importer.name = "test"
 
         with patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.discover_locators",
+            "retrovue.workflows.container_ingest.discover_locators",
             return_value=[(loc, item)],
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.canonical_key_for",
+            "retrovue.workflows.container_ingest.canonical_key_for",
             return_value="key_a",
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.canonical_hash",
+            "retrovue.workflows.container_ingest.canonical_hash",
             return_value="hash_a",
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.handle_ingest",
+            "retrovue.workflows.container_ingest.handle_ingest",
             return_value={"resolved_fields": {}},
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.persist_asset_metadata",
+            "retrovue.workflows.container_ingest.persist_asset_metadata",
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.load_catalog_state_for_container",
+            "retrovue.workflows.container_ingest.load_catalog_state_for_container",
             return_value={},
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.enqueue_processor_jobs",
+            "retrovue.workflows.container_ingest.enqueue_processor_jobs",
         ):
             # Repo finds the soft-deleted row when checking duplicate by canonical_key_hash
             db.scalar.return_value = soft_deleted_asset
@@ -402,7 +402,7 @@ class TestReAddRestoresAsset:
         State goes to 'new' (not 'ready') because the file may have changed
         while absent — enrichers need to re-probe.
         """
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestService,
         )
 
@@ -426,24 +426,24 @@ class TestReAddRestoresAsset:
         importer.name = "test"
 
         with patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.discover_locators",
+            "retrovue.workflows.container_ingest.discover_locators",
             return_value=[(loc, item)],
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.canonical_key_for",
+            "retrovue.workflows.container_ingest.canonical_key_for",
             return_value="key_a",
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.canonical_hash",
+            "retrovue.workflows.container_ingest.canonical_hash",
             return_value="hash_a",
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.handle_ingest",
+            "retrovue.workflows.container_ingest.handle_ingest",
             return_value={"resolved_fields": {}},
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.persist_asset_metadata",
+            "retrovue.workflows.container_ingest.persist_asset_metadata",
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.load_catalog_state_for_container",
+            "retrovue.workflows.container_ingest.load_catalog_state_for_container",
             return_value={},
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.enqueue_processor_jobs",
+            "retrovue.workflows.container_ingest.enqueue_processor_jobs",
         ):
             db.scalar.return_value = soft_deleted_asset
 
@@ -473,7 +473,7 @@ class TestStatsAccuracy:
     """R-6: assets_removed in output dict."""
 
     def test_assets_removed_in_to_dict(self):
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestResult,
             IngestStats,
         )

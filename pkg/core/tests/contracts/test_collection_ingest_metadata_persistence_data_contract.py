@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 
 from retrovue.adapters.importers.base import DiscoveredItem
-from retrovue.cli.commands._ops.collection_ingest_service import ContainerIngestService
+from retrovue.workflows.container_ingest import ContainerIngestService
 
 
 def _fake_collection() -> Any:
@@ -77,7 +77,7 @@ def service(monkeypatch: pytest.MonkeyPatch) -> ContainerIngestService:
     monkeypatch.setattr("retrovue.infra.canonical.canonical_key_for", lambda *a, **k: "canon/key")
     monkeypatch.setattr("retrovue.infra.canonical.canonical_hash", lambda *a, **k: "h" * 64)
     # No enrichers during this test path
-    monkeypatch.setattr("retrovue.cli.commands._ops.collection_ingest_service.ENRICHERS", {}, raising=True)
+    monkeypatch.setattr("retrovue.workflows.container_ingest.ENRICHERS", {}, raising=True)
     return ContainerIngestService(_DB())
 
 
@@ -96,14 +96,14 @@ def test_editorial_triggers_persistence(service: ContainerIngestService, monkeyp
         }
 
     monkeypatch.setattr(
-        "retrovue.cli.commands._ops.collection_ingest_service.persist_asset_metadata",
+        "retrovue.workflows.container_ingest.persist_asset_metadata",
         _persist,
         raising=True,
     )
 
     # Handler returns editorial at top-level and resolved_fields
     monkeypatch.setattr(
-        "retrovue.cli.commands._ops.collection_ingest_service.handle_ingest",
+        "retrovue.workflows.container_ingest.handle_ingest",
         lambda payload: {"editorial": {"title": "Akira"}, "resolved_fields": {"editorial": {"title": "Akira"}}},  # noqa: E501
         raising=True,
     )
@@ -132,14 +132,14 @@ def test_probed_triggers_persistence(service: ContainerIngestService, monkeypatc
         }
 
     monkeypatch.setattr(
-        "retrovue.cli.commands._ops.collection_ingest_service.persist_asset_metadata",
+        "retrovue.workflows.container_ingest.persist_asset_metadata",
         _persist,
         raising=True,
     )
 
     # Handler returns probed under resolved_fields
     monkeypatch.setattr(
-        "retrovue.cli.commands._ops.collection_ingest_service.handle_ingest",
+        "retrovue.workflows.container_ingest.handle_ingest",
         lambda payload: {"editorial": {}, "resolved_fields": {"probed": {"duration_ms": 120000}}},
         raising=True,
     )
@@ -163,14 +163,14 @@ def test_handler_is_called(service: ContainerIngestService, monkeypatch: pytest.
         return {"editorial": {}, "resolved_fields": {}}
 
     monkeypatch.setattr(
-        "retrovue.cli.commands._ops.collection_ingest_service.handle_ingest",
+        "retrovue.workflows.container_ingest.handle_ingest",
         _handle,
         raising=True,
     )
 
     # No-op persistence
     monkeypatch.setattr(
-        "retrovue.cli.commands._ops.collection_ingest_service.persist_asset_metadata",
+        "retrovue.workflows.container_ingest.persist_asset_metadata",
         lambda *a, **k: None,  # noqa: ANN001
         raising=True,
     )
@@ -211,7 +211,7 @@ def test_dry_run_does_not_persist(service: ContainerIngestService, monkeypatch: 
         called["persist"] = True
 
     monkeypatch.setattr(
-        "retrovue.cli.commands._ops.collection_ingest_service.persist_asset_metadata",
+        "retrovue.workflows.container_ingest.persist_asset_metadata",
         _persist,
         raising=True,
     )
@@ -246,13 +246,13 @@ def test_station_ops_triggers_persistence(service: ContainerIngestService, monke
         }
 
     monkeypatch.setattr(
-        "retrovue.cli.commands._ops.collection_ingest_service.persist_asset_metadata",
+        "retrovue.workflows.container_ingest.persist_asset_metadata",
         _persist,
         raising=True,
     )
 
     monkeypatch.setattr(
-        "retrovue.cli.commands._ops.collection_ingest_service.handle_ingest",
+        "retrovue.workflows.container_ingest.handle_ingest",
         lambda payload: {"editorial": {}, "resolved_fields": {"station_ops": {"content_class": "cartoon"}}},  # noqa: E501
         raising=True,
     )
@@ -281,13 +281,13 @@ def test_relationships_triggers_persistence(service: ContainerIngestService, mon
         }
 
     monkeypatch.setattr(
-        "retrovue.cli.commands._ops.collection_ingest_service.persist_asset_metadata",
+        "retrovue.workflows.container_ingest.persist_asset_metadata",
         _persist,
         raising=True,
     )
 
     monkeypatch.setattr(
-        "retrovue.cli.commands._ops.collection_ingest_service.handle_ingest",
+        "retrovue.workflows.container_ingest.handle_ingest",
         lambda payload: {"editorial": {}, "resolved_fields": {"relationships": {"series_id": "s-1"}}},  # noqa: E501
         raising=True,
     )
@@ -316,13 +316,13 @@ def test_sidecar_triggers_persistence(service: ContainerIngestService, monkeypat
         }
 
     monkeypatch.setattr(
-        "retrovue.cli.commands._ops.collection_ingest_service.persist_asset_metadata",
+        "retrovue.workflows.container_ingest.persist_asset_metadata",
         _persist,
         raising=True,
     )
 
     monkeypatch.setattr(
-        "retrovue.cli.commands._ops.collection_ingest_service.handle_ingest",
+        "retrovue.workflows.container_ingest.handle_ingest",
         lambda payload: {"editorial": {}, "resolved_fields": {"sidecar": {"asset_type": "movie"}}},  # noqa: E501
         raising=True,
     )

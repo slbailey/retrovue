@@ -20,7 +20,7 @@ from .collection_enrichers import _resolve_collection, apply_enrichers_to_collec
 
 def _resolve_source(db, selector):
     """Late-import wrapper to avoid circular dependency with CLI layer."""
-    from ..cli.commands._ops.source_ingest_service import resolve_source_selector
+    from ..workflows.source_ingest import resolve_source_selector
 
     return resolve_source_selector(db, selector)
 

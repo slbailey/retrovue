@@ -19,7 +19,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from retrovue.cli.commands._ops.source_ingest_service import (
+from retrovue.workflows.source_ingest import (
     SourceIngestService,
     SourceIngestResult,
 )
@@ -107,9 +107,9 @@ class TestEligibleCollectionFiltering:
         db.query.return_value.filter.return_value.all.return_value = [c_ok, c_skip]
 
         with patch(
-            "retrovue.cli.commands._ops.source_ingest_service._construct_importer"
+            "retrovue.workflows.source_ingest._construct_importer"
         ) as mock_cif, patch(
-            "retrovue.cli.commands._ops.source_ingest_service.ContainerIngestService"
+            "retrovue.workflows.source_ingest.ContainerIngestService"
         ) as mock_cis_cls:
             mock_cis = MagicMock()
             mock_cis.ingest_container.return_value = _FakeCISResult(
@@ -158,9 +158,9 @@ class TestStatsAggregation:
             return _FakeCISResult(collection_name="Movies", discovered=50, ingested=40, skipped=10)
 
         with patch(
-            "retrovue.cli.commands._ops.source_ingest_service._construct_importer"
+            "retrovue.workflows.source_ingest._construct_importer"
         ) as mock_cif, patch(
-            "retrovue.cli.commands._ops.source_ingest_service.ContainerIngestService"
+            "retrovue.workflows.source_ingest.ContainerIngestService"
         ) as mock_cis_cls:
             mock_cis = MagicMock()
             mock_cis.ingest_container.side_effect = _make_result
@@ -189,9 +189,9 @@ class TestDelegatesToCIS:
         db.query.return_value.filter.return_value.all.return_value = [c1]
 
         with patch(
-            "retrovue.cli.commands._ops.source_ingest_service._construct_importer"
+            "retrovue.workflows.source_ingest._construct_importer"
         ) as mock_cif, patch(
-            "retrovue.cli.commands._ops.source_ingest_service.ContainerIngestService"
+            "retrovue.workflows.source_ingest.ContainerIngestService"
         ) as mock_cis_cls:
             mock_importer = MagicMock()
             mock_cif.return_value = mock_importer
@@ -222,9 +222,9 @@ class TestDryRun:
         db.query.return_value.filter.return_value.all.return_value = [c1]
 
         with patch(
-            "retrovue.cli.commands._ops.source_ingest_service._construct_importer"
+            "retrovue.workflows.source_ingest._construct_importer"
         ) as mock_cif, patch(
-            "retrovue.cli.commands._ops.source_ingest_service.ContainerIngestService"
+            "retrovue.workflows.source_ingest.ContainerIngestService"
         ) as mock_cis_cls:
             mock_cif.return_value = MagicMock()
             mock_cis = MagicMock()
@@ -262,9 +262,9 @@ class TestPartialFailure:
             raise RuntimeError("Importer unreachable")
 
         with patch(
-            "retrovue.cli.commands._ops.source_ingest_service._construct_importer"
+            "retrovue.workflows.source_ingest._construct_importer"
         ) as mock_cif, patch(
-            "retrovue.cli.commands._ops.source_ingest_service.ContainerIngestService"
+            "retrovue.workflows.source_ingest.ContainerIngestService"
         ) as mock_cis_cls:
             mock_cif.return_value = MagicMock()
             mock_cis = MagicMock()
@@ -286,9 +286,9 @@ class TestPartialFailure:
         db.query.return_value.filter.return_value.all.return_value = [c1]
 
         with patch(
-            "retrovue.cli.commands._ops.source_ingest_service._construct_importer"
+            "retrovue.workflows.source_ingest._construct_importer"
         ) as mock_cif, patch(
-            "retrovue.cli.commands._ops.source_ingest_service.ContainerIngestService"
+            "retrovue.workflows.source_ingest.ContainerIngestService"
         ) as mock_cis_cls:
             mock_cif.return_value = MagicMock()
             mock_cis = MagicMock()
@@ -333,9 +333,9 @@ class TestOutputShape:
         db.query.return_value.filter.return_value.all.return_value = [c1]
 
         with patch(
-            "retrovue.cli.commands._ops.source_ingest_service._construct_importer"
+            "retrovue.workflows.source_ingest._construct_importer"
         ) as mock_cif, patch(
-            "retrovue.cli.commands._ops.source_ingest_service.ContainerIngestService"
+            "retrovue.workflows.source_ingest.ContainerIngestService"
         ) as mock_cis_cls:
             mock_cif.return_value = MagicMock()
             mock_cis = MagicMock()
@@ -370,9 +370,9 @@ class TestOutputShape:
         db.query.return_value.filter.return_value.all.return_value = [c1]
 
         with patch(
-            "retrovue.cli.commands._ops.source_ingest_service._construct_importer"
+            "retrovue.workflows.source_ingest._construct_importer"
         ) as mock_cif, patch(
-            "retrovue.cli.commands._ops.source_ingest_service.ContainerIngestService"
+            "retrovue.workflows.source_ingest.ContainerIngestService"
         ) as mock_cis_cls:
             mock_cif.return_value = MagicMock()
             mock_cis = MagicMock()

@@ -2050,7 +2050,7 @@ class TestMilestone2DAssetChangeDetection:
 
     @patch("retrovue.cli.commands.collection.session")
     def test_existing_asset_different_hash_is_skipped_no_update(self, mock_session):
-        from retrovue.cli.commands._ops import collection_ingest_service as svc
+        from retrovue.workflows import container_ingest as svc
         from retrovue.cli.main import app
         from retrovue.domain.entities import Asset
         from tests.contracts._fakes import FakeDB
@@ -2093,7 +2093,7 @@ class TestMilestone2DAssetChangeDetection:
 
     @patch("retrovue.cli.commands.collection.session")
     def test_existing_asset_different_enricher_is_skipped_no_update(self, mock_session):
-        from retrovue.cli.commands._ops import collection_ingest_service as svc
+        from retrovue.workflows import container_ingest as svc
         from retrovue.cli.main import app
         from retrovue.domain.entities import Asset
         from tests.contracts._fakes import FakeDB
@@ -2135,7 +2135,7 @@ class TestMilestone2DAssetChangeDetection:
 
     @patch("retrovue.cli.commands.collection.session")
     def test_existing_asset_no_diffs_increments_skipped(self, mock_session):
-        from retrovue.cli.commands._ops import collection_ingest_service as svc
+        from retrovue.workflows import container_ingest as svc
         from retrovue.cli.main import app
         from retrovue.domain.entities import Asset
         from tests.contracts._fakes import FakeDB
@@ -2196,7 +2196,7 @@ class TestMilestone3AAssetStateUpdate:
 
     @patch("retrovue.cli.commands.collection.session")
     def test_existing_asset_is_skipped_and_not_mutated(self, mock_session):
-        from retrovue.cli.commands._ops import collection_ingest_service as svc
+        from retrovue.workflows import container_ingest as svc
         from retrovue.cli.main import app
         from retrovue.domain.entities import Asset
         from tests.contracts._fakes import FakeDB
@@ -2245,7 +2245,7 @@ class TestMilestone3AAssetStateUpdate:
 
     @patch("retrovue.cli.commands.collection.session")
     def test_existing_asset_new_enricher_is_skipped_and_not_mutated(self, mock_session):
-        from retrovue.cli.commands._ops import collection_ingest_service as svc
+        from retrovue.workflows import container_ingest as svc
         from retrovue.cli.main import app
         from retrovue.domain.entities import Asset
         from tests.contracts._fakes import FakeDB
@@ -2294,7 +2294,7 @@ class TestMilestone3AAssetStateUpdate:
 
     @patch("retrovue.cli.commands.collection.session")
     def test_existing_asset_no_changes_keeps_state_and_no_add(self, mock_session):
-        from retrovue.cli.commands._ops import collection_ingest_service as svc
+        from retrovue.workflows import container_ingest as svc
         from retrovue.cli.main import app
         from retrovue.domain.entities import Asset
         from tests.contracts._fakes import FakeDB

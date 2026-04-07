@@ -46,7 +46,7 @@ class TestCatalogReconciliationContract:
         """Reconciliation with same source state produces no additional catalog changes."""
         from retrovue.infra.canonical import canonical_hash, canonical_key_for
 
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestService,
         )
 
@@ -77,12 +77,12 @@ class TestCatalogReconciliationContract:
         importer.discover.return_value = [item]
 
         with patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.handle_ingest",
+            "retrovue.workflows.container_ingest.handle_ingest",
             return_value={"resolved_fields": {}},
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.persist_asset_metadata",
+            "retrovue.workflows.container_ingest.persist_asset_metadata",
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.enqueue_processor_jobs",
+            "retrovue.workflows.container_ingest.enqueue_processor_jobs",
         ):
             svc = ContainerIngestService(db)
             r1 = svc.ingest_container(container=collection, importer=importer)
@@ -130,7 +130,7 @@ class TestCatalogReconciliationContract:
 
     def test_reconciliation_outcome_mark_unavailable_when_absent_from_source(self):
         """Locator was in catalog but absent from discovery → mark_unavailable, do not delete."""
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             ContainerIngestService,
         )
 
@@ -149,18 +149,18 @@ class TestCatalogReconciliationContract:
         importer.discover.return_value = [item]
 
         with patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.canonical_key_for",
+            "retrovue.workflows.container_ingest.canonical_key_for",
             return_value="key_a",
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.canonical_hash",
+            "retrovue.workflows.container_ingest.canonical_hash",
             return_value="hash_a",
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.handle_ingest",
+            "retrovue.workflows.container_ingest.handle_ingest",
             return_value={"resolved_fields": {}},
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.persist_asset_metadata",
+            "retrovue.workflows.container_ingest.persist_asset_metadata",
         ), patch(
-            "retrovue.cli.commands._ops.collection_ingest_service.load_catalog_state_for_container",
+            "retrovue.workflows.container_ingest.load_catalog_state_for_container",
             return_value={"hash_gone": stale},
         ):
             svc = ContainerIngestService(db)
@@ -170,7 +170,7 @@ class TestCatalogReconciliationContract:
 
     def test_reconciliation_workflow_steps_in_order(self):
         """Workflow runs: discover → detect sidecars → compare → determine → apply → enqueue."""
-        from retrovue.cli.commands._ops.collection_ingest_service import (
+        from retrovue.workflows.container_ingest import (
             discover_locators,
             load_catalog_state_for_container,
             determine_reconciliation_outcomes,

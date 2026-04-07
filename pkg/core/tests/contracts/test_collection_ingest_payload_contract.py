@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from retrovue.adapters.importers.base import DiscoveredItem
-from retrovue.cli.commands._ops.collection_ingest_service import ContainerIngestService
+from retrovue.workflows.container_ingest import ContainerIngestService
 
 
 def _fake_collection() -> Any:
@@ -69,7 +69,7 @@ def service(monkeypatch: pytest.MonkeyPatch) -> ContainerIngestService:
             return _NullChain()
 
 
-    monkeypatch.setattr("retrovue.cli.commands._ops.collection_ingest_service.ENRICHERS", {}, raising=True)
+    monkeypatch.setattr("retrovue.workflows.container_ingest.ENRICHERS", {}, raising=True)
     return ContainerIngestService(_DB())
 
 
@@ -81,7 +81,7 @@ def test_b20_ingest_builds_handler_payload(service: ContainerIngestService, monk
         return {"editorial": payload.get("editorial"), "resolved_fields": {}}
 
     monkeypatch.setattr(
-        "retrovue.cli.commands._ops.collection_ingest_service.handle_ingest",
+        "retrovue.workflows.container_ingest.handle_ingest",
         _handle,
         raising=True,
     )
