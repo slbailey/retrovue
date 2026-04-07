@@ -68,46 +68,38 @@ def _subprocess_expand_blocks(payload: dict) -> list[dict]:
     break_config = payload.get("break_config")
 
     # Create a short-lived DB session for asset library queries.
-    asset_library = None
-    db_session = None
-    try:
-        from retrovue.infra.uow import session as db_session_factory
-        from retrovue.catalog.db_asset_library import DatabaseAssetLibrary
-        db_session = db_session_factory()
-        asset_library = DatabaseAssetLibrary(db_session, channel_slug=channel_id)
-    except Exception:
-        pass  # Fall back to filler-only mode if DB unavailable.
+    # session() is a context manager — must use `with` to enter it.
+    from retrovue.infra.uow import session as db_session_factory
+    from retrovue.catalog.db_asset_library import DatabaseAssetLibrary
 
     results = []
     try:
-        for sb_dict in payload["blocks"]:
-            block_id = sb_dict.get("block_id", "unknown")
-            try:
-                filled = expand_editorial_block(
-                    sb_dict,
-                    filler_uri=filler_uri,
-                    filler_duration_ms=filler_duration_ms,
-                    asset_library=asset_library,
-                    policy=policy,
-                    break_config=break_config,
-                )
-                results.append({
-                    "block_id": block_id,
-                    "ok": True,
-                    "serialized": _serialize_scheduled_block(filled),
-                })
-            except Exception as e:
-                results.append({
-                    "block_id": block_id,
-                    "ok": False,
-                    "error": str(e),
-                })
-    finally:
-        if db_session is not None:
-            try:
-                db_session.close()
-            except Exception:
-                pass
+        with db_session_factory() as db_session:
+            asset_library = DatabaseAssetLibrary(db_session, channel_slug=channel_id)
+            for sb_dict in payload["blocks"]:
+                block_id = sb_dict.get("block_id", "unknown")
+                try:
+                    filled = expand_editorial_block(
+                        sb_dict,
+                        filler_uri=filler_uri,
+                        filler_duration_ms=filler_duration_ms,
+                        asset_library=asset_library,
+                        policy=policy,
+                        break_config=break_config,
+                    )
+                    results.append({
+                        "block_id": block_id,
+                        "ok": True,
+                        "serialized": _serialize_scheduled_block(filled),
+                    })
+                except Exception as e:
+                    results.append({
+                        "block_id": block_id,
+                        "ok": False,
+                        "error": str(e),
+                    })
+    except Exception:
+        pass  # Fall back: return whatever results we have so far.
 
     return results
 
