@@ -38,6 +38,59 @@ if TYPE_CHECKING:
     from retrovue.catalog.db_asset_library import DatabaseAssetLibrary
 
 
+# ---------------------------------------------------------------------------
+# INV-TRAFFIC-FILL-CACHED-QUERY-001: Block-scoped candidate cache
+# ---------------------------------------------------------------------------
+
+
+class _CandidateCache:
+    """Block-scoped cache for asset library query results.
+
+    Queries get_filler_assets once with the maximum filler duration,
+    then filters locally on subsequent calls. Pre-builds TrafficCandidate
+    objects once from the initial query result.
+
+    INV-TRAFFIC-FILL-CACHED-QUERY-001: Within a single fill_ad_blocks()
+    call, the asset library is queried at most once.
+    """
+
+    __slots__ = ("_filler_assets", "_traffic_candidates")
+
+    def __init__(
+        self,
+        asset_library: "DatabaseAssetLibrary",
+        max_duration_ms: int,
+        policy: TrafficPolicy | None,
+    ) -> None:
+        # Single query for all candidates up to max duration.
+        # Use count=100 to get a large pool (the shuffle inside
+        # get_filler_assets provides randomization).
+        count = 100 if policy else 20
+        self._filler_assets = asset_library.get_filler_assets(
+            max_duration_ms=max_duration_ms, count=count,
+        )
+        # Pre-build TrafficCandidate objects once.
+        self._traffic_candidates: list[TrafficCandidate] = [
+            TrafficCandidate(
+                asset_id=c.asset_uri,
+                asset_type=c.asset_type,
+                duration_ms=c.duration_ms,
+                asset_category=getattr(c, "asset_category", None),
+                cooldown_group=getattr(c, "cooldown_group", None),
+                tags=getattr(c, "tags", ()),
+            )
+            for c in self._filler_assets
+        ]
+
+    def get_filler_assets(self, max_duration_ms: int) -> list:
+        """Filter cached filler assets by max duration."""
+        return [a for a in self._filler_assets if a.duration_ms <= max_duration_ms]
+
+    def get_traffic_candidates(self, max_duration_ms: int) -> list[TrafficCandidate]:
+        """Filter cached TrafficCandidate objects by max duration."""
+        return [tc for tc in self._traffic_candidates if tc.duration_ms <= max_duration_ms]
+
+
 def _build_filler_segments(
     gap_ms: int,
     filler_uri: str,
@@ -169,15 +222,27 @@ def fill_ad_blocks(
     # advances between breaks. Copy to avoid mutating the caller's list.
     running_history: list[PlayRecord] = list(play_history) if play_history else []
 
+    # INV-TRAFFIC-FILL-CACHED-QUERY-001: Pre-query asset library once for
+    # this entire block. All break fills filter from this cache.
+    cache: _CandidateCache | None = None
+    if asset_library is not None:
+        max_filler_ms = max(
+            (s.segment_duration_ms for s in block.segments
+             if s.segment_type == "filler" and s.asset_uri == ""),
+            default=0,
+        )
+        if max_filler_ms > 0:
+            cache = _CandidateCache(asset_library, max_filler_ms, policy)
+
     for seg in block.segments:
         if seg.segment_type == "filler" and seg.asset_uri == "":
-            if asset_library is not None:
+            if cache is not None:
                 if break_config is not None:
                     # INV-TRAFFIC-FILL-STRUCTURED-001: Expand through BreakStructure
                     filled = _fill_structured_break(
                         break_duration_ms=seg.segment_duration_ms,
                         break_config=break_config,
-                        asset_library=asset_library,
+                        cache=cache,
                         policy=policy,
                         play_history=running_history,
                         now_ms=now_ms,
@@ -188,7 +253,7 @@ def fill_ad_blocks(
                 else:
                     filled = _fill_break_with_interstitials(
                         break_duration_ms=seg.segment_duration_ms,
-                        asset_library=asset_library,
+                        cache=cache,
                         policy=policy,
                         play_history=running_history,
                         now_ms=now_ms,
@@ -292,13 +357,14 @@ def _assert_no_filler_before_primary(
 def _fill_structured_break(
     break_duration_ms: int,
     break_config: BreakConfig,
-    asset_library: "DatabaseAssetLibrary",
+    cache: _CandidateCache,
     policy: TrafficPolicy | None = None,
     play_history: list[PlayRecord] | None = None,
     now_ms: int = 0,
     day_start_ms: int = 0,
     filler_uri: str = "",
     filler_duration_ms: int = 30_000,
+    asset_library: "DatabaseAssetLibrary | None" = None,
 ) -> list[ScheduledSegment] | None:
     """Fill a single break using BreakStructure slot expansion.
 
@@ -333,7 +399,7 @@ def _fill_structured_break(
         if slot.fill_rule == "bumper":
             bumper_seg = _select_bumper(
                 slot_duration_ms=slot.duration_ms,
-                asset_library=asset_library,
+                cache=cache,
             )
             if bumper_seg is not None:
                 structural_segments[i] = bumper_seg
@@ -348,7 +414,7 @@ def _fill_structured_break(
         elif slot.fill_rule == "station_id":
             sid_seg = _select_station_id(
                 slot_duration_ms=slot.duration_ms,
-                asset_library=asset_library,
+                cache=cache,
             )
             if sid_seg is not None:
                 structural_segments[i] = sid_seg
@@ -369,7 +435,7 @@ def _fill_structured_break(
 
     interstitial_segments = _fill_interstitial_pool(
         pool_duration_ms=interstitial_pool_ms,
-        asset_library=asset_library,
+        cache=cache,
         policy=policy,
         play_history=play_history,
         now_ms=now_ms,
@@ -403,20 +469,19 @@ def _fill_structured_break(
 
 def _select_bumper(
     slot_duration_ms: int,
-    asset_library: "DatabaseAssetLibrary",
+    cache: _CandidateCache,
 ) -> ScheduledSegment | None:
     """Select a single bumper asset for a bumper slot.
 
-    Queries the asset library for bumper-type assets that fit within the
+    Filters cached assets for bumper-type assets that fit within the
     slot duration. Returns the first eligible bumper, or None if none found.
 
     Bumper selection does not use the traffic policy engine. Bumpers are
     not subject to cooldown, daily caps, or rotation.
+
+    INV-TRAFFIC-FILL-CACHED-QUERY-001: Uses cached candidate data.
     """
-    candidates = asset_library.get_filler_assets(
-        max_duration_ms=slot_duration_ms,
-        count=10,
-    )
+    candidates = cache.get_filler_assets(max_duration_ms=slot_duration_ms)
     # Filter to bumper type only
     bumpers = [c for c in candidates if c.asset_type == "bumper"]
     if not bumpers:
@@ -436,20 +501,19 @@ def _select_bumper(
 
 def _select_station_id(
     slot_duration_ms: int,
-    asset_library: "DatabaseAssetLibrary",
+    cache: _CandidateCache,
 ) -> ScheduledSegment | None:
     """Select a single station ID asset for a station_id slot.
 
-    Queries the asset library for station_id-type assets that fit within the
+    Filters cached assets for station_id-type assets that fit within the
     slot duration. Returns the first eligible station ID, or None if none found.
 
     Station ID selection does not use the traffic policy engine. Station IDs
     are structural elements, not subject to cooldown, daily caps, or rotation.
+
+    INV-TRAFFIC-FILL-CACHED-QUERY-001: Uses cached candidate data.
     """
-    candidates = asset_library.get_filler_assets(
-        max_duration_ms=slot_duration_ms,
-        count=10,
-    )
+    candidates = cache.get_filler_assets(max_duration_ms=slot_duration_ms)
     # Filter to station_id type only
     station_ids = [c for c in candidates if c.asset_type == "station_id"]
     if not station_ids:
@@ -469,25 +533,28 @@ def _select_station_id(
 
 def _fill_interstitial_pool(
     pool_duration_ms: int,
-    asset_library: "DatabaseAssetLibrary",
+    cache: _CandidateCache,
     policy: TrafficPolicy | None = None,
     play_history: list[PlayRecord] | None = None,
     now_ms: int = 0,
     day_start_ms: int = 0,
     filler_uri: str = "",
     filler_duration_ms: int = 30_000,
+    asset_library: "DatabaseAssetLibrary | None" = None,
 ) -> list[ScheduledSegment]:
     """Fill the interstitial pool with traffic assets + pad.
 
     Same logic as _fill_break_with_interstitials but always returns segments
     (falls back to filler loop internally rather than returning None).
+
+    INV-TRAFFIC-FILL-CACHED-QUERY-001: Uses cached candidate data.
     """
     if pool_duration_ms <= 0:
         return []
 
     result = _fill_break_with_interstitials(
         break_duration_ms=pool_duration_ms,
-        asset_library=asset_library,
+        cache=cache,
         policy=policy,
         play_history=play_history,
         now_ms=now_ms,
@@ -581,14 +648,19 @@ def _assert_pad_invariants(segments: list[ScheduledSegment]) -> None:
 
 def _fill_break_with_interstitials(
     break_duration_ms: int,
-    asset_library: "DatabaseAssetLibrary",
+    cache: _CandidateCache,
     policy: TrafficPolicy | None = None,
     play_history: list[PlayRecord] | None = None,
     now_ms: int = 0,
     day_start_ms: int = 0,
+    asset_library: "DatabaseAssetLibrary | None" = None,
 ) -> list[ScheduledSegment] | None:
     """
-    Fill a single ad break with interstitials from the asset library.
+    Fill a single ad break with interstitials from cached candidates.
+
+    INV-TRAFFIC-FILL-CACHED-QUERY-001: Uses pre-queried candidate data
+    from the block-scoped cache. Filters by remaining duration locally
+    instead of re-querying the asset library per iteration.
 
     When a TrafficPolicy is provided, candidates are evaluated through
     the traffic policy engine (evaluate_candidates) which enforces allowed
@@ -617,25 +689,12 @@ def _fill_break_with_interstitials(
     history = play_history if play_history is not None else []
 
     while remaining_ms > 0:
-        candidates = asset_library.get_filler_assets(
-            max_duration_ms=remaining_ms, count=20 if policy else 5,
-        )
-        if not candidates:
-            break
-
         if policy is not None:
-            # Convert FillerAsset → TrafficCandidate for policy evaluation
-            traffic_candidates = [
-                TrafficCandidate(
-                    asset_id=c.asset_uri,
-                    asset_type=c.asset_type,
-                    duration_ms=c.duration_ms,
-                    asset_category=getattr(c, "asset_category", None),
-                    cooldown_group=getattr(c, "cooldown_group", None),
-                    tags=getattr(c, "tags", ()),
-                )
-                for c in candidates
-            ]
+            # INV-TRAFFIC-FILL-CACHED-QUERY-001: Filter pre-built
+            # TrafficCandidate objects by remaining duration.
+            traffic_candidates = cache.get_traffic_candidates(remaining_ms)
+            if not traffic_candidates:
+                break
             # Stage 2: filter + rotation sort
             ordered = evaluate_candidates(
                 traffic_candidates, policy, history, now_ms, day_start_ms,
@@ -664,6 +723,11 @@ def _fill_break_with_interstitials(
             break_categories.append(picked.asset_category)
             remaining_ms -= picked.duration_ms
         else:
+            # INV-TRAFFIC-FILL-CACHED-QUERY-001: Filter cached filler
+            # assets by remaining duration.
+            candidates = cache.get_filler_assets(remaining_ms)
+            if not candidates:
+                break
             pick = candidates[0]
             picks.append((pick.asset_uri, pick.duration_ms, pick.asset_type))
             break_categories.append(getattr(pick, "asset_category", None))

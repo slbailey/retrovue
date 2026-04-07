@@ -205,6 +205,7 @@ Canonical contract: [dsl_vocabulary.md](dsl_vocabulary.md)
 | INV-TRAFFIC-FILL-LATE-BIND-001 | [traffic_manager.md](traffic_manager.md) | LAW-ELIGIBILITY, LAW-CONTENT-AUTHORITY |
 | INV-TRAFFIC-FILL-FALLBACK-001 | [traffic_manager.md](traffic_manager.md) | LAW-GRID, LAW-CONTENT-AUTHORITY |
 | INV-TRAFFIC-FILL-BUDGET-001 | [traffic_manager.md](traffic_manager.md) | LAW-GRID, LAW-DERIVATION |
+| INV-TRAFFIC-FILL-CACHED-QUERY-001 | [traffic_manager.md](traffic_manager.md) | LAW-GRID, LAW-DERIVATION |
 
 ### Scheduling — Episode Progression
 

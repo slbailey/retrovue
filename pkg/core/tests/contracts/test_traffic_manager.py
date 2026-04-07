@@ -141,10 +141,12 @@ class FakeAssetLibrary:
 
     def __init__(self, assets: list[FakeFillerAsset]) -> None:
         self._assets = assets
+        self.get_filler_assets_call_count = 0
 
     def get_filler_assets(
         self, max_duration_ms: int = 0, count: int = 5,
     ) -> list[FakeFillerAsset]:
+        self.get_filler_assets_call_count += 1
         eligible = [a for a in self._assets if a.duration_ms <= max_duration_ms]
         return eligible[:count]
 
@@ -1518,4 +1520,120 @@ class TestStructuralSlotShortfall:
         total = sum(s.segment_duration_ms for s in filled)
         assert total == break_ms, (
             f"INV-TRAFFIC-FILL-EXACT-001: {total}ms != {break_ms}ms"
+        )
+
+
+# ===========================================================================
+# INV-TRAFFIC-FILL-CACHED-QUERY-001 — Asset library queried at most once per block
+# ===========================================================================
+
+
+class TestCachedQueryPerBlock:
+    """INV-TRAFFIC-FILL-CACHED-QUERY-001: Within a single fill_ad_blocks() call,
+    the asset library MUST be queried at most once. All break fill operations
+    reuse cached candidate data."""
+
+    # Tier: 2 | Performance invariant
+    def test_cached_query_single_call_per_block(self):
+        """Multiple filler placeholders in one block: asset library queried at most once."""
+        lib = _make_library(
+            ("promo1.ts", "promo", 15_000),
+            ("promo2.ts", "promo", 15_000),
+            ("promo3.ts", "promo", 15_000),
+            ("promo4.ts", "promo", 15_000),
+        )
+        # Block with 3 separate filler placeholders (3 ad breaks)
+        block = _block_with_multiple_fillers([60_000, 60_000, 60_000])
+        result = fill_ad_blocks(
+            block,
+            filler_uri=FILLER_URI,
+            filler_duration_ms=FILLER_DURATION_MS,
+            asset_library=lib,
+            policy=_policy(),
+            play_history=[],
+            now_ms=NOW_MS,
+            day_start_ms=DAY_START_MS,
+        )
+        # Verify fill still works correctly (exact duration)
+        total = sum(s.segment_duration_ms for s in result.segments)
+        assert total == GRID_DURATION_MS
+
+        # INV-TRAFFIC-FILL-CACHED-QUERY-001: at most 1 query to asset library
+        assert lib.get_filler_assets_call_count <= 1, (
+            f"INV-TRAFFIC-FILL-CACHED-QUERY-001 violated: get_filler_assets called "
+            f"{lib.get_filler_assets_call_count} times, expected at most 1"
+        )
+
+    # Tier: 2 | Performance invariant
+    def test_cached_query_tc_built_once(self):
+        """TrafficCandidate objects constructed once per block, reused across breaks.
+
+        Verified indirectly: if get_filler_assets is called once, TC objects
+        are built once from that single result set. We also verify that the
+        per-break while loop does not re-query (multiple spots per break)."""
+        lib = _make_library(
+            ("promo1.ts", "promo", 10_000),
+            ("promo2.ts", "promo", 10_000),
+            ("promo3.ts", "promo", 10_000),
+            ("promo4.ts", "promo", 10_000),
+            ("promo5.ts", "promo", 10_000),
+        )
+        # Single break with room for ~5 spots (each 10s in a 60s break)
+        # Without caching, the while loop queries once per spot pick = ~6 calls
+        block = _block_with_filler(60_000)
+        result = fill_ad_blocks(
+            block,
+            filler_uri=FILLER_URI,
+            filler_duration_ms=FILLER_DURATION_MS,
+            asset_library=lib,
+            policy=_policy(),
+            play_history=[],
+            now_ms=NOW_MS,
+            day_start_ms=DAY_START_MS,
+        )
+        # Verify correctness
+        total = sum(s.segment_duration_ms for s in result.segments)
+        assert total == GRID_DURATION_MS
+
+        # INV-TRAFFIC-FILL-CACHED-QUERY-001: at most 1 query even with
+        # multiple spot iterations within a single break
+        assert lib.get_filler_assets_call_count <= 1, (
+            f"INV-TRAFFIC-FILL-CACHED-QUERY-001 violated: get_filler_assets called "
+            f"{lib.get_filler_assets_call_count} times within single break fill, "
+            f"expected at most 1"
+        )
+
+    # Tier: 2 | Performance invariant
+    def test_cached_query_structured_fill(self):
+        """Structured fill (with BreakConfig) also respects query caching."""
+        bumper_config = BreakConfig(to_break_bumper_ms=3000, from_break_bumper_ms=3000)
+        lib = _make_library(
+            ("bumper_in.ts", "bumper", 3000),
+            ("bumper_out.ts", "bumper", 3000),
+            ("promo1.ts", "promo", 15_000),
+            ("promo2.ts", "promo", 15_000),
+            ("promo3.ts", "promo", 15_000),
+        )
+        # Two filler placeholders with break_config
+        block = _block_with_multiple_fillers([60_000, 60_000])
+        result = fill_ad_blocks(
+            block,
+            filler_uri=FILLER_URI,
+            filler_duration_ms=FILLER_DURATION_MS,
+            asset_library=lib,
+            policy=_policy(allowed_types=["promo", "bumper"]),
+            play_history=[],
+            now_ms=NOW_MS,
+            day_start_ms=DAY_START_MS,
+            break_config=bumper_config,
+        )
+        total = sum(s.segment_duration_ms for s in result.segments)
+        assert total == GRID_DURATION_MS
+
+        # With structured fill: bumper selection + interstitial pool + iteration
+        # previously would call get_filler_assets many times. With caching: at most 1.
+        assert lib.get_filler_assets_call_count <= 1, (
+            f"INV-TRAFFIC-FILL-CACHED-QUERY-001 violated: get_filler_assets called "
+            f"{lib.get_filler_assets_call_count} times in structured fill, "
+            f"expected at most 1"
         )

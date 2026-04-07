@@ -243,6 +243,18 @@ Derived From: `LAW-GRID`, `LAW-DERIVATION`
 
 ---
 
+### INV-TRAFFIC-FILL-CACHED-QUERY-001 — Asset library queried at most once per block fill
+
+Status: Invariant
+Authority Level: Planning
+Derived From: `LAW-GRID`, `LAW-DERIVATION`
+
+**Guarantee:** Within a single `fill_ad_blocks()` invocation, the asset library MUST be queried at most once for interstitial candidates. All break fill operations within the block MUST reuse cached candidate data, filtering locally by remaining duration. TrafficCandidate objects MUST be constructed once from the cached query result, not recreated per break or per iteration.
+
+**Violation:** A `fill_ad_blocks()` call that queries `get_filler_assets()` more than once; a break fill loop that re-queries the asset library per spot pick; TrafficCandidate objects constructed from fresh query results on each iteration.
+
+---
+
 ## Pipeline Position
 
 ```
@@ -348,6 +360,8 @@ This contract consolidates and supersedes traffic manager invariants previously 
 | `test_fallback_no_error` | INV-TRAFFIC-FILL-FALLBACK-001 | No candidates: no exception, produces valid segments. |
 | `test_total_fill_within_budget` | INV-TRAFFIC-FILL-BUDGET-001 | Sum of all break allocations <= break_budget_ms. |
 | `test_rounding_does_not_overshoot` | INV-TRAFFIC-FILL-BUDGET-001 | Weight rounding across 5 breaks stays within budget. |
+| `test_cached_query_single_call_per_block` | INV-TRAFFIC-FILL-CACHED-QUERY-001 | Multiple filler placeholders in one block: asset library queried at most once. |
+| `test_cached_query_tc_built_once` | INV-TRAFFIC-FILL-CACHED-QUERY-001 | TrafficCandidate objects constructed once per block, reused across breaks. |
 
 ---
 
