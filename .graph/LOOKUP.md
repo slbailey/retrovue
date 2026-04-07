@@ -57,6 +57,8 @@ Always merge `relationships/cross-domain.yaml` when tracing cross-domain seams.
 | playout-session | service | `services/playout/playout-session.md` | playout | `by-domain/playout.yaml` |
 | air-playout-engine | service | `services/playout/air-playout-engine.md` | playout | `by-domain/playout.yaml`, `cross-domain.yaml`, `by-domain/systems.yaml` |
 | importer | service | `services/ingest/importer.md` | ingest | `by-domain/ingest.yaml`, `by-domain/systems.yaml` |
+| source-ingest-workflow | service | `services/ingest/source-ingest-workflow.md` | ingest | `by-domain/ingest.yaml` |
+| container-ingest-workflow | service | `services/ingest/container-ingest-workflow.md` | ingest | `by-domain/ingest.yaml` |
 | evidence-server | service | `services/playout/evidence-server.md` | playout | `by-domain/playout.yaml`, `cross-domain.yaml` |
 | master-clock | service | `services/systems/master-clock.md` | systems | `by-domain/systems.yaml` |
 
@@ -72,6 +74,9 @@ Always merge `relationships/cross-domain.yaml` when tracing cross-domain seams.
 | INV-EPG-NONAUTHORITATIVE-FOR-PLAYOUT-001 | invariant | `invariants/playout/INV-EPG-NONAUTHORITATIVE-FOR-PLAYOUT-001.md` | playout | `by-domain/playout.yaml` |
 | INV-HLS-NO-DISK-IO-001 | invariant | `invariants/playout/INV-HLS-NO-DISK-IO-001.md` | playout | `by-domain/playout.yaml` |
 | INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001 | invariant | `invariants/ingest/INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001.md` | ingest | `by-domain/ingest.yaml` |
+| INV-CLI-NO-BUSINESS-LOGIC-001 | invariant | `invariants/systems/INV-CLI-NO-BUSINESS-LOGIC-001.md` | systems | `by-domain/ingest.yaml` |
+| INV-API-NO-BUSINESS-LOGIC-001 | invariant | `invariants/systems/INV-API-NO-BUSINESS-LOGIC-001.md` | systems | `by-domain/ingest.yaml` |
+| INV-WORKFLOW-FLAT-NESTING-001 | invariant | `invariants/systems/INV-WORKFLOW-FLAT-NESTING-001.md` | systems | `by-domain/ingest.yaml` |
 | INV-AUTHORITY-SINGLE-OWNER-001 | invariant | `invariants/systems/INV-AUTHORITY-SINGLE-OWNER-001.md` | systems | `by-domain/systems.yaml` |
 | INV-NO-GHOST-METHODS-001 | invariant | `invariants/systems/INV-NO-GHOST-METHODS-001.md` | systems | `by-domain/systems.yaml` |
 | INV-LIFECYCLE-OBSERVABILITY-001 | invariant | `invariants/playout/INV-LIFECYCLE-OBSERVABILITY-001.md` | playout | `by-domain/playout.yaml` |

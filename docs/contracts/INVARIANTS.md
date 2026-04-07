@@ -274,6 +274,14 @@ Canonical contract: [core/programming_pools.md](core/programming_pools.md)
 | INV-ASSET-TAGS-PERSISTED-CORRECTLY-001 | [invariants/core/ingest/INV-ASSET-TAGS-PERSISTED-CORRECTLY-001.md](invariants/core/ingest/INV-ASSET-TAGS-PERSISTED-CORRECTLY-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
 | INV-ASSET-LIFECYCLE-COMPLETION-001 | [invariants/core/ingest/INV-ASSET-LIFECYCLE-COMPLETION-001.md](invariants/core/ingest/INV-ASSET-LIFECYCLE-COMPLETION-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
 
+### Interaction Boundary
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-CLI-NO-BUSINESS-LOGIC-001 | [invariants/core/interaction-boundary/INV-CLI-NO-BUSINESS-LOGIC-001.md](invariants/core/interaction-boundary/INV-CLI-NO-BUSINESS-LOGIC-001.md) | LAW-CONTENT-AUTHORITY |
+| INV-API-NO-BUSINESS-LOGIC-001 | [invariants/core/interaction-boundary/INV-API-NO-BUSINESS-LOGIC-001.md](invariants/core/interaction-boundary/INV-API-NO-BUSINESS-LOGIC-001.md) | LAW-CONTENT-AUTHORITY |
+| INV-WORKFLOW-FLAT-NESTING-001 | [invariants/core/interaction-boundary/INV-WORKFLOW-FLAT-NESTING-001.md](invariants/core/interaction-boundary/INV-WORKFLOW-FLAT-NESTING-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+
 ### Scheduling — Schedule Block Program Reference
 
 | Invariant | File | Derived From |

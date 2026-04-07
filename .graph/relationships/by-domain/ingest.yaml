@@ -23,3 +23,32 @@
 - type: constrained_by
   from: { kind: service, id: importer }
   to: { kind: invariant, id: INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001 }
+
+# Workflow layer (Phase 1 — RETA-69)
+
+- type: drives
+  from: { kind: service, id: source-ingest-workflow }
+  to: { kind: service, id: container-ingest-workflow }
+  note: Iterates eligible containers, delegates each to container ingest
+
+- type: depends_on
+  from: { kind: service, id: source-ingest-workflow }
+  to: { kind: entity, id: source }
+
+- type: drives
+  from: { kind: service, id: container-ingest-workflow }
+  to: { kind: service, id: importer }
+  note: Constructs importer for the container, drives discovery
+
+- type: produces
+  from: { kind: service, id: container-ingest-workflow }
+  to: { kind: entity, id: asset }
+  note: Via reconciliation and persistence
+
+- type: constrained_by
+  from: { kind: service, id: source-ingest-workflow }
+  to: { kind: invariant, id: INV-WORKFLOW-FLAT-NESTING-001 }
+
+- type: constrained_by
+  from: { kind: service, id: container-ingest-workflow }
+  to: { kind: invariant, id: INV-WORKFLOW-FLAT-NESTING-001 }
