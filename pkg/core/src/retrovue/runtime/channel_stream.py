@@ -155,7 +155,7 @@ _logger = logging.getLogger(__name__)
 # =============================================================================
 # Diagnostic constants — set per-instance from resolved_config in ChannelStream.__init__.
 # Module-level values are sentinels for code outside the class (pre-instance).
-_DIAG_ENABLED = False
+_DIAG_ENABLED = os.environ.get("RETROVUE_DIAG", "1") == "1"
 _DIAG_STARTUP_EVENTS = 200
 _DIAG_STEADY_INTERVAL = 100
 

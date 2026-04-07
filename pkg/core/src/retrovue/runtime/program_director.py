@@ -1111,9 +1111,12 @@ class ProgramDirector:
 
     _GC_REFREEZE_INTERVAL_S = 15.0
 
+    _MEM_TELEMETRY_INTERVAL_S = 60.0  # emit memory summary every 60s
+
     def _health_check_loop(self) -> None:
         """Run check_health() and tick() on each registered ChannelManager (embedded mode)."""
         last_refreeze = time.monotonic()
+        last_mem_telemetry = time.monotonic()
         while (
             self._health_check_stop is not None
             and not self._health_check_stop.wait(timeout=self._health_check_interval_seconds)
@@ -1156,6 +1159,43 @@ class ProgramDirector:
                         _gc_after["uncollectable"] - _gc_before["uncollectable"],
                     )
                     last_refreeze = now
+
+                # --- Periodic memory telemetry ---
+                if now - last_mem_telemetry >= self._MEM_TELEMETRY_INTERVAL_S:
+                    last_mem_telemetry = now
+                    try:
+                        import resource
+                        rss_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+                        rss_mb = rss_kb / 1024
+                        pipeline_summary: list[str] = []
+                        with self._fanout_lock:
+                            for ch_id, fanout in self._fanout_buffers.items():
+                                rb = fanout._ring_buffer.current_bytes
+                                rb_drop = fanout._ring_buffer.dropped_bytes
+                                with fanout.subscribers_lock:
+                                    n_subs = len(fanout.subscribers)
+                                    sub_bytes = sum(
+                                        sq.current_bytes for sq in fanout.subscribers.values()
+                                    )
+                                hls_bytes = 0
+                                if fanout.hls_segmenter is not None:
+                                    hls_bytes = len(fanout.hls_segmenter._seg_buffer)
+                                    ring = fanout.hls_segmenter._ring
+                                    if hasattr(ring, "_segments"):
+                                        hls_bytes += sum(
+                                            len(s.data) for s in ring._segments.values()
+                                        )
+                                pipeline_summary.append(
+                                    f"{ch_id}(ring={rb}B,subs={n_subs}/{sub_bytes}B,hls={hls_bytes}B,drop={rb_drop}B)"
+                                )
+                        thread_count = threading.active_count()
+                        self._logger.info(
+                            "[MEM] rss_peak_mb=%.1f threads=%d pipeline=[%s]",
+                            rss_mb, thread_count,
+                            " ".join(pipeline_summary) if pipeline_summary else "idle",
+                        )
+                    except Exception:
+                        pass
 
             except Exception as e:
                 self._logger.warning("Health check loop error: %s", e, exc_info=True)
@@ -1993,6 +2033,129 @@ class ProgramDirector:
                     content=str(e),
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
+
+        @self.fastapi_app.get("/debug/memory")
+        def debug_memory() -> dict[str, Any]:
+            """Memory leak diagnostics: pipeline byte counts and tracemalloc snapshot.
+
+            Reports exactly where bytes live in the TS/HLS pipeline so we can
+            identify retention leaks.  Zero overhead when not called.
+            """
+            import resource
+            import sys
+            import tracemalloc
+
+            rusage = resource.getrusage(resource.RUSAGE_SELF)
+            rss_mb = rusage.ru_maxrss / 1024  # Linux reports in KB
+
+            # --- GC stats ---
+            gc_stats = gc.get_stats()
+            gc_counts = gc.get_count()
+
+            # --- Per-channel pipeline byte counts ---
+            pipeline: dict[str, Any] = {}
+            with self._fanout_lock:
+                for ch_id, fanout in self._fanout_buffers.items():
+                    ch_info: dict[str, Any] = {}
+                    # Ring buffer
+                    ch_info["ring_buffer_bytes"] = fanout._ring_buffer.current_bytes
+                    ch_info["ring_buffer_hwm"] = fanout._ring_buffer.high_water_mark
+                    ch_info["ring_buffer_dropped_bytes"] = fanout._ring_buffer.dropped_bytes
+                    # Subscribers
+                    with fanout.subscribers_lock:
+                        subs: dict[str, Any] = {}
+                        for sid, sq in fanout.subscribers.items():
+                            subs[sid] = {
+                                "queue_bytes": sq.current_bytes,
+                                "queue_chunks": sq.current_chunk_count
+                                    if hasattr(sq, "current_chunk_count") else "n/a",
+                            }
+                        ch_info["subscriber_count"] = len(fanout.subscribers)
+                        ch_info["subscribers"] = subs
+                    # HLS segmenter
+                    if fanout.hls_segmenter is not None:
+                        seg = fanout.hls_segmenter
+                        ch_info["hls_seg_buffer_bytes"] = len(seg._seg_buffer)
+                        ch_info["hls_seg_leftover_bytes"] = len(seg._leftover)
+                        ring = seg._ring
+                        ch_info["hls_segment_ring_count"] = len(ring._segments) if hasattr(ring, "_segments") else "n/a"
+                        ch_info["hls_segment_ring_bytes"] = sum(
+                            len(s.data) for s in ring._segments.values()
+                        ) if hasattr(ring, "_segments") else "n/a"
+                    else:
+                        ch_info["hls_segmenter"] = None
+                    # Thread state
+                    ch_info["reader_thread_alive"] = (
+                        fanout.reader_thread is not None and fanout.reader_thread.is_alive()
+                    )
+                    ch_info["fanout_thread_alive"] = (
+                        fanout._fanout_thread is not None and fanout._fanout_thread.is_alive()
+                    )
+                    pipeline[ch_id] = ch_info
+
+            # --- Thread count ---
+            thread_count = threading.active_count()
+
+            # --- asyncio tasks ---
+            try:
+                loop = asyncio.get_running_loop()
+                task_count = len(asyncio.all_tasks(loop))
+            except RuntimeError:
+                task_count = "no_event_loop"
+
+            # --- tracemalloc top allocations ---
+            tracemalloc_top: list[dict[str, Any]] = []
+            if tracemalloc.is_tracing():
+                snapshot = tracemalloc.take_snapshot()
+                top_stats = snapshot.statistics("lineno")
+                for stat in top_stats[:25]:
+                    tracemalloc_top.append({
+                        "file": str(stat.traceback),
+                        "size_mb": round(stat.size / 1048576, 2),
+                        "count": stat.count,
+                    })
+
+            return {
+                "rss_peak_mb": round(rss_mb, 1),
+                "gc_counts": gc_counts,
+                "gc_stats": gc_stats,
+                "thread_count": thread_count,
+                "asyncio_task_count": task_count,
+                "fanout_channels": list(pipeline.keys()),
+                "pipeline": pipeline,
+                "tracemalloc_tracing": tracemalloc.is_tracing(),
+                "tracemalloc_top_25": tracemalloc_top,
+            }
+
+        @self.fastapi_app.post("/debug/memory/tracemalloc-start")
+        def debug_tracemalloc_start() -> dict[str, str]:
+            """Enable tracemalloc (10-frame depth). Call before test run."""
+            import tracemalloc
+            if not tracemalloc.is_tracing():
+                tracemalloc.start(10)
+                return {"status": "started"}
+            return {"status": "already_tracing"}
+
+        @self.fastapi_app.post("/debug/memory/tracemalloc-snapshot")
+        def debug_tracemalloc_snapshot() -> dict[str, Any]:
+            """Take tracemalloc snapshot and compare to start."""
+            import tracemalloc
+            if not tracemalloc.is_tracing():
+                return {"error": "tracemalloc not started"}
+            snapshot = tracemalloc.take_snapshot()
+            top_stats = snapshot.statistics("lineno")
+            return {
+                "top_30": [
+                    {
+                        "file": str(stat.traceback),
+                        "size_mb": round(stat.size / 1048576, 2),
+                        "count": stat.count,
+                    }
+                    for stat in top_stats[:30]
+                ],
+                "traced_memory_mb": round(tracemalloc.get_traced_memory()[0] / 1048576, 1),
+                "traced_peak_mb": round(tracemalloc.get_traced_memory()[1] / 1048576, 1),
+            }
 
         @self.fastapi_app.post("/admin/reload-config")
         async def reload_config() -> dict[str, Any]:
