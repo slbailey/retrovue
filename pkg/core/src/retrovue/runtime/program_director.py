@@ -1165,8 +1165,11 @@ class ProgramDirector:
                     last_mem_telemetry = now
                     try:
                         import resource
-                        rss_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-                        rss_mb = rss_kb / 1024
+                        # Current RSS from /proc (not peak)
+                        with open("/proc/self/statm") as _statm:
+                            _resident_pages = int(_statm.read().split()[1])
+                        rss_mb = _resident_pages * os.sysconf("SC_PAGE_SIZE") / 1048576
+                        peak_rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
                         pipeline_summary: list[str] = []
                         with self._fanout_lock:
                             for ch_id, fanout in self._fanout_buffers.items():
@@ -1189,9 +1192,11 @@ class ProgramDirector:
                                     f"{ch_id}(ring={rb}B,subs={n_subs}/{sub_bytes}B,hls={hls_bytes}B,drop={rb_drop}B)"
                                 )
                         thread_count = threading.active_count()
+                        gc_tracked = len(gc.get_objects())
+                        gc_frozen = gc.get_freeze_count() if hasattr(gc, "get_freeze_count") else -1
                         self._logger.info(
-                            "[MEM] rss_peak_mb=%.1f threads=%d pipeline=[%s]",
-                            rss_mb, thread_count,
+                            "[MEM] rss_mb=%.1f peak_mb=%.1f threads=%d gc_tracked=%d gc_frozen=%d pipeline=[%s]",
+                            rss_mb, peak_rss_mb, thread_count, gc_tracked, gc_frozen,
                             " ".join(pipeline_summary) if pipeline_summary else "idle",
                         )
                     except Exception:
@@ -2046,7 +2051,10 @@ class ProgramDirector:
             import tracemalloc
 
             rusage = resource.getrusage(resource.RUSAGE_SELF)
-            rss_mb = rusage.ru_maxrss / 1024  # Linux reports in KB
+            peak_rss_mb = rusage.ru_maxrss / 1024  # Linux reports in KB
+            with open("/proc/self/statm") as _f:
+                _pages = int(_f.read().split()[1])
+            rss_mb = _pages * os.sysconf("SC_PAGE_SIZE") / 1048576
 
             # --- GC stats ---
             gc_stats = gc.get_stats()
@@ -2116,7 +2124,8 @@ class ProgramDirector:
                     })
 
             return {
-                "rss_peak_mb": round(rss_mb, 1),
+                "rss_mb": round(rss_mb, 1),
+                "rss_peak_mb": round(peak_rss_mb, 1),
                 "gc_counts": gc_counts,
                 "gc_stats": gc_stats,
                 "thread_count": thread_count,
