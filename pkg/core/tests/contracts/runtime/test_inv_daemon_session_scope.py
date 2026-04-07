@@ -267,16 +267,17 @@ class TestRule3ExtendNoOwnSessions:
         source = textwrap.dedent(inspect.getsource(PlaylistBuilderDaemon._extend_to_target))
         tree = ast.parse(source)
 
-        # Find calls to self._get_asset_library and self._write_to_txlog and check
-        # they pass a `db` keyword argument
-        helpers_checked = {"_get_asset_library": False, "_write_to_txlog": False}
+        # INV-BLOCKFILL-SUBPROCESS-ISOLATION-001: expand_editorial_block and
+        # _get_asset_library now run in a subprocess. _extend_to_target still
+        # calls _write_to_txlog (DB write) and other DB helpers in parent.
+        # Check that DB helpers called from _extend_to_target pass db=.
+        helpers_checked = {"_write_to_txlog": False}
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             func = node.func
             if not isinstance(func, ast.Attribute):
                 continue
-            # self.xxx → Attribute(value=Name(id='self'), attr='xxx')
             method_name = func.attr
             if method_name in helpers_checked:
                 kw_names = [kw.arg for kw in node.keywords]

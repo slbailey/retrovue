@@ -301,6 +301,7 @@ All test definitions in sections 6–7 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-SCHEDULE-SEED-DETERMINISTIC-001 | SEED-001..004 | ScheduleCompiler |
 | INV-BLOCK-SEGMENT-CONSERVATION-001 | BLOCK-CONSERVATION-001..004 | ScheduledBlock |
 | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 (structural) | PLAYLOG-BATCHED-003, PLAYLOG-BATCHED-004, PLAYLOG-BATCHED-005 | PlaylistEvent |
+| INV-BLOCKFILL-SUBPROCESS-ISOLATION-001 (structural) | SUBPROCESS-ISOLATION-001, SUBPROCESS-ISOLATION-002 | PlaylistEvent |
 | INV-HLS-DISCONTINUITY-MARKER-001 (structural) | HLS-DISCONT-001 | Runtime — HLS |
 | INV-CONSTRAINT-BLACKOUT-001 | CONSTRAINT-BLACKOUT-001..007 | ScheduleConstraints |
 | INV-CONSTRAINT-EVALUATION-IDEMPOTENT-001 | CONSTRAINT-IDEMPOTENT-001..003 | ScheduleConstraints |
@@ -1002,6 +1003,34 @@ Tests in this section exercise the scheduling derivation chain — compiler, exp
 
 ---
 
+### SUBPROCESS-ISOLATION-001: _extend_to_target uses subprocess for expansion
+
+| Field | Value |
+|---|---|
+| **Invariant(s)** | INV-BLOCKFILL-SUBPROCESS-ISOLATION-001 |
+| **Derived Law(s)** | LAW-LIVENESS |
+| **Scenario** | AST scan of _extend_to_target() source. The method MUST NOT contain direct calls to expand_editorial_block. Block expansion MUST be delegated to a subprocess via ProcessPoolExecutor or multiprocessing.Process. |
+| **Clock Setup** | N/A (structural inspection). |
+| **Stimulus / Actions** | 1. Parse _extend_to_target source AST. 2. Walk function calls. |
+| **Assertions** | No direct expand_editorial_block call in _extend_to_target. ProcessPoolExecutor or subprocess dispatch present. |
+| **Failure Classification** | Runtime |
+
+---
+
+### SUBPROCESS-ISOLATION-002: max_tasks_per_child=1 ensures process-per-batch
+
+| Field | Value |
+|---|---|
+| **Invariant(s)** | INV-BLOCKFILL-SUBPROCESS-ISOLATION-001 |
+| **Derived Law(s)** | LAW-LIVENESS |
+| **Scenario** | AST scan of _extend_to_target() source. ProcessPoolExecutor MUST be constructed with max_tasks_per_child=1 to ensure each batch runs in a fresh process. |
+| **Clock Setup** | N/A (structural inspection). |
+| **Stimulus / Actions** | 1. Parse _extend_to_target source AST. 2. Find ProcessPoolExecutor constructor call. |
+| **Assertions** | max_tasks_per_child keyword argument present with value 1. |
+| **Failure Classification** | Runtime |
+
+---
+
 ### 8.2.5 Runtime — HLS
 
 ---
@@ -1530,6 +1559,8 @@ Tests in this section require clock progression (`FakeAdvancingClock.advance_ms(
 | PLAYLOG-001 | INV-EXECUTIONENTRY-ELIGIBLE-CONTENT-001 | LAW-ELIGIBILITY, LAW-DERIVATION | Ineligible asset replaced at extension |
 | PLAYLOG-002 | INV-EXECUTIONENTRY-MASTERCLOCK-ALIGNED-001 | LAW-RUNTIME-AUTHORITY | Timestamps match injected clock |
 | PLAYLOG-003 | INV-EXECUTIONENTRY-MASTERCLOCK-ALIGNED-001 | LAW-RUNTIME-AUTHORITY | Different clocks produce different timestamps |
+| SUBPROCESS-ISOLATION-001 | INV-BLOCKFILL-SUBPROCESS-ISOLATION-001 | LAW-LIVENESS | _extend_to_target uses subprocess (AST scan) |
+| SUBPROCESS-ISOLATION-002 | INV-BLOCKFILL-SUBPROCESS-ISOLATION-001 | LAW-LIVENESS | max_tasks_per_child=1 (AST scan) |
 | PLAYLOG-BATCHED-001 | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | LAW-LIVENESS | Extend uses batched check |
 | PLAYLOG-BATCHED-002 | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | LAW-LIVENESS | GIL yielded after each fill |
 | PLAYLOG-BATCHED-006 | INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001 | LAW-LIVENESS | Jitter varies across cycles |

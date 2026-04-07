@@ -23,6 +23,7 @@ import logging
 import random
 import threading
 import time
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -31,6 +32,85 @@ from zoneinfo import ZoneInfo
 from retrovue.runtime.schedule_items_reader import expand_editorial_block
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# INV-BLOCKFILL-SUBPROCESS-ISOLATION-001: Module-level worker for subprocess
+# ---------------------------------------------------------------------------
+
+def _subprocess_expand_blocks(payload: dict) -> list[dict]:
+    """Expand editorial blocks in a subprocess for memory isolation.
+
+    INV-BLOCKFILL-SUBPROCESS-ISOLATION-001: This function runs in a child
+    process. When it returns, the child exits and all memory allocated during
+    expansion (deserialization, traffic fill, candidate caches) is returned
+    to the OS — eliminating allocator fragmentation in the daemon process.
+
+    The child creates its own short-lived DB session for the asset library.
+    The session and connection die with the process.
+
+    Args:
+        payload: dict with keys: channel_id, blocks (list of sb_dict),
+                 filler_uri, filler_duration_ms, policy, break_config.
+
+    Returns:
+        List of result dicts, one per input block:
+        {"block_id": str, "ok": True, "serialized": dict} on success,
+        {"block_id": str, "ok": False, "error": str} on failure.
+    """
+    # Late imports: subprocess has its own module state.
+    from retrovue.runtime.schedule_items_reader import expand_editorial_block
+    from retrovue.runtime.dsl_schedule_service import _serialize_scheduled_block
+
+    channel_id = payload["channel_id"]
+    filler_uri = payload["filler_uri"]
+    filler_duration_ms = payload["filler_duration_ms"]
+    policy = payload.get("policy")
+    break_config = payload.get("break_config")
+
+    # Create a short-lived DB session for asset library queries.
+    asset_library = None
+    db_session = None
+    try:
+        from retrovue.infra.uow import session as db_session_factory
+        from retrovue.catalog.db_asset_library import DatabaseAssetLibrary
+        db_session = db_session_factory()
+        asset_library = DatabaseAssetLibrary(db_session, channel_slug=channel_id)
+    except Exception:
+        pass  # Fall back to filler-only mode if DB unavailable.
+
+    results = []
+    try:
+        for sb_dict in payload["blocks"]:
+            block_id = sb_dict.get("block_id", "unknown")
+            try:
+                filled = expand_editorial_block(
+                    sb_dict,
+                    filler_uri=filler_uri,
+                    filler_duration_ms=filler_duration_ms,
+                    asset_library=asset_library,
+                    policy=policy,
+                    break_config=break_config,
+                )
+                results.append({
+                    "block_id": block_id,
+                    "ok": True,
+                    "serialized": _serialize_scheduled_block(filled),
+                })
+            except Exception as e:
+                results.append({
+                    "block_id": block_id,
+                    "ok": False,
+                    "error": str(e),
+                })
+    finally:
+        if db_session is not None:
+            try:
+                db_session.close()
+            except Exception:
+                pass
+
+    return results
+
 
 # Log INV-PLAYLOG-HORIZON-002 at WARNING only on first consecutive zero; later repeats at DEBUG.
 # When the program schedule has no next-day blocks (e.g. compile not run yet), 0 blocks filled every tick.
@@ -330,15 +410,18 @@ class PlaylistBuilderDaemon:
     def _extend_to_target(self, now_ms: int, target_ms: int, *, db=None) -> int:
         """Fill from program schedule until playlog plan depth reaches target.
 
+        INV-BLOCKFILL-SUBPROCESS-ISOLATION-001: Block expansion runs in a
+        subprocess. When the child exits, all memory from deserialization
+        and traffic fill is returned to the OS.
+
         INV-PLAYLOG-DAEMON-BATCHED-TXCHECK-001:
         - Rule 1: Batch PlaylistEvent existence checks per scan-day.
-        - Rule 2: Yield GIL (time.sleep) after each block fill.
+        - Rule 2: Yield GIL (time.sleep) after each block write.
 
         INV-DAEMON-SESSION-SCOPE-001: Receives db from evaluate_once();
-        does not open any sessions itself.
+        does not open any sessions itself. DB writes remain in parent.
         """
         target_end_ms = now_ms + target_ms
-        blocks_filled = 0
 
         # Start from current frontier (or now if no frontier)
         cursor_ms = max(self._farthest_end_utc_ms, now_ms)
@@ -353,8 +436,11 @@ class PlaylistBuilderDaemon:
         scan_date = self._broadcast_date_for(cursor_dt) - timedelta(days=1)
         end_date = self._broadcast_date_for(target_dt) + timedelta(days=1)
 
+        # Phase 1: Collect all candidate blocks needing fill (parent process).
+        # Each entry: (sb_dict, scan_date) — scan_date needed for DB write.
+        blocks_to_fill: list[tuple[dict, date]] = []
+
         while scan_date <= end_date and cursor_ms < target_end_ms:
-            # Load program schedule segmented blocks for this day
             segmented_blocks = self._load_program_schedule_blocks(scan_date, db=db)
             if segmented_blocks is None:
                 logger.debug(
@@ -364,7 +450,7 @@ class PlaylistBuilderDaemon:
                 scan_date += timedelta(days=1)
                 continue
 
-            # Collect candidate block IDs for this scan-day (Rule 1)
+            # Rule 1: Collect candidate block IDs for this scan-day
             candidate_ids = []
             candidate_blocks = []
             for sb_dict in segmented_blocks:
@@ -381,65 +467,107 @@ class PlaylistBuilderDaemon:
             existing_ids = self._batch_block_exists_in_txlog(candidate_ids, db=db)
 
             for sb_dict in candidate_blocks:
-                block_end = sb_dict["end_utc_ms"]
                 block_id = sb_dict["block_id"]
+                block_end = sb_dict["end_utc_ms"]
 
-                # Already in PlaylistEvent (checked via batch)
                 if block_id in existing_ids:
                     if block_end > self._farthest_end_utc_ms:
                         self._farthest_end_utc_ms = block_end
                     continue
 
-                # Canonical expansion: deserialize + fill ads
-                try:
-                    filled_block = expand_editorial_block(
-                        sb_dict,
-                        filler_uri=self._filler_path,
-                        filler_duration_ms=self._filler_duration_ms,
-                        asset_library=self._get_asset_library(db=db),
-                        policy=self._traffic_policy,
-                        break_config=self._break_config,
-                    )
-
-                    # Write to PlaylistEvent
-                    # INV-TIER2-WINDOW-UUID-PROPAGATION-001: thread provenance
-                    self._write_to_txlog(
-                        filled_block, scan_date,
-                        window_uuid=sb_dict.get("window_uuid"),
-                        db=db,
-                    )
-
-                    self._last_fill_block_id = block_id
-                    if block_end > self._farthest_end_utc_ms:
-                        self._farthest_end_utc_ms = block_end
-                    blocks_filled += 1
-
-                    logger.debug(
-                        "PlaylistBuilder[%s]: filled block=%s (%d segs)",
-                        self._channel_id, block_id,
-                        len(filled_block.segments),
-                    )
-
-                except Exception as e:
-                    self._fill_errors += 1
-                    # INV-DAEMON-SESSION-RECOVERY-001: rollback so next block can proceed
-                    if db is not None:
-                        try:
-                            db.rollback()
-                        except Exception:
-                            pass
-                    logger.error(
-                        "PlaylistBuilder[%s]: failed to fill block=%s: %s",
-                        self._channel_id, block_id, e,
-                    )
-
-                # Rule 2: yield GIL after each block fill so upstream
-                # reader thread can cycle select→recv→put.
-                # 10ms minimum — 1ms was insufficient (UPSTREAM_LOOP
-                # spikes of 260ms+ observed with 0.001).
-                time.sleep(0.010)
+                blocks_to_fill.append((sb_dict, scan_date))
 
             scan_date += timedelta(days=1)
+
+        if not blocks_to_fill:
+            return 0
+
+        # Phase 2: Expand blocks in subprocess (memory isolation).
+        # INV-BLOCKFILL-SUBPROCESS-ISOLATION-001: max_tasks_per_child=1
+        # guarantees the child process exits after each batch, releasing
+        # all memory back to the OS.
+        payload = {
+            "channel_id": self._channel_id,
+            "blocks": [entry[0] for entry in blocks_to_fill],
+            "filler_uri": self._filler_path,
+            "filler_duration_ms": self._filler_duration_ms,
+            "policy": self._traffic_policy,
+            "break_config": self._break_config,
+        }
+
+        try:
+            with ProcessPoolExecutor(max_workers=1, max_tasks_per_child=1) as executor:
+                future = executor.submit(_subprocess_expand_blocks, payload)
+                results = future.result(timeout=120)
+        except Exception as e:
+            logger.error(
+                "PlaylistBuilder[%s]: subprocess block expansion failed: %s",
+                self._channel_id, e,
+            )
+            self._fill_errors += len(blocks_to_fill)
+            return 0
+
+        # Phase 3: Write results to DB (parent process).
+        # INV-DAEMON-SESSION-SCOPE-001: uses the session from evaluate_once().
+        from retrovue.runtime.dsl_schedule_service import _deserialize_scheduled_block
+
+        blocks_filled = 0
+        for result, (sb_dict, scan_date) in zip(results, blocks_to_fill):
+            block_id = result["block_id"]
+            block_end = sb_dict["end_utc_ms"]
+
+            if not result["ok"]:
+                self._fill_errors += 1
+                if db is not None:
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
+                logger.error(
+                    "PlaylistBuilder[%s]: failed to fill block=%s: %s",
+                    self._channel_id, block_id, result.get("error", "unknown"),
+                )
+                # Rule 2: yield GIL even on error
+                time.sleep(0.010)
+                continue
+
+            try:
+                filled_block = _deserialize_scheduled_block(result["serialized"])
+
+                # INV-TIER2-WINDOW-UUID-PROPAGATION-001: thread provenance
+                self._write_to_txlog(
+                    filled_block, scan_date,
+                    window_uuid=sb_dict.get("window_uuid"),
+                    db=db,
+                )
+
+                self._last_fill_block_id = block_id
+                if block_end > self._farthest_end_utc_ms:
+                    self._farthest_end_utc_ms = block_end
+                blocks_filled += 1
+
+                logger.debug(
+                    "PlaylistBuilder[%s]: filled block=%s (%d segs)",
+                    self._channel_id, block_id,
+                    len(filled_block.segments),
+                )
+            except Exception as e:
+                self._fill_errors += 1
+                if db is not None:
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
+                logger.error(
+                    "PlaylistBuilder[%s]: failed to write block=%s: %s",
+                    self._channel_id, block_id, e,
+                )
+
+            # Rule 2: yield GIL after each block write so upstream
+            # reader thread can cycle select→recv→put.
+            # 10ms minimum — 1ms was insufficient (UPSTREAM_LOOP
+            # spikes of 260ms+ observed with 0.001).
+            time.sleep(0.010)
 
         return blocks_filled
 

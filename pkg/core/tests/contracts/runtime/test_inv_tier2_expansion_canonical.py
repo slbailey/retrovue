@@ -87,28 +87,33 @@ class TestRule1RebuildPassesAssetLibrary:
 # ---------------------------------------------------------------------------
 
 class TestRule2DaemonPassesAssetLibrary:
-    """Rule 2: _extend_to_target() MUST pass asset_library to expand_editorial_block()."""
+    """Rule 2: Block expansion MUST pass asset_library to expand_editorial_block().
+
+    INV-BLOCKFILL-SUBPROCESS-ISOLATION-001: _extend_to_target delegates expansion
+    to _subprocess_expand_blocks. The invariant now applies to the subprocess
+    worker function, which is where expand_editorial_block is called.
+    """
 
     # Tier: 2 | Scheduling logic invariant
-    def test_extend_to_target_passes_asset_library(self):
-        """Inspect _extend_to_target source to verify expand_editorial_block()
+    def test_subprocess_worker_passes_asset_library(self):
+        """Inspect _subprocess_expand_blocks source to verify expand_editorial_block()
         is called with asset_library keyword argument."""
-        from retrovue.runtime.playlist_builder_daemon import PlaylistBuilderDaemon
+        from retrovue.runtime.playlist_builder_daemon import _subprocess_expand_blocks
 
         source = textwrap.dedent(
-            inspect.getsource(PlaylistBuilderDaemon._extend_to_target)
+            inspect.getsource(_subprocess_expand_blocks)
         )
         calls = _find_expand_editorial_block_calls(source)
 
         assert calls, (
             "INV-TIER2-EXPANSION-CANONICAL-001 Rule 2: "
-            "_extend_to_target() does not call expand_editorial_block() at all."
+            "_subprocess_expand_blocks does not call expand_editorial_block() at all."
         )
 
         for call in calls:
             assert "asset_library" in call["kwargs"], (
                 f"INV-TIER2-EXPANSION-CANONICAL-001 Rule 2: "
-                f"_extend_to_target() calls expand_editorial_block() at line {call['line']} "
+                f"_subprocess_expand_blocks calls expand_editorial_block() at line {call['line']} "
                 f"WITHOUT asset_library kwarg. Found kwargs: {call['kwargs']}. "
                 f"All Tier-2 writers MUST pass asset_library."
             )
