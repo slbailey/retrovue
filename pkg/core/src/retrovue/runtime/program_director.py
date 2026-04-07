@@ -1810,6 +1810,12 @@ class ProgramDirector:
         # Studio tagging UI
         from retrovue.web.studio import router as studio_router
         self.fastapi_app.include_router(studio_router)
+
+        # REST API routers (Phase 2 — RETA-69)
+        from retrovue.web.api import catalog_router, ingest_router, scheduling_router
+        self.fastapi_app.include_router(ingest_router)
+        self.fastapi_app.include_router(catalog_router)
+        self.fastapi_app.include_router(scheduling_router)
         
         @self.fastapi_app.get("/channels", response_model=None)
         async def get_channels():
