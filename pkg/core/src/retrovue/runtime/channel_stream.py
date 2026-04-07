@@ -185,7 +185,7 @@ RECV_GAP_WARN_COUNT: int = 10
 SLOW_CLIENT_PUT_TIMEOUT_S: float = 3.0
 BACKPRESSURE_SLOW_THRESHOLD_S: float = 5.0
 BackpressurePolicy = Literal["drop_oldest", "disconnect"]
-DEFAULT_BACKPRESSURE_POLICY: BackpressurePolicy = "drop_oldest"
+DEFAULT_BACKPRESSURE_POLICY: BackpressurePolicy = "disconnect"
 UPSTREAM_POLL_TIMEOUT_S: float = 0.05
 UPSTREAM_LOOP_SPIKE_MS: float = 50.0
 BACKPRESSURE_LOG_INTERVAL_S: float = 5.0
@@ -845,6 +845,14 @@ class ChannelStream:
                         q.put_nowait(b"")
                     except Full:
                         pass
+                    self._logger.info(
+                        "[HTTP] SLOW_CONSUMER_DISCONNECT client_id=%s channel_id=%s "
+                        "reason=backpressure_disconnect",
+                        cid, self.channel_id,
+                    )
+                # Clean up per-client throttle state to prevent memory leaks
+                with self._backpressure_log_lock:
+                    self._backpressure_log_last.pop(cid, None)
         self._logger.debug(
             "[HTTP] Fanout loop stopped for channel %s", self.channel_id
         )
@@ -1037,15 +1045,28 @@ def generate_ts_stream(client_queue: Queue[bytes]) -> Any:
             break
 
 
-async def generate_ts_stream_async(client_queue: Queue[bytes]) -> Any:
+WRITE_TIMEOUT_S: float = 10.0  # INV-SLOW-CONSUMER-DISCONNECT-001
+
+
+async def generate_ts_stream_async(
+    client_queue: Queue[bytes],
+    *,
+    write_timeout_s: float = WRITE_TIMEOUT_S,
+) -> Any:
     """
     INV-IO-DRAIN-REALTIME: Async generator for live TS streaming.
 
     Batch-drains up to 64 KB per executor call to reduce per-chunk overhead
     and produce larger, more efficient TCP writes.
 
+    INV-SLOW-CONSUMER-DISCONNECT-001: If a yield (TCP write) takes longer
+    than write_timeout_s, the client is considered dead and the connection
+    is closed.
+
     Args:
         client_queue: BytesBoundedQueue receiving TS chunks from ChannelStream
+        write_timeout_s: Max seconds a yield/TCP-write may block before
+            the connection is severed (default: 10s).
 
     Yields:
         TS data chunks (bytes)
@@ -1162,7 +1183,21 @@ async def generate_ts_stream_async(client_queue: Queue[bytes]) -> Any:
                         _diag_timeout_total,
                         client_queue.current_bytes,
                     )
+            # INV-SLOW-CONSUMER-DISCONNECT-001: detect dead clients via write timeout.
+            # yield transfers to the ASGI write path; if the client's TCP window
+            # is closed the write stalls. Measure pre/post yield wall time.
+            _t_pre_yield = time.monotonic()
             yield batch
+            _yield_elapsed = time.monotonic() - _t_pre_yield
+            if _yield_elapsed > write_timeout_s:
+                _logger.warning(
+                    "WRITE_TIMEOUT: yield_elapsed_s=%.1f threshold_s=%.1f "
+                    "yields=%d bytes=%d — closing dead client connection",
+                    _yield_elapsed, write_timeout_s,
+                    _diag_yield_count, _diag_yield_cumulative_bytes,
+                )
+                _exit_reason = "write_timeout"
+                break
             await asyncio.sleep(0)
         except Empty:
             consecutive_timeouts += 1

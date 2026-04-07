@@ -263,8 +263,10 @@ streaming:
 
   # --- back-pressure ----------------------------------------------------
   backpressure:
-    # Policy: "drop_oldest" | "block"
-    policy: "drop_oldest"
+    # Policy: "drop_oldest" | "disconnect"
+    # INV-SLOW-CONSUMER-DISCONNECT-001: disconnect slow clients so they
+    # reconnect with fresh TCP state instead of receiving gapped streams.
+    policy: "disconnect"
     slow_threshold_seconds: 5.0
     log_interval_seconds: 5.0
 

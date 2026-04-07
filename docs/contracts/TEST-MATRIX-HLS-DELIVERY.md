@@ -183,3 +183,16 @@ Maps HLS delivery invariants to concrete test scenarios.
 | INV-HLS-ENDPOINT-SESSION-TOUCH-001 | 503 response does not refresh session | `test_inv_hls_delivery_path.py::test_503_no_touch` |
 | INV-HLS-ENDPOINT-SESSION-TOUCH-001 | 404 response does not refresh session | `test_inv_hls_delivery_path.py::test_404_no_touch` |
 | INV-HLS-ENDPOINT-SESSION-TOUCH-001 | Request with no session creates new session | `test_inv_hls_delivery_path.py::test_no_session_creates_new` |
+
+---
+
+## Slow Consumer Disconnect — Contract Invariants
+
+| Invariant | Scenario | Test |
+|-----------|----------|------|
+| INV-SLOW-CONSUMER-DISCONNECT-001 | Overflow under disconnect policy sends EOF and removes subscriber | `test_slow_consumer_disconnect.py::TestDisconnectPolicyRemovesSlowClient::test_overflow_sends_eof_and_removes_subscriber` |
+| INV-SLOW-CONSUMER-DISCONNECT-001 | Backpressure log contains structured client_id field | `test_slow_consumer_disconnect.py::TestDisconnectStructuredLogging::test_backpressure_log_contains_client_id` |
+| INV-SLOW-CONSUMER-DISCONNECT-001 | drop_oldest policy keeps slow client connected (regression guard) | `test_slow_consumer_disconnect.py::TestDropOldestKeepsClientConnected::test_overflow_with_drop_oldest_keeps_subscriber` |
+| INV-SLOW-CONSUMER-DISCONNECT-001 | Per-client state cleaned up after disconnect (no leaks) | `test_slow_consumer_disconnect.py::TestClientStateCleanupOnDisconnect::test_backpressure_log_state_cleaned_on_disconnect` |
+| INV-SLOW-CONSUMER-DISCONNECT-001 | Disconnect log emitted with reason=backpressure_disconnect | `test_slow_consumer_disconnect.py::TestDisconnectReasonLog::test_disconnect_log_contains_reason_field` |
+| INV-SLOW-CONSUMER-DISCONNECT-001 | Async generator breaks on write timeout (dead client) | `test_slow_consumer_disconnect.py::TestWriteTimeoutClosesConnection::test_yield_stall_exceeding_timeout_breaks_generator` |

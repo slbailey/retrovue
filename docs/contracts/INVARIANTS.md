@@ -428,6 +428,7 @@ Canonical contract: [schedule_constraints.md](schedule_constraints.md)
 | INV-BREAK-V2-SINGLE-CHAPTER-001 | [invariants/core/runtime/INV-BREAK-V2-SINGLE-CHAPTER-001.md](invariants/core/runtime/INV-BREAK-V2-SINGLE-CHAPTER-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
 | INV-AUTHORITY-SINGLE-OWNER-001 | [invariants/core/runtime/INV-AUTHORITY-SINGLE-OWNER-001.md](invariants/core/runtime/INV-AUTHORITY-SINGLE-OWNER-001.md) | LAW-RUNTIME-AUTHORITY, LAW-CLOCK |
 | INV-SINGLE-ACTIVATION-PATH-001 | [invariants/core/runtime/INV-SINGLE-ACTIVATION-PATH-001.md](invariants/core/runtime/INV-SINGLE-ACTIVATION-PATH-001.md) | LAW-RUNTIME-AUTHORITY, LAW-LIVENESS |
+| INV-SLOW-CONSUMER-DISCONNECT-001 | [invariants/core/runtime/INV-SLOW-CONSUMER-DISCONNECT-001.md](invariants/core/runtime/INV-SLOW-CONSUMER-DISCONNECT-001.md) | LAW-LIVENESS, LAW-RUNTIME-AUTHORITY |
 
 ### Delivery — HLS Segment Production
 
