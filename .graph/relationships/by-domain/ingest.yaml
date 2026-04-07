@@ -52,3 +52,47 @@
 - type: constrained_by
   from: { kind: service, id: container-ingest-workflow }
   to: { kind: invariant, id: INV-WORKFLOW-FLAT-NESTING-001 }
+
+# Workflow layer (Phase 3 — RETA-69)
+
+- type: drives
+  from: { kind: service, id: source-ingest-workflow }
+  to: { kind: service, id: container-ingest-workflow }
+  note: Top-level workflow delegates per-container ingest; max nesting depth 1
+
+- type: depends_on
+  from: { kind: service, id: source-ingest-workflow }
+  to: { kind: entity, id: source }
+  note: Resolves source to determine eligible containers
+
+- type: depends_on
+  from: { kind: service, id: container-ingest-workflow }
+  to: { kind: entity, id: container }
+
+- type: produces
+  from: { kind: service, id: container-ingest-workflow }
+  to: { kind: entity, id: asset }
+  note: Via discovery, reconciliation, and persistence pipeline
+
+- type: depends_on
+  from: { kind: service, id: container-ingest-workflow }
+  to: { kind: service, id: importer }
+  note: Uses importer for locator discovery
+
+- type: constrained_by
+  from: { kind: service, id: source-ingest-workflow }
+  to: { kind: invariant, id: INV-WORKFLOW-FLAT-NESTING-001 }
+
+- type: constrained_by
+  from: { kind: service, id: container-ingest-workflow }
+  to: { kind: invariant, id: INV-WORKFLOW-FLAT-NESTING-001 }
+
+- type: constrained_by
+  from: { kind: service, id: source-ingest-workflow }
+  to: { kind: invariant, id: INV-CLI-NO-BUSINESS-LOGIC-001 }
+  note: Workflow must not contain presentation logic; callers (CLI/API) must not contain business logic
+
+- type: constrained_by
+  from: { kind: service, id: container-ingest-workflow }
+  to: { kind: invariant, id: INV-CLI-NO-BUSINESS-LOGIC-001 }
+  note: Workflow must not contain presentation logic; callers (CLI/API) must not contain business logic

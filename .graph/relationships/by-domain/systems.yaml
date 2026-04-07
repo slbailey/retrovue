@@ -44,3 +44,15 @@
   from: { kind: service, id: importer }
   to: { kind: invariant, id: INV-PRODUCTION-BOUNDARY-001 }
   note: Production ingest modules vs tests/fixtures; layout discipline
+
+# New invariants (Phase 3 — RETA-69)
+
+- type: constrained_by
+  from: { kind: service, id: source-ingest-workflow }
+  to: { kind: invariant, id: INV-WORKFLOW-FLAT-NESTING-001 }
+  note: Top-level workflow; calls container-ingest-workflow at depth 1
+
+- type: constrained_by
+  from: { kind: service, id: container-ingest-workflow }
+  to: { kind: invariant, id: INV-WORKFLOW-FLAT-NESTING-001 }
+  note: Leaf workflow; must not call other workflows

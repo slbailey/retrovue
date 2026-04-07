@@ -25,3 +25,8 @@
 - Contain presentation logic (IO, HTTP response formatting).
 - Encode scheduling or playout decisions.
 - Bypass asset state machine (`INV-ASSET-STATE-MACHINE-001`).
+- Call other workflows — it is a leaf workflow (`INV-WORKFLOW-FLAT-NESTING-001`).
+
+## Source location
+
+`pkg/core/src/retrovue/workflows/container_ingest.py`

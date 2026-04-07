@@ -39,6 +39,6 @@ Bring **media and metadata** into the catalog: discovery, enrichment jobs, persi
 
 ## Key invariants (IDs)
 
-`INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001`, `INV-CLI-NO-BUSINESS-LOGIC-001`, `INV-API-NO-BUSINESS-LOGIC-001`, `INV-WORKFLOW-FLAT-NESTING-001`
+`INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001`, `INV-CLI-NO-BUSINESS-LOGIC-001`, `INV-WORKFLOW-FLAT-NESTING-001`
 
 See RetroVue `docs/contracts/INVARIANTS.md` for asset eligibility, probe authority, and ingest-related entries.

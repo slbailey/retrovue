@@ -25,3 +25,8 @@ CLI command or API route handler (presentation layer). Receives source selector 
 - Contain presentation logic (IO, HTTP response formatting).
 - Call workflows deeper than one level (`INV-WORKFLOW-FLAT-NESTING-001`).
 - Encode scheduling or playout decisions.
+- Be called from another workflow (it is a top-level entry point).
+
+## Source location
+
+`pkg/core/src/retrovue/workflows/source_ingest.py`

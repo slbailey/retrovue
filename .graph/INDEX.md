@@ -56,9 +56,10 @@ For each pattern: **start domain** → then **entities** / **services** / **inva
 | **What does runtime execution consume (not re-plan)?** | playout | `playlog`, `execution-entry`* | `channel-manager`, `block-plan-producer` | `INV-CHANNELMANAGER-NO-PLANNING-001`, `INV-EPG-NONAUTHORITATIVE-FOR-PLAYOUT-001` |
 | **How is content executed on the wire / in the engine?** | playout | `block-plan`, `playout-instance` | `air-playout-engine`, `channel-manager`, `playout-session` | (see playout domain list in `domains/playout.md`) |
 | **How do viewers get HLS or TS?** | playout | `segment-ring` | `hls-segmenter`, `hls-consumption-adapter`, `ts-consumption-adapter`, `program-director` | `INV-HLS-NO-DISK-IO-001`, `INV-SINGLE-ACTIVATION-PATH-001`, `INV-LIFECYCLE-OBSERVABILITY-001` |
-| **Where do assets come from / what is eligible to schedule?** | ingest | `asset`, `container`, `source`, `discovered-item` | `importer` | `INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001` |
+| **Where do assets come from / what is eligible to schedule?** | ingest | `asset`, `container`, `source`, `discovered-item` | `importer`, `source-ingest-workflow`, `container-ingest-workflow` | `INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001` |
 | **Who is allowed to call AIR or extend the plan at runtime?** | systems → then playout/scheduling | — | (infer targets from YAML `forbids` / `constrained_by`) | `INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001`, `INV-CHANNELMANAGER-NO-PLANNING-001`, `INV-AUTHORITY-SINGLE-OWNER-001` |
-| **Is this code in the right layer / module class?** | systems | — | — | `INV-PRODUCTION-BOUNDARY-001`, `INV-NO-GHOST-METHODS-001` |
+| **Is this code in the right layer / module class?** | systems | — | — | `INV-PRODUCTION-BOUNDARY-001`, `INV-NO-GHOST-METHODS-001`, `INV-CLI-NO-BUSINESS-LOGIC-001`, `INV-WORKFLOW-FLAT-NESTING-001` |
+| **How does ingest orchestration work (source/container sync)?** | ingest | `source`, `container`, `asset` | `source-ingest-workflow`, `container-ingest-workflow`, `importer` | `INV-WORKFLOW-FLAT-NESTING-001`, `INV-CLI-NO-BUSINESS-LOGIC-001` |
 
 \*`execution-entry` is a **scheduling** entity; load it from scheduling when you need **plan** semantics, or follow `relationships/cross-domain.yaml` (`playlog` → `execution-entry`) when tracing the spine from playout.
 
