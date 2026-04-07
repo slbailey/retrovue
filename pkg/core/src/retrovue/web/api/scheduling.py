@@ -8,7 +8,7 @@ React/Vue SPAs, or any other HTTP client.
 from __future__ import annotations
 
 import uuid as uuid_module
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -20,6 +20,16 @@ from ...domain.entities import Asset, AssetEditorial, Channel, SchedulePlan, Zon
 from ...infra.uow import session as get_session
 from ...usecases import plan_add, plan_delete, plan_list, plan_update
 from ...usecases import zone_add, zone_delete, zone_list, zone_update
+from ...usecases.schedule_revision_lifecycle import (
+    create_draft_revision,
+    get_revision,
+    list_revisions,
+    publish_revision,
+    ChannelNotFoundError,
+    RevisionEmptyError,
+    RevisionNotDraftError,
+    RevisionNotFoundError,
+)
 
 router = APIRouter(prefix="/api/scheduling", tags=["scheduling"])
 
@@ -645,3 +655,204 @@ async def create_zone_from_preset(
         if "not found" in error_msg:
             raise HTTPException(status_code=404, detail=error_msg)
         raise HTTPException(status_code=400, detail=error_msg)
+
+
+# ============================================================================
+# Schedule Revision Lifecycle Endpoints
+# ============================================================================
+
+
+class RevisionItemCreate(BaseModel):
+    """Request model for a schedule revision item."""
+    start_time: str = Field(..., description="ISO 8601 datetime with timezone")
+    duration_sec: int = Field(..., gt=0, description="Duration in seconds")
+    asset_id: str | None = Field(None, description="Asset UUID")
+    content_type: str = Field("episode", description="Content type")
+    metadata: dict[str, Any] | None = Field(None, description="Optional metadata")
+
+
+class RevisionCreate(BaseModel):
+    """Request model for creating a draft revision."""
+    broadcast_day: str = Field(..., description="Broadcast day (YYYY-MM-DD)")
+    created_by: str | None = Field(None, description="Operator identifier")
+    items: list[RevisionItemCreate] = Field(..., description="Schedule items")
+
+
+class RevisionItemResponse(BaseModel):
+    """Response model for a schedule item."""
+    id: str
+    start_time: str
+    duration_sec: int
+    asset_id: str | None
+    content_type: str
+    slot_index: int
+
+
+class RevisionListResponse(BaseModel):
+    """Response model for revision listing (without full items)."""
+    id: str
+    channel_id: str
+    broadcast_day: str
+    status: str
+    created_at: str | None
+    activated_at: str | None
+    superseded_at: str | None
+    created_by: str | None
+    item_count: int
+
+
+def _revision_to_response(rev) -> dict:
+    return {
+        "id": str(rev.id),
+        "channel_id": str(rev.channel_id),
+        "broadcast_day": str(rev.broadcast_day),
+        "status": rev.status,
+        "created_at": rev.created_at.isoformat() if rev.created_at else None,
+        "activated_at": rev.activated_at.isoformat() if rev.activated_at else None,
+        "superseded_at": rev.superseded_at.isoformat() if rev.superseded_at else None,
+        "created_by": rev.created_by,
+        "items": [
+            {
+                "id": str(item.id),
+                "start_time": item.start_time.isoformat() if item.start_time else None,
+                "duration_sec": item.duration_sec,
+                "asset_id": str(item.asset_id) if item.asset_id else None,
+                "content_type": item.content_type,
+                "slot_index": item.slot_index,
+            }
+            for item in rev.items
+        ],
+    }
+
+
+def _revision_to_list_response(rev) -> dict:
+    return {
+        "id": str(rev.id),
+        "channel_id": str(rev.channel_id),
+        "broadcast_day": str(rev.broadcast_day),
+        "status": rev.status,
+        "created_at": rev.created_at.isoformat() if rev.created_at else None,
+        "activated_at": rev.activated_at.isoformat() if rev.activated_at else None,
+        "superseded_at": rev.superseded_at.isoformat() if rev.superseded_at else None,
+        "created_by": rev.created_by,
+        "item_count": len(rev.items),
+    }
+
+
+@router.post(
+    "/channels/{channel_id}/revisions",
+    status_code=201,
+    tags=["revisions"],
+)
+def create_revision_endpoint(
+    channel_id: str,
+    body: RevisionCreate,
+    db: Session = Depends(get_db),
+):
+    """Create a draft schedule revision with items."""
+    try:
+        channel_uuid = uuid_module.UUID(channel_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid channel_id format")
+
+    try:
+        rev = create_draft_revision(
+            db,
+            channel_id=channel_uuid,
+            broadcast_day=date.fromisoformat(body.broadcast_day),
+            items=[item.model_dump() for item in body.items],
+            created_by=body.created_by,
+        )
+        db.commit()
+        return _revision_to_response(rev)
+    except ChannelNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Channel {channel_id} not found")
+    except RevisionEmptyError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.get(
+    "/channels/{channel_id}/revisions",
+    tags=["revisions"],
+)
+def list_revisions_endpoint(
+    channel_id: str,
+    broadcast_day: str | None = Query(None, description="Filter by broadcast day (YYYY-MM-DD)"),
+    status: str | None = Query(None, description="Filter by status"),
+    db: Session = Depends(get_db),
+):
+    """List schedule revisions for a channel."""
+    try:
+        channel_uuid = uuid_module.UUID(channel_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid channel_id format")
+
+    try:
+        bd = date.fromisoformat(broadcast_day) if broadcast_day else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid broadcast_day format")
+
+    try:
+        revisions = list_revisions(
+            db,
+            channel_id=channel_uuid,
+            broadcast_day=bd,
+            status=status,
+        )
+        return [_revision_to_list_response(rev) for rev in revisions]
+    except ChannelNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Channel {channel_id} not found")
+
+
+@router.get(
+    "/revisions/{revision_id}",
+    tags=["revisions"],
+)
+def get_revision_endpoint(
+    revision_id: str,
+    db: Session = Depends(get_db),
+):
+    """Get a single schedule revision with items."""
+    try:
+        rev_uuid = uuid_module.UUID(revision_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid revision_id format")
+
+    try:
+        rev = get_revision(db, revision_id=rev_uuid)
+        return _revision_to_response(rev)
+    except RevisionNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Revision {revision_id} not found")
+
+
+@router.post(
+    "/revisions/{revision_id}/publish",
+    tags=["revisions"],
+)
+def publish_revision_endpoint(
+    revision_id: str,
+    db: Session = Depends(get_db),
+):
+    """Publish a draft revision (draft → active)."""
+    try:
+        rev_uuid = uuid_module.UUID(revision_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid revision_id format")
+
+    try:
+        rev = publish_revision(db, revision_id=rev_uuid)
+        db.commit()
+        return {
+            "id": str(rev.id),
+            "channel_id": str(rev.channel_id),
+            "broadcast_day": str(rev.broadcast_day),
+            "status": rev.status,
+            "activated_at": rev.activated_at.isoformat() if rev.activated_at else None,
+            "superseded_revision_id": None,
+        }
+    except RevisionNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Revision {revision_id} not found")
+    except RevisionNotDraftError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except RevisionEmptyError as e:
+        raise HTTPException(status_code=422, detail=str(e))

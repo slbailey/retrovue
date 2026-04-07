@@ -14,8 +14,8 @@ Work on later phases has progressed opportunistically (scheduling APIs, asset in
 
 | Phase | Name | Status | Completion | Notes |
 |-------|------|--------|------------|-------|
-| **A** | Proof of Broadcast Reality | **In Progress** | ~60% | Muxing pipeline proven (EncoderPipeline + MuxInterleaver); TSMuxer stub deletion pending; validation pending |
-| **B1** | Schedule Core | Mostly Done | ~85% | Publish/lock REST endpoints remaining |
+| **A** | Proof of Broadcast Reality | **Nearly Done** | ~85% | TSMuxer deleted, clock leak fixed (RETA-59); sustained playout validation remaining |
+| **B1** | Schedule Core | **Done** | 100% | Publish/lock REST lifecycle complete (RETA-60/61) |
 | **B2** | Schedule Intelligence | Early | ~20% | Depends on C |
 | **C** | Asset Management | Mostly Done | ~75% | REST write endpoints remaining |
 | **D** | Reporting & Monitoring | Partial | ~30% | Infrastructure exists; no query APIs |
@@ -25,7 +25,7 @@ Work on later phases has progressed opportunistically (scheduling APIs, asset in
 ### What Works Today
 
 * **Scheduling pipeline**: SchedulePlan → ScheduleDay → ExecutionEntry (11 invariants enforced)
-* **Schedule REST API**: Full CRUD for plans and zones, validation, zone presets
+* **Schedule REST API**: Full CRUD for plans and zones, validation, zone presets, revision lifecycle (draft/publish/lock)
 * **Asset ingest**: Plex and filesystem importers, probing, enrichment, eligibility checks
 * **Runtime playout**: ProgramDirector → ChannelManager → AIR (gRPC) → MPEG-TS bytes
 * **HLS delivery**: In-memory SegmentRing + HlsSegmenter (INV-HLS-NO-DISK-IO-001)
@@ -47,9 +47,9 @@ If you only have 10 hours, this is what moves the system forward the most.
 
 ### Must Do
 
-1. **Delete TSMuxer stub and clean up references** — TSMuxer.cpp is a dead placeholder (every method is a no-op/TODO). EncoderPipeline (2,479 lines) + MuxInterleaver is the sole mux authority. Remove TSMuxer.h, TSMuxer.cpp, StubMuxer.h, and the dead `muxer_` member in MpegTSPlayoutSink. This eliminates the competing mux path and resolves the INV-NO-GHOST-METHODS-001 violation.
-2. **Eliminate the last `datetime.now()` leak** — `MasterClock._resolve_timezone()` line 156 in `runtime/clock.py` has a bare `datetime.now()` in the timezone fallback path. Isolated but contractually wrong.
-3. **Run a 4-hour continuous playout test** — Validate: no gaps, stable segment cadence, correct offsets, no buffer underruns.
+1. ~~**Delete TSMuxer stub and clean up references**~~ — **Done** (RETA-59). EncoderPipeline is sole mux authority.
+2. ~~**Eliminate the last `datetime.now()` leak**~~ — **Done** (RETA-59). MasterClock timezone fallback fixed.
+3. **Run a 4-hour continuous playout test** — Validate: no gaps, stable segment cadence, correct offsets, no buffer underruns. This is the Phase A gate.
 4. **Ensure correlation IDs cover playout trace logs** — Current coverage is ~95% (intentionally scoped per INV-LIFECYCLE-OBSERVABILITY-001). Verify that a 4-hour run produces a fully traceable event chain from schedule resolution to HLS viewer.
 
 ### Should Do (Before Long Runs)
@@ -72,10 +72,10 @@ If you only have 10 hours, this is what moves the system forward the most.
 
 | # | Blocker | Phase | Severity | Current State |
 |---|---------|-------|----------|---------------|
-| 1 | **TSMuxer stub deletion** | A | **Medium** | Decision made: delete TSMuxer stub. EncoderPipeline is sole mux authority. Stub removal + reference cleanup remaining |
-| 2 | **Sustained playout validation** | A | **Critical** | No 4-hour+ test run completed yet |
-| 3 | **Clock authority leak** | A | Low | 1 remaining bare `datetime.now()` in timezone fallback (clock.py:156) |
-| 4 | **Schedule publish/lock REST endpoints** | B1 | Medium | State machine exists internally; no REST surface |
+| 1 | ~~TSMuxer stub deletion~~ | A | ~~Medium~~ | **Resolved** (RETA-59) |
+| 2 | **Sustained playout validation** | A | **Critical** | No 4-hour+ test run completed yet — this is the Phase A gate |
+| 3 | ~~Clock authority leak~~ | A | ~~Low~~ | **Resolved** (RETA-59) |
+| 4 | ~~Schedule publish/lock REST endpoints~~ | B1 | ~~Medium~~ | **Resolved** (RETA-60/61) — 4 REST endpoints, 24 contract tests |
 | 5 | **As-run and compliance query APIs** | D | Medium | Logging infrastructure exists; no query API |
 | 6 | **Deployment documentation** | F | Medium | Build scripts exist; no production setup guide |
 
@@ -83,7 +83,7 @@ If you only have 10 hours, this is what moves the system forward the most.
 
 ## Phase Details
 
-### Phase A: Proof of Broadcast Reality — In Progress (~60%)
+### Phase A: Proof of Broadcast Reality — Nearly Done (~85%)
 
 **Goal**: Prove broadcast-grade correctness — deterministic, gap-free, observable playout over sustained periods.
 
@@ -92,14 +92,15 @@ This phase is the entire viability of the system. If muxing + timing isn't rock 
 | Work Item | Status | Notes |
 |-----------|--------|-------|
 | Encoding pipeline (FFmpeg H.264 + AAC) | **Done** | EncoderPipeline.cpp (2,479 lines), MuxInterleaver for DTS-order interleaving |
-| Delete TSMuxer stub and clean references | **Not Done** | Decision: EncoderPipeline is sole mux authority (formally declared in AirArchitectureReference). Remove TSMuxer.h/.cpp, StubMuxer.h, dead muxer_ member in MpegTSPlayoutSink |
+| Delete TSMuxer stub and clean references | **Done** | RETA-59: TSMuxer.h/.cpp, StubMuxer.h removed; EncoderPipeline is sole mux authority |
 | Remove legacy disk-based HLS stack | **Done** | SegmentRing + HlsSegmenter only; INV-HLS-NO-DISK-IO-001 enforced |
 | Complete correlation ID propagation | **Done** | 5 runtime modules carry session_id; channel-scoped events use channel_id per INV-LIFECYCLE-OBSERVABILITY-001 design |
-| Fix remaining clock authority leaks | **Nearly Done** | 1 remaining: MasterClock._resolve_timezone() fallback path (clock.py:156) |
+| Fix remaining clock authority leaks | **Done** | RETA-59: MasterClock._resolve_timezone() fallback path fixed |
 | Clean ghost method stubs | **Partial** | Base class templates acceptable; no critical runtime violations found |
 | BlockPlan queue executor | **Done** | Full validator + 2-block window model in PlayoutSession.seed()/feed() |
 | Viewer join under load | **Done** | 100+ concurrent viewer tests, churn tests, SegmentRing concurrency |
 | **Basic observability (pulled from Phase D)** | **Partial** | Prometheus metrics exist; need structured playout trace logs and "why did this air" logging before long runs |
+| **Sustained playout validation** | **Not Done** | 4-hour continuous playout test — the Phase A gate |
 
 **Exit Criteria (Broadcast-Grade)**: All existing invariants pass. Zero known architectural violations. Plus:
 
@@ -111,11 +112,11 @@ This phase is the entire viability of the system. If muxing + timing isn't rock 
 * Full observability: end-to-end playout trace from schedule to HLS viewer with correlation IDs
 * Concurrent viewer correctness: multiple viewers joining at different times receive valid segments
 
-**Remaining work**: TSMuxer stub deletion is straightforward cleanup (not integration — the decision is made). Clock leak is a one-line fix. Observability trace logs needed before attempting 12-hour runs.
+**Remaining work**: All code-level items resolved. The gate is now **operational validation** — a 4-hour+ sustained playout test proving the pipeline end-to-end. Observability trace logs should be verified during the test run.
 
 ---
 
-### Phase B1: Schedule Core — Mostly Done (~85%)
+### Phase B1: Schedule Core — Done (100%)
 
 **Goal**: Operators can create, validate, publish, and execute schedules through a structured API workflow.
 
@@ -123,10 +124,10 @@ This phase is the entire viability of the system. If muxing + timing isn't rock 
 |-----------|--------|-------|
 | Schedule creation API (REST) | **Done** | Full CRUD at /api/scheduling/channels/{id}/plans |
 | Schedule validation endpoint | **Done** | Zone coverage validation with asset eligibility checks |
-| Publish / lock / revise lifecycle | **Partial** | ScheduleRevision state machine exists (draft → active → superseded) but no REST endpoints for explicit publish/lock |
+| Publish / lock / revise lifecycle | **Done** | RETA-60/61: 4 REST endpoints (create draft, list, get, publish); atomic supersession; 24 contract tests |
 | Future-window mutation API | **Done** | Zone CRUD + zone presets API |
 
-**Remaining work**: Expose publish/lock operations as explicit REST endpoints.
+**Complete.** Operators have full control over schedule revisions: create drafts, review, publish (draft → active with atomic supersession), and inspect history. Active revisions are immutable (INV-SCHEDULEREVISION-IMMUTABLE-001) — lock semantics enforced by design.
 
 ---
 
@@ -271,8 +272,8 @@ Phase E (Operator UI)  ◄── FROZEN until Phase A exits
 Phase F (Production Hardening, Recovery & 1.0)
 ```
 
-* **A** must complete first — TSMuxer stub cleanup and sustained playout validation are the gates.
-* **B1** is mostly done; publish/lock REST endpoints are the remaining gap.
+* **A** is nearly done — code-level items resolved; sustained playout validation is the gate.
+* **B1** is complete — publish/lock REST lifecycle delivered (RETA-60/61).
 * **B1** and **C** have been developed in parallel (both mostly done).
 * **B2** depends on C for virtual asset expansion and break fill pools — B2 is early.
 * **D** depends on B1, B2, and C for the data it reports on — basic observability pulled into Phase A.

@@ -409,7 +409,7 @@ REQUIRED CHANGE HEADER
 ────────────────────────
 Every non-trivial PR or change set must include this header in its commit message or PR description:
 
-Authority domain touched: [clock | segment-window | lifecycle | diagnostics | http | scheduling | producer | none]
+Authority domain touched: [clock | segment-window | lifecycle | diagnostics | http | scheduling | producer | mux | none]
 Complexity budget: removed=[X lines/classes] added=[Y lines/classes] net=[simpler/same/more complex]
 Contracts affected: [list invariant IDs or "none"]
 Rollback unit: [why this change can be reverted independently]
