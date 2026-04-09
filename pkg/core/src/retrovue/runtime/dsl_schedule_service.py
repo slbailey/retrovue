@@ -2036,6 +2036,20 @@ class DslScheduleService:
         # (content segments + empty filler placeholders)
         blocks = self._expand_schedule_to_blocks(schedule, resolver)
 
+        # Compile-time validation: catch compiler bugs before bad data
+        # enters the playlog.  These are safety-net assertions on the
+        # production path (ScheduledBlock list), not the derivation chain.
+        from retrovue.scheduling.compile_time_validation import (
+            validate_compiled_block_contiguity,
+            validate_compiled_grid_alignment,
+        )
+        if blocks:
+            validate_compiled_block_contiguity(blocks)
+            _sched_cfg = self._resolved_config.get("scheduling", {})
+            _grid_mins_cfg = _sched_cfg.get("grid_minutes", {})
+            _grid_min = _grid_mins_cfg.get("network_television", 30)
+            validate_compiled_grid_alignment(blocks, _grid_min * 60 * 1000)
+
         # INV-SCHEDULE-HORIZON-001: Persist segmented blocks alongside
         # program metadata so playlog plan (PlaylistBuilderDaemon) can consume
         # pre-segmented data without re-expanding.
@@ -2487,7 +2501,7 @@ class DslScheduleService:
                     PathMapping.container_id == col.uuid
                 ).all()
                 if pms:
-                    path_mappings[col_uuid] = [(pm.plex_path, pm.local_path) for pm in pms]
+                    path_mappings[col_uuid] = [(pm.source_path, pm.retrovue_path) for pm in pms]
 
             # Resolve each scheduled asset
             for block_def in schedule["program_blocks"]:

@@ -1,5 +1,9 @@
 """Hard-coded PlaylistScheduleManager (Phase 4 burn-in).
 
+.. deprecated:: 2026-04-09
+    This module is deprecated. The production scheduling authority is
+    DslScheduleService (runtime/dsl_schedule_service.py). See ADR-015.
+
 Sole producer of Playlists consumed by ChannelManager.
 Satisfies PlaylistScheduleManagerContract.md (Accepted, frozen 2026-02-07).
 
@@ -106,6 +110,9 @@ def _round_half_up(x: float) -> int:
 
 class PlaylistScheduleManager:
     """Hard-coded, deterministic PlaylistScheduleManager for Phase 4 burn-in.
+
+    .. deprecated:: 2026-04-09
+        Deprecated in favor of DslScheduleService. See ADR-015.
 
     Produces Playlists from a repeating 3-episode rotation with filler padding
     to half-hour blocks, at 30fps.  Returns a single Playlist covering the

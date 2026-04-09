@@ -29,54 +29,6 @@ class ScheduleValidationError(Exception):
         return self.message
 
 
-class SchedulePlanValidationError(ScheduleValidationError):
-    """Raised when a SchedulePlan fails validation."""
-
-    def __init__(
-        self,
-        message: str,
-        plan_id: str | None = None,
-        plan_name: str | None = None,
-        violations: list[str] | None = None,
-    ):
-        """
-        Initialize a SchedulePlan validation error.
-
-        Args:
-            message: Human-readable error message
-            plan_id: UUID of the plan that failed validation
-            plan_name: Name of the plan that failed validation
-            violations: List of specific violation descriptions
-        """
-        super().__init__(message, violations)
-        self.plan_id = plan_id
-        self.plan_name = plan_name
-
-
-class BlockAssignmentValidationError(ScheduleValidationError):
-    """Raised when a Program fails validation."""
-
-    def __init__(
-        self,
-        message: str,
-        assignment_id: str | None = None,
-        plan_id: str | None = None,
-        violations: list[str] | None = None,
-    ):
-        """
-        Initialize a block assignment validation error.
-
-        Args:
-            message: Human-readable error message
-            assignment_id: UUID of the assignment that failed validation
-            plan_id: UUID of the plan containing the assignment
-            violations: List of specific violation descriptions
-        """
-        super().__init__(message, violations)
-        self.assignment_id = assignment_id
-        self.plan_id = plan_id
-
-
 class ScheduleDayValidationError(ScheduleValidationError):
     """Raised when a BroadcastScheduleDay fails validation."""
 
