@@ -21,6 +21,7 @@ import pytest
 try:
     from retrovue.adapters.importers.filesystem_importer import FilesystemImporter
     from retrovue.domain.tag_normalization import (
+        canonicalize_tag,
         expand_tag_match_set,
         normalize_tag_set,
     )
@@ -61,9 +62,9 @@ def _generate_tags(root: Path, segments: list[str]) -> list[str]:
 
 
 def _simulate_persistence(tag_values: list[str]) -> list[str]:
-    """Simulate what collection_ingest_service does: normalize + namespace."""
+    """Simulate what collection_ingest_service does: normalize + canonicalize."""
     normalized = normalize_tag_set(tag_values)
-    return [t if ":" in t else f"TAG:{t}" for t in normalized]
+    return [canonicalize_tag(t) for t in normalized]
 
 
 # ===========================================================================
@@ -130,7 +131,7 @@ class TestTagsPersistedAfterIngest:
         )
         # Every segment should have a TAG: entry
         for seg in segments:
-            assert f"TAG:{seg}" in namespaced, (
+            assert f"tag.{seg}" in namespaced, (
                 f"TAG:{seg} missing from persisted tags {namespaced}"
             )
 
@@ -144,7 +145,7 @@ class TestTagsPersistedAfterIngest:
 
         # Both "HBO" and "hbo" normalize to "hbo" → 1 tag
         assert len(namespaced) == 1
-        assert namespaced == ["TAG:hbo"]
+        assert namespaced == ["tag.hbo"]
 
     def test_no_tags_lost_in_extraction(self, tmp_path):
         """Labels with tag: prefix are correctly extracted from mixed raw_labels."""
@@ -250,7 +251,7 @@ class TestTagsQueryableByPool:
             type="bumper",
             duration_sec=10,
             title="HBO Station ID",
-            tags=("TAG:hbo", "TAG:station_ids", "TAG:1982"),
+            tags=("tag.hbo", "tag.station_ids", "tag.1982"),
         ))
         resolver.register_pools({
             "hbo_station_ids": {
@@ -268,7 +269,7 @@ class TestTagsQueryableByPool:
             type="bumper",
             duration_sec=15,
             title="Deep Asset",
-            tags=("TAG:commercials", "TAG:restaurant", "TAG:mcdonalds", "TAG:1985", "TAG:summer"),
+            tags=("tag.commercials", "tag.restaurant", "tag.mcdonalds", "tag.1985", "tag.summer"),
         ))
         resolver.register_pools({
             "summer_mcdonalds": {
@@ -289,7 +290,7 @@ class TestTagsQueryableByPool:
             type="bumper",
             duration_sec=10,
             title="Partial Asset",
-            tags=("TAG:hbo", "TAG:station_ids"),  # missing "1982"
+            tags=("tag.hbo", "tag.station_ids"),  # missing "1982"
         ))
         resolver.register_pools({
             "specific_pool": {
@@ -301,12 +302,13 @@ class TestTagsQueryableByPool:
             resolver.resolve_pool("specific_pool")
 
     def test_expand_tag_match_set_covers_namespaced(self):
-        """expand_tag_match_set must produce both TAG:x and x forms."""
-        stored_tags = {"TAG:hbo", "TAG:station_ids", "TAG:1982"}
+        """expand_tag_match_set must produce canonical, colon, and plain forms."""
+        stored_tags = {"tag.hbo", "tag.station_ids", "tag.1982"}
         expanded = expand_tag_match_set(stored_tags)
 
-        # Both namespaced and plain forms must be present
+        # All forms must be present
         assert "hbo" in expanded
+        assert "tag.hbo" in expanded
         assert "tag:hbo" in expanded
         assert "station_ids" in expanded
         assert "1982" in expanded
@@ -360,7 +362,7 @@ class TestDeduplicationEdgeCases:
         # But normalization deduplicates
         namespaced = _simulate_persistence(tag_values)
         assert len(namespaced) == 2  # unique = 2
-        assert set(namespaced) == {"TAG:a", "TAG:b"}
+        assert set(namespaced) == {"tag.a", "tag.b"}
 
     def test_empty_segment_name_discarded(self, tmp_path):
         """A directory named with only whitespace produces empty tag → discarded."""

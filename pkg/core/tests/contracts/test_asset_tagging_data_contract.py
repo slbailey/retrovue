@@ -63,9 +63,9 @@ class TestAssetTaggingDataContractD1toD5:
                 if isinstance(c.args[0] if c.args else None, AssetTag)
             ]
             added_tags = {t.tag for t in tag_objects}
-            # D-6: CLI writes namespaced tags (TAG: prefix for plain values)
-            assert "TAG:hbo" in added_tags, f"Expected 'TAG:hbo' in {added_tags}"
-            assert "TAG:1982" in added_tags, f"Expected 'TAG:1982' in {added_tags}"
+            # INV-TAG-CANONICAL-FORM-001: CLI writes canonical namespace.value tags
+            assert "tag.hbo" in added_tags, f"Expected 'tag.hbo' in {added_tags}"
+            assert "tag.1982" in added_tags, f"Expected 'tag.1982' in {added_tags}"
 
     # ------------------------------------------------------------------
     # D-2: Tag normalization enforced on write; persisted values are
@@ -100,21 +100,18 @@ class TestAssetTaggingDataContractD1toD5:
                 if isinstance(c.args[0] if c.args else None, AssetTag)
             ]
             for tag_obj in tag_objects:
-                # D-6: Namespaced tags use uppercase prefix (TAG:, NETWORK:, etc.)
-                # The value part after the colon MUST be normalized (lowercase, stripped).
+                # INV-TAG-CANONICAL-FORM-001: tags stored as namespace.value (dot separator)
                 tag = tag_obj.tag
-                if ":" in tag:
-                    prefix, value = tag.split(":", 1)
-                    assert prefix == prefix.upper(), (
-                        f"INV-ASSET-TAG-PERSISTENCE-001: namespace prefix {prefix!r} must be uppercase"
-                    )
-                    assert value == value.strip().lower(), (
-                        f"INV-ASSET-TAG-PERSISTENCE-001: tag value {value!r} is not normalized"
-                    )
-                else:
-                    assert tag == tag.strip().lower(), (
-                        f"INV-ASSET-TAG-PERSISTENCE-001: persisted tag {tag!r} is not normalized"
-                    )
+                assert "." in tag, (
+                    f"INV-TAG-CANONICAL-FORM-001: tag {tag!r} must be in namespace.value form"
+                )
+                ns, value = tag.split(".", 1)
+                assert ns == ns.lower(), (
+                    f"INV-TAG-CANONICAL-FORM-001: namespace {ns!r} must be lowercase"
+                )
+                assert value == value.strip().lower(), (
+                    f"INV-TAG-CANONICAL-FORM-001: tag value {value!r} is not normalized"
+                )
 
     # ------------------------------------------------------------------
     # D-3: Updates occur in a single Unit of Work; partial failures
