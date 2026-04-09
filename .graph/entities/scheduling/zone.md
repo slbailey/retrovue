@@ -1,29 +1,29 @@
 # Zone
 
-**Domain:** scheduling  
+**Domain:** scheduling
 **Slug:** `zone`
+**Status:** RETIRED (2026-04-09, RETA-88 Option B)
 
-## What it represents
+## Retirement notice
 
-A **time-bounded scheduling region** within the grid that holds schedulable content or avails, without cutting in-flight longform against contract rules.
+Zone and the SchedulePlan CRUD island have been retired. The DSL + ScheduleRevision/ScheduleItem is now the sole scheduling authority path.
 
-## Lifecycle phase
+## What it represented (historical)
 
-**Planned** as part of editorial scheduling structures; materializes in resolved daily views.
+A time-bounded scheduling region within the grid that held schedulable content or avails, without cutting in-flight longform against contract rules.
 
-## Owning domain
+## Preserved concepts (future DSL promotion)
 
-scheduling
+The following Zone-level concepts are valuable and are preserved for future DSL enhancement:
 
-## What depends on it
+- **DST policy** — reject, shrink_one_block, expand_one_block
+- **Day filters** — restrict scheduling to specific days of week
+- **Effective date ranges** — seasonal scheduling
+- **Coverage validation** — overlap/tiling checks across time regions
 
-Program placement, break/traffic structures, and resolution into ScheduleDay.
-
-## What produces it
-
-Editorial scheduling (SchedulePlan-level intent and tooling).
+These concepts will be promoted as DSL-native features when needed. See `docs/architecture/decisions/ADR-016-Zone-Concepts-For-DSL-Promotion.md`.
 
 ## What must NOT be assumed
 
-- That zones are visible runtime objects for AIR.
-- That they auto-extend or mid-cut programs contrary to grid/longform invariants.
+- That Zone is a runtime object visible to AIR (never was).
+- That new Zone CRUD endpoints should be built (DSL replaces Zone-level intent).

@@ -1,29 +1,31 @@
 # SchedulePlan
 
-**Domain:** scheduling  
+**Domain:** scheduling
 **Slug:** `schedule-plan`
+**Status:** RETIRED (2026-04-09, RETA-88 Option B)
 
-## What it represents
+## Retirement notice
 
-The **sole editorial authority** for what programming structure is intended on a channel: schedulable regions, content choices, and rules that downstream artifacts must honor.
+SchedulePlan and its CRUD surface (SchedulePlan → Zone → Program) have been retired. The DSL + ScheduleRevision/ScheduleItem is now the sole scheduling authority path.
 
-## Lifecycle phase
+Board decision: RETA-88 Option B approved — DSL compilation produces ScheduleRevision rows directly; SchedulePlan is no longer the editorial authority.
 
-**Persisted** editorial object; evolves under immutability and future-window rules (see contracts).
+## What it represented (historical)
 
-## Owning domain
+The editorial authority for what programming structure was intended on a channel: schedulable regions, content choices, and rules that downstream artifacts were required to honor.
 
-scheduling
+## What replaced it
 
-## What depends on it
+- **DSL schedule definitions** — operators define schedules in DSL files
+- **ScheduleRevision** — the persistence layer for compiled DSL output
+- **ScheduleItem** — individual scheduled entries within a revision
+- **DslScheduleService** — compiles DSL → ScheduleRevision/ScheduleItem
 
-ScheduleDay derivation, zone resolution, traffic/break structures, and ultimately execution artifacts—indirectly.
+## Preserved concepts (future DSL promotion)
 
-## What produces it
-
-Human/operators and tooling via Core’s scheduling surface (not playout).
+Zone-level concepts (DST policy, day filters, effective date ranges, coverage validation) are documented for future DSL enhancement. See `docs/architecture/decisions/ADR-016-Zone-Concepts-For-DSL-Promotion.md`.
 
 ## What must NOT be assumed
 
-- That it is the same as “what is playing right now” (runtime authority is ExecutionEntry / execution window).
-- That AIR or ChannelManager reads or repairs it at runtime.
+- That SchedulePlan is still the editorial authority (it is not — DSL is).
+- That new CRUD endpoints should be built for scheduling (DSL is the sole input path).

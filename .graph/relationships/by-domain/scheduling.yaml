@@ -11,9 +11,11 @@
   to: { kind: entity, id: execution-entry }
   note: Input horizon depends on implementation phase; contract locks output shape
 
+# ScheduleDay now derives from DSL-compiled ScheduleRevision, not from retired SchedulePlan
 - type: depends_on
   from: { kind: entity, id: schedule-day }
-  to: { kind: entity, id: schedule-plan }
+  to: { kind: service, id: dsl-schedule-service }
+  note: ScheduleDay derivation from DSL compilation output (ScheduleRevision/ScheduleItem)
 
 - type: depends_on
   from: { kind: entity, id: transmission-log }
@@ -30,3 +32,89 @@
 - type: constrained_by
   from: { kind: service, id: playlist-schedule-manager }
   to: { kind: invariant, id: INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001 }
+
+- type: constrained_by
+  from: { kind: entity, id: epg }
+  to: { kind: invariant, id: INV-EPG-PLAYOUT-ANCHOR-MATCH-001 }
+  note: EPG ScheduleRevision broadcast_day must match in-memory compilation anchor
+
+- type: constrained_by
+  from: { kind: service, id: dsl-schedule-service }
+  to: { kind: invariant, id: INV-COMPILED-BLOCK-CONTIGUITY-001 }
+  note: Compile-time contiguity check on production ScheduledBlock list
+
+- type: constrained_by
+  from: { kind: service, id: dsl-schedule-service }
+  to: { kind: invariant, id: INV-COMPILED-GRID-ALIGNMENT-001 }
+  note: Compile-time grid alignment check on production ScheduledBlock list
+
+- type: constrained_by
+  from: { kind: service, id: dsl-schedule-service }
+  to: { kind: invariant, id: INV-TIMELINE-SINGLE-AUTHORITY-001 }
+  note: DSL is the sole editorial authority path; ScheduleRevision is the persistence layer
+
+- type: produces
+  from: { kind: service, id: dsl-schedule-service }
+  to: { kind: entity, id: scheduling-policy }
+  note: DSL compilation resolves policy declarations into runtime SchedulingPolicy objects
+
+- type: constrained_by
+  from: { kind: entity, id: scheduling-policy }
+  to: { kind: invariant, id: INV-POLICY-DSL-DECLARED-001 }
+  note: Policies must originate from DSL YAML only
+
+- type: depends_on
+  from: { kind: entity, id: scheduling-policy }
+  to: { kind: law, id: LAW-ELIGIBILITY }
+  note: Policies layer on top of LAW-ELIGIBILITY; they restrict but never relax the core gate
+
+- type: consumes
+  from: { kind: entity, id: scheduling-policy }
+  to: { kind: entity, id: asset }
+  note: Policy evaluation consumes asset metadata to determine scheduling eligibility
+
+- type: constrained_by
+  from: { kind: entity, id: scheduling-policy }
+  to: { kind: invariant, id: INV-POLICY-PURE-001 }
+  note: Policy evaluation must be pure (no I/O, no mutation)
+
+- type: constrained_by
+  from: { kind: entity, id: scheduling-policy }
+  to: { kind: invariant, id: INV-POLICY-LAYERED-001 }
+  note: Policies must not override or relax LAW-ELIGIBILITY
+
+- type: constrained_by
+  from: { kind: entity, id: scheduling-policy }
+  to: { kind: invariant, id: INV-POLICY-IDEMPOTENT-001 }
+  note: Same inputs must produce same violations
+
+- type: constrained_by
+  from: { kind: entity, id: scheduling-policy }
+  to: { kind: invariant, id: INV-POLICY-VIOLATION-STRUCTURED-001 }
+  note: Violations must carry structured context (invariant_id, rule_type, message, details)
+
+# Programming Pools — named query definitions against the asset catalog
+- type: produces
+  from: { kind: service, id: dsl-schedule-service }
+  to: { kind: entity, id: pool }
+  note: DSL compilation declares pools; DslScheduleService registers them with the resolver
+
+- type: consumes
+  from: { kind: entity, id: pool }
+  to: { kind: entity, id: asset }
+  note: Pool queries resolve against the asset catalog at compile time
+
+- type: constrained_by
+  from: { kind: entity, id: pool }
+  to: { kind: invariant, id: INV-POOL-RATING-NORMALIZE-001 }
+  note: Rating match normalizes shorthand to canonical form
+
+- type: constrained_by
+  from: { kind: entity, id: pool }
+  to: { kind: invariant, id: INV-POOL-TAGS-FILTER-001 }
+  note: Tags evaluated as AND-combined filter
+
+- type: constrained_by
+  from: { kind: entity, id: pool }
+  to: { kind: invariant, id: INV-POOL-RESOLUTION-VISIBILITY-001 }
+  note: Pool resolution produces per-filter exclusion diagnostics (PoolDiagnostics)

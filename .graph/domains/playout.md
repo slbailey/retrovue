@@ -27,7 +27,7 @@ Structures named **playlist** (e.g. contract-shaped lists) are **convenience or 
 
 ## What this domain does NOT own (critical)
 
-- Editorial “what should air” truth (**scheduling** / SchedulePlan).
+- Editorial “what should air” truth (**scheduling** / DSL → ScheduleRevision).
 - Deriving ScheduleDay or EPG (**scheduling**).
 - EPG-driven playback decisions (**forbidden**; execution plan is sole runtime schedule authority).
 - Catalog discovery, probe, or approval (**ingest**).

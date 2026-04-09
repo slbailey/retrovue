@@ -17,7 +17,7 @@ Pick **one** domain to open first. Read `domains/<domain>.md` for depth; stay sh
 | | |
 |--|--|
 | **Start here when the question is about** | What *should* air (editorial intent), daily/grid structure, derivation chains, execution **plan** horizon, EPG as a **display** derivative, traffic/playlist-shaped **outputs** from planning—not runtime bytes. |
-| **Responsible for** | `schedule-plan` → `schedule-day` → `transmission-log` → `execution-entry`; **persisted playlog plan** materialization (scheduling-side; see `entities/playout/playlog.md`); zones, programs, channels; `playlist-schedule-manager` (playlist-shaped output, not playlog authority). |
+| **Responsible for** | DSL → `dsl-schedule-service` → `schedule-day` → `transmission-log` → `execution-entry`; **persisted playlog plan** materialization (scheduling-side; see `entities/playout/playlog.md`); channels; `playlist-schedule-manager` (playlist-shaped output, not playlog authority); `pool` (named asset query definitions for DSL). Retired: `schedule-plan`, `zone`, `program` (RETA-88). |
 | **Does NOT handle** | Frame timing, encode/mux, AIR, channel activation, viewers, HTTP TS/HLS, “what is on the wire right now,” catalog discovery, asset probing. |
 
 ### Playout
@@ -26,7 +26,7 @@ Pick **one** domain to open first. Read `domains/<domain>.md` for depth; stay sh
 |--|--|
 | **Start here when the question is about** | Turning **prefetched** execution artifacts into live playout: `channel-manager`, AIR session, BlockPlan feed, adapters (TS/HLS), segment ring, lifecycle/activation, **runtime** consumption of `playlog` (not rebuilding the schedule). |
 | **Responsible for** | Truth chain tail: **playlog** → `channel-manager` → `air-playout-engine`; `program-director`, consumption adapters, `block-plan-producer`, `hls-segmenter`, in-memory HLS (`segment-ring`). |
-| **Does NOT handle** | Authoring SchedulePlan/ScheduleDay, EPG-driven **control** of what plays, ingest discovery, cross-cutting **laws** (those live under `systems` pointers). |
+| **Does NOT handle** | Authoring DSL schedules or ScheduleDay, EPG-driven **control** of what plays, ingest discovery, cross-cutting **laws** (those live under `systems` pointers). |
 
 ### Ingest
 
@@ -52,11 +52,12 @@ For each pattern: **start domain** → then **entities** / **services** / **inva
 
 | Question pattern | Start domain | Entities (typical) | Services (typical) | Invariants (typical) |
 |------------------|--------------|--------------------|--------------------|----------------------|
-| **What should air on channel C at time T (planned / editorial)?** | scheduling | `schedule-plan`, `schedule-day`, `channel`, `program`, `execution-entry`, `transmission-log` | `playlist-schedule-manager` | `INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001` |
+| **What should air on channel C at time T (planned / editorial)?** | scheduling | `schedule-day`, `channel`, `execution-entry`, `transmission-log` | `dsl-schedule-service`, `playlist-schedule-manager` | `INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001`, `INV-TIMELINE-SINGLE-AUTHORITY-001` |
 | **What does runtime execution consume (not re-plan)?** | playout | `playlog`, `execution-entry`* | `channel-manager`, `block-plan-producer` | `INV-CHANNELMANAGER-NO-PLANNING-001`, `INV-EPG-NONAUTHORITATIVE-FOR-PLAYOUT-001` |
 | **How is content executed on the wire / in the engine?** | playout | `block-plan`, `playout-instance` | `air-playout-engine`, `channel-manager`, `playout-session` | (see playout domain list in `domains/playout.md`) |
 | **How do viewers get HLS or TS?** | playout | `segment-ring` | `hls-segmenter`, `hls-consumption-adapter`, `ts-consumption-adapter`, `program-director` | `INV-HLS-NO-DISK-IO-001`, `INV-SINGLE-ACTIVATION-PATH-001`, `INV-LIFECYCLE-OBSERVABILITY-001` |
 | **Where do assets come from / what is eligible to schedule?** | ingest | `asset`, `container`, `source`, `discovered-item` | `importer`, `source-ingest-workflow`, `container-ingest-workflow` | `INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001` |
+| **What enricher ran / what version produced this result?** | ingest | `asset`, `enricher-run` | `container-ingest-workflow` | `INV-ENRICHER-OBSERVABILITY-001`, `INV-ENRICHER-RESULT-VERSIONED-001` |
 | **Who is allowed to call AIR or extend the plan at runtime?** | systems → then playout/scheduling | — | (infer targets from YAML `forbids` / `constrained_by`) | `INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001`, `INV-CHANNELMANAGER-NO-PLANNING-001`, `INV-AUTHORITY-SINGLE-OWNER-001` |
 | **Is this code in the right layer / module class?** | systems | — | — | `INV-PRODUCTION-BOUNDARY-001`, `INV-NO-GHOST-METHODS-001`, `INV-CLI-NO-BUSINESS-LOGIC-001`, `INV-WORKFLOW-FLAT-NESTING-001` |
 | **How does ingest orchestration work (source/container sync)?** | ingest | `source`, `container`, `asset` | `source-ingest-workflow`, `container-ingest-workflow`, `importer` | `INV-WORKFLOW-FLAT-NESTING-001`, `INV-CLI-NO-BUSINESS-LOGIC-001` |
@@ -71,7 +72,7 @@ Use this to **minimize** context. “Unless bridging” = only when a question e
 
 | Agent type | SHOULD load | MUST NOT load (unless bridging) |
 |------------|-------------|----------------------------------|
-| **Scheduling-focused** | `domains/scheduling.md`, `entities/scheduling/`, `services/scheduling/`, `invariants/scheduling/`, `relationships/by-domain/scheduling.yaml`, `relationships/cross-domain.yaml` (execution-spine + forbids edges only) | Playout internals: `segment-ring`, `hls-segmenter`, `hls-consumption-adapter`, `ts-consumption-adapter`, `air-playout-engine`, BlockPlan/AIR gRPC detail; full `entities/playout/` except `playlog` / `playlist` stubs when tracing the plan→playlog handoff |
+| **Scheduling-focused** | `domains/scheduling.md`, `entities/scheduling/` (note: `schedule-plan`, `zone`, `program` are retired), `services/scheduling/`, `invariants/scheduling/`, `relationships/by-domain/scheduling.yaml`, `relationships/cross-domain.yaml` (execution-spine + forbids edges only) | Playout internals: `segment-ring`, `hls-segmenter`, `hls-consumption-adapter`, `ts-consumption-adapter`, `air-playout-engine`, BlockPlan/AIR gRPC detail; full `entities/playout/` except `playlog` / `playlist` stubs when tracing the plan→playlog handoff |
 | **Playout-focused** | `domains/playout.md`, `entities/playout/`, `services/playout/`, `invariants/playout/`, `relationships/by-domain/playout.yaml`, `relationships/cross-domain.yaml` | Ingest: `importer`, probe/enrichment pipelines; scheduling: break/traffic DSL depth, full derivation math—pull only `execution-entry` / schedule stubs if the question is the execution spine |
 | **Ingest-focused** | `domains/ingest.md`, `entities/ingest/`, `services/ingest/`, `invariants/ingest/`, `relationships/by-domain/ingest.yaml` | BlockPlan, AIR, HLS segment ring, `channel-manager`, `program-director` session details |
 | **Systems-focused** | `domains/systems.md`, `invariants/systems/`, `services/systems/`, `relationships/by-domain/systems.yaml`, relevant `ambiguities/*` | Entire subgraphs of scheduling/playout/ingest **unless** the question is about their interaction; then use YAML + one domain file’s boundary table only |
@@ -85,7 +86,7 @@ Use this to **minimize** context. “Unless bridging” = only when a question e
 3. **Follow relationships, not the file tree.** Use `relationships/by-domain/*.yaml` for intra-domain edges; **merge** `relationships/cross-domain.yaml` for seams (planning↔playout, eligibility, ambiguities).
 4. **Invariants override assumptions.** If prose in an entity stub conflicts with an `INV-*` file or a YAML `constrained_by` / `forbids`, the invariant wins; refresh the stub in a later maintenance pass if needed.
 5. **Prefer reverse lookup:** from a slug, scan YAML for edges **to**/**from** that id rather than loading all markdown.
-6. **Truth chain for execution** (broadcast-accurate): scheduling plan → `playlog` → `channel-manager` → AIR—do not treat `playlist` as the root (see `domains/playout.md`).
+6. **Truth chain for execution** (broadcast-accurate): DSL → `dsl-schedule-service` → ScheduleRevision → `playlog` → `channel-manager` → AIR—do not treat `playlist` as the root (see `domains/playout.md`).
 
 ---
 

@@ -24,6 +24,26 @@
   from: { kind: service, id: importer }
   to: { kind: invariant, id: INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001 }
 
+# Enricher observability (RETA-100)
+
+- type: depends_on
+  from: { kind: entity, id: enricher-run }
+  to: { kind: entity, id: asset }
+  note: Each enricher-run is scoped to a single asset
+
+- type: produces
+  from: { kind: service, id: container-ingest-workflow }
+  to: { kind: entity, id: enricher-run }
+  note: Via enricher dispatch during pipeline execution
+
+- type: constrained_by
+  from: { kind: entity, id: enricher-run }
+  to: { kind: invariant, id: INV-ENRICHER-OBSERVABILITY-001 }
+
+- type: constrained_by
+  from: { kind: entity, id: enricher-run }
+  to: { kind: invariant, id: INV-ENRICHER-RESULT-VERSIONED-001 }
+
 # Workflow layer (RETA-69)
 
 - type: drives
@@ -67,3 +87,47 @@
   from: { kind: service, id: container-ingest-workflow }
   to: { kind: invariant, id: INV-CLI-NO-BUSINESS-LOGIC-001 }
   note: Workflow must not contain presentation logic; callers (CLI/API) must not contain business logic
+
+# Tag canonical form (RETA-125)
+
+- type: constrained_by
+  from: { kind: entity, id: asset }
+  to: { kind: invariant, id: INV-TAG-CANONICAL-FORM-001 }
+  note: All persisted tags in asset_tags.tag must use namespace.value canonical form
+
+- type: constrained_by
+  from: { kind: entity, id: asset }
+  to: { kind: invariant, id: INV-TAG-MIGRATION-IDEMPOTENT-001 }
+  note: canonicalize_tag() must be idempotent — safe to re-run on already-canonical tags
+
+- type: constrained_by
+  from: { kind: service, id: container-ingest-workflow }
+  to: { kind: invariant, id: INV-TAG-CANONICAL-FORM-001 }
+  note: Ingest pipeline writes tags via canonicalize_tag()
+
+# Source watch mode (RETA-127)
+
+- type: depends_on
+  from: { kind: service, id: source-watch-service }
+  to: { kind: entity, id: source }
+  note: Resolves source to determine filesystem paths to monitor
+
+- type: depends_on
+  from: { kind: service, id: source-watch-service }
+  to: { kind: service, id: source-ingest-workflow }
+  note: Delegates re-ingest to SourceIngestService via ingest_source()
+
+- type: constrained_by
+  from: { kind: service, id: source-watch-service }
+  to: { kind: invariant, id: INV-WATCH-DELEGATES-001 }
+  note: CLI delegates all watch business logic to workflow layer
+
+- type: constrained_by
+  from: { kind: service, id: source-watch-service }
+  to: { kind: invariant, id: INV-WATCH-DEBOUNCE-001 }
+  note: File events debounced before triggering re-ingest
+
+- type: constrained_by
+  from: { kind: service, id: source-watch-service }
+  to: { kind: invariant, id: INV-CLI-NO-BUSINESS-LOGIC-001 }
+  note: Watch business logic lives in workflow, not CLI

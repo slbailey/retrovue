@@ -22,11 +22,11 @@ Always merge `relationships/cross-domain.yaml` when tracing cross-domain seams.
 
 | id | kind | canonical file | domain | relationship file(s) |
 |----|------|----------------|--------|----------------------|
-| schedule-plan | entity | `entities/scheduling/schedule-plan.md` | scheduling | `by-domain/scheduling.yaml` |
+| schedule-plan | entity | `entities/scheduling/schedule-plan.md` | scheduling | ~~`by-domain/scheduling.yaml`~~ | **RETIRED** (RETA-88) |
 | schedule-day | entity | `entities/scheduling/schedule-day.md` | scheduling | `by-domain/scheduling.yaml` |
-| zone | entity | `entities/scheduling/zone.md` | scheduling | `by-domain/scheduling.yaml`, `cross-domain.yaml` (ambiguity) |
+| zone | entity | `entities/scheduling/zone.md` | scheduling | `cross-domain.yaml` (ambiguity) | **RETIRED** (RETA-88) |
 | channel | entity | `entities/scheduling/channel.md` | scheduling | `by-domain/scheduling.yaml` |
-| program | entity | `entities/scheduling/program.md` | scheduling | `by-domain/scheduling.yaml`, `cross-domain.yaml` |
+| program | entity | `entities/scheduling/program.md` | scheduling | `cross-domain.yaml` | **RETIRED** (RETA-88) |
 | execution-entry | entity | `entities/scheduling/execution-entry.md` | scheduling | `by-domain/scheduling.yaml`, `cross-domain.yaml` |
 | transmission-log | entity | `entities/scheduling/transmission-log.md` | scheduling | `by-domain/scheduling.yaml` |
 | epg | entity | `entities/scheduling/epg.md` | scheduling | `by-domain/scheduling.yaml` |
@@ -39,6 +39,9 @@ Always merge `relationships/cross-domain.yaml` when tracing cross-domain seams.
 | container | entity | `entities/ingest/container.md` | ingest | `by-domain/ingest.yaml`, `cross-domain.yaml` (ambiguity) |
 | discovered-item | entity | `entities/ingest/discovered-item.md` | ingest | `by-domain/ingest.yaml` |
 | asset | entity | `entities/ingest/asset.md` | ingest | `by-domain/ingest.yaml`, `cross-domain.yaml` |
+| enricher-run | entity | `entities/ingest/enricher-run.md` | ingest | `by-domain/ingest.yaml` |
+| scheduling-policy | entity | `entities/scheduling/scheduling-policy.md` | scheduling | `by-domain/scheduling.yaml` |
+| pool | entity | `entities/scheduling/pool.md` | scheduling | `by-domain/scheduling.yaml` |
 | production-server | entity | `entities/systems/production-server.md` | systems | — |
 
 ---
@@ -47,6 +50,7 @@ Always merge `relationships/cross-domain.yaml` when tracing cross-domain seams.
 
 | id | kind | canonical file | domain | relationship file(s) |
 |----|------|----------------|--------|----------------------|
+| dsl-schedule-service | service | `services/scheduling/dsl-schedule-service.md` | scheduling | `by-domain/scheduling.yaml`, `cross-domain.yaml` |
 | playlist-schedule-manager | service | `services/scheduling/playlist-schedule-manager.md` | scheduling | `by-domain/scheduling.yaml`, `cross-domain.yaml` |
 | program-director | service | `services/playout/program-director.md` | playout | `by-domain/playout.yaml`, `by-domain/systems.yaml` |
 | channel-manager | service | `services/playout/channel-manager.md` | playout | `by-domain/playout.yaml`, `by-domain/systems.yaml` |
@@ -59,6 +63,7 @@ Always merge `relationships/cross-domain.yaml` when tracing cross-domain seams.
 | importer | service | `services/ingest/importer.md` | ingest | `by-domain/ingest.yaml`, `by-domain/systems.yaml` |
 | source-ingest-workflow | service | `services/ingest/source-ingest-workflow.md` | ingest | `by-domain/ingest.yaml`, `by-domain/systems.yaml` |
 | container-ingest-workflow | service | `services/ingest/container-ingest-workflow.md` | ingest | `by-domain/ingest.yaml`, `by-domain/systems.yaml` |
+| source-watch-service | service | `services/ingest/source-watch-service.md` | ingest | `by-domain/ingest.yaml` |
 | evidence-server | service | `services/playout/evidence-server.md` | playout | `by-domain/playout.yaml`, `cross-domain.yaml` |
 | master-clock | service | `services/systems/master-clock.md` | systems | `by-domain/systems.yaml` |
 
@@ -74,6 +79,12 @@ Always merge `relationships/cross-domain.yaml` when tracing cross-domain seams.
 | INV-EPG-NONAUTHORITATIVE-FOR-PLAYOUT-001 | invariant | `invariants/playout/INV-EPG-NONAUTHORITATIVE-FOR-PLAYOUT-001.md` | playout | `by-domain/playout.yaml` |
 | INV-HLS-NO-DISK-IO-001 | invariant | `invariants/playout/INV-HLS-NO-DISK-IO-001.md` | playout | `by-domain/playout.yaml` |
 | INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001 | invariant | `invariants/ingest/INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001.md` | ingest | `by-domain/ingest.yaml` |
+| INV-ENRICHER-OBSERVABILITY-001 | invariant | `invariants/ingest/INV-ENRICHER-OBSERVABILITY-001.md` | ingest | `by-domain/ingest.yaml` |
+| INV-ENRICHER-RESULT-VERSIONED-001 | invariant | `invariants/ingest/INV-ENRICHER-RESULT-VERSIONED-001.md` | ingest | `by-domain/ingest.yaml` |
+| INV-TAG-CANONICAL-FORM-001 | invariant | `invariants/ingest/INV-TAG-CANONICAL-FORM-001.md` | ingest | `by-domain/ingest.yaml` |
+| INV-TAG-MIGRATION-IDEMPOTENT-001 | invariant | `invariants/ingest/INV-TAG-MIGRATION-IDEMPOTENT-001.md` | ingest | `by-domain/ingest.yaml` |
+| INV-WATCH-DELEGATES-001 | invariant | `invariants/ingest/INV-WATCH-DELEGATES-001.md` | ingest | `by-domain/ingest.yaml` |
+| INV-WATCH-DEBOUNCE-001 | invariant | `invariants/ingest/INV-WATCH-DEBOUNCE-001.md` | ingest | `by-domain/ingest.yaml` |
 | INV-CLI-NO-BUSINESS-LOGIC-001 | invariant | `invariants/systems/INV-CLI-NO-BUSINESS-LOGIC-001.md` | systems | `by-domain/ingest.yaml`, `by-domain/systems.yaml` |
 | INV-WORKFLOW-FLAT-NESTING-001 | invariant | `invariants/systems/INV-WORKFLOW-FLAT-NESTING-001.md` | systems | `by-domain/ingest.yaml`, `by-domain/systems.yaml` |
 | INV-AUTHORITY-SINGLE-OWNER-001 | invariant | `invariants/systems/INV-AUTHORITY-SINGLE-OWNER-001.md` | systems | `by-domain/systems.yaml` |
@@ -84,6 +95,17 @@ Always merge `relationships/cross-domain.yaml` when tracing cross-domain seams.
 | INV-GRPC-FEED-BACKPRESSURE-001 | invariant | `invariants/playout/INV-GRPC-FEED-BACKPRESSURE-001.md` | playout | `by-domain/playout.yaml` |
 | INV-GRPC-GRACEFUL-DRAIN-001 | invariant | `invariants/playout/INV-GRPC-GRACEFUL-DRAIN-001.md` | playout | `by-domain/playout.yaml` |
 | INV-GRPC-HEALTH-CHECK-001 | invariant | `invariants/playout/INV-GRPC-HEALTH-CHECK-001.md` | playout | `by-domain/playout.yaml` |
+| INV-EPG-PLAYOUT-ANCHOR-MATCH-001 | invariant | `invariants/scheduling/INV-EPG-PLAYOUT-ANCHOR-MATCH-001.md` | scheduling | `by-domain/scheduling.yaml` |
+| INV-COMPILED-BLOCK-CONTIGUITY-001 | invariant | `invariants/scheduling/INV-COMPILED-BLOCK-CONTIGUITY-001.md` | scheduling | `by-domain/scheduling.yaml` |
+| INV-COMPILED-GRID-ALIGNMENT-001 | invariant | `invariants/scheduling/INV-COMPILED-GRID-ALIGNMENT-001.md` | scheduling | `by-domain/scheduling.yaml` |
+| INV-POLICY-PURE-001 | invariant | `invariants/scheduling/INV-POLICY-PURE-001.md` | scheduling | `by-domain/scheduling.yaml` |
+| INV-POLICY-LAYERED-001 | invariant | `invariants/scheduling/INV-POLICY-LAYERED-001.md` | scheduling | `by-domain/scheduling.yaml` |
+| INV-POLICY-IDEMPOTENT-001 | invariant | `invariants/scheduling/INV-POLICY-IDEMPOTENT-001.md` | scheduling | `by-domain/scheduling.yaml` |
+| INV-POLICY-DSL-DECLARED-001 | invariant | `invariants/scheduling/INV-POLICY-DSL-DECLARED-001.md` | scheduling | `by-domain/scheduling.yaml` |
+| INV-POLICY-VIOLATION-STRUCTURED-001 | invariant | `invariants/scheduling/INV-POLICY-VIOLATION-STRUCTURED-001.md` | scheduling | `by-domain/scheduling.yaml` |
+| INV-POOL-RATING-NORMALIZE-001 | invariant | `invariants/scheduling/INV-POOL-RATING-NORMALIZE-001.md` | scheduling | `by-domain/scheduling.yaml` |
+| INV-POOL-TAGS-FILTER-001 | invariant | `invariants/scheduling/INV-POOL-TAGS-FILTER-001.md` | scheduling | `by-domain/scheduling.yaml` |
+| INV-POOL-RESOLUTION-VISIBILITY-001 | invariant | `invariants/scheduling/INV-POOL-RESOLUTION-VISIBILITY-001.md` | scheduling | `by-domain/scheduling.yaml` |
 
 ---
 

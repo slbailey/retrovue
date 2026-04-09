@@ -9,6 +9,7 @@ Bring **media and metadata** into the catalog: discovery, enrichment jobs, persi
 - Discover items from external sources (importers) and persist **Assets**.
 - Run enrichers/processors so metadata required for scheduling eligibility is **real or visibly failed**—never silently missing.
 - Maintain asset lifecycle (e.g. probe, approval, readiness) as contracted.
+- Provide **per-enricher observability**: queryable execution records with enricher name, status, version, and timestamps per asset.
 
 ## What this domain owns
 
@@ -31,14 +32,14 @@ Bring **media and metadata** into the catalog: discovery, enrichment jobs, persi
 
 ## Key entities (slugs)
 
-`source`, `container`, `discovered-item`, `asset`
+`source`, `container`, `discovered-item`, `asset`, `enricher-run`
 
 ## Key services (slugs)
 
-`importer`, `source-ingest-workflow`, `container-ingest-workflow`
+`importer`, `source-ingest-workflow`, `container-ingest-workflow`, `source-watch-service`
 
 ## Key invariants (IDs)
 
-`INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001`, `INV-CLI-NO-BUSINESS-LOGIC-001`, `INV-WORKFLOW-FLAT-NESTING-001`
+`INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001`, `INV-ENRICHER-OBSERVABILITY-001`, `INV-ENRICHER-RESULT-VERSIONED-001`, `INV-CLI-NO-BUSINESS-LOGIC-001`, `INV-WORKFLOW-FLAT-NESTING-001`, `INV-TAG-CANONICAL-FORM-001`, `INV-TAG-MIGRATION-IDEMPOTENT-001`, `INV-WATCH-DELEGATES-001`, `INV-WATCH-DEBOUNCE-001`
 
 See RetroVue `docs/contracts/INVARIANTS.md` for asset eligibility, probe authority, and ingest-related entries.

@@ -13,11 +13,14 @@
   note: Playlog/events materialize from the locked execution plan horizon; not from playlist as authority
 
 # Ingest → scheduling eligibility (read-only conceptual)
+# NOTE: Program entity is retired (RETA-88). Eligibility now flows through
+# DSL schedule blocks referencing asset pools, not through the Program CRUD entity.
+# The conceptual dependency (scheduling → eligible assets) remains valid.
 
 - type: depends_on
-  from: { kind: entity, id: program }
+  from: { kind: service, id: dsl-schedule-service }
   to: { kind: entity, id: asset }
-  note: Scheduling resolves to eligible catalog material; not a runtime library call from ChannelManager
+  note: DSL schedule blocks resolve to eligible catalog material via asset pools; not a runtime library call from ChannelManager
 
 # Ambiguity anchors (disambiguation nodes)
 
@@ -40,6 +43,7 @@
 - type: depends_on
   from: { kind: ambiguity, id: collection-vs-container }
   to: { kind: entity, id: zone }
+  note: Zone entity is retired (RETA-88); ambiguity preserved for historical disambiguation
 
 - type: depends_on
   from: { kind: ambiguity, id: program-director-import-alias }

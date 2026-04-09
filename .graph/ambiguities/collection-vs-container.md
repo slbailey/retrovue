@@ -11,12 +11,12 @@
 
 ## Critical confusion
 
-**Scheduling `zone`** is **not** an ingest container. Same English word “bucket” in conversation does **not** imply the same entity.
+**Scheduling `zone`** was a grid/programming concept (now retired — RETA-88). It was never an ingest container. Same English word "bucket" in conversation does **not** imply the same entity.
 
 ## Resolution rule
 
 - **Ingest / importers / discovery** → `container`.
-- **Grid / programming window** → `zone`.
+- **Grid / programming window** → formerly `zone` (retired). In the DSL model, time-bounded scheduling regions are expressed as DSL block definitions, not as Zone CRUD entities.
 
 ## Relationships
 
