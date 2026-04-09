@@ -12,6 +12,8 @@ Protects `LAW-CONTENT-AUTHORITY` and `LAW-CLOCK` by ensuring all system componen
 
 At any point in time, there MUST be exactly one authoritative timeline per channel. All system components — playback, EPG, scheduling, and planning — MUST derive their answers from this single timeline.
 
+The sole editorial authority path is: **DSL schedule definitions → DslScheduleService compilation → ScheduleRevision/ScheduleItem**. No CRUD path, manual insertion, or alternative compilation pipeline may produce or modify ScheduleRevision rows. The former SchedulePlan → Zone → Program CRUD island is retired (RETA-88 Option B).
+
 ## Observability
 
 For any time T, all system interfaces MUST return the same program, start time, and duration.

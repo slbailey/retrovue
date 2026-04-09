@@ -196,3 +196,13 @@ Maps HLS delivery invariants to concrete test scenarios.
 | INV-SLOW-CONSUMER-DISCONNECT-001 | Per-client state cleaned up after disconnect (no leaks) | `test_slow_consumer_disconnect.py::TestClientStateCleanupOnDisconnect::test_backpressure_log_state_cleaned_on_disconnect` |
 | INV-SLOW-CONSUMER-DISCONNECT-001 | Disconnect log emitted with reason=backpressure_disconnect | `test_slow_consumer_disconnect.py::TestDisconnectReasonLog::test_disconnect_log_contains_reason_field` |
 | INV-SLOW-CONSUMER-DISCONNECT-001 | Async generator breaks on write timeout (dead client) | `test_slow_consumer_disconnect.py::TestWriteTimeoutClosesConnection::test_yield_stall_exceeding_timeout_breaks_generator` |
+
+## ChannelStream Fanout Metrics — Observability Invariants
+
+| Invariant | Scenario | Test |
+|-----------|----------|------|
+| INV-LIFECYCLE-OBSERVABILITY-001 | Backpressure disconnect includes queue_bytes_at_detach | `test_channel_stream_metrics.py::TestBackpressureDisconnectQueueBytes::test_disconnect_log_includes_queue_bytes_at_detach` |
+| INV-LIFECYCLE-OBSERVABILITY-001 | Write timeout includes client_id | `test_channel_stream_metrics.py::TestWriteTimeoutIncludesClientId::test_write_timeout_log_includes_client_id` |
+| INV-LIFECYCLE-OBSERVABILITY-001 | First subscriber logs stream_state=fresh | `test_channel_stream_metrics.py::TestClientConnectedStreamState::test_first_subscriber_logs_stream_state_fresh` |
+| INV-LIFECYCLE-OBSERVABILITY-001 | Subsequent subscriber logs stream_state=existing | `test_channel_stream_metrics.py::TestClientConnectedStreamState::test_second_subscriber_logs_stream_state_existing` |
+| INV-LIFECYCLE-OBSERVABILITY-001 | Client disconnect includes queue_bytes_at_detach | `test_channel_stream_metrics.py::TestClientDisconnectedQueueBytes::test_unsubscribe_logs_queue_bytes_at_detach` |

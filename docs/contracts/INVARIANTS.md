@@ -17,7 +17,7 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | LAW-DECODABILITY | [laws/LAW-DECODABILITY.md](laws/LAW-DECODABILITY.md) | Playout — output decodability |
 | LAW-ELIGIBILITY | [laws/LAW-ELIGIBILITY.md](laws/LAW-ELIGIBILITY.md) | Scheduling — eligible assets only |
 | LAW-GRID | [laws/LAW-GRID.md](laws/LAW-GRID.md) | Scheduling — grid-aligned boundaries |
-| LAW-CONTENT-AUTHORITY | [laws/LAW-CONTENT-AUTHORITY.md](laws/LAW-CONTENT-AUTHORITY.md) | Scheduling — SchedulePlan is sole editorial authority |
+| LAW-CONTENT-AUTHORITY | [laws/LAW-CONTENT-AUTHORITY.md](laws/LAW-CONTENT-AUTHORITY.md) | Scheduling — DSL is sole editorial authority (was SchedulePlan, retired RETA-88) |
 | LAW-DERIVATION | [laws/LAW-DERIVATION.md](laws/LAW-DERIVATION.md) | Scheduling — artifact chain traceability |
 | LAW-RUNTIME-AUTHORITY | [laws/LAW-RUNTIME-AUTHORITY.md](laws/LAW-RUNTIME-AUTHORITY.md) | Scheduling — ExecutionEntry is sole runtime authority |
 | LAW-IMMUTABILITY | [laws/LAW-IMMUTABILITY.md](laws/LAW-IMMUTABILITY.md) | Scheduling — published artifacts are immutable |
@@ -26,14 +26,22 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 
 ## Core
 
-### Scheduling — SchedulePlan
+### Scheduling — SchedulePlan (DEPRECATED — RETA-88)
+
+> **Retired:** SchedulePlan CRUD island retired per RETA-88 Option B. DSL + ScheduleRevision/ScheduleItem is the sole scheduling authority. These invariants are retained for historical reference only and are not enforced.
+
+| Invariant | File | Derived From | Status |
+|-----------|------|--------------|--------|
+| INV-PLAN-FULL-COVERAGE-001 | [invariants/core/schedule-plan/INV-PLAN-FULL-COVERAGE-001.md](invariants/core/schedule-plan/INV-PLAN-FULL-COVERAGE-001.md) | LAW-CONTENT-AUTHORITY, LAW-GRID | DEPRECATED |
+| INV-PLAN-NO-ZONE-OVERLAP-001 | [invariants/core/schedule-plan/INV-PLAN-NO-ZONE-OVERLAP-001.md](invariants/core/schedule-plan/INV-PLAN-NO-ZONE-OVERLAP-001.md) | LAW-CONTENT-AUTHORITY, LAW-GRID | DEPRECATED |
+| INV-PLAN-GRID-ALIGNMENT-001 | [invariants/core/schedule-plan/INV-PLAN-GRID-ALIGNMENT-001.md](invariants/core/schedule-plan/INV-PLAN-GRID-ALIGNMENT-001.md) | LAW-GRID | DEPRECATED |
+| INV-PLAN-ELIGIBLE-ASSETS-ONLY-001 | [invariants/core/schedule-plan/INV-PLAN-ELIGIBLE-ASSETS-ONLY-001.md](invariants/core/schedule-plan/INV-PLAN-ELIGIBLE-ASSETS-ONLY-001.md) | LAW-ELIGIBILITY, LAW-CONTENT-AUTHORITY | DEPRECATED |
+
+### Scheduling — CRUD Island Retirement
 
 | Invariant | File | Derived From |
 |-----------|------|--------------|
-| INV-PLAN-FULL-COVERAGE-001 | [invariants/core/schedule-plan/INV-PLAN-FULL-COVERAGE-001.md](invariants/core/schedule-plan/INV-PLAN-FULL-COVERAGE-001.md) | LAW-CONTENT-AUTHORITY, LAW-GRID |
-| INV-PLAN-NO-ZONE-OVERLAP-001 | [invariants/core/schedule-plan/INV-PLAN-NO-ZONE-OVERLAP-001.md](invariants/core/schedule-plan/INV-PLAN-NO-ZONE-OVERLAP-001.md) | LAW-CONTENT-AUTHORITY, LAW-GRID |
-| INV-PLAN-GRID-ALIGNMENT-001 | [invariants/core/schedule-plan/INV-PLAN-GRID-ALIGNMENT-001.md](invariants/core/schedule-plan/INV-PLAN-GRID-ALIGNMENT-001.md) | LAW-GRID |
-| INV-PLAN-ELIGIBLE-ASSETS-ONLY-001 | [invariants/core/schedule-plan/INV-PLAN-ELIGIBLE-ASSETS-ONLY-001.md](invariants/core/schedule-plan/INV-PLAN-ELIGIBLE-ASSETS-ONLY-001.md) | LAW-ELIGIBILITY, LAW-CONTENT-AUTHORITY |
+| INV-CRUD-ISLAND-RETIRED-001 | [invariants/core/scheduling/INV-CRUD-ISLAND-RETIRED-001.md](invariants/core/scheduling/INV-CRUD-ISLAND-RETIRED-001.md) | LAW-CONTENT-AUTHORITY |
 
 ### Scheduling — ScheduleDay
 
@@ -172,6 +180,18 @@ Each invariant is defined in its own file under `invariants/`. Laws are defined 
 | INV-TRAFFIC-EMPTY-001 | [traffic_policy.md](traffic_policy.md) | LAW-ELIGIBILITY |
 | INV-TRAFFIC-NONE-001 | [traffic_policy.md](traffic_policy.md) | LAW-ELIGIBILITY, LAW-CONTENT-AUTHORITY |
 
+### Scheduling — Scheduling Policies
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-POLICY-PURE-001 | [invariants/core/scheduling-policy/INV-POLICY-PURE-001.md](invariants/core/scheduling-policy/INV-POLICY-PURE-001.md) | LAW-ELIGIBILITY, LAW-CONTENT-AUTHORITY |
+| INV-POLICY-LAYERED-001 | [invariants/core/scheduling-policy/INV-POLICY-LAYERED-001.md](invariants/core/scheduling-policy/INV-POLICY-LAYERED-001.md) | LAW-ELIGIBILITY, LAW-CONTENT-AUTHORITY |
+| INV-POLICY-IDEMPOTENT-001 | [invariants/core/scheduling-policy/INV-POLICY-IDEMPOTENT-001.md](invariants/core/scheduling-policy/INV-POLICY-IDEMPOTENT-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-POLICY-DSL-DECLARED-001 | [invariants/core/scheduling-policy/INV-POLICY-DSL-DECLARED-001.md](invariants/core/scheduling-policy/INV-POLICY-DSL-DECLARED-001.md) | LAW-CONTENT-AUTHORITY |
+| INV-POLICY-VIOLATION-STRUCTURED-001 | [invariants/core/scheduling-policy/INV-POLICY-VIOLATION-STRUCTURED-001.md](invariants/core/scheduling-policy/INV-POLICY-VIOLATION-STRUCTURED-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+
+Canonical contract: [scheduling_policies.md](scheduling_policies.md)
+
 ### Scheduling — DSL Vocabulary
 
 | Invariant | File | Derived From |
@@ -262,10 +282,12 @@ Canonical contract: [block_assembly_tiers.md](block_assembly_tiers.md)
 | INV-POOL-RATING-NORMALIZE-001 | [invariants/core/programming-pools/INV-POOL-RATING-NORMALIZE-001.md](invariants/core/programming-pools/INV-POOL-RATING-NORMALIZE-001.md) | LAW-DERIVATION |
 | INV-POOL-TAGS-FILTER-001 | [invariants/core/programming-pools/INV-POOL-TAGS-FILTER-001.md](invariants/core/programming-pools/INV-POOL-TAGS-FILTER-001.md) | LAW-DERIVATION |
 | INV-POOL-RESOLUTION-VISIBILITY-001 | [invariants/core/programming-pools/INV-POOL-RESOLUTION-VISIBILITY-001.md](invariants/core/programming-pools/INV-POOL-RESOLUTION-VISIBILITY-001.md) | LAW-DERIVATION |
+| INV-POOL-NAME-UNIQUE-001 | [invariants/core/programming-pools/INV-POOL-NAME-UNIQUE-001.md](invariants/core/programming-pools/INV-POOL-NAME-UNIQUE-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-POOL-CLI-DELEGATES-001 | [invariants/core/programming-pools/INV-POOL-CLI-DELEGATES-001.md](invariants/core/programming-pools/INV-POOL-CLI-DELEGATES-001.md) | LAW-CONTENT-AUTHORITY |
 
-Canonical contract: [core/programming_pools.md](core/programming_pools.md)
+Canonical contracts: [core/programming_pools.md](core/programming_pools.md), [pool_management.md](pool_management.md)
 
-### Ingest — Interstitial Type Persistence
+### Ingest — Validation & Enrichment Pipeline
 
 | Invariant | File | Derived From |
 |-----------|------|--------------|
@@ -273,6 +295,29 @@ Canonical contract: [core/programming_pools.md](core/programming_pools.md)
 | INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001 | [invariants/core/ingest/INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001.md](invariants/core/ingest/INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
 | INV-ASSET-TAGS-PERSISTED-CORRECTLY-001 | [invariants/core/ingest/INV-ASSET-TAGS-PERSISTED-CORRECTLY-001.md](invariants/core/ingest/INV-ASSET-TAGS-PERSISTED-CORRECTLY-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
 | INV-ASSET-LIFECYCLE-COMPLETION-001 | [invariants/core/ingest/INV-ASSET-LIFECYCLE-COMPLETION-001.md](invariants/core/ingest/INV-ASSET-LIFECYCLE-COMPLETION-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
+| INV-VALIDATOR-OUTPUT-SHAPE-001 | [invariants/core/ingest/INV-VALIDATOR-OUTPUT-SHAPE-001.md](invariants/core/ingest/INV-VALIDATOR-OUTPUT-SHAPE-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
+| INV-ENRICHER-IDEMPOTENT-001 | [invariants/core/ingest/INV-ENRICHER-IDEMPOTENT-001.md](invariants/core/ingest/INV-ENRICHER-IDEMPOTENT-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
+| INV-CATALOG-READY-SCHEDULABLE-001 | [invariants/core/ingest/INV-CATALOG-READY-SCHEDULABLE-001.md](invariants/core/ingest/INV-CATALOG-READY-SCHEDULABLE-001.md) | LAW-ELIGIBILITY, LAW-CONTENT-AUTHORITY |
+| INV-ENRICHER-EXECUTION-MODE-001 | [invariants/core/ingest/INV-ENRICHER-EXECUTION-MODE-001.md](invariants/core/ingest/INV-ENRICHER-EXECUTION-MODE-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
+| INV-ENRICHER-OBSERVABILITY-001 | [invariants/core/ingest/INV-ENRICHER-OBSERVABILITY-001.md](invariants/core/ingest/INV-ENRICHER-OBSERVABILITY-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
+| INV-ENRICHER-RESULT-VERSIONED-001 | [invariants/core/ingest/INV-ENRICHER-RESULT-VERSIONED-001.md](invariants/core/ingest/INV-ENRICHER-RESULT-VERSIONED-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
+| INV-PATH-MAPPING-SOURCE-SCOPED-001 | [invariants/core/ingest/INV-PATH-MAPPING-SOURCE-SCOPED-001.md](invariants/core/ingest/INV-PATH-MAPPING-SOURCE-SCOPED-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-PATH-VALIDATION-ON-IMPORT-001 | [invariants/core/ingest/INV-PATH-VALIDATION-ON-IMPORT-001.md](invariants/core/ingest/INV-PATH-VALIDATION-ON-IMPORT-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-SOURCE-TYPE-REGISTRY-001 | [invariants/core/ingest/INV-SOURCE-TYPE-REGISTRY-001.md](invariants/core/ingest/INV-SOURCE-TYPE-REGISTRY-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-VALIDATOR-RESULT-PERSISTENCE-001 | [invariants/core/ingest/INV-VALIDATOR-RESULT-PERSISTENCE-001.md](invariants/core/ingest/INV-VALIDATOR-RESULT-PERSISTENCE-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
+| INV-TAG-CANONICAL-FORM-001 | [invariants/core/ingest/INV-TAG-CANONICAL-FORM-001.md](invariants/core/ingest/INV-TAG-CANONICAL-FORM-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
+| INV-TAG-MIGRATION-IDEMPOTENT-001 | [invariants/core/ingest/INV-TAG-MIGRATION-IDEMPOTENT-001.md](invariants/core/ingest/INV-TAG-MIGRATION-IDEMPOTENT-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
+
+Canonical contracts: [tag_canonical_form.md](tag_canonical_form.md)
+
+### Ingest — Source Watch Mode
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-WATCH-DELEGATES-001 | [invariants/core/ingest/INV-WATCH-DELEGATES-001.md](invariants/core/ingest/INV-WATCH-DELEGATES-001.md) | LAW-CONTENT-AUTHORITY |
+| INV-WATCH-DEBOUNCE-001 | [invariants/core/ingest/INV-WATCH-DEBOUNCE-001.md](invariants/core/ingest/INV-WATCH-DEBOUNCE-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+
+Canonical contract: [source_watch_mode.md](source_watch_mode.md)
 
 ### Interaction Boundary
 
@@ -423,6 +468,7 @@ Canonical contract: [schedule_constraints.md](schedule_constraints.md)
 | INV-HLS-PHANTOM-CLEANUP-001 | [invariants/core/runtime/INV-HLS-PHANTOM-CLEANUP-001.md](invariants/core/runtime/INV-HLS-PHANTOM-CLEANUP-001.md) | LAW-LIVENESS |
 | INV-HLS-DISCONTINUITY-MARKER-001 | [invariants/core/runtime/INV-HLS-DISCONTINUITY-MARKER-001.md](invariants/core/runtime/INV-HLS-DISCONTINUITY-MARKER-001.md) | LAW-DECODABILITY, LAW-LIVENESS |
 | INV-CHANNEL-LIVENESS-RECOVERY-001 | [invariants/core/runtime/INV-CHANNEL-LIVENESS-RECOVERY-001.md](invariants/core/runtime/INV-CHANNEL-LIVENESS-RECOVERY-001.md) | LAW-LIVENESS |
+| INV-FEED-MISS-POLICY-001 | [invariants/core/runtime/INV-FEED-MISS-POLICY-001.md](invariants/core/runtime/INV-FEED-MISS-POLICY-001.md) | LAW-LIVENESS, LAW-CLOCK |
 | INV-DAEMON-SESSION-SCOPE-001 | [invariants/core/runtime/INV-DAEMON-SESSION-SCOPE-001.md](invariants/core/runtime/INV-DAEMON-SESSION-SCOPE-001.md) | LAW-LIVENESS |
 | INV-BLOCKFILL-SUBPROCESS-ISOLATION-001 | [invariants/core/runtime/INV-BLOCKFILL-SUBPROCESS-ISOLATION-001.md](invariants/core/runtime/INV-BLOCKFILL-SUBPROCESS-ISOLATION-001.md) | LAW-LIVENESS |
 | INV-BREAK-V2-SINGLE-CHAPTER-001 | [invariants/core/runtime/INV-BREAK-V2-SINGLE-CHAPTER-001.md](invariants/core/runtime/INV-BREAK-V2-SINGLE-CHAPTER-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |

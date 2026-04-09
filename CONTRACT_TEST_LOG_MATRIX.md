@@ -109,7 +109,21 @@ The following harness capabilities are **required** to test observability rules 
 
 ---
 
-## 8. Summary
+## 8. Enricher Observability (Phase 3)
+
+| canonical_id | contract/law location | test file path | test asserts | log evidence asserted | status |
+|--------------|----------------------|----------------|--------------|------------------------|--------|
+| INV-ENRICHER-OBSERVABILITY-001 | `catalog/enrichment_progress.py`; `domain/entities.py` EnricherRun | `tests/contracts/ingest/test_inv_enricher_observability.py` | EnricherRun fields, per-enricher queries, execute_job creates records | (none) | exists |
+| INV-ENRICHER-RESULT-VERSIONED-001 | `catalog/enrichment_progress.py` | `tests/contracts/ingest/test_inv_enricher_result_versioned.py` | Version persisted, idempotent rerun, stale detection, version upgrade | (none) | exists |
+| INV-ENRICHER-OBSERVABILITY-001 (inspect surface) | `usecases/asset_inspect.py` | `tests/contracts/ingest/test_inv_enricher_inspect.py` | Inspect returns enricher list, record shape, summary, error handling | (none) | exists |
+| INV-ENRICHER-OBSERVABILITY-001 (multi-enricher integration) | `catalog/enrichment_progress.py` | `tests/contracts/integration/test_integration_enricher_observability.py` TestMultiEnricherProgress | FFprobe + Loudness tracked independently; latest run wins; usecase aggregation | (none) | exists |
+| INV-ENRICHER-OBSERVABILITY-001 (failure tracking integration) | `catalog/enrichment_progress.py`; `usecases/asset_inspect.py` | `tests/contracts/integration/test_integration_enricher_observability.py` TestEnricherFailureTracking | Failed status + error persisted; mixed success/failure; summary counts | (none) | exists |
+| INV-ENRICHER-OBSERVABILITY-001 (API endpoint integration) | `web/api/catalog.py` /assets/{uuid}/enrichment | `tests/contracts/integration/test_integration_enricher_observability.py` TestEnrichmentApiEndpoint | HTTP 200 shape, per-enricher data, 404 for unknown, empty enrichers | (none) | exists |
+| INV-ENRICHER-OBSERVABILITY-001 (CLI inspect integration) | `cli/commands/asset.py` inspect | `tests/contracts/integration/test_integration_enricher_observability.py` TestCliInspectEnrichmentOutput | Human-readable table, JSON output, no-enrichments message, error on missing asset | (none) | exists |
+
+---
+
+## 9. Summary
 
 | Category | Rules in scope | Exists | Partial | Missing |
 |----------|----------------|--------|---------|---------|
@@ -117,7 +131,8 @@ The following harness capabilities are **required** to test observability rules 
 | Air control (AIR-*) | 9 | 9 | 0 | 0 |
 | Phase 8 switching | 5+ | 5+ | 0 | 0 |
 | Output switching (OS-*) | 6 | 6 | 0 | 0 |
+| Enricher observability (Phase 3) | 7 | 7 | 0 | 0 |
 | Observability (LAW-OBS-*, Part 2.5) | 10 | 0 | 0 | 10 |
-| **Total** | ~39 | ~24 | ~1 | ~14 |
+| **Total** | ~46 | ~31 | ~1 | ~14 |
 
 **Critical gap:** No tests assert on log events. All LAW-OBS-* rules and PlayoutEngineContract Part 2.5 observability requirements are untested. Implementing log capture + parsing in the contract test harness is prerequisite for closing this gap.

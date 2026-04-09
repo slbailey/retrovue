@@ -168,10 +168,11 @@ These invariants have structural enforcement in production code and passing cont
 | INV-EXECUTION-DERIVED-FROM-SCHEDULEDAY-001 | 2 (negative + positive) | **PASS** | `ExecutionWindowStore.add_entries()` rejects entries missing `channel_id` or `programming_day_date` |
 | INV-DERIVATION-ANCHOR-PROTECTED-001 | 2 (negative + positive) | **PASS** | `InMemoryResolvedStore.delete()` checks `ExecutionWindowStore.has_entries_for()` before deletion |
 | INV-OVERRIDE-RECORD-PRECEDES-ARTIFACT-001 | 6 (TOR-001..004 + 2 inline) | **PASS** | `InMemoryOverrideStore.persist()` called before artifact mutation in `operator_override()` and `publish_atomic_replace()` |
-| INV-PLAN-FULL-COVERAGE-001 | 4 (gap reject + exact tile + pds≠00:00 reject + pds≠00:00 tile) | **PASS** | `validate_zone_plan_integrity()` in `zone_add.py` / `zone_update.py` before `db.commit()` |
-| INV-PLAN-NO-ZONE-OVERLAP-001 | 4 (overlap reject + day-filter pass + mutation-induced overlap + precedence) | **PASS** | `validate_zone_plan_integrity()` in `zone_add.py` / `zone_update.py` before `db.commit()` |
-| INV-PLAN-GRID-ALIGNMENT-001 | 7 (block start/duration/valid + zone end/start/duration/valid) | **PASS** | `validate_zone_plan_integrity()` in `zone_add.py` / `zone_update.py`; `validate_block_assignment()` in `contracts.py` |
-| INV-PLAN-ELIGIBLE-ASSETS-ONLY-001 | 4 (ineligible reject + eligible accept + mixed reject + no-resolver skip) | **PASS** | `check_asset_eligibility()` in `zone_coverage_check.py` via `validate_zone_plan_integrity()` |
+| INV-CRUD-ISLAND-RETIRED-001 | 1 (AST scan — no production imports of retired entities) | **PASS** | Structural: AST inspection verifies no production module imports SchedulePlan/Zone/Program/SchedulePlanLabel |
+| ~~INV-PLAN-FULL-COVERAGE-001~~ | ~~4~~ | **DEPRECATED** | RETA-88: CRUD island retired; enforcement code removed |
+| ~~INV-PLAN-NO-ZONE-OVERLAP-001~~ | ~~4~~ | **DEPRECATED** | RETA-88: CRUD island retired; enforcement code removed |
+| ~~INV-PLAN-GRID-ALIGNMENT-001~~ | ~~7~~ | **DEPRECATED** | RETA-88: CRUD island retired; enforcement code removed |
+| ~~INV-PLAN-ELIGIBLE-ASSETS-ONLY-001~~ | ~~4~~ | **DEPRECATED** | RETA-88: CRUD island retired; enforcement code removed |
 | INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 | 3 (unanchored reject + plan_id accept + manual override accept) | **PASS** | `_enforce_derivation_traceability()` in `schedule_manager_service.py`; `InMemoryResolvedStore.store()` / `force_replace()` |
 | INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 | 3 (carry-in overlap reject + carry-in honored accept + no carry-in accept) | **PASS** | `validate_scheduleday_seam()` in `schedule_manager_service.py`; `InMemoryResolvedStore.store()` / `force_replace()` |
 | INV-SCHEDULEDAY-LEAD-TIME-001 | 3 (missing at deadline + materialized before deadline + parameterized N=5) | **PASS** | `check_scheduleday_lead_time()` standalone function in `schedule_manager_service.py` |
@@ -1383,6 +1384,34 @@ Tests in this section require clock progression (`FakeAdvancingClock.advance_ms(
 
 ---
 
+### FEED-MISS-001: Late feed records annotation, does not reorder
+
+| Field | Value |
+|---|---|
+| **Invariant(s)** | INV-FEED-MISS-POLICY-001 |
+| **Derived Law(s)** | LAW-LIVENESS, LAW-CLOCK |
+| **Scenario** | BlockPlanProducer feed-ahead detects a block past its start_utc_ms. The miss is recorded (counter incremented, WARNING logged, as-run annotation created) but block ordering is preserved and control flow is unchanged. |
+| **Clock Setup** | FakeAdvancingClock advanced past the next block's start_utc_ms before feed-ahead tick fires. |
+| **Stimulus / Actions** | 1. Seed BlockPlanProducer normally. 2. Advance clock past the next block's start_utc_ms. 3. Trigger feed-ahead tick. 4. Inspect _ready_by_miss_count, log output, and feed ordering. |
+| **Assertions** | `_ready_by_miss_count` incremented by 1. WARNING log emitted with `MISS_READY_BY` and `lateness_ms`. Block ordering unchanged — the missed block is still fed next, not skipped or reordered. |
+| **Failure Classification** | Runtime (if miss alters control flow or reorders blocks) |
+
+---
+
+### FEED-MISS-002: Horizon exhaustion returns None without crash
+
+| Field | Value |
+|---|---|
+| **Invariant(s)** | INV-FEED-MISS-POLICY-001 |
+| **Derived Law(s)** | LAW-LIVENESS |
+| **Scenario** | `_resolve_plan_for_block()` returns None when schedule_service has no block at the requested time. Feed-ahead logs `INV-BLOCKPLAN-HORIZON-MISS` and retries next tick without crashing. |
+| **Clock Setup** | N/A (schedule service returns None regardless of time). |
+| **Stimulus / Actions** | 1. Construct BlockPlanProducer with a schedule service that returns None. 2. Trigger feed-ahead tick. 3. Verify no exception and retry behavior. |
+| **Assertions** | No exception raised. WARNING log emitted with `INV-BLOCKPLAN-HORIZON-MISS`. Feed-ahead returns normally (retry next tick). No block is generated or fed. |
+| **Failure Classification** | Runtime (if crash or panic on None) |
+
+---
+
 ### 8.3.1 Cross-Layer Constitutional Scenarios
 
 ---
@@ -1871,38 +1900,6 @@ The following domain tables group tests by functional area. Each test is classif
 
 ---
 
-#### Program Presentation Stack (Tier 2)
-
-**Contract:** `docs/contracts/program_presentation.md`
-**Test file:** `pkg/core/tests/contracts/test_program_presentation.py`
-
-| Test ID | Invariant(s) | Law(s) | Scenario |
-|---------|-------------|--------|----------|
-| PRES-EMPTY-001 | INV-PRESENTATION-SINGLE-PRIMARY-001 | LAW-CONTENT-AUTHORITY | Program with empty presentation stack assembles with primary content only; exactly one `is_primary=True` segment |
-| PRES-SINGLE-001 | INV-PRESENTATION-PRECEDES-PRIMARY-001, INV-PRESENTATION-SINGLE-PRIMARY-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Single presentation segment appears before primary content; presentation has `is_primary=False` |
-| PRES-ORDER-001 | INV-PRESENTATION-PRECEDES-PRIMARY-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Multiple presentation segments appear in declared order before primary content |
-| PRES-BUDGET-001 | INV-PRESENTATION-GRID-BUDGET-001 | LAW-GRID, LAW-CONTENT-AUTHORITY | Presentation durations reduce available grid budget; oversized content rejected with `bleed: false` |
-| PRES-BUDGET-002 | INV-PRESENTATION-GRID-BUDGET-001 | LAW-GRID, LAW-CONTENT-AUTHORITY | Content that fits within remaining budget (after presentation overhead) is accepted |
-| PRES-IDENTITY-001 | INV-PRESENTATION-FIRST-CONTENT-IDENTITY-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Editorial identity extracted from first `segment_type="content"` segment, not presentation segments |
-| PRES-IDENTITY-002 | INV-PRESENTATION-FIRST-CONTENT-IDENTITY-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | No presentation segment has `segment_type="content"` |
-| PRES-FILLER-001 | INV-PRESENTATION-NOT-FILLER-001 | LAW-CONTENT-AUTHORITY, LAW-ELIGIBILITY | Presentation segments before primary content do not trigger `_assert_no_filler_before_primary` |
-| PRES-FILLER-002 | INV-PRESENTATION-NOT-FILLER-001 | LAW-CONTENT-AUTHORITY, LAW-ELIGIBILITY | Every presentation segment has non-empty `asset_uri` and `segment_type="presentation"` |
-| PRES-BREAK-001 | INV-PRESENTATION-BREAK-INVISIBLE-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Break detection produces no opportunities at presentation-to-content boundaries |
-| PRES-POOL-001 | INV-PRESENTATION-PRECEDES-PRIMARY-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Pool entry resolves to exactly one asset from the named pool |
-| PRES-POOL-002 | INV-PRESENTATION-PRECEDES-PRIMARY-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Same seed produces same pool selection; different seeds differ |
-| PRES-POOL-003 | INV-PRESENTATION-PRECEDES-PRIMARY-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Mixed asset and pool entries resolve in declared order |
-| PRES-MULTI-001 | INV-PRESENTATION-PRECEDES-PRIMARY-001 | LAW-CONTENT-AUTHORITY | Multiple presentation before primary — no crash |
-| PRES-BREAK-002 | INV-PRESENTATION-BREAK-INVISIBLE-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Presentation invisible but content breaks preserved |
-| PRES-REJECT-001 | INV-PRESENTATION-PRECEDES-PRIMARY-001 | LAW-CONTENT-AUTHORITY | Presentation and intro co-existence rejected |
-| PRES-BUDGET-003 | INV-PRESENTATION-GRID-BUDGET-001 | LAW-GRID, LAW-CONTENT-AUTHORITY | Multiple presentation segments — budget sum applies |
-| PRES-CTX-001 | INV-PRESENTATION-CONTEXTUAL-SELECT-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Pool entry with `rating: eq: program.rating` selects asset matching content rating |
-| PRES-CTX-002 | INV-PRESENTATION-CONTEXTUAL-SELECT-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Pool entry with `year: lte: program.release_year` selects era-appropriate asset |
-| PRES-CTX-003 | INV-PRESENTATION-CONTEXTUAL-SELECT-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Missing program metadata degrades gracefully — pool unfiltered, segment still emitted |
-| PRES-CTX-004 | INV-PRESENTATION-CONTEXTUAL-SELECT-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Entry without `select` clause resolves from full pool (backward compatible) |
-| PRES-CTX-005 | INV-PRESENTATION-CONTEXTUAL-SELECT-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Contextual select with zero matches degrades gracefully — segment omitted |
-
----
-
 #### Programming Pool — Rating Match Normalization (Tier 1)
 
 **Test file:** `pkg/core/tests/contracts/test_pool_rating_normalize.py`
@@ -1981,6 +1978,41 @@ The following domain tables group tests by functional area. Each test is classif
 | POOL-VIS-INT-009 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | Attached diagnostics are PoolDiagnostics instances |
 | POOL-VIS-INT-010 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | Attached diagnostics have populated exclusion_reasons |
 | POOL-VIS-INT-011 | INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | Assembly still succeeds with empty presentation pool (graceful degradation) |
+
+---
+
+#### Pool Management — Name Uniqueness (Tier 1)
+
+**Contract:** `docs/contracts/pool_management.md`
+**Test file:** `pkg/core/tests/contracts/test_pool_management.py`
+
+| Test ID | Invariant(s) | Law(s) | Scenario |
+|---------|-------------|--------|----------|
+| POOL-MGMT-001 | INV-POOL-NAME-UNIQUE-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Creating a pool with a unique name succeeds |
+| POOL-MGMT-002 | INV-POOL-NAME-UNIQUE-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Creating a pool with a duplicate name raises uniqueness error |
+| POOL-MGMT-003 | INV-POOL-NAME-UNIQUE-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Original pool is unchanged after duplicate creation attempt |
+| POOL-MGMT-004 | INV-POOL-NAME-UNIQUE-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Pool names are case-sensitive (distinct names differing only by case are allowed) |
+| POOL-MGMT-005 | INV-POOL-NAME-UNIQUE-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | list_pools returns all created pools ordered by name |
+| POOL-MGMT-006 | INV-POOL-NAME-UNIQUE-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | inspect_pool returns matched assets and PoolDiagnostics |
+| POOL-MGMT-007 | INV-POOL-NAME-UNIQUE-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | inspect_pool with zero matches returns full diagnostics |
+| POOL-MGMT-008 | INV-POOL-NAME-UNIQUE-001, INV-POOL-RESOLUTION-VISIBILITY-001 | LAW-DERIVATION | Inspect delegates to query_with_diagnostics, not query |
+| POOL-MGMT-009 | INV-POOL-NAME-UNIQUE-001 | LAW-CONTENT-AUTHORITY | assign_pool creates advisory association |
+| POOL-MGMT-010 | INV-POOL-NAME-UNIQUE-001 | LAW-CONTENT-AUTHORITY | assign_pool to non-existent channel raises error |
+
+---
+
+#### Pool Management — CLI Delegation (Tier 1)
+
+**Contract:** `docs/contracts/pool_management.md`
+**Test file:** `pkg/core/tests/contracts/test_pool_management.py`
+
+| Test ID | Invariant(s) | Law(s) | Scenario |
+|---------|-------------|--------|----------|
+| POOL-CLI-001 | INV-POOL-CLI-DELEGATES-001 | LAW-CONTENT-AUTHORITY | Pool CLI create command delegates to workflow create_pool |
+| POOL-CLI-002 | INV-POOL-CLI-DELEGATES-001 | LAW-CONTENT-AUTHORITY | Pool CLI list command delegates to workflow list_pools |
+| POOL-CLI-003 | INV-POOL-CLI-DELEGATES-001 | LAW-CONTENT-AUTHORITY | Pool CLI inspect command delegates to workflow inspect_pool |
+| POOL-CLI-004 | INV-POOL-CLI-DELEGATES-001 | LAW-CONTENT-AUTHORITY | Pool CLI assign command delegates to workflow assign_pool |
+| POOL-CLI-005 | INV-POOL-CLI-DELEGATES-001 | LAW-CONTENT-AUTHORITY | Pool CLI module contains no ORM queries or entity mutations |
 
 ---
 
@@ -2172,3 +2204,32 @@ The following domain tables group tests by functional area. Each test is classif
 | TIER3-NEXT-002 | INV-TIER3-NEXT-BLOCK-IDENTITY-001 | LAW-DERIVATION | Last block of broadcast day has no "coming up next", no error |
 | TIER-SEQ-001 | INV-ASSEMBLY-SEQUENCE-001 | LAW-CONTENT-AUTHORITY, LAW-GRID, LAW-DERIVATION | Segment order: obligation, presentation, content, optional |
 | TIER-CONS-001 | INV-BLOCK-SEGMENT-CONSERVATION-001 | LAW-GRID | Sum of all tier segment durations equals block duration |
+
+---
+
+## Scheduling Policies
+
+**Contract:** `docs/contracts/scheduling_policies.md`
+
+**Test file:** `pkg/core/tests/contracts/test_scheduling_policies.py`
+
+| Test ID | Invariant(s) | Law(s) | Scenario |
+|---------|-------------|--------|----------|
+| POL-PURE-001 | INV-POLICY-PURE-001 | LAW-ELIGIBILITY, LAW-CONTENT-AUTHORITY | Inputs are frozen before evaluation; assert byte-identical after call returns |
+| POL-PURE-002 | INV-POLICY-PURE-001 | LAW-ELIGIBILITY | Policy module contains no I/O imports (os, io, pathlib, socket, requests, sqlalchemy) |
+| POL-LAYER-001 | INV-POLICY-LAYERED-001 | LAW-ELIGIBILITY, LAW-CONTENT-AUTHORITY | Policy cannot mark an ineligible asset as eligible |
+| POL-LAYER-002 | INV-POLICY-LAYERED-001 | LAW-ELIGIBILITY | Empty policy returns all eligible candidates unchanged; does not re-check eligibility |
+| POL-IDEMP-001 | INV-POLICY-IDEMPOTENT-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | N identical calls produce N identical results |
+| POL-IDEMP-002 | INV-POLICY-IDEMPOTENT-001 | LAW-DERIVATION | Varying candidate input order produces identical output |
+| POL-DSL-001 | INV-POLICY-DSL-DECLARED-001 | LAW-CONTENT-AUTHORITY | SchedulingPolicy construction call sites exist only in DSL compilation path or test fixtures |
+| POL-VIOL-001 | INV-POLICY-VIOLATION-STRUCTURED-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Repeat window violation carries invariant_id, rule_type, message, details with asset_id |
+| POL-VIOL-002 | INV-POLICY-VIOLATION-STRUCTURED-001 | LAW-DERIVATION | Frequency cap violation carries all required fields |
+| POL-VIOL-003 | INV-POLICY-VIOLATION-STRUCTURED-001 | LAW-DERIVATION | Tag eligibility violation carries all required fields |
+| POL-VIOL-004 | INV-POLICY-VIOLATION-STRUCTURED-001 | LAW-DERIVATION | Duration gate violation carries all required fields |
+| POL-REPEAT-001 | INV-POLICY-LAYERED-001, INV-POLICY-PURE-001 | LAW-ELIGIBILITY | Asset aired within window_days is excluded; asset outside window passes |
+| POL-FREQ-001 | INV-POLICY-LAYERED-001, INV-POLICY-PURE-001 | LAW-ELIGIBILITY | Show at daily cap excluded; show below cap passes |
+| POL-TAG-001 | INV-POLICY-LAYERED-001, INV-POLICY-PURE-001 | LAW-ELIGIBILITY | Asset missing required tags excluded; asset with excluded tags excluded |
+| POL-DUR-001 | INV-POLICY-LAYERED-001, INV-POLICY-PURE-001 | LAW-ELIGIBILITY | Asset below min_duration excluded; asset above max_duration excluded; boundary values pass |
+| POL-EMPTY-001 | INV-POLICY-PURE-001, INV-POLICY-IDEMPOTENT-001 | LAW-ELIGIBILITY | Empty candidate list returns empty eligible list and no violations |
+| POL-EMPTY-002 | INV-POLICY-PURE-001, INV-POLICY-IDEMPOTENT-001 | LAW-ELIGIBILITY | Empty policy (no rules) returns all candidates eligible |
+| POL-MULTI-001 | INV-POLICY-VIOLATION-STRUCTURED-001 | LAW-DERIVATION | Asset failing multiple rule types reports all violations, not just first |
