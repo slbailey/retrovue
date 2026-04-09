@@ -22,3 +22,4 @@ prometheus-client>=0.17.0
 grpcio>=1.60.0
 grpcio-health-checking>=1.60.0
 protobuf>=4.25.0
+watchdog>=4.0.0

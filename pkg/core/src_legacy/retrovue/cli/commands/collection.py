@@ -76,7 +76,7 @@ def list_collections(
                 mapping_pairs = []
                 for mapping in path_mappings:
                     mapping_pairs.append(
-                        {"plex_path": mapping.plex_path, "local_path": mapping.local_path}
+                        {"source_path": mapping.source_path, "retrovue_path": mapping.retrovue_path}
                     )
 
                 # Use persisted ingestible field
