@@ -490,24 +490,36 @@ class ContainerIngestService:
         )
         processor_ids_for_enqueue = [eid for eid, _, _ in pipeline]
 
-        # Preload path mappings for this container to resolve local paths before enrichment
-        path_mappings: list[tuple[str, str]] = []
-        try:
-            from ..domain.entities import PathMapping as _PathMapping
+        # Resolve effective path mappings (source inheritance + container overrides)
+        # per INV-PATH-MAPPING-SOURCE-SCOPED-001
+        from .path_mapping import resolve_effective_mappings
+        from .path_validation import validate_paths_at_import
 
-            rows = (
-                self.db.query(_PathMapping).filter(_PathMapping.container_id == container.uuid).all()
-            )
-            for pm in rows:
-                plex_p = getattr(pm, "plex_path", "") or ""
-                local_p = getattr(pm, "local_path", "") or ""
-                if plex_p and local_p:
-                    # Normalize slashes for comparison; keep original local path
-                    path_mappings.append((plex_p.replace("\\", "/"), local_p))
-        except Exception:
-            path_mappings = []
+        source = container.source
+        path_mappings = resolve_effective_mappings(source=source, container=container)
 
-        
+        # INV-PATH-VALIDATION-ON-IMPORT-001: validate sampled paths at import time
+        if path_mappings and discovered_locators:
+            sample_paths = []
+            for loc in discovered_locators[:10]:
+                uri = None
+                if isinstance(loc, dict):
+                    uri = loc.get("path_uri") or loc.get("uri") or loc.get("path")
+                else:
+                    uri = getattr(loc, "path_uri", None)
+                if uri and not uri.startswith("plex://"):
+                    sample_paths.append(uri)
+            if sample_paths:
+                path_validation_result = validate_paths_at_import(
+                    effective_mappings=path_mappings,
+                    sample_paths=sample_paths,
+                )
+                if path_validation_result.status == "failed":
+                    logger.warning(
+                        "path_validation_failed_at_import",
+                        container=container.name,
+                        diagnostic=path_validation_result.diagnostic,
+                    )
 
         def _get_uri(item: Any) -> str | None:
             if isinstance(item, dict):
@@ -959,6 +971,36 @@ class ContainerIngestService:
                         asset.duration_ms = int(dm)
                 except Exception:
                     pass
+            # Run validation pipeline and auto-approve if all validators pass.
+            # INV-VALIDATOR-OUTPUT-SHAPE-001, INV-CATALOG-READY-SCHEDULABLE-001
+            from ..validators.auto_approve import try_auto_approve
+            from ..validators.pipeline import ValidationPipeline
+            from ..validators.duration import DurationValidator
+            from ..validators.codec import CodecValidator
+            from ..validators.container_format import ContainerFormatValidator
+            from ..validators.playability import PlayabilityValidator
+
+            _pipeline = ValidationPipeline([
+                DurationValidator(),
+                CodecValidator(),
+                ContainerFormatValidator(),
+                PlayabilityValidator(),
+            ])
+            _validation_result = try_auto_approve(asset, _pipeline)
+            if not _validation_result.passed:
+                logger.debug(
+                    "asset_validation_not_passed",
+                    asset_uuid=str(asset.uuid),
+                    errors=[e.code for e in _validation_result.errors],
+                )
+            # INV-VALIDATOR-RESULT-PERSISTENCE-001: persist validation result
+            from ..validators.persistence import ValidationResultStore
+            _val_store = ValidationResultStore()
+            _val_store.persist(
+                asset_id=str(asset.uuid),
+                timestamp=datetime.now(UTC),
+                result=_validation_result,
+            )
             # Persist when not a dry run
             if not dry_run:
                 repo.create(asset)
@@ -966,7 +1008,7 @@ class ContainerIngestService:
                 # INV-ASSET-TAG-PERSISTENCE-001: tags MUST live in asset_tags, not only JSONB.
                 try:
                     from ..domain.entities import AssetTag
-                    from ..domain.tag_normalization import normalize_tag_set
+                    from ..domain.tag_normalization import canonicalize_tag, normalize_tag_set
                     tag_labels: list[str] = []
                     if labels:
                         tag_labels = [
@@ -976,12 +1018,12 @@ class ContainerIngestService:
                         ]
                     if tag_labels:
                         for tag_val in normalize_tag_set(tag_labels):
-                            # INV-ASSET-TAG-FORMAT-001: tags stored as CATEGORY:value
-                            namespaced = tag_val if ":" in tag_val else f"TAG:{tag_val}"
+                            # INV-TAG-CANONICAL-FORM-001: tags stored as namespace.value
+                            canonical = canonicalize_tag(tag_val)
                             self.db.merge(
                                 AssetTag(
                                     asset_uuid=asset.uuid,
-                                    tag=namespaced,
+                                    tag=canonical,
                                     source="ingest",
                                 )
                             )

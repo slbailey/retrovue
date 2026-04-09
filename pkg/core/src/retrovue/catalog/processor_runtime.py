@@ -22,6 +22,7 @@ from ..domain.entities import (
     AssetEditorial,
     AssetProbed,
     Container,
+    EnricherRun,
     ProcessorOutput,
     ProcessorRun,
 )
@@ -308,6 +309,7 @@ def execute_job(db: Session, job: Any) -> None:
 
     processor_ids = get_processors_for_target(job.target_type)
     run_records: list[dict[str, Any]] = []
+    enricher_run_records: list[EnricherRun] = []
     flexible_outputs: list[tuple[str, dict[str, Any]]] = []
 
     logger.info(
@@ -348,6 +350,18 @@ def execute_job(db: Session, job: Any) -> None:
                 "completed_at": _started,
                 "error_message": str(exc),
             })
+            # INV-ENRICHER-OBSERVABILITY-001: per-enricher execution record
+            enricher_run_records.append(EnricherRun(
+                id=_run_id,
+                asset_id=job.target_id,
+                enricher_name=processor_id,
+                enricher_version=DEFAULT_PROCESSOR_VERSION,
+                status="failed",
+                started_at=_started,
+                completed_at=_started,
+                error=str(exc),
+                result_payload=None,
+            ))
             continue
         if enricher is None:
             # Processor not in ENRICHERS registry — legitimate skip
@@ -414,6 +428,18 @@ def execute_job(db: Session, job: Any) -> None:
                 duration_ms=round(duration_ms),
                 applied=dict(result.metadata) if result.metadata else None,
             )
+            # INV-ENRICHER-OBSERVABILITY-001: per-enricher execution record (success)
+            enricher_run_records.append(EnricherRun(
+                id=run_id,
+                asset_id=job.target_id,
+                enricher_name=processor_id,
+                enricher_version=DEFAULT_PROCESSOR_VERSION,
+                status="succeeded",
+                started_at=started_at,
+                completed_at=completed_at,
+                error=None,
+                result_payload=dict(result.metadata) if result.metadata else None,
+            ))
         except Exception as e:
             completed_at = datetime.now(UTC)
             run_record["status"] = RUN_STATUS_FAILED
@@ -424,6 +450,18 @@ def execute_job(db: Session, job: Any) -> None:
                 processor_id=processor_id,
                 error=str(e),
             )
+            # INV-ENRICHER-OBSERVABILITY-001: per-enricher execution record (failure)
+            enricher_run_records.append(EnricherRun(
+                id=run_id,
+                asset_id=job.target_id,
+                enricher_name=processor_id,
+                enricher_version=DEFAULT_PROCESSOR_VERSION,
+                status="failed",
+                started_at=started_at,
+                completed_at=completed_at,
+                error=str(e),
+                result_payload=None,
+            ))
             run_records.append(run_record)
             # Persist run rows for every processor that was invoked (including failed)
             for rec in run_records:
@@ -442,6 +480,8 @@ def execute_job(db: Session, job: Any) -> None:
                         error_message=rec.get("error_message"),
                     )
                 )
+            for er in enricher_run_records:
+                db.add(er)
             # INV-ASSET-LIFECYCLE-COMPLETION-001: evaluate state transition
             # on the exception path so the asset does not remain "enriching".
             _finalize_asset_state(ctx.target_entity)
@@ -469,6 +509,7 @@ def execute_job(db: Session, job: Any) -> None:
         existing_ed = db.get(AssetEditorial, asset.uuid)
         if existing_ed:
             existing_ed.payload = editorial_to_persist
+            existing_ed.sync_columns_from_payload()
             db.add(existing_ed)
         else:
             db.add(AssetEditorial(asset_uuid=asset.uuid, payload=editorial_to_persist))
@@ -492,6 +533,10 @@ def execute_job(db: Session, job: Any) -> None:
                 error_message=rec.get("error_message"),
             )
         )
+
+    # INV-ENRICHER-OBSERVABILITY-001: persist per-enricher execution records.
+    for er in enricher_run_records:
+        db.add(er)
 
     for processor_id, payload in flexible_outputs:
         existing = (

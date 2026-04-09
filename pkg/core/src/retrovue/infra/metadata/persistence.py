@@ -34,6 +34,7 @@ def persist_asset_metadata(
             merged = dict(ed_obj.payload or {})
             merged.update(editorial)
             ed_obj.payload = merged
+            ed_obj.sync_columns_from_payload()
         db.add(ed_obj)
 
     # Probed — same merge pattern to protect fields set by prior enrichers.

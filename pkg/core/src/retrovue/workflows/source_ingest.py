@@ -30,16 +30,34 @@ from sqlalchemy.orm import Session
 
 from ..domain.entities import Container, Source
 from .container_ingest import ContainerIngestService
+from .source_type_registry import resolve_importer_class
 
 logger = structlog.get_logger(__name__)
 
 
-def _construct_importer(collection, db):
-    # TODO(phase-2): inject importer factory to remove cli/ dependency
-    """Late-import wrapper to avoid circular dependency with collection.py."""
-    from ..cli.commands.collection import construct_importer_for_collection
+def _construct_importer(container: Container, db: Session) -> Any:
+    """Construct an importer for a container using the source type registry.
 
-    return construct_importer_for_collection(collection, db)
+    Routes through SOURCE_TYPE_REGISTRY per INV-SOURCE-TYPE-REGISTRY-001.
+    """
+    source = container.source
+    if source is None:
+        raise ValueError(f"Container {container.uuid} has no associated source")
+
+    importer_cls = resolve_importer_class(source.type)
+
+    # Build importer config from source config
+    config = source.config or {}
+    try:
+        return importer_cls(**config)
+    except Exception as exc:
+        logger.warning(
+            "importer_construction_failed",
+            source_type=source.type,
+            source_id=str(source.id),
+            error=str(exc),
+        )
+        raise
 
 
 @dataclass
