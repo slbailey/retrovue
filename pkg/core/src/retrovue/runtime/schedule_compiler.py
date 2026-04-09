@@ -24,10 +24,22 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, date
 from typing import Any
 
+import logging
 import yaml
 
 from retrovue.runtime.asset_resolver import AssetResolver
 from retrovue.runtime.playout_log_expander import expand_program_block
+from retrovue.scheduling.policies import (
+    DurationGateRule,
+    FrequencyCapRule,
+    PolicyViolation,
+    RepeatWindowRule,
+    SchedulingPolicy,
+    TagEligibilityRule,
+    evaluate_scheduling_policies,
+)
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -980,6 +992,102 @@ def validate_program_blocks(blocks: list[ProgramBlockOutput]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Scheduling policy DSL resolution (INV-POLICY-DSL-DECLARED-001)
+# ---------------------------------------------------------------------------
+
+
+def resolve_scheduling_policy(dsl: dict[str, Any]) -> SchedulingPolicy | None:
+    """Resolve the optional ``policies:`` key from channel DSL YAML.
+
+    Returns a frozen SchedulingPolicy if the key is present, None otherwise.
+    This is the **only** construction site for SchedulingPolicy objects
+    (INV-POLICY-DSL-DECLARED-001).
+    """
+    raw = dsl.get("policies")
+    if not raw:
+        return None
+
+    repeat_window = None
+    rw = raw.get("repeat_window")
+    if rw:
+        repeat_window = RepeatWindowRule(
+            same_episode_days=rw.get("same_episode_days", 7),
+        )
+
+    frequency_cap = None
+    fc = raw.get("frequency_cap")
+    if fc:
+        per_day = fc.get("per_day", fc)
+        frequency_cap = FrequencyCapRule(
+            max_episodes_per_show=per_day.get("max_episodes_per_show", 0),
+        )
+
+    tag_eligibility: list[TagEligibilityRule] = []
+    te_raw = raw.get("tag_eligibility")
+    if te_raw and isinstance(te_raw, list):
+        for entry in te_raw:
+            tag_eligibility.append(
+                TagEligibilityRule(
+                    context=entry.get("context", ""),
+                    require_tags=frozenset(entry.get("require_tags", [])),
+                    exclude_tags=frozenset(entry.get("exclude_tags", [])),
+                )
+            )
+
+    duration_gate: list[DurationGateRule] = []
+    dg_raw = raw.get("duration_gate")
+    if dg_raw and isinstance(dg_raw, list):
+        for entry in dg_raw:
+            duration_gate.append(
+                DurationGateRule(
+                    context=entry.get("context", ""),
+                    min_duration_sec=entry.get("min_duration_sec", 0),
+                    max_duration_sec=entry.get("max_duration_sec", 0),
+                )
+            )
+
+    return SchedulingPolicy(
+        repeat_window=repeat_window,
+        frequency_cap=frequency_cap,
+        tag_eligibility=tag_eligibility,
+        duration_gate=duration_gate,
+    )
+
+
+class _PolicyAssetAdapter:
+    """Adapts a ProgramBlockOutput + AssetMetadata to the _SchedulableAsset protocol.
+
+    This adapter bridges the compilation output to the policy evaluation
+    interface without coupling the policy layer to compilation internals.
+    """
+
+    __slots__ = (
+        "asset_id", "show_id", "episode_id",
+        "duration_ms", "tags", "state", "approved_for_broadcast",
+    )
+
+    def __init__(
+        self,
+        block: "ProgramBlockOutput",
+        resolver: AssetResolver,
+    ) -> None:
+        self.asset_id = block.asset_id
+        self.episode_id = block.asset_id
+        # Use pool/collection as show grouping key
+        self.show_id = block.collection or ""
+        self.state = "ready"
+        self.approved_for_broadcast = True
+        try:
+            meta = resolver.lookup(block.asset_id)
+            self.duration_ms = meta.duration_sec * 1000
+            self.tags = frozenset(meta.tags)
+        except (KeyError, AttributeError):
+            self.duration_ms = block.episode_duration_sec * 1000
+            self.tags = frozenset()
+
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -1039,6 +1147,9 @@ def compile_schedule(
     template = get_channel_template(dsl)
     grid_minutes = get_grid_minutes(template, _grid_mins)
     programs_defs = dsl.get("programs", {})
+
+    # Resolve scheduling policy from DSL (INV-POLICY-DSL-DECLARED-001)
+    scheduling_policy = resolve_scheduling_policy(dsl)
 
     # Schedule resolution: resolve DOW layering to flat block list
     all_blocks: list[ProgramBlockOutput] = []
@@ -1141,6 +1252,30 @@ def compile_schedule(
             if rid:
                 _run_id_prior[rid] = prior + _block_executions[i]
 
+    # Scheduling policy evaluation (INV-POLICY-DSL-DECLARED-001)
+    # Evaluate after asset resolution, before block assembly compaction.
+    policy_violations: list[PolicyViolation] = []
+    if scheduling_policy is not None and all_blocks:
+        eligible_blocks: list[ProgramBlockOutput] = []
+        for block in all_blocks:
+            adapted = _PolicyAssetAdapter(block, resolver)
+            violations = evaluate_scheduling_policies(
+                asset=adapted,
+                policy=scheduling_policy,
+                slot_context=block.selector.get("fill_mode", "") if block.selector else "",
+                play_history=[],  # TODO: wire air history from as-run log
+                broadcast_date=date.fromisoformat(broadcast_day),
+            )
+            if violations:
+                policy_violations.extend(violations)
+                logger.info(
+                    "Policy violation: asset %s skipped (%d violations)",
+                    block.asset_id, len(violations),
+                )
+            else:
+                eligible_blocks.append(block)
+        all_blocks = eligible_blocks
+
     # INV-BLEED-NO-GAP-001: Sort, validate, compact, revalidate.
     all_blocks.sort(key=lambda b: b.start_at)
 
@@ -1186,6 +1321,17 @@ def compile_schedule(
     notes = dsl.get("notes")
     if notes:
         plan["notes"] = notes
+
+    if policy_violations:
+        plan["policy_violations"] = [
+            {
+                "invariant_id": v.invariant_id,
+                "rule_type": v.rule_type,
+                "message": v.message,
+                "details": v.details,
+            }
+            for v in policy_violations
+        ]
 
     plan["hash"] = _compute_hash(plan)
     return plan
