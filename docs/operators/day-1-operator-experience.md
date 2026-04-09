@@ -2,7 +2,7 @@
 
 > **Purpose:** Before implementing the RETA-62 Simplified Asset Management plan, this guide walks through the complete Day 1 experience from an operator's perspective. It validates that the proposed CLI surface, state transitions, and feedback loops feel coherent and intuitive before any code is written.
 >
-> **Reference:** [RETA-62 plan](/RETA/issues/RETA-62#document-plan) — Simplified Asset Management
+> **Reference:** [RETA-62 plan](/RETA/issues/RETA-62#document-plan) — Simplified Asset Management (v10, revised for RETA-69)
 
 ---
 
@@ -22,19 +22,21 @@ The operator has:
 ### Step 1: Connect the source
 
 ```
-$ retrovue plex add --url http://plex.local:32400 --token abc123
+$ retrovue source add --type plex --url http://plex.local:32400 --token abc123
 ✓ Connected to Plex server "Living Room"
-  Found 3 libraries: Movies (847), TV Shows (124), Music Videos (31)
+  Found 3 containers: Movies (847), TV Shows (124), Music Videos (31)
 ```
 
-The system discovers Plex libraries and reports item counts. No media is ingested yet — the operator chooses what to import.
+The system discovers Plex containers (libraries in Plex's terminology) and reports item counts. No media is ingested yet — the operator chooses what to import.
 
-### Step 2: Import a library
+> **Under the hood:** `source add` delegates to the `SourceIngestService` workflow, which registers the source and runs container discovery. No domain logic lives in the CLI command (INV-CLI-NO-BUSINESS-LOGIC-001).
+
+### Step 2: Import a container
 
 ```
-$ retrovue plex import "Movies" --auto-approve
+$ retrovue source import "Movies"
 
-Importing "Movies" (847 items)...
+Importing "Movies" from source "Living Room" (847 items)...
   Ingested:   847 / 847
   Validating...
   ✅ Ready:       791  (93.4%)
@@ -45,27 +47,31 @@ Importing "Movies" (847 items)...
 Run `retrovue asset list --errors` to see failures.
 ```
 
+> **Disambiguation:** If multiple sources contain a container named "Movies", the CLI returns a hard error listing the matches and suggests adding `--source <name-or-id>` to specify which source. For example: `retrovue source import "Movies" --source "Living Room"`. No interactive prompting — the CLI stays scriptable.
+
 **What happened under the hood:**
 
 ```
-Ingest → Validate (4 core validators) → Auto-Approve → Enrich (immediate enrichers)
+ContainerIngestService → Validate (4 core validators) → Auto-Approve → Enrich (immediate enrichers)
 ```
 
 Each asset moved through the state machine:
 
 | Count | Path | Meaning |
 |-------|------|---------|
-| 791 | `new → validated → ready` | Broadcast-ready, no issues |
-| 38 | `new → validated (warnings) → ready` | Broadcast-ready, minor warnings (e.g., low bitrate) |
-| 18 | `new → new + errors` | Failed validation, not schedulable |
+| 791 | `new → validated → approved → ready` | Broadcast-ready, no issues |
+| 38 | `new → validated (warnings) → approved → ready` | Broadcast-ready, minor warnings (e.g., low bitrate) |
+| 18 | `new → validation failed` | Failed validation, not schedulable |
+
+Auto-approve is the default. The `validated → approved → ready` transition happens in one pass. To require manual approval instead, use `--manual-approve` — assets will stop at `validated` and await explicit approval.
 
 ### What "ready" means
 
 An asset is **ready** when:
-1. All 4 core validators pass (Duration, Codec, Container, Playability)
-2. The operator (or auto-approve) has approved it
+1. All 4 core validators pass (Duration, Codec, Container, Playability) — per INV-VALIDATOR-OUTPUT-SHAPE-001
+2. The operator (or auto-approve) has approved it — per the approval model
 
-Ready assets can be scheduled on any channel. They may still have warnings (non-blocking observations) and may gain richer metadata over time via enrichment.
+Ready assets can be scheduled on any channel. They may still have warnings (non-blocking observations) and may gain richer metadata over time via enrichment. Enrichment is orthogonal to readiness — an asset with zero enrichments complete is still fully schedulable (INV-CATALOG-READY-SCHEDULABLE-001).
 
 ### What "warnings" mean
 
@@ -73,7 +79,7 @@ Warnings are informational. The asset is fully schedulable but the system notice
 
 ### What "failed" means
 
-At least one core validator returned an error. The asset cannot be scheduled until the error is resolved and validation passes. Errors include machine-readable codes and human-readable messages.
+At least one core validator returned an error. The asset cannot be scheduled until the error is resolved and validation passes. Errors include machine-readable codes and human-readable messages (INV-VALIDATOR-OUTPUT-SHAPE-001).
 
 ### UX verification
 
@@ -90,17 +96,19 @@ At least one core validator returned an error. The asset cannot be scheduled unt
 ### Step 1: List failures
 
 ```
-$ retrovue asset list --status new --errors
+$ retrovue asset list --errors
 
-ID     Title              Error
-----   ----------------   ---------------------------
-1023   Die Hard           MISSING_AUDIO_CODEC: No audio stream detected
-1045   Ghostbusters       UNKNOWN_CONTAINER: Container format not recognized
-1099   Aliens             INVALID_DURATION: Duration = 0
-1102   The Thing          PLAYABILITY_FAIL: Stream probe could not read video
+ID     Title              Status   Error
+----   ----------------   ------   ---------------------------
+1023   Die Hard           new      MISSING_AUDIO_CODEC: No audio stream detected
+1045   Ghostbusters       new      UNKNOWN_CONTAINER: Container format not recognized
+1099   Aliens             new      INVALID_DURATION: Duration = 0
+1102   The Thing          new      PLAYABILITY_FAIL: Stream probe could not read video
 ```
 
 Every error has a machine-readable code (from INV-VALIDATOR-OUTPUT-SHAPE-001) and a human message. The operator can immediately see *what* is wrong.
+
+> **Note:** `--errors` shows all assets with validation errors regardless of status. The output includes the status column so the operator can see where each asset is in the state machine. Assets that failed validation remain in `new` status — they never advance to `validated`.
 
 ### Step 2: Inspect a specific asset
 
@@ -109,7 +117,7 @@ $ retrovue asset inspect 1023
 
 Asset: Die Hard (1023)
 Status: new
-Source: Plex / Movies / Die Hard (1988)
+Source: plex / Movies / Die Hard (1988)
 File:   /media/movies/Die Hard (1988)/Die.Hard.1988.mkv
 
 Validation:
@@ -140,10 +148,10 @@ Validating Die Hard (1023)...
   container:   pass
   playability: pass
 
-✅ Asset validated. Status: validated → ready (auto-approved)
+✅ Asset validated. Status: validated → approved → ready (auto-approved)
 ```
 
-If auto-approve is on, the asset moves straight to `ready`. Otherwise:
+If auto-approve is on, the asset moves straight through to `ready`. Otherwise:
 
 ```
 ✅ Asset validated. Status: validated (awaiting approval)
@@ -152,15 +160,17 @@ If auto-approve is on, the asset moves straight to `ready`. Otherwise:
 
 ### Batch operations
 
-Operators can re-validate an entire folder after fixing multiple files:
+Operators can re-validate all assets with errors at once:
 
 ```
-$ retrovue asset validate --folder "Movies"
+$ retrovue asset validate --errors
 
 Validating 18 assets with errors...
   ✅ Fixed:  12
   ❌ Still failing: 6
 ```
+
+> **Disambiguation:** To scope re-validation to a specific container, use `--container "Movies"`. If the container name exists in multiple sources, add `--source "Living Room"` to disambiguate. The CLI returns a hard error on ambiguity — no silent guessing.
 
 ### UX verification
 
@@ -178,34 +188,38 @@ Validating 18 assets with errors...
 ### The 3-command path
 
 ```
-$ retrovue plex import "Movies" --auto-approve
+$ retrovue source import "Movies"
   ✅ Ready: 791 assets
 
 $ retrovue channel create "Movie Channel"
   ✓ Channel "Movie Channel" created (id: movie-channel)
 
-$ retrovue schedule auto "Movie Channel"
-  ✓ Auto-schedule applied to "Movie Channel"
-    Using 791 eligible assets
-    Schedule generated: 24h continuous rotation
+$ retrovue schedule auto "Movie Channel" --container "Movies"
+  ✓ Generated schedule YAML: channels/movie-channel.yaml
+    Default pool: "Movies" (791 eligible assets)
+    Schedule: 24h continuous rotation
     First program: The Shawshank Redemption @ 00:00:00
 ```
 
 That's it. The channel is live.
 
+> **Note on `schedule auto`:** This is the quick-start exception, not the standard channel development methodology. `schedule auto` generates a YAML file containing a default pool and a 24-hour rotation schedule. The YAML file is editable and modifiable — this just gets the ball rolling. Full channel development (custom pools, editorial scheduling, zone-based grids) is covered separately.
+
+> **Note:** The `--container` flag specifies which container to draw assets from. If the container name is ambiguous across sources, add `--source "Living Room"` to disambiguate (per RETA-78).
+
 ### What the system does
 
-1. **Asset eligibility:** Only assets that are `ready` (validated + approved) are considered. Failed, unapproved, and policy-blocked assets are silently excluded.
-2. **Enrichment:** Lightweight enrichers (ffprobe metadata, interstitial classification) run immediately after approval. Expensive enrichers (loudness analysis) run lazily — on first schedule or via background queue. The operator doesn't need to wait.
-3. **Schedule generation:** The auto-scheduler fills 24h of programming using eligible assets. It respects any active policies (if configured) and falls back to the full eligible set if policies are too restrictive.
-4. **Continuous playback:** The channel advances with the wall clock. Viewers join mid-program and see content at the correct offset, as if tuning into live TV.
+1. **Asset eligibility:** Only assets that are `ready` (validated + approved) are considered. Failed and unapproved assets are silently excluded.
+2. **YAML generation:** `schedule auto` creates a channel YAML file with a default pool definition and a 24-hour rotation schedule. The pool draws from the specified container and filters by readiness.
+3. **Enrichment:** Immediate enrichers (ffprobe metadata, interstitial classification) run as soon as the asset reaches `ready`. Background enrichers (loudness analysis) run via a worker queue. The operator doesn't need to wait — enrichment never blocks scheduling (INV-CATALOG-READY-SCHEDULABLE-001, INV-ENRICHER-EXECUTION-MODE-001).
+4. **Schedule generation:** The auto-scheduler fills 24h of programming using eligible assets from the pool.
+5. **Continuous playback:** The channel advances with the wall clock. Viewers join mid-program and see content at the correct offset, as if tuning into live TV.
 
 ### What the operator does NOT need to think about
 
 - Validation (handled automatically during import)
 - Enrichment (runs in background, never blocks scheduling)
 - Failed assets (silently excluded — they never appear on air)
-- Policy conflicts (fallback rule prevents dead air)
 
 ### The trust contract
 
@@ -220,7 +234,7 @@ The operator can trust `ready` because:
 
 - [ ] Can the operator go from zero to a running channel in under 5 minutes?
 - [ ] Does the operator trust that "ready" assets will actually play?
-- [ ] Does the operator need to understand validation, enrichment, or policies to get started? (Answer should be: no)
+- [ ] Does the operator need to understand validation, enrichment, or pools to get started? (Answer should be: no — `schedule auto` handles pool creation via YAML)
 
 ---
 
@@ -234,7 +248,7 @@ The operator can trust `ready` because:
 $ retrovue asset inspect 1045
 ```
 
-The system returns a complete status picture. There are exactly 4 possible reasons an asset isn't airing, and the output makes each one unambiguous:
+The system returns a complete status picture. There are exactly 4 possible reasons an asset isn't airing on Day 1 (policies add a 5th reason in a future phase), and the output makes each one unambiguous:
 
 ### Case 1 — Not validated (validation error)
 
@@ -247,6 +261,8 @@ Validation:
   codec:       pass
   container:   FAIL — UNKNOWN_CONTAINER: Container format "rmvb" not recognized
   playability: skipped (container failed)
+
+Enrichment: not started (requires validation + approval)
 
 Not schedulable: fix the container format and re-validate.
 Run: retrovue asset validate 1045
@@ -264,6 +280,8 @@ Status: validated (awaiting approval)
 Validation: all pass
 Approval: pending
 
+Enrichment: not started (requires approval)
+
 Not schedulable: needs approval.
 Run: retrovue asset approve 1045
 ```
@@ -271,50 +289,52 @@ Run: retrovue asset approve 1045
 **Operator reads:** "It passed validation but I haven't approved it."
 **Time to answer:** ~2 seconds.
 
-### Case 3 — Policy blocked
+### Case 3 — Ready but not in a pool for this channel
 
 ```
 Asset: Ghostbusters (1045)
 Status: ready
 Approval: approved
-Channel: Movie Channel
 
-Policy blocks:
-  subtitles-required — Asset has no subtitle track
-     Policy applied to: Movie Channel
-     Fix: Add a subtitle track, or remove the policy
-     Run: retrovue policy list --channel "Movie Channel"
+Enrichment:
+  ffprobe:           complete
+  interstitial_type: complete
+  loudness:          complete
 
-Eligible but blocked by policy on this channel.
-The asset IS broadcast-ready. A channel-specific policy prevents scheduling.
+Pools: none (not assigned to any pool)
+
+Asset is fully eligible but not in any pool connected to a channel.
+Run: retrovue pool add-assets "Movie Pool" --asset 1045
 ```
 
-**Operator reads:** "It's ready, but this channel requires subtitles and my file doesn't have them."
-**Time to answer:** ~5 seconds.
+**Operator reads:** "Nothing is wrong. I just haven't added it to a pool."
+**Time to answer:** ~3 seconds.
 
-**Critical distinction:** The system explicitly says this is a *policy* block, not a validation failure. The asset is broadcast-ready — a channel-specific rule is preventing it. The operator knows the fix is either to add subtitles or relax the policy.
-
-### Case 4 — Ready but not yet scheduled
+### Case 4 — Ready, in pool, but not yet scheduled
 
 ```
 Asset: Ghostbusters (1045)
 Status: ready
 Approval: approved
-Policies: all pass
-Channels: not assigned to any channel
+Pools: Movie Pool
 
-Asset is fully eligible but not assigned to any channel's asset pool.
-Run: retrovue channel add-assets "Movie Channel" --folder "Movies"
+Enrichment:
+  ffprobe:           complete
+  interstitial_type: complete
+  loudness:          running (background)
+
+Schedule: not yet selected by auto-scheduler
+The asset is eligible and in a pool. It will be scheduled in a future rotation.
 ```
 
-**Operator reads:** "Nothing is wrong. I just haven't added it to a channel."
+**Operator reads:** "It's queued up. It just hasn't come up in the rotation yet."
 **Time to answer:** ~3 seconds.
 
 ### The 10-second test
 
 For every possible reason an asset isn't airing, the `inspect` output must:
 1. **State the reason** in plain language (not a code or status enum)
-2. **Name the specific blocker** (which validator, which policy, which missing step)
+2. **Name the specific blocker** (which validator, which missing step)
 3. **Show the fix** (the exact command to run or action to take)
 
 If the operator cannot answer "Why isn't this airing?" in under 10 seconds from `inspect` output, the design needs revision.
@@ -323,7 +343,7 @@ If the operator cannot answer "Why isn't this airing?" in under 10 seconds from 
 
 - [ ] Does every case produce a single, unambiguous reason?
 - [ ] Is the fix always visible in the output (command or action)?
-- [ ] Are policy blocks clearly distinguished from validation failures?
+- [ ] Is the pool layer transparent enough that operators don't get confused by "ready but not in pool"?
 - [ ] Can the operator self-serve every resolution without contacting support?
 
 ---
@@ -332,27 +352,27 @@ If the operator cannot answer "Why isn't this airing?" in under 10 seconds from 
 
 | Step | Command | Time | Outcome |
 |------|---------|------|---------|
-| Connect source | `retrovue plex add ...` | 5 sec | Libraries discovered |
-| Import + validate | `retrovue plex import "Movies" --auto-approve` | 1–5 min | ~90% ready, ~10% need attention |
+| Connect source | `retrovue source add --type plex ...` | 5 sec | Containers discovered |
+| Import + validate | `retrovue source import "Movies"` | 1–5 min | ~90% ready, ~10% need attention |
 | Fix failures | `retrovue asset list --errors` then fix then `retrovue asset validate` | 5–30 min | Remaining assets resolved |
 | Create channel | `retrovue channel create "Movie Channel"` | 5 sec | Channel exists |
-| Schedule | `retrovue schedule auto "Movie Channel"` | 5 sec | 24h programming generated |
+| Schedule | `retrovue schedule auto "Movie Channel" --container "Movies"` | 5 sec | YAML generated, 24h rotation, default pool |
 | Diagnose | `retrovue asset inspect <id>` | <10 sec | Root cause + fix visible |
 
 **Total time from zero to running channel: under 10 minutes** (for a typical Plex library with ~90% clean content).
 
 ---
 
-## Open Design Questions
+## Resolved Design Questions
 
-These should be resolved before implementation begins:
-
-1. **Folder vs. Plex as the primary source model:** The RETA-62 plan uses `retrovue folder add` as the canonical example, but Scenario 1 above uses `retrovue plex add`. Should both exist? Should Plex be a special case of folder? Or should `source` be the generic noun with `plex` and `folder` as source types?
-
-2. **Auto-approve default:** Should `--auto-approve` be the default for `plex import`, or should operators opt in? The "lazy operator" path (Scenario 3) works best with auto-approve as default, but some operators may want manual review.
-
-3. **Policy UX for Day 1:** Policies are a Phase 3 feature in the RETA-62 plan. Should the Day 1 guide mention them at all, or should Scenario 4 Case 3 be deferred until policies exist? (This guide includes it for completeness, but the implementation order matters.)
-
-4. **Channel asset assignment:** The plan doesn't specify how assets are associated with channels for scheduling. Is it folder-based? Tag-based? Explicit assignment? The `schedule auto` command needs to know which assets to draw from.
-
-5. **`inspect` output format:** Should `inspect` always show the full validator breakdown, or only show it when there are errors? For ready assets, the full breakdown may be noise.
+| Question | Resolution | Source |
+|----------|------------|--------|
+| Folder vs. Plex as primary source model | `source` is the generic noun with `--type` flag. Plex, folder, etc. are source types. | RETA-62 Design Decision #1 |
+| Channel asset assignment model | Pools are the Asset-to-Channel abstraction. | RETA-62 Design Decision #3 |
+| Where does new logic live? | `workflows/` or domain packages. Never CLI or API handlers. | RETA-69 invariants |
+| Auto-approve default | Auto-approve is the default for `source import`. Operators opt in to manual review with `--manual-approve`. | Board direction (RETA-77) |
+| Policy UX for Day 1 | Deferred. Policies are a Phase 4 feature; the Day 1 guide does not cover them. | Board direction (RETA-77) |
+| `inspect` output format | Show the full validator breakdown and enrichment progress by default. Revisit if it becomes noisy in practice. | Board direction (RETA-77) |
+| Pool creation in auto-schedule | `schedule auto` generates a YAML file that includes a default pool definition and a 24-hour rotation schedule. The YAML is editable. This is the quick-start exception; full channel development methodology is separate. | Board direction (RETA-77) |
+| Container/source disambiguation | Optional `--source` flag with error-on-ambiguity for source-level disambiguation. `schedule auto` uses `--container` for the container filter (not `--source`, which would conflict). If container name is unique across sources: resolve normally. If ambiguous: hard error listing matches, suggest `--source <name-or-id>`. No interactive prompting (CLI must stay scriptable). No path syntax (parsing ambiguity with `/` in names). Applies to `source import`, `asset validate --container`, `schedule auto --container`. | CEO decision (RETA-78, RETA-79) |
+| `--errors` status scope | `asset list --errors` shows validation failures only — assets stuck in `new` due to failed validators. Retired assets are a separate concern via `asset list --state retired`. Rationale: `--errors` = "what broke that I can fix"; retired = terminal, not actionable the same way. | CEO decision (RETA-78) |
