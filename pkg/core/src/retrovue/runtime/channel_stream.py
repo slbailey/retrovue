@@ -841,15 +841,18 @@ class ChannelStream:
                 with self.subscribers_lock:
                     q = self.subscribers.pop(cid, None)
                 if q is not None:
+                    detach_bytes = q.current_bytes
+                    # Log BEFORE sentinel so observers cannot react to
+                    # the disconnect before the observability event exists.
+                    self._logger.info(
+                        "[HTTP] SLOW_CONSUMER_DISCONNECT client_id=%s channel_id=%s "
+                        "reason=backpressure_disconnect queue_bytes_at_detach=%d",
+                        cid, self.channel_id, detach_bytes,
+                    )
                     try:
                         q.put_nowait(b"")
                     except Full:
                         pass
-                    self._logger.info(
-                        "[HTTP] SLOW_CONSUMER_DISCONNECT client_id=%s channel_id=%s "
-                        "reason=backpressure_disconnect",
-                        cid, self.channel_id,
-                    )
                 # Clean up per-client throttle state to prevent memory leaks
                 with self._backpressure_log_lock:
                     self._backpressure_log_last.pop(cid, None)
@@ -955,16 +958,19 @@ class ChannelStream:
         """
         queue = BytesBoundedQueue(max_bytes=self._client_buffer_max_bytes)
 
+        was_running = self.reader_thread is not None and self.reader_thread.is_alive()
+
         with self.subscribers_lock:
             self.subscribers[client_id] = queue
             subscriber_count = len(self.subscribers)
 
+        stream_state = "existing" if was_running else "fresh"
         self._logger.info(
-            "[HTTP] CLIENT_CONNECTED id=%s channel=%s subscribers=%d",
-            client_id, self.channel_id, subscriber_count,
+            "[HTTP] CLIENT_CONNECTED id=%s channel=%s subscribers=%d stream_state=%s",
+            client_id, self.channel_id, subscriber_count, stream_state,
         )
 
-        if not self.reader_thread or not self.reader_thread.is_alive():
+        if not was_running:
             self.start()
 
         return queue
@@ -979,9 +985,11 @@ class ChannelStream:
             subscriber_count = len(self.subscribers)
 
         if removed is not None:
+            detach_bytes = removed.current_bytes
             self._logger.info(
-                "[HTTP] CLIENT_DISCONNECTED id=%s reason=%s channel=%s subscribers=%d",
-                client_id, reason, self.channel_id, subscriber_count,
+                "[HTTP] CLIENT_DISCONNECTED id=%s reason=%s channel=%s subscribers=%d "
+                "queue_bytes_at_detach=%d",
+                client_id, reason, self.channel_id, subscriber_count, detach_bytes,
             )
         # Do NOT call self.stop() when subscriber_count == 0. Upstream stays alive.
 
@@ -1052,6 +1060,7 @@ async def generate_ts_stream_async(
     client_queue: Queue[bytes],
     *,
     write_timeout_s: float = WRITE_TIMEOUT_S,
+    client_id: str = "unknown",
 ) -> Any:
     """
     INV-IO-DRAIN-REALTIME: Async generator for live TS streaming.
@@ -1192,9 +1201,9 @@ async def generate_ts_stream_async(
             if _yield_elapsed > write_timeout_s:
                 _logger.warning(
                     "WRITE_TIMEOUT: yield_elapsed_s=%.1f threshold_s=%.1f "
-                    "yields=%d bytes=%d — closing dead client connection",
+                    "yields=%d bytes=%d client_id=%s — closing dead client connection",
                     _yield_elapsed, write_timeout_s,
-                    _diag_yield_count, _diag_yield_cumulative_bytes,
+                    _diag_yield_count, _diag_yield_cumulative_bytes, client_id,
                 )
                 _exit_reason = "write_timeout"
                 break

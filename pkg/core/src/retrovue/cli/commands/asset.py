@@ -13,9 +13,10 @@ import uuid as _uuid_mod
 import typer
 
 from ...domain.entities import Asset, AssetTag
-from ...domain.tag_normalization import normalize_tag_set
+from ...domain.tag_normalization import canonicalize_tag, normalize_tag_set
 from ...infra.uow import session
 from ...usecases import asset_attention as _uc_asset_attention
+from ...usecases import asset_inspect as _uc_asset_inspect
 from ...usecases import asset_update as _uc_asset_update
 from ...usecases.asset_enrich_stale import enrich_stale_assets
 
@@ -96,11 +97,22 @@ def resolve_asset(
                 typer.echo(f"Error: {exc}")
                 raise typer.Exit(1)
 
+            # Add enrichment summary
+            enrich_summary = _uc_asset_inspect.get_enrichment_summary(
+                db, asset_id=_uuid_mod.UUID(asset_uuid)
+            )
+            summary["enrichment_summary"] = enrich_summary
+
             if json_output:
                 typer.echo(json.dumps({"status": "ok", "asset": summary}, indent=2))
             else:
+                enrich_line = (
+                    f"  enrichment={enrich_summary['completed']}/{enrich_summary['total']}"
+                    if enrich_summary["total"] > 0
+                    else ""
+                )
                 typer.echo(
-                    f"{summary['uuid']}  {summary['state']:<10} approved={summary['approved_for_broadcast']}  {summary['uri']}"
+                    f"{summary['uuid']}  {summary['state']:<10} approved={summary['approved_for_broadcast']}  {summary['uri']}{enrich_line}"
                 )
             raise typer.Exit(0)
 
@@ -122,6 +134,57 @@ def resolve_asset(
     else:
         typer.echo(f"Asset {result['uuid']} updated")
 
+
+
+@app.command("inspect")
+def inspect_asset(
+    asset_uuid: str = typer.Argument(..., help="Asset UUID to inspect"),
+    json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
+):
+    """
+    Inspect a single asset: state, approval, source, container, and per-enricher status.
+
+    Delegates to asset_inspect usecase (INV-CLI-NO-BUSINESS-LOGIC-001).
+    """
+    with session() as db:
+        try:
+            result = _uc_asset_inspect.get_asset_inspect(db, asset_uuid=asset_uuid)
+        except ValueError as exc:
+            typer.echo(f"Error: {exc}", err=True)
+            raise typer.Exit(1)
+
+    if json_output:
+        typer.echo(json.dumps({"status": "ok", "asset": result}, indent=2))
+        raise typer.Exit(0)
+
+    # Human-readable output
+    typer.echo(
+        f"Asset: {result['uri']} ({result['uuid']})"
+    )
+    typer.echo(
+        f"State: {result['state']} | Approved: {'yes' if result['approved_for_broadcast'] else 'no'}"
+        f" | Source: {result['source_name']} / {result['container_name']}"
+    )
+
+    enrichers = result.get("enrichers", [])
+    if not enrichers:
+        typer.echo("\nNo enrichment records.")
+        raise typer.Exit(0)
+
+    typer.echo("\nEnrichment:")
+    typer.echo(f"  {'Enricher':<20} {'Status':<12} {'Version':<10} {'Completed'}")
+    for e in enrichers:
+        completed = e.get("completed_at") or "\u2014"
+        typer.echo(
+            f"  {e['name']:<20} {e['status']:<12} {e.get('version') or '\u2014':<10} {completed}"
+        )
+        if e.get("error"):
+            typer.echo(f"    error: {e['error']}")
+
+    summary = result.get("enrichment_summary", {})
+    typer.echo(
+        f"\n  {summary.get('completed', 0)}/{summary.get('total', 0)} enrichers completed"
+    )
 
 
 @app.command("update")
@@ -176,8 +239,8 @@ def update_asset(
                 # D-3: single Unit of Work — delete then insert
                 db.query(AssetTag).filter_by(asset_uuid=asset.uuid).delete()
                 for tag_val in new_tag_set:
-                    namespaced = tag_val if ":" in tag_val else f"TAG:{tag_val}"
-                    db.add(AssetTag(asset_uuid=asset.uuid, tag=namespaced, source="operator"))
+                    canonical = canonicalize_tag(tag_val)
+                    db.add(AssetTag(asset_uuid=asset.uuid, tag=canonical, source="operator"))
                 db.commit()
 
             status = "changed" if changed else "no_change"

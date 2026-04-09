@@ -399,6 +399,40 @@ class ProcessorOutput(Base):
     )
 
 
+class EnricherRun(Base):
+    """Per-enricher execution record for queryable enricher progress.
+
+    Contract: INV-ENRICHER-OBSERVABILITY-001. One row per enricher per asset per execution.
+    Provides per-enricher granularity that ProcessorJob does not expose.
+
+    Status values: pending, running, succeeded, failed.
+    """
+
+    __tablename__ = "enricher_runs"
+
+    id: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid_module.uuid4
+    )
+    asset_id: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("assets.uuid", ondelete="CASCADE"), nullable=False
+    )
+    enricher_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    enricher_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result_payload: Mapped[dict[str, Any] | None] = mapped_column(
+        PG_JSONB, nullable=True
+    )
+
+    __table_args__ = (
+        Index("ix_enricher_runs_asset_id", "asset_id"),
+        Index("ix_enricher_runs_asset_enricher", "asset_id", "enricher_name"),
+        Index("ix_enricher_runs_enricher_version", "enricher_name", "enricher_version"),
+    )
+
+
 class AssetEditorial(Base):
     __tablename__ = "asset_editorial"
 
@@ -409,7 +443,41 @@ class AssetEditorial(Base):
         PG_JSONB, nullable=False, server_default=sa.text("'{}'::jsonb")
     )
 
+    # Indexed columns — metadata consolidation contract (docs/contracts/metadata_consolidation.md)
+    series_title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    season_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    episode_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    content_rating: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    production_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     asset: Mapped[Asset] = relationship("Asset", back_populates="editorial_meta")
+
+    __table_args__ = (
+        Index("ix_asset_editorial_series_title_lower", sa.func.lower(sa.column("series_title"))),
+        Index("ix_asset_editorial_season_episode", "season_number", "episode_number"),
+        Index("ix_asset_editorial_content_rating", "content_rating"),
+        Index("ix_asset_editorial_production_year", "production_year"),
+    )
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.sync_columns_from_payload()
+
+    def sync_columns_from_payload(self) -> None:
+        """Populate indexed columns from JSONB payload (dual-write rule D-1)."""
+        p = self.payload or {}
+        self.series_title = p.get("series_title") or None
+        raw_season = p.get("season_number")
+        self.season_number = int(raw_season) if raw_season is not None else None
+        raw_episode = p.get("episode_number")
+        self.episode_number = int(raw_episode) if raw_episode is not None else None
+        raw_rating = p.get("content_rating")
+        if isinstance(raw_rating, dict):
+            self.content_rating = raw_rating.get("code")
+        else:
+            self.content_rating = raw_rating or None
+        raw_year = p.get("production_year") or p.get("year")
+        self.production_year = int(raw_year) if raw_year is not None else None
 
 
 class AssetProbed(Base):
@@ -639,6 +707,9 @@ class Source(Base):
     containers: Mapped[list[Container]] = relationship(
         "Container", back_populates="source", cascade="all, delete-orphan", passive_deletes=True
     )
+    path_mappings: Mapped[list[PathMapping]] = relationship(
+        "PathMapping", back_populates="source", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<Source(id={self.id}, name={self.name}, type={self.type})>"
@@ -692,29 +763,49 @@ class Container(Base):
 
 
 class PathMapping(Base):
-    """Path mapping for a container (Plex path -> local path)."""
+    """Path mapping: source_path -> retrovue_path.
+
+    Mappings may be scoped to a source (source_id set, container_id NULL) or
+    to a container (container_id set).  Container-level overrides take
+    precedence per-prefix over inherited source-level mappings.
+
+    INV-PATH-MAPPING-SOURCE-SCOPED-001.
+    """
 
     __tablename__ = "path_mappings"
 
     id: Mapped[uuid_module.UUID] = mapped_column(
         PG_UUID(as_uuid=True), primary_key=True, default=uuid_module.uuid4
     )
-    container_id: Mapped[uuid_module.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("containers.uuid", ondelete="CASCADE"), nullable=False
+    source_id: Mapped[uuid_module.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("sources.id", ondelete="CASCADE"), nullable=True
     )
-    plex_path: Mapped[str] = mapped_column(String(500), nullable=False)
-    local_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    container_id: Mapped[uuid_module.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("containers.uuid", ondelete="CASCADE"), nullable=True
+    )
+    source_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    retrovue_path: Mapped[str] = mapped_column(String(500), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
-    container: Mapped[Container] = relationship(
+    source: Mapped[Source | None] = relationship(
+        "Source", back_populates="path_mappings", passive_deletes=True
+    )
+    container: Mapped[Container | None] = relationship(
         "Container", back_populates="path_mappings", passive_deletes=True
     )
 
-    __table_args__ = (Index("ix_path_mappings_container_id", "container_id"),)
+    __table_args__ = (
+        Index("ix_path_mappings_container_id", "container_id"),
+        Index("ix_path_mappings_source_id", "source_id"),
+        CheckConstraint(
+            "source_id IS NOT NULL OR container_id IS NOT NULL",
+            name="ck_path_mappings_scope",
+        ),
+    )
 
     def __repr__(self) -> str:
-        return f"<PathMapping(id={self.id}, container_id={self.container_id}, plex_path={self.plex_path}, local_path={self.local_path})>"
+        return f"<PathMapping(id={self.id}, source_id={self.source_id}, container_id={self.container_id}, source_path={self.source_path}, retrovue_path={self.retrovue_path})>"
 
 
 class Channel(Base):
@@ -782,239 +873,6 @@ class Enricher(Base):
 
     def __repr__(self) -> str:
         return f"<Enricher(id={self.id}, enricher_id={self.enricher_id}, type={self.type}, scope={self.scope}, name={self.name}, protected={self.protected_from_removal})>"
-
-
-class Program(Base):
-    """
-    Represents a scheduled program in a SchedulePlan.
-
-    Programs define what content runs when within a schedule plan, using
-    schedule-time (00:00 to 24:00 relative to programming day) and duration.
-    """
-
-    __tablename__ = "programs"
-
-    id: Mapped[uuid_module.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), primary_key=True, default=uuid_module.uuid4
-    )
-    channel_id: Mapped[uuid_module.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("channels.id", ondelete="CASCADE"), nullable=False
-    )
-    plan_id: Mapped[uuid_module.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("schedule_plans.id", ondelete="CASCADE"), nullable=False
-    )
-    start_time: Mapped[str] = mapped_column(
-        String(5), nullable=False, comment="Start time in 'HH:MM' format (schedule-time)"
-    )
-    duration: Mapped[int] = mapped_column(
-        Integer, nullable=False, comment="Duration in minutes"
-    )
-    content_type: Mapped[str] = mapped_column(
-        String(50),
-        nullable=False,
-        comment="Type of content: 'series', 'asset', 'rule', 'random', 'virtual_package'",
-    )
-    content_ref: Mapped[str] = mapped_column(
-        Text, nullable=False, comment="Content reference (UUID or JSON depending on content_type)"
-    )
-    label_id: Mapped[uuid_module.UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("schedule_plan_labels.id", ondelete="SET NULL"), nullable=True
-    )
-    episode_policy: Mapped[str | None] = mapped_column(
-        String(50), nullable=True, comment="Episode selection policy (e.g., 'sequential', 'seasonal')"
-    )
-    playback_rules: Mapped[dict[str, Any] | None] = mapped_column(
-        JSON, nullable=True, comment="Additional playback rules and directives"
-    )
-    operator_intent: Mapped[str | None] = mapped_column(
-        Text, nullable=True, comment="Operator-defined metadata describing programming intent"
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
-    )
-
-    # Relationships
-    channel: Mapped[Channel | None] = relationship("Channel", passive_deletes=True)
-    # plan relationship would be defined in SchedulePlan model
-    # label relationship would be defined in SchedulePlanLabel model
-
-    __table_args__ = (
-        Index("ix_programs_channel_id", "channel_id"),
-        Index("ix_programs_plan_id", "plan_id"),
-        Index("ix_programs_start_time", "plan_id", "start_time"),
-        Index("ix_programs_label_id", "label_id"),
-    )
-
-    def __repr__(self) -> str:
-        return f"<Program(id={self.id}, plan_id={self.plan_id}, start_time={self.start_time}, duration={self.duration}, content_type={self.content_type})>"
-
-
-class SchedulePlan(Base):
-    """
-    Represents a schedule plan for a channel.
-
-    Schedule plans define programming patterns using Zones and Patterns.
-    Higher priority numbers indicate higher priority when multiple plans overlap.
-    """
-
-    __tablename__ = "schedule_plans"
-
-    id: Mapped[uuid_module.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), primary_key=True, default=uuid_module.uuid4
-    )
-    channel_id: Mapped[uuid_module.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("channels.id", ondelete="CASCADE"), nullable=False
-    )
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    cron_expression: Mapped[str | None] = mapped_column(Text, nullable=True)
-    start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
-    end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
-    priority: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0, server_default="0", comment="Higher number = higher priority"
-    )
-    is_active: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default="true"
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
-    )
-
-    # Relationships
-    channel: Mapped[Channel | None] = relationship("Channel", passive_deletes=True)
-
-    __table_args__ = (
-        UniqueConstraint("channel_id", "name", name="uq_schedule_plans_channel_name"),
-        CheckConstraint("priority >= 0", name="chk_schedule_plans_priority_non_negative"),
-        Index("ix_schedule_plans_channel_id", "channel_id"),
-        Index("ix_schedule_plans_name", "name"),
-        Index("ix_schedule_plans_is_active", "is_active"),
-    )
-
-    def __repr__(self) -> str:
-        return f"<SchedulePlan(id={self.id}, channel_id={self.channel_id}, name={self.name}, priority={self.priority}, is_active={self.is_active})>"
-
-
-class SchedulePlanLabel(Base):
-    """
-    Represents a label for organizing programs within schedule plans.
-
-    Labels are purely visual/organizational and do not affect scheduling logic.
-    """
-
-    __tablename__ = "schedule_plan_labels"
-
-    id: Mapped[uuid_module.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), primary_key=True, default=uuid_module.uuid4
-    )
-    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    category: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
-    )
-
-    __table_args__ = (
-        Index("ix_schedule_plan_labels_name", "name"),
-        Index("ix_schedule_plan_labels_category", "category"),
-    )
-
-    def __repr__(self) -> str:
-        return f"<SchedulePlanLabel(id={self.id}, name='{self.name}', category={self.category})>"
-
-
-class Zone(Base):
-    """
-    Represents a named time window within the programming day (daypart).
-
-    Zones divide the broadcast day into logical areas (e.g., "Morning Cartoons",
-    "Prime Time", "Late Night") and contain SchedulableAssets that play during
-    those windows. Zones are planning constructs used by ScheduleDay for
-    organization but are not themselves runtime entities.
-
-    Times use broadcast day time (00:00-24:00 relative to programming_day_start).
-    Zones can span midnight (e.g., 22:00-05:00) within the same broadcast day.
-    """
-
-    __tablename__ = "zones"
-
-    id: Mapped[uuid_module.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), primary_key=True, default=uuid_module.uuid4
-    )
-    plan_id: Mapped[uuid_module.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("schedule_plans.id", ondelete="CASCADE"), nullable=False
-    )
-    name: Mapped[str] = mapped_column(
-        String(255), nullable=False, comment="Human-readable zone name (e.g., 'Morning Cartoons')"
-    )
-    start_time: Mapped[dt_time] = mapped_column(
-        Time(timezone=False), nullable=False,
-        comment="Zone start in broadcast day time (00:00-24:00)"
-    )
-    end_time: Mapped[dt_time] = mapped_column(
-        Time(timezone=False), nullable=False,
-        comment="Zone end in broadcast day time. 24:00 stored as 23:59:59.999999"
-    )
-    schedulable_assets: Mapped[list[Any]] = mapped_column(
-        PG_JSONB, nullable=False, server_default=sa.text("'[]'::jsonb"),
-        comment="Array of SchedulableAsset UUIDs (Programs, Assets, VirtualAssets)"
-    )
-    day_filters: Mapped[list[str] | None] = mapped_column(
-        PG_JSONB, nullable=True,
-        comment="Day-of-week constraints: ['MON','TUE',...]. Null = all days."
-    )
-    enabled: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=sa.text("true"),
-        comment="Active flag. Disabled zones are ignored during resolution."
-    )
-    effective_start: Mapped[date | None] = mapped_column(
-        Date, nullable=True, comment="Start date for zone validity (inclusive)"
-    )
-    effective_end: Mapped[date | None] = mapped_column(
-        Date, nullable=True, comment="End date for zone validity (inclusive)"
-    )
-    dst_policy: Mapped[str | None] = mapped_column(
-        String(50), nullable=True,
-        comment="DST policy: 'reject', 'shrink_one_block', 'expand_one_block'"
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
-    )
-
-    # Relationships
-    plan: Mapped[SchedulePlan | None] = relationship("SchedulePlan", passive_deletes=True)
-
-    __table_args__ = (
-        UniqueConstraint("plan_id", "name", name="uq_zones_plan_name"),
-        CheckConstraint(
-            "dst_policy IS NULL OR dst_policy IN ('reject', 'shrink_one_block', 'expand_one_block')",
-            name="chk_zones_dst_policy_valid"
-        ),
-        CheckConstraint(
-            "(effective_start IS NULL AND effective_end IS NULL) OR "
-            "(effective_start IS NULL) OR (effective_end IS NULL) OR "
-            "(effective_start <= effective_end)",
-            name="chk_zones_effective_range"
-        ),
-        Index("ix_zones_plan_id", "plan_id"),
-        Index("ix_zones_enabled", "enabled"),
-        Index("ix_zones_start_time", "start_time"),
-    )
-
-    def __repr__(self) -> str:
-        return f"<Zone(id={self.id}, plan_id={self.plan_id}, name='{self.name}', start={self.start_time}, end={self.end_time})>"
 
 
 class ProgramLogDay(Base):
@@ -1485,3 +1343,64 @@ class ProgressionRun(Base):
             f"anchor_date={self.anchor_date}, "
             f"placement_days={self.placement_days})>"
         )
+
+
+class Pool(Base):
+    """Persistent named pool definition for asset matching."""
+
+    __tablename__ = "pools"
+
+    id: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid_module.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    match_criteria: Mapped[dict[str, Any]] = mapped_column(PG_JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # Relationships
+    assignments: Mapped[list[PoolAssignment]] = relationship(
+        "PoolAssignment", back_populates="pool", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_pools_name"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<Pool(id={self.id}, name={self.name})>"
+
+
+class PoolAssignment(Base):
+    """Advisory association between a pool and a channel."""
+
+    __tablename__ = "pool_assignments"
+
+    id: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid_module.uuid4
+    )
+    pool_id: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("pools.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    channel_id: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("channels.id"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    # Relationships
+    pool: Mapped[Pool] = relationship("Pool", back_populates="assignments")
+
+    __table_args__ = (
+        UniqueConstraint("pool_id", "channel_id", name="uq_pool_assignments_pool_channel"),
+    )

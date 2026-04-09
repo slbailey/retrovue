@@ -116,22 +116,25 @@ def del_tag(body: DelTag):
 
 @router.post("/api/assets/tags")
 def apply_tags(body: ApplyTags):
-    tag_str = f"{body.category.upper()}:{body.tag.lower()}"
+    from retrovue.domain.tag_normalization import canonicalize_tag
+    canonical = canonicalize_tag(f"{body.category}:{body.tag}")
     with _pg() as conn:
         with conn.cursor() as cur:
             for aid in body.asset_ids:
-                cur.execute("INSERT INTO asset_tags(asset_uuid,tag,source) VALUES(%s,%s,'operator') ON CONFLICT DO NOTHING", (aid, tag_str))
+                cur.execute("INSERT INTO asset_tags(asset_uuid,tag,source) VALUES(%s,%s,'operator') ON CONFLICT DO NOTHING", (aid, canonical))
         conn.commit()
     return jr({"ok": True, "applied": len(body.asset_ids)})
 
 @router.delete("/api/assets/tags")
 def remove_tags(body: ApplyTags):
-    tag_str = f"{body.category.upper()}:{body.tag.lower()}"
+    from retrovue.domain.tag_normalization import canonicalize_tag
+    canonical = canonicalize_tag(f"{body.category}:{body.tag}")
+    # Backward-compatible: match canonical, legacy colon, and raw forms
+    legacy_str = f"{body.category.upper()}:{body.tag.lower()}"
     raw_str = body.tag.lower()
     with _pg() as conn:
         with conn.cursor() as cur:
             for aid in body.asset_ids:
-                # Match both namespaced (CATEGORY:tag) and raw tags
-                cur.execute("DELETE FROM asset_tags WHERE asset_uuid=%s AND tag = ANY(%s)", (aid, [tag_str, raw_str]))
+                cur.execute("DELETE FROM asset_tags WHERE asset_uuid=%s AND tag = ANY(%s)", (aid, [canonical, legacy_str, raw_str]))
         conn.commit()
     return jr({"ok": True})

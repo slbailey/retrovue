@@ -174,7 +174,7 @@ class AssetPathResolver:
         """
         Apply path mappings using longest-prefix match.
 
-        Path mappings translate Plex-side paths to local filesystem paths.
+        Path mappings translate source-side paths to retrovue-local paths.
         E.g., ("/media/retrotv", "/mnt/data/media/retrotv")
         """
         if not self._path_mappings:
@@ -183,12 +183,12 @@ class AssetPathResolver:
         normalised = file_path.replace("\\", "/")
         best_match: tuple[int, str] | None = None  # (prefix_len, resolved_path)
 
-        for plex_prefix, local_prefix in self._path_mappings:
-            plex_norm = plex_prefix.replace("\\", "/").rstrip("/")
-            if normalised.startswith(plex_norm + "/") or normalised == plex_norm:
-                remainder = normalised[len(plex_norm):]
-                resolved = str(Path(local_prefix) / remainder.lstrip("/"))
-                prefix_len = len(plex_norm)
+        for source_prefix, retrovue_prefix in self._path_mappings:
+            src_norm = source_prefix.replace("\\", "/").rstrip("/")
+            if normalised.startswith(src_norm + "/") or normalised == src_norm:
+                remainder = normalised[len(src_norm):]
+                resolved = str(Path(retrovue_prefix) / remainder.lstrip("/"))
+                prefix_len = len(src_norm)
                 if best_match is None or prefix_len > best_match[0]:
                     best_match = (prefix_len, resolved)
 

@@ -165,10 +165,13 @@ class CatalogAssetResolver:
         ).all()
         assets = [a for a in assets if not a.is_deleted]
 
-        # Load editorial data
+        # Load editorial data — indexed columns for promoted fields, JSONB for the rest
+        editorial_rows: dict[str, AssetEditorial] = {}
         editorials: dict[str, dict[str, Any]] = {}
         for ed in db.query(AssetEditorial).all():
-            editorials[str(ed.asset_uuid)] = ed.payload or {}
+            key = str(ed.asset_uuid)
+            editorial_rows[key] = ed
+            editorials[key] = ed.payload or {}
 
         # INV-LOUDNESS-NORMALIZED-001: Load probed metadata (contains loudness data)
         probed_payloads: dict[str, dict] = {}
@@ -208,17 +211,16 @@ class CatalogAssetResolver:
         for _asset_idx, asset in enumerate(assets):
             uuid_str = str(asset.uuid)
             editorial = editorials.get(uuid_str, {})
+            ed = editorial_rows.get(uuid_str)
             chapter_secs = tuple(markers.get(uuid_str, []))
 
             duration_sec = round((asset.duration_ms or 0) / 1000)
-            series_title = editorial.get("series_title", "")
-            season_raw = editorial.get("season_number")
-            episode_raw = editorial.get("episode_number")
-            rating_raw = editorial.get("content_rating")
-            rating = rating_raw.get("code") if isinstance(rating_raw, dict) else rating_raw
+            # Read promoted fields from indexed columns (contract D-2)
+            series_title = (ed.series_title if ed else None) or ""
+            season = ed.season_number if ed else None
+            episode_num = ed.episode_number if ed else None
+            rating = ed.content_rating if ed else None
 
-            season = int(season_raw) if season_raw is not None else None
-            episode_num = int(episode_raw) if episode_raw is not None else None
 
             col_uuid = str(asset.container_id)
             col_name = col_name_map.get(col_uuid, "")
@@ -284,12 +286,8 @@ class CatalogAssetResolver:
                 genres = tuple(g.lower() for g in genres_raw if isinstance(g, str))
             else:
                 genres = ()
-            production_year = editorial.get("production_year") or editorial.get("year")
-            if production_year is not None:
-                try:
-                    production_year = int(production_year)
-                except (ValueError, TypeError):
-                    production_year = None
+            # Read production_year from indexed column (contract D-2)
+            production_year = ed.production_year if ed else None
             asset_title = editorial.get("title", "")
 
             # Catalog entry for query()

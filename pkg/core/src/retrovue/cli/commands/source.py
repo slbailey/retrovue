@@ -549,6 +549,7 @@ def add_source(
     base_path: str | None = typer.Option(None, "--base-path", help="Base filesystem path to scan"),
     enrichers: str | None = typer.Option(None, "--enrichers", help="Comma-separated list of enrichers to use"),
     set_params: list[str] | None = typer.Option(None, "--set", help="Set importer config key: KEY=VALUE (repeatable). Booleans: true/false. JSON: valid JSON."),
+    path_map: list[str] | None = typer.Option(None, "--path-map", help="Path mapping SOURCE_PATH=RETROVUE_PATH (repeatable). E.g. --path-map /media/movies=/mnt/nfs/movies"),
     discover: bool = typer.Option(False, "--discover", help="Automatically discover and persist containers after source creation"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be created without executing"),
     test_db: bool = typer.Option(False, "--test-db", help="Direct command to test database environment"),
@@ -828,6 +829,20 @@ def add_source(
             # Add collections_discovered field for backward compatibility
             result["collections_discovered"] = 0
             
+            # Persist --path-map entries as source-level PathMappings
+            if path_map:
+                from ...domain.entities import PathMapping
+                from ...workflows.path_mapping import validate_mapping_fields
+                source_uuid = result["id"]
+                for pm_entry in path_map:
+                    if "=" not in pm_entry:
+                        typer.echo(f"Invalid --path-map format (expected SOURCE=RETROVUE): {pm_entry}", err=True)
+                        raise typer.Exit(1)
+                    sp, rp = pm_entry.split("=", 1)
+                    validate_mapping_fields({"source_path": sp, "retrovue_path": rp})
+                    db.add(PathMapping(source_id=source_uuid, source_path=sp, retrovue_path=rp))
+                db.commit()
+
             # Note: --discover flag is ignored in add command per contract
             # Discovery is handled by separate source discover command
             
@@ -1950,4 +1965,204 @@ def update_enrichers(
                 
         except Exception as e:
             typer.echo(f"Error updating enrichers: {e}", err=True)
+            raise typer.Exit(1)
+
+# ── path-map subcommands ─────────────────────────────────────────────
+# INV-PATH-MAPPING-SOURCE-SCOPED-001: source-level path mappings
+# INV-CLI-NO-BUSINESS-LOGIC-001: delegates to workflows/path_mapping.py
+
+path_map_app = typer.Typer()
+app.add_typer(path_map_app, name="path-map")
+
+
+@path_map_app.command("list")
+def path_map_list(
+    source_id: str = typer.Argument(..., help="Source UUID, external_id, or name"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+) -> None:
+    """List path mappings for a source."""
+    from ...domain.entities import PathMapping, Source
+    from ...infra.uow import session
+
+    db = session()
+    try:
+        source = _resolve_source_by_id(db, source_id)
+        if source is None:
+            typer.echo(f"Source not found: {source_id}", err=True)
+            raise typer.Exit(1)
+
+        rows = (
+            db.query(PathMapping)
+            .filter(PathMapping.source_id == source.id)
+            .all()
+        )
+
+        if json_output:
+            import json as _json
+            mappings = [
+                {"id": str(m.id), "source_path": m.source_path, "retrovue_path": m.retrovue_path}
+                for m in rows
+            ]
+            typer.echo(_json.dumps({"source_id": str(source.id), "mappings": mappings}, indent=2))
+        else:
+            if not rows:
+                typer.echo(f"No path mappings for source '{source.name}'")
+                return
+            typer.echo(f"Path mappings for source '{source.name}':")
+            for m in rows:
+                typer.echo(f"  {m.source_path}  ->  {m.retrovue_path}")
+    finally:
+        db.close()
+
+
+@path_map_app.command("add")
+def path_map_add(
+    source_id: str = typer.Argument(..., help="Source UUID, external_id, or name"),
+    source_path: str = typer.Option(..., "--source-path", help="Source-side path prefix"),
+    retrovue_path: str = typer.Option(..., "--retrovue-path", help="RetroVue-local path prefix"),
+) -> None:
+    """Add a path mapping to a source."""
+    from ...domain.entities import PathMapping, Source
+    from ...infra.uow import session
+    from ...workflows.path_mapping import validate_mapping_fields
+
+    # Validate canonical field names (rejects plex_path/local_path if someone passes them)
+    validate_mapping_fields({"source_path": source_path, "retrovue_path": retrovue_path})
+
+    db = session()
+    try:
+        source = _resolve_source_by_id(db, source_id)
+        if source is None:
+            typer.echo(f"Source not found: {source_id}", err=True)
+            raise typer.Exit(1)
+
+        mapping = PathMapping(
+            source_id=source.id,
+            source_path=source_path,
+            retrovue_path=retrovue_path,
+        )
+        db.add(mapping)
+        db.commit()
+        typer.echo(f"Added: {source_path}  ->  {retrovue_path}")
+    except Exception as e:
+        db.rollback()
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+    finally:
+        db.close()
+
+
+@path_map_app.command("remove")
+def path_map_remove(
+    source_id: str = typer.Argument(..., help="Source UUID, external_id, or name"),
+    source_path: str = typer.Option(..., "--source-path", help="Source-side path prefix to remove"),
+) -> None:
+    """Remove a path mapping from a source by source_path prefix."""
+    from ...domain.entities import PathMapping, Source
+    from ...infra.uow import session
+
+    db = session()
+    try:
+        source = _resolve_source_by_id(db, source_id)
+        if source is None:
+            typer.echo(f"Source not found: {source_id}", err=True)
+            raise typer.Exit(1)
+
+        deleted = (
+            db.query(PathMapping)
+            .filter(
+                PathMapping.source_id == source.id,
+                PathMapping.source_path == source_path,
+            )
+            .delete()
+        )
+        db.commit()
+        if deleted:
+            typer.echo(f"Removed {deleted} mapping(s) for prefix: {source_path}")
+        else:
+            typer.echo(f"No mapping found for prefix: {source_path}", err=True)
+            raise typer.Exit(1)
+    except typer.Exit:
+        raise
+    except Exception as e:
+        db.rollback()
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+    finally:
+        db.close()
+
+
+@app.command("watch")
+def source_watch(
+    source_id: str = typer.Argument(..., help="Source ID, external ID, or name to watch"),
+    debounce_sec: float = typer.Option(5.0, "--debounce-sec", help="Seconds to debounce file changes before re-ingest (minimum 1)"),
+):
+    """
+    Watch a source's filesystem paths and re-ingest on changes.
+
+    Monitors source container directories for filesystem events, debounces
+    rapid changes, then triggers a full source re-ingest via the existing
+    ingest pipeline.
+
+    Long-running foreground process. Stop with Ctrl-C or SIGTERM.
+
+    Examples:
+        retrovue source watch "My Plex Server"
+        retrovue source watch plex-5063d926 --debounce-sec 10
+    """
+    from pathlib import Path
+
+    from retrovue.workflows.source_watch import make_source_ingest_fn, run_watch
+
+    with session() as db:
+        try:
+            source = _resolve_source_by_id(db, source_id)
+            if not source:
+                typer.echo(f"Error: Source '{source_id}' not found", err=True)
+                raise typer.Exit(1)
+
+            # Determine watch paths from source container filesystem roots
+            containers = (
+                db.query(Container)
+                .filter(
+                    Container.source_id == source.id,
+                    Container.sync_enabled.is_(True),
+                )
+                .all()
+            )
+
+            watch_paths: list[Path] = []
+            for c in containers:
+                if c.local_path and Path(c.local_path).is_dir():
+                    watch_paths.append(Path(c.local_path))
+
+            if not watch_paths:
+                typer.echo(
+                    f"No watchable directories found for source '{source.name}'. "
+                    "Ensure containers have valid local paths.",
+                    err=True,
+                )
+                raise typer.Exit(1)
+
+            typer.echo(f"Watching {len(watch_paths)} directory(ies) for source '{source.name}'")
+            for wp in watch_paths:
+                typer.echo(f"  {wp}")
+
+            ingest_fn = make_source_ingest_fn(db, source)
+
+            run_watch(
+                source_id=str(source.id),
+                source_name=source.name,
+                watch_paths=watch_paths,
+                ingest_fn=ingest_fn,
+                debounce_sec=debounce_sec,
+            )
+
+        except typer.Exit:
+            raise
+        except ValueError as e:
+            typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(1)
+        except Exception as e:
+            typer.echo(f"Error: {e}", err=True)
             raise typer.Exit(1)

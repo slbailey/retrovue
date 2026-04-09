@@ -23,13 +23,13 @@ from .commands import (
     collection,
     config,
     enricher,
+    pool,
     producer,
     program_director,
     runtime,
     schedule,
     source,
     worker,
-    zone,
     programming,
 )
 from .router import get_router
@@ -104,17 +104,17 @@ router.register(
 )
 
 router.register(
-    "zone",
-    zone.app,
-    help_text="Zone (daypart) management operations",
-    doc_path="zone.md",
-)
-
-router.register(
     "programming",
     programming.app,
     help_text="Programming DSL compile and validate operations",
     doc_path="programming.md",
+)
+
+router.register(
+    "pool",
+    pool.app,
+    help_text="Programming pool management operations",
+    doc_path="pool.md",
 )
 
 router.register(

@@ -9,6 +9,7 @@ Phase 2 of the Asset Domain Alignment Plan (RETA-69).
 
 from __future__ import annotations
 
+import uuid as _uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -18,6 +19,7 @@ from sqlalchemy.orm import Session
 from ...infra.uow import session as get_session
 from ...usecases.asset_attention import list_assets_needing_attention
 from ...usecases.asset_enrich_stale import enrich_stale_assets
+from ...usecases.asset_inspect import get_asset_inspect, get_enrichment_summary
 from ...usecases.asset_update import get_asset_summary, update_asset_review_status
 
 router = APIRouter(prefix="/api/catalog", tags=["catalog"])
@@ -86,11 +88,37 @@ def get_asset(
     asset_uuid: str,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Get a single asset summary by UUID."""
+    """Get a single asset summary by UUID, including enrichment summary."""
     try:
-        return get_asset_summary(db, asset_uuid=asset_uuid)
+        summary = get_asset_summary(db, asset_uuid=asset_uuid)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+    summary["enrichment_summary"] = get_enrichment_summary(
+        db, asset_id=_uuid.UUID(asset_uuid)
+    )
+    return summary
+
+
+@router.get("/assets/{asset_uuid}/enrichment")
+def get_asset_enrichment(
+    asset_uuid: str,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Get per-enricher status detail for an asset.
+
+    INV-ENRICHER-OBSERVABILITY-001: enricher progress retrievable per-asset.
+    INV-API-NO-BUSINESS-LOGIC-001: delegates to asset_inspect usecase.
+    """
+    try:
+        result = get_asset_inspect(db, asset_uuid=asset_uuid)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    return {
+        "asset_id": result["uuid"],
+        "enrichers": result["enrichers"],
+    }
 
 
 # ---------------------------------------------------------------------------
