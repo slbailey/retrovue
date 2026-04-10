@@ -348,15 +348,147 @@ If the operator cannot answer "Why isn't this airing?" in under 10 seconds from 
 
 ---
 
+## Scenario 5 — "I want my folder to auto-update when I add files"
+
+**Operator goal:** Set up a watched source so new files are automatically ingested.
+
+### Step 1: Set up path mapping (if needed)
+
+If the source's file paths don't match RetroVue's expected paths (e.g., Plex stores paths as `/plex/media/...` but the files are mounted at `/mnt/media/...`):
+
+```
+$ retrovue source path-map add "Living Room" /plex/media /mnt/media
+✓ Path mapping added: /plex/media → /mnt/media
+```
+
+Path mappings are source-scoped — they apply to all containers from this source automatically (INV-PATH-MAPPING-SOURCE-SCOPED-001). Container-level overrides can be added if specific containers need different mappings.
+
+### Step 2: Start watch mode
+
+```
+$ retrovue source watch "My Folder"
+
+Watching /mnt/media for changes (debounce: 5s)...
+```
+
+The system monitors the source's paths for filesystem changes. When files are added, modified, or removed, the system waits for the debounce period (default 5 seconds) before re-ingesting the affected container (INV-WATCH-DEBOUNCE-001).
+
+```
+  [2026-04-09 14:32:15] Change detected: 3 files modified
+  Re-ingesting container "My Folder"...
+  Ingested:   3 / 3
+  ✅ Ready:   3  (100%)
+```
+
+Watch mode continues running until stopped with Ctrl+C. It delegates all ingest logic to the standard container ingest workflow (INV-WATCH-DELEGATES-001) — watch mode adds no business logic of its own.
+
+> **Under the hood:** `source watch` creates a `SourceWatchService` with a debounced file observer. Each filesystem event resets the debounce timer. When the timer expires, the full ingest workflow runs. Errors during ingest are logged but do not stop the watcher.
+
+### Step 3: Verify path mappings
+
+To see the effective path mappings for a source:
+
+```
+$ retrovue source path-map list "Living Room"
+
+Source: Living Room
+Mappings:
+  /plex/media → /mnt/media
+
+Container overrides: none
+```
+
+If paths are misconfigured, import-time validation catches it (INV-PATH-VALIDATION-ON-IMPORT-001):
+
+```
+$ retrovue source import "Movies"
+
+Importing "Movies"...
+  ❌ Path validation failed:
+     12 / 12 sampled paths could not be resolved.
+     Source prefix /plex/media has no mapping to a local path.
+     
+  Suggested fix:
+     retrovue source path-map add "Living Room" /plex/media /mnt/media
+```
+
+### UX verification
+
+- [ ] Can the operator set up watch mode without understanding path mapping? (Answer: yes, if paths match already)
+- [ ] Does path validation catch misconfigurations at import time, not at playout time?
+- [ ] Is the debounce behavior transparent enough that operators trust it?
+
+---
+
+## Scenario 6 — "How do I manage programming pools?"
+
+**Operator goal:** Create pools to organize assets for scheduling.
+
+### Step 1: Create a pool
+
+```
+$ retrovue pool create "Comedies" --match '{"tags": ["genre.comedy"]}' --description "All comedy content"
+✓ Pool "Comedies" created
+```
+
+Pools define named queries against the asset catalog. They are used by the DSL scheduler to select assets for programming.
+
+### Step 2: Inspect pool contents
+
+```
+$ retrovue pool inspect "Comedies"
+
+Pool: Comedies
+Description: All comedy content
+Match criteria: {"tags": ["genre.comedy"]}
+
+Matched assets: 142
+  By type:  feature=98, episode=44
+  By state: ready=140, enriching=2
+```
+
+Pool inspection resolves the match criteria against the live catalog and shows a diagnostic breakdown (INV-POOL-RESOLUTION-VISIBILITY-001).
+
+### Step 3: Assign pool to a channel
+
+```
+$ retrovue pool assign "Comedies" "Comedy Channel"
+✓ Pool "Comedies" assigned to channel "Comedy Channel"
+```
+
+Pool assignments are advisory — they help operators understand which content is available for each channel. The DSL schedule itself references pools by name.
+
+### Step 4: List all pools
+
+```
+$ retrovue pool list
+
+Name        Assets  Channels    Description
+--------    ------  ----------  ---------------------------
+Comedies    142     Comedy Ch   All comedy content
+Movies      791     Movie Ch    Feature films
+```
+
+### UX verification
+
+- [ ] Is the pool concept intuitive without prior DSL knowledge?
+- [ ] Does `pool inspect` give enough information to debug "why isn't my asset in this pool"?
+- [ ] Is the relationship between pools and DSL scheduling clear?
+
+---
+
 ## End-to-End Summary
 
 | Step | Command | Time | Outcome |
 |------|---------|------|---------|
 | Connect source | `retrovue source add --type plex ...` | 5 sec | Containers discovered |
+| Path mapping (if needed) | `retrovue source path-map add ...` | 5 sec | Paths resolved |
 | Import + validate | `retrovue source import "Movies"` | 1–5 min | ~90% ready, ~10% need attention |
 | Fix failures | `retrovue asset list --errors` then fix then `retrovue asset validate` | 5–30 min | Remaining assets resolved |
+| Create pool | `retrovue pool create "Movies" --match ...` | 5 sec | Pool defined |
 | Create channel | `retrovue channel create "Movie Channel"` | 5 sec | Channel exists |
 | Schedule | `retrovue schedule auto "Movie Channel" --container "Movies"` | 5 sec | YAML generated, 24h rotation, default pool |
+| Watch (optional) | `retrovue source watch "My Folder"` | ongoing | Auto-ingest on changes |
 | Diagnose | `retrovue asset inspect <id>` | <10 sec | Root cause + fix visible |
 
 **Total time from zero to running channel: under 10 minutes** (for a typical Plex library with ~90% clean content).

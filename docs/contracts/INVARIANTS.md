@@ -276,6 +276,7 @@ Canonical contract: [program_presentation.md](program_presentation.md)
 | INV-TIER3-TEMPLATE-DECLARED-001 | [invariants/core/block-assembly-tiers/INV-TIER3-TEMPLATE-DECLARED-001.md](invariants/core/block-assembly-tiers/INV-TIER3-TEMPLATE-DECLARED-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
 | INV-TIER3-SUBTYPE-ORDER-001 | [invariants/core/block-assembly-tiers/INV-TIER3-SUBTYPE-ORDER-001.md](invariants/core/block-assembly-tiers/INV-TIER3-SUBTYPE-ORDER-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
 | INV-STRUCTURAL-TIER-UNIFICATION-001 | [invariants/core/block-assembly-tiers/INV-STRUCTURAL-TIER-UNIFICATION-001.md](invariants/core/block-assembly-tiers/INV-STRUCTURAL-TIER-UNIFICATION-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-PRIMARY-CONTENT-UNINTERRUPTIBLE-001 | [invariants/core/block-assembly-tiers/INV-PRIMARY-CONTENT-UNINTERRUPTIBLE-001.md](invariants/core/block-assembly-tiers/INV-PRIMARY-CONTENT-UNINTERRUPTIBLE-001.md) | LAW-CONTENT-AUTHORITY, LAW-GRID |
 | INV-ASSEMBLY-SEQUENCE-001 | [block_assembly_tiers.md](block_assembly_tiers.md) | LAW-CONTENT-AUTHORITY, LAW-GRID, LAW-DERIVATION |
 
 Canonical contract: [block_assembly_tiers.md](block_assembly_tiers.md)

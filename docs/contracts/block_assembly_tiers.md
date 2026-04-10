@@ -69,22 +69,88 @@ Content that MUST accompany a specific program: rating card, program intro.
 Content triggered by time-of-day rules rather than program identity: station ID at top of hour, daypart intro at boundary, legal ID.
 
 **Rules:**
-- Tier 2 obligations are derived from channel YAML configuration.
-- Tier 2 obligations MUST be evaluated at compile time against block boundaries.
+- Tier 2 obligations are derived from channel YAML configuration (`obligations:` section).
+- Tier 2 obligations MUST be evaluated in a **second compilation pass** against absolute wall-clock time, after all first-pass structural segments (Tiers 0–1) are resolved and break positions are determined.
 - When an obligation's trigger time falls within a block's time range, the obligation MUST be honored in that block.
 - Tier 2 duration is structural and is included in grid sizing. It displaces fill time, never primary content.
-- Tier 2 segments MUST appear before Tier 0 content in the block's segment sequence.
 - Multiple obligations MAY stack within a single block.
 - Obligation evaluation MUST be deterministic: same (config + block boundaries) produces same obligations.
 - No persisted state is required. See `INV-TIER2-OBLIGATION-YAML-ONLY-001`.
+- Clock obligations are channel-global configuration, not per-template. Templates MAY declare which obligation types they participate in but MUST NOT suppress mandatory obligations.
+
+#### Obligation Types
+
+| Type | Trigger | Example |
+|------|---------|---------|
+| `station_id` | Fixed interval (e.g., every 60 minutes) | FCC station identification at top of each hour |
+| `legal_id` | Fixed interval or specific times | Legal identification requirements |
+| `daypart_transition` | Specific wall-clock times | Adult Swim transition bump at 22:00 |
+
+#### Obligation YAML Schema
+
+```yaml
+obligations:
+  - type: station_id
+    interval_minutes: 60        # Trigger every N minutes from midnight
+    pool: station_ids            # Asset pool for obligation content
+    duration_sec: 10             # Obligation segment duration
+    mandatory: true              # Cannot be suppressed by templates
+  - type: daypart_transition
+    trigger_times: ["06:00", "22:00"]  # Specific wall-clock trigger times
+    pool: daypart_intros
+    max_duration_sec: 60
+    mandatory: true
+  - type: legal_id
+    interval_minutes: 180
+    pool: legal_ids
+    duration_sec: 15
+    mandatory: true
+```
+
+#### Obligation Placement Rules (`INV-CLOCK-OBLIGATIONS-OVERRIDE-001`)
+
+Placement depends on where the trigger time falls relative to the block's segment structure:
+
+1. **Trigger within a break:** The obligation MUST be inserted into that break, displacing Tier 4 fill per `INV-TIER-DISPLACEMENT-001`. The break's fill budget is reduced by the obligation's duration.
+
+2. **Trigger within primary content:** The compiler MUST defer the obligation to the nearest eligible placement point. Eligible points, in priority order:
+   - (a) The next existing break within the same block
+   - (b) The block boundary (appended after the last segment)
+   - If no eligible point exists within the block, the obligation attaches to the next block boundary.
+   - The compiler MUST NOT insert a micro-break or split primary content to place an obligation (`INV-MOVIE-PRIMARY-ATOMIC`).
+
+3. **Trigger at block boundary:** The obligation MUST appear at the head of the block's segment sequence, before Tier 1 presentation.
+
+4. **Multiple obligations at same trigger time:** Stacked in declaration order from the YAML config.
+
+#### Second Compilation Pass
+
+The second pass operates on the output of the first pass:
+
+```
+Input:  compiled blocks with resolved T0, T1 segments and break positions
+Config: channel-level obligations[] from YAML
+
+For each block in broadcast day:
+  For each obligation in config:
+    If obligation triggers within block's [start_utc, end_utc):
+      Determine insertion point (break, deferred eligible point, or block head)
+      Insert obligation segment into compiled_segments
+      Adjust fill budget if inserting into a break
+
+Output: compiled blocks with T0, T1, T2 segments and adjusted break budgets
+```
+
+The second pass MUST NOT modify Tier 0 content identity, duration, or ordering. It MUST NOT modify Tier 1 presentation segments. It MAY adjust Tier 4 fill budgets within breaks to accommodate inserted obligations.
 
 **Existing implementation:** Partial. Station ID is already a structural element within breaks via `BreakConfig.station_id_ms` and `_select_station_id()`. However, station ID placement is currently break-scoped (appears inside each commercial break), not clock-scoped (guaranteed per hour regardless of break placement). No daypart intro or legal ID mechanism exists.
 
 **Delta from current code:**
-- New: clock-scoped obligation evaluation at compile time.
-- New: obligation injection into `compiled_segments` via a second pass in `compile_schedule()`.
-- New: `obligations` section in channel YAML.
-- Existing break-scoped station ID via `BreakConfig` is unaffected; Tier 2 obligations are a separate mechanism.
+- New: clock-scoped obligation evaluation at compile time (second pass in `compile_schedule()`).
+- New: obligation injection into `compiled_segments` with placement-aware insertion logic.
+- New: `obligations` section in channel YAML with typed obligation entries.
+- New: deferral logic for obligations that trigger within primary content (defers to next break or block boundary).
+- Existing break-scoped station ID via `BreakConfig` is unaffected; Tier 2 clock obligations are a separate, additive mechanism.
 
 ### Tier 3 — Optional Presentation
 
@@ -94,16 +160,159 @@ Content that enriches the viewing experience: "coming up next" promo, channel id
 - Tier 3 inclusion is a compile-time decision, made BEFORE grid sizing.
 - Tier 3 duration is part of the structural total that drives grid block allocation. If Tier 3 causes the structural total to exceed the current grid slot, the grid grows — Tier 3 is NOT dropped to fit.
 - Once included, Tier 3 segments are structural — they MUST NOT be added, removed, or modified during expansion. See `INV-TIER3-COMPILE-RESOLUTION-001`.
-- Tier 3 asset selection MUST use deterministic selection rules (longest-fitting from pool, no uncontrolled RNG).
+- Tier 3 asset selection MUST use deterministic selection rules (longest-fitting from pool, seed-based, no uncontrolled RNG). See `INV-TIER3-POOL-DETERMINISTIC-001`.
 - "Coming up next" requires next-block program identity, available only after all blocks in a broadcast day are compiled.
 - Tier 3 segments MUST NOT displace Tier 0, Tier 1, or Tier 2 content.
+- Tier 3 duration is deducted from the break budget BEFORE Tier 4 traffic fill runs. The break budget formula is: `break_budget = scheduled_duration - content_duration - presentation_duration`, where `presentation_duration` includes Tiers 1–3. See `INV-TIER3-BUDGET-BEFORE-FILL-001`.
+- Tier 3 elements MUST be declared in a template's `continuity.optional` section. No Tier 3 element may be injected ad-hoc outside of template configuration. See `INV-TIER3-TEMPLATE-DECLARED-001`.
+
+#### Optional Presentation Sub-Types
+
+##### "Coming Up Next" Promo
+
+A promo referencing the next program in the broadcast day. Requires next-block lookahead.
+
+| Property | Value |
+|----------|-------|
+| `segment_type` | `coming_up_next` |
+| Position | After primary content (Tier 0), last among Tier 3 elements |
+| Lookahead | Resolved during second compilation pass over `all_blocks[i+1]` |
+| Pool | Template-declared promo pool |
+| Duration | Selected asset's native duration (pool-filtered by `max_duration_sec`) |
+| Last block | Omitted — last block of a broadcast day has no next-block identity. No error. |
+
+**Semantics:**
+- The "coming up next" segment MUST reference the next block's program identity as resolved by `compile_schedule()`, after all blocks are compiled and compacted. See `INV-TIER3-NEXT-BLOCK-IDENTITY-001`.
+- Asset selection from the promo pool MUST be deterministic: same (pool contents + block seed) produces the same asset. The compiler selects the longest-fitting asset whose duration ≤ `max_duration_sec`.
+- Cross-day boundary: the last block of a broadcast day MUST NOT produce a "coming up next" segment. This is not an error; the element is silently omitted.
+- The next-block identity is the `title` (or `program_title`) field of the adjacent compiled block. The promo asset carries this identity as metadata, not as part of the asset content.
+
+##### Channel Ident
+
+A short branding segment identifying the channel. Placed at block boundaries.
+
+| Property | Value |
+|----------|-------|
+| `segment_type` | `channel_ident` |
+| Position | After primary content, first among Tier 3 elements |
+| Pool | Template-declared ident pool |
+| Duration | Selected asset's native duration (pool-filtered by `max_duration_sec`) |
+
+**Placement rules:**
+- Channel idents MUST appear between programs — at block boundaries, not mid-content.
+- When a block declares a channel ident via its template, the ident segment is placed after Tier 0 content and any interleaved breaks, before any other Tier 3 elements.
+- Channel idents MUST NOT be inserted within primary content or within breaks.
+- A block MAY declare at most one channel ident.
+
+##### Network Branding
+
+A short network-level branding segment (e.g., network promo, seasonal bumper).
+
+| Property | Value |
+|----------|-------|
+| `segment_type` | `network_branding` |
+| Position | After channel ident (if present), before "coming up next" (if present) |
+| Pool | Template-declared branding pool |
+| Duration | Selected asset's native duration (pool-filtered by `max_duration_sec`) |
+
+**Placement rules:**
+- Network branding MUST appear at block boundaries, not mid-content.
+- A block MAY declare at most one network branding segment.
+- Network branding is optional — a template MAY omit it entirely.
+
+#### Tier 3 Ordering Within Block
+
+When multiple Tier 3 sub-types are present, they MUST appear in this order after Tier 0 content:
+
+```
+[Tier 0 content ± breaks] → [channel_ident] → [network_branding] → [coming_up_next]
+```
+
+This ordering is enforced by `INV-ASSEMBLY-SEQUENCE-001`.
+
+#### Compile-Time Resolution (Deterministic Pool Selection)
+
+All Tier 3 asset selection occurs at compile time using deterministic rules. See `INV-TIER3-POOL-DETERMINISTIC-001`.
+
+Selection algorithm:
+1. Filter pool assets by `max_duration_sec` (exclude assets longer than the filter value).
+2. From the filtered set, select using a deterministic seed derived from `(channel_id, broadcast_day, block_index, element_type)`.
+3. The seed computation MUST use the same hashlib-based approach as `INV-SCHEDULE-SEED-DETERMINISTIC-001`.
+4. Same inputs MUST produce the same selected asset across compilations.
+
+No uncontrolled RNG (`random.random()`, `random.choice()`) is permitted. Pool selection is a pure function of its inputs.
+
+#### Budget Interaction
+
+Tier 3 optional presentation is structural. Its duration participates in the break budget derivation:
+
+```
+break_budget = scheduled_duration - content_duration - tier1_duration - tier2_duration - tier3_duration
+```
+
+Tier 3 is deducted BEFORE Tier 4 traffic fill runs. This means:
+- Adding a Tier 3 element reduces the available break budget.
+- If the structural total (T0 + T1 + T2 + T3) exceeds the current grid slot, the grid grows per `INV-GRID-SIZING-STRUCTURAL-001`. The break budget is then recomputed against the enlarged slot.
+- Tier 3 elements are NEVER dropped to preserve break budget. Grid growth is the resolution mechanism.
+
+This is consistent with `INV-TIER-DISPLACEMENT-001`: higher-numbered tiers do not displace lower-numbered tiers, and structural tiers (0–3) all participate in grid sizing.
+
+#### Relationship to Phase C Second Compilation Pass
+
+Tier 3 optional presentation shares the second compilation pass with Tier 2 clock obligations. The pass sequence within `compile_schedule()` is:
+
+```
+First pass:  Resolve T0 content, T1 presentation, break positions
+Second pass: Evaluate T2 clock obligations (INV-CLOCK-OBLIGATIONS-OVERRIDE-001)
+             Then resolve T3 optional presentation (this section)
+Grid sizing: Compute slot duration from total structural runtime
+```
+
+Tier 3 resolution runs AFTER Tier 2 obligations because:
+- "Coming up next" requires all blocks to be compiled and compacted (including any obligation-induced adjustments).
+- Channel ident and network branding placement depends on final block boundaries (post-obligation insertion).
+
+Tier 3 MUST NOT modify, reorder, or remove Tier 2 obligation segments. The second pass is ordered: T2 first, then T3. Both are structural and immutable once placed.
+
+#### Template Participation
+
+Tier 3 elements are declared in a template's `continuity.optional` section (see `timeline_compilation_templates.md`):
+
+```yaml
+templates:
+  sitcom:
+    continuity:
+      optional:
+        - type: channel_ident
+          pool: channel_idents
+          max_duration_sec: 10
+          position: after_content
+        - type: coming_up_next
+          pool: coming_up_promos
+          max_duration_sec: 30
+          position: after_content
+        - type: network_branding
+          pool: network_bumpers
+          max_duration_sec: 15
+          position: after_content
+```
+
+Rules:
+- Only templates may declare Tier 3 elements. There is no channel-global Tier 3 mechanism (unlike Tier 2 obligations, which are channel-global).
+- A template MAY declare zero, one, or multiple Tier 3 element types.
+- The `position` field MUST be `after_content` for all Tier 3 sub-types. Tier 3 elements MUST NOT appear before primary content (that is Tier 1's domain).
+- Template inheritance via `extends` applies: a child template inherits the parent's `continuity.optional` unless overridden. List replacement, not merge (per `timeline_compilation_templates.md` composition rules).
+- Blocks that reference no template have no Tier 3 elements.
 
 **Existing implementation:** None. No concept of optional presentation exists.
 
 **Delta from current code:**
 - New: compile-time conditional segment injection with deterministic asset selection.
 - New: next-block lookahead for "coming up next" via second pass in `compile_schedule()`.
-- New: Tier 3 segment types (e.g., `segment_type="coming_up_next"`, `segment_type="channel_ident"`).
+- New: Tier 3 segment types (`segment_type="coming_up_next"`, `segment_type="channel_ident"`, `segment_type="network_branding"`).
+- New: Tier 3 ordering enforcement within the assembly sequence.
+- New: Template `continuity.optional` integration with existing template compilation.
+- New: Tier 3 budget deduction before traffic fill.
 
 ### Tier 4 — Fill (Traffic Domain)
 
@@ -143,11 +352,13 @@ This rule is partially enforced today: `INV-PRESENTATION-GRID-BUDGET-001` deduct
 
 ## Assembly Sequence
 
-Block assembly produces a segment sequence in this order:
+Block assembly produces a segment sequence. The default ordering when obligation trigger times align with block boundaries is:
 
 ```
 [Tier 2: obligations]  [Tier 1: presentation]  [Tier 0: content ± breaks(Tier 4)]  [Tier 3: optional]
 ```
+
+When a Tier 2 obligation triggers mid-block (within primary content or a break), it is placed at the trigger point rather than the block head. Obligations that trigger within a break displace Tier 4 fill in that break. Obligations that trigger within primary content are deferred to the nearest eligible placement point (next break or block boundary) per `INV-CLOCK-OBLIGATIONS-OVERRIDE-001`.
 
 The assembly sequence is split across two stages with a strict boundary:
 
@@ -159,7 +370,7 @@ The assembly sequence is split across two stages with a strict boundary:
 |---|---|---|
 | 1. Resolve Tier 0 content | Episode/movie selection via assembly (first pass) | Implemented |
 | 2. Resolve Tier 1 presentation | Intro, rating card from program definition (first pass) | Implemented |
-| 3. Resolve Tier 2 obligations | Clock-triggered segments from config (second pass) | **Not implemented** |
+| 3. Resolve Tier 2 obligations | Clock-triggered segments from config (second pass). Evaluates `obligations:` config against block wall-clock boundaries. Determines insertion point per `INV-CLOCK-OBLIGATIONS-OVERRIDE-001`. | **Not implemented** |
 | 4. Resolve Tier 3 candidates | "Coming up next" from adjacent block (second pass) | **Not implemented** |
 | 5. Size grid allocation | Based on total T0–T3 structural runtime (`INV-GRID-SIZING-STRUCTURAL-001`) | Partial (T0–T1 only) |
 
@@ -240,6 +451,10 @@ ChannelManager executes all tiers identically. It has no tier awareness. `INV-CH
 
 Defined in the Displacement Rule section above.
 
+### INV-CLOCK-OBLIGATIONS-OVERRIDE-001 — Clock obligations override block structure
+
+Clock obligations MUST be evaluated in a second compilation pass against absolute wall-clock time. When an obligation's trigger time falls within a block, it MUST be honored: inserted into a break (displacing Tier 4 fill), deferred to the nearest eligible placement point if within primary content (next break or block boundary), or prepended at the block head. Clock obligations are channel-global configuration; templates MUST NOT suppress mandatory obligations. See `docs/contracts/invariants/core/block-assembly-tiers/INV-CLOCK-OBLIGATIONS-OVERRIDE-001.md`.
+
 ### INV-TIER2-OBLIGATION-YAML-ONLY-001 — Obligations require no persisted state
 
 Obligation evaluation MUST be deterministic from (channel YAML config + block boundaries). No database state, no fulfillment tracking, no cross-compilation memory is required. The compiler recomputes obligations identically on every compilation of the same broadcast day.
@@ -268,9 +483,25 @@ Tier 3 segments, when enabled, MUST be resolved during `compile_schedule()`, inc
 
 All structural tiers (T0–T3) MUST follow the same compilation model: asset selection occurs during `compile_schedule()`, durations are known at compile time, and segments are immutable during expansion. No structural tier receives special treatment. The distinction between tiers governs ordering and editorial intent, not the compilation/expansion boundary.
 
+### INV-TIER3-POOL-DETERMINISTIC-001 — Tier 3 asset selection is deterministic
+
+Tier 3 asset selection from pools MUST be deterministic. The selection seed MUST be derived from `(channel_id, broadcast_day, block_index, element_type)` using the same hashlib-based approach as `INV-SCHEDULE-SEED-DETERMINISTIC-001`. Same inputs MUST produce the same selected asset across compilations. No uncontrolled RNG (`random.random()`, `random.choice()`) is permitted. Pool filtering by `max_duration_sec` occurs before seed-based selection.
+
+### INV-TIER3-BUDGET-BEFORE-FILL-001 — Tier 3 duration deducted before traffic fill
+
+Tier 3 optional presentation duration MUST be deducted from the break budget BEFORE Tier 4 traffic fill runs. The break budget formula is: `break_budget = scheduled_duration - content_duration - tier1_duration - tier2_duration - tier3_duration`. If adding Tier 3 elements causes the structural total to exceed the grid slot, the grid grows per `INV-GRID-SIZING-STRUCTURAL-001`; Tier 3 elements are NEVER dropped to preserve break budget.
+
+### INV-TIER3-TEMPLATE-DECLARED-001 — Tier 3 elements declared in templates only
+
+Tier 3 optional presentation elements MUST be declared in a template's `continuity.optional` section. No Tier 3 element may be injected ad-hoc outside of template configuration. Blocks that reference no template MUST NOT have Tier 3 elements. This ensures all optional presentation is editorially intentional and auditable.
+
+### INV-TIER3-SUBTYPE-ORDER-001 — Tier 3 sub-types follow fixed ordering
+
+When multiple Tier 3 sub-types are present within a block, they MUST appear in this order: `channel_ident`, `network_branding`, `coming_up_next`. This ordering is deterministic and MUST NOT vary based on template declaration order.
+
 ### INV-ASSEMBLY-SEQUENCE-001 — Segment ordering follows tier precedence
 
-Within a block's segment sequence, segments MUST appear in this order: Tier 2 obligations, Tier 1 presentation, Tier 0 content (with Tier 4 breaks interleaved), Tier 3 optional presentation. Tier 4 fill occupies break slots within and after Tier 0 content.
+Within a block's segment sequence, segments MUST appear in this order: Tier 2 obligations, Tier 1 presentation, Tier 0 content (with Tier 4 breaks interleaved), Tier 3 optional presentation (in sub-type order per `INV-TIER3-SUBTYPE-ORDER-001`). Tier 4 fill occupies break slots within and after Tier 0 content.
 
 ---
 
@@ -286,6 +517,15 @@ Within a block's segment sequence, segments MUST appear in this order: Tier 2 ob
 | `test_structural_tiers_grow_grid` | `INV-TIER-DISPLACEMENT-001` | Adding T2/T3 segments increases grid block count when structural total exceeds slot. |
 | `test_fill_is_residual` | `INV-TIER-DISPLACEMENT-001` | Tier 4 fill budget is `slot_ms - structural_ms` — a consequence of grid sizing, not an input to it. |
 | `test_structural_tiers_never_dropped` | `INV-TIER-DISPLACEMENT-001` | T0–T3 segments are all present after compilation regardless of fill budget. |
+| `test_clock_obligation_in_break_displaces_fill` | `INV-CLOCK-OBLIGATIONS-OVERRIDE-001` | Obligation trigger within a break inserts into break and reduces fill budget. |
+| `test_clock_obligation_in_content_defers_to_break` | `INV-CLOCK-OBLIGATIONS-OVERRIDE-001` | Obligation trigger within primary content defers to nearest eligible break. |
+| `test_clock_obligation_in_content_defers_to_boundary` | `INV-CLOCK-OBLIGATIONS-OVERRIDE-001` | Obligation trigger within primary content with no subsequent break defers to block boundary. |
+| `test_clock_obligation_in_content_deferred_appears_in_output` | `INV-CLOCK-OBLIGATIONS-OVERRIDE-001` | Deferred obligation still appears in compiled output (not silently dropped). |
+| `test_clock_obligation_at_block_boundary` | `INV-CLOCK-OBLIGATIONS-OVERRIDE-001` | Obligation trigger at block start prepends before Tier 1 presentation. |
+| `test_clock_obligation_mandatory_not_suppressible` | `INV-CLOCK-OBLIGATIONS-OVERRIDE-001` | Mandatory obligation cannot be suppressed by template configuration. |
+| `test_clock_obligation_multiple_stack` | `INV-CLOCK-OBLIGATIONS-OVERRIDE-001` | Multiple obligations at same trigger time stack in YAML declaration order. |
+| `test_clock_obligation_does_not_cut_content` | `INV-CLOCK-OBLIGATIONS-OVERRIDE-001` | Obligation insertion never cuts, truncates, or shifts primary content. |
+| `test_clock_obligation_second_pass_deterministic` | `INV-CLOCK-OBLIGATIONS-OVERRIDE-001` | Same config + block boundaries produce identical obligation placements across compilations. |
 | `test_obligation_yaml_only_deterministic` | `INV-TIER2-OBLIGATION-YAML-ONLY-001` | Same config + same block boundaries produce identical obligations across compilations. |
 | `test_obligation_no_db_state` | `INV-TIER2-OBLIGATION-YAML-ONLY-001` | Obligation evaluation does not query database or require prior compilation output. |
 | `test_all_structural_segments_resolved_at_compile` | `INV-STRUCTURAL-RESOLUTION-001` | All T0–T3 segments in `compiled_segments` have non-empty `asset_id` and `duration_ms > 0` after `compile_schedule()`. |
@@ -301,6 +541,19 @@ Within a block's segment sequence, segments MUST appear in this order: Tier 2 ob
 | `test_structural_unification_all_tiers` | `INV-STRUCTURAL-TIER-UNIFICATION-001` | T0–T3 all follow same model: asset selected at compile, duration known, immutable in expansion. |
 | `test_coming_up_next_uses_next_block_title` | `INV-TIER3-NEXT-BLOCK-IDENTITY-001` | "Coming up next" segment references `all_blocks[i+1].title`. |
 | `test_coming_up_next_last_block_no_error` | `INV-TIER3-NEXT-BLOCK-IDENTITY-001` | Last block of broadcast day has no "coming up next" segment, no error. |
+| `test_tier3_pool_selection_deterministic` | `INV-TIER3-POOL-DETERMINISTIC-001` | Same pool + seed inputs produce identical Tier 3 asset selection across compilations. |
+| `test_tier3_pool_no_uncontrolled_rng` | `INV-TIER3-POOL-DETERMINISTIC-001` | Tier 3 selection does not use `random.random()` or `random.choice()`. |
+| `test_tier3_pool_max_duration_filter` | `INV-TIER3-POOL-DETERMINISTIC-001` | Assets exceeding `max_duration_sec` are excluded from selection. |
+| `test_tier3_budget_deducted_before_fill` | `INV-TIER3-BUDGET-BEFORE-FILL-001` | Break budget equals `slot - T0 - T1 - T2 - T3` when Tier 3 elements are present. |
+| `test_tier3_budget_grid_grows_not_dropped` | `INV-TIER3-BUDGET-BEFORE-FILL-001` | Tier 3 elements cause grid growth rather than being dropped when structural total exceeds slot. |
+| `test_tier3_template_declared_only` | `INV-TIER3-TEMPLATE-DECLARED-001` | Block without template has no Tier 3 elements in compiled_segments. |
+| `test_tier3_no_adhoc_injection` | `INV-TIER3-TEMPLATE-DECLARED-001` | Tier 3 segments only appear when template `continuity.optional` declares them. |
+| `test_tier3_subtype_order_ident_branding_next` | `INV-TIER3-SUBTYPE-ORDER-001` | Tier 3 sub-types appear in order: channel_ident, network_branding, coming_up_next. |
+| `test_tier3_subtype_order_partial` | `INV-TIER3-SUBTYPE-ORDER-001` | With only ident + next (no branding), order is still ident then next. |
+| `test_channel_ident_after_content_not_mid` | `INV-TIER3-SUBTYPE-ORDER-001`, `INV-ASSEMBLY-SEQUENCE-001` | Channel ident appears after Tier 0 content, not within breaks or mid-content. |
+| `test_network_branding_max_one_per_block` | `INV-TIER3-SUBTYPE-ORDER-001` | At most one network branding segment per block. |
+| `test_coming_up_next_omitted_last_block` | `INV-TIER3-NEXT-BLOCK-IDENTITY-001` | Last block of broadcast day omits "coming up next" without error. |
+| `test_tier3_does_not_modify_tier2` | `INV-EXPANSION-NON-MUTATION-001` | Tier 3 resolution in second pass does not alter existing Tier 2 obligation segments. |
 | `test_segment_order_tiers` | `INV-ASSEMBLY-SEQUENCE-001` | Segment sequence is: obligation, presentation, content, optional. |
 | `test_conservation_with_all_tiers` | `INV-BLOCK-SEGMENT-CONSERVATION-001` | Sum of all tier segment durations equals block duration. |
 

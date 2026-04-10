@@ -2242,14 +2242,18 @@ The following domain tables group tests by functional area. Each test is classif
 | TIER2-YAML-001 | INV-TIER2-OBLIGATION-YAML-ONLY-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Same config + block boundaries produce identical obligations across compilations |
 | TIER2-YAML-002 | INV-TIER2-OBLIGATION-YAML-ONLY-001 | LAW-DERIVATION | Obligation evaluation does not query database |
 | CLOCK-OBL-001 | INV-CLOCK-OBLIGATIONS-OVERRIDE-001 | LAW-CONTENT-AUTHORITY, LAW-GRID, LAW-CLOCK | Obligation trigger within a break inserts into break and reduces fill budget |
-| CLOCK-OBL-002 | INV-CLOCK-OBLIGATIONS-OVERRIDE-001 | LAW-CONTENT-AUTHORITY, LAW-CLOCK | Obligation trigger within primary content inserts micro-break at nearest safe point |
-| CLOCK-OBL-003 | INV-CLOCK-OBLIGATIONS-OVERRIDE-001 | LAW-CONTENT-AUTHORITY | Obligation trigger within intro/outro defers to nearest safe point per INV-BREAK-009 |
-| CLOCK-OBL-004 | INV-CLOCK-OBLIGATIONS-OVERRIDE-001 | LAW-CONTENT-AUTHORITY | Obligation trigger within protected zone defers to nearest safe point per INV-BREAK-003 |
+| CLOCK-OBL-002 | INV-CLOCK-OBLIGATIONS-OVERRIDE-001 | LAW-CONTENT-AUTHORITY, LAW-CLOCK | Obligation trigger within primary content defers to nearest eligible break in same block |
+| CLOCK-OBL-002b | INV-CLOCK-OBLIGATIONS-OVERRIDE-001 | LAW-CONTENT-AUTHORITY, LAW-CLOCK | Obligation trigger within primary content with no subsequent break defers to block boundary |
 | CLOCK-OBL-005 | INV-CLOCK-OBLIGATIONS-OVERRIDE-001 | LAW-CONTENT-AUTHORITY, LAW-GRID | Obligation trigger at block boundary prepends before Tier 1 presentation |
 | CLOCK-OBL-006 | INV-CLOCK-OBLIGATIONS-OVERRIDE-001 | LAW-CONTENT-AUTHORITY | Mandatory obligation cannot be suppressed by template configuration |
 | CLOCK-OBL-007 | INV-CLOCK-OBLIGATIONS-OVERRIDE-001 | LAW-CONTENT-AUTHORITY, LAW-CLOCK | Multiple obligations at same trigger time stack in YAML declaration order |
 | CLOCK-OBL-008 | INV-CLOCK-OBLIGATIONS-OVERRIDE-001 | LAW-CONTENT-AUTHORITY | Obligation insertion never cuts, truncates, or shifts primary content |
 | CLOCK-OBL-009 | INV-CLOCK-OBLIGATIONS-OVERRIDE-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Same config + block boundaries produce identical obligation placements across compilations |
+| PRI-UNINT-001 | INV-PRIMARY-CONTENT-UNINTERRUPTIBLE-001 | LAW-CONTENT-AUTHORITY, LAW-GRID | Primary content segment count and duration unchanged after all compilation passes |
+| PRI-UNINT-002 | INV-PRIMARY-CONTENT-UNINTERRUPTIBLE-001 | LAW-CONTENT-AUTHORITY | No non-primary segment inserted between primary content logical start and end |
+| PRI-UNINT-003 | INV-PRIMARY-CONTENT-UNINTERRUPTIBLE-001 | LAW-CONTENT-AUTHORITY, LAW-GRID | Obligation trigger within primary content time range defers to safe point outside primary content |
+| PRI-UNINT-004 | INV-PRIMARY-CONTENT-UNINTERRUPTIBLE-001 | LAW-CONTENT-AUTHORITY | Break detection does not create break opportunities within primary content |
+| PRI-UNINT-005 | INV-PRIMARY-CONTENT-UNINTERRUPTIBLE-001 | LAW-CONTENT-AUTHORITY | Traffic fill does not split or truncate primary content |
 | MIDROLL-INT-001 | INV-MIDROLL-INTERLEAVE-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Network channel compiled_segments has filler between content acts (chapter markers) |
 | MIDROLL-INT-002 | INV-MIDROLL-INTERLEAVE-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Network channel compiled_segments has filler between content acts (algorithmic breaks) |
 | MIDROLL-INT-003 | INV-MIDROLL-INTERLEAVE-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Content-filler-content alternation pattern preserved in compiled_segments |

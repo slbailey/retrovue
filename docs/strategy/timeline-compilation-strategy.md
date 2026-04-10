@@ -160,7 +160,7 @@ Top-of-hour station IDs, legal IDs, and daypart transitions are **timeline-level
 Rules:
 
 * If a clock obligation falls within a break, it is inserted into the break (displacing Tier 4 fill per `INV-TIER-DISPLACEMENT-001`).
-* If a clock obligation falls within primary content, the compiler inserts a micro-break at the nearest safe point (respecting `INV-BREAK-009` — no breaks in intro/outro, and `INV-BREAK-003` — protected zone).
+* If a clock obligation falls within primary content, the compiler defers the obligation to the nearest eligible placement point (next break or block boundary). Primary content is never split or interrupted (`INV-PRIMARY-CONTENT-UNINTERRUPTIBLE-001`).
 * Clock obligations are channel-global configuration, not per-template. Templates can declare which obligation types they participate in, but cannot suppress mandatory obligations.
 
 ***
