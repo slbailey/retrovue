@@ -873,10 +873,10 @@ class TestBackwardCompatibility:
         """Channel without `templates:` section compiles identically
         to current behavior."""
         # No templates section — pure legacy path
-        dsl = _base_dsl(program_presentation="sitcom_30")
+        dsl = _base_dsl(program_presentation="sitcom")
         dsl["presentation"] = {
             "programs": {
-                "sitcom_30": {
+                "sitcom": {
                     "midroll": [
                         {
                             "type": "traffic",

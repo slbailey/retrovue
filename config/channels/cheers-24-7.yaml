@@ -53,13 +53,13 @@ programs:
     pool: cheers
     grid_blocks_max: 1
     fill_mode: single
-    presentation: sitcom_30
+    presentation: sitcom
 
 presentation:
 
   programs:
 
-    sitcom_30:
+    sitcom:
       midroll:
         - type: traffic
           profile: sitcom
@@ -87,7 +87,7 @@ traffic:
       default_cooldown_seconds: 3600
       max_plays_per_day: 0
 
-  default_profile: sitcom
+  default: sitcom
 
 # -----------------------------
 # SCHEDULE

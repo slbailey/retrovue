@@ -25,10 +25,10 @@ except ImportError:
 
 
 def _pres_defs_with_midroll():
-    """Presentation defs with midroll on a sitcom_30 program."""
+    """Presentation defs with midroll on a sitcom program."""
     return {
         "programs": {
-            "sitcom_30": {
+            "sitcom": {
                 "midroll": [
                     {
                         "type": "traffic",
@@ -87,7 +87,7 @@ def _pres_defs_no_midroll():
     }
 
 
-def _prog_def(ref: str = "sitcom_30"):
+def _prog_def(ref: str = "sitcom"):
     return {
         "pool": "cheers",
         "fill_mode": "single",
@@ -108,7 +108,7 @@ class TestMidrollExtracted:
     def test_midroll_present_in_resolved(self):
         """When pres_block has midroll, resolved dict has presentation_midroll."""
         resolved = _resolve_presentation_ref(
-            _prog_def("sitcom_30"), _pres_defs_with_midroll(),
+            _prog_def("sitcom"), _pres_defs_with_midroll(),
         )
         assert "presentation_midroll" in resolved
         assert isinstance(resolved["presentation_midroll"], list)
@@ -117,7 +117,7 @@ class TestMidrollExtracted:
     def test_midroll_content_preserved(self):
         """Midroll entry structure is passed through unchanged."""
         resolved = _resolve_presentation_ref(
-            _prog_def("sitcom_30"), _pres_defs_with_midroll(),
+            _prog_def("sitcom"), _pres_defs_with_midroll(),
         )
         midroll = resolved["presentation_midroll"]
         entry = midroll[0]
@@ -192,7 +192,7 @@ class TestMidrollEdgeCases:
 
     def test_presentation_defs_none_no_midroll(self):
         """Null presentation_defs produces no midroll."""
-        resolved = _resolve_presentation_ref(_prog_def("sitcom_30"), None)
+        resolved = _resolve_presentation_ref(_prog_def("sitcom"), None)
         assert "presentation_midroll" not in resolved
 
     def test_unresolvable_ref_no_midroll(self):
