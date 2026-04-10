@@ -318,17 +318,16 @@ class FFprobeEnricher(BaseEnricher):
             probed["video"] = {k: v for k, v in video_block.items() if v is not None}
         if audio_blocks:
             probed["audio"] = audio_blocks
-        # Extract chapters
+        # Extract chapters (INV-CHAPTER-MARKER-SHAPE-001)
         chapters = meta.get("chapters") or []
         if chapters:
             chapter_markers = []
             for ch in chapters:
                 chapter_markers.append({
-                    "start_ms": int(float(ch.get("start_time", 0)) * 1000),
-                    "end_ms": int(float(ch.get("end_time", 0)) * 1000),
+                    "time_ms": int(float(ch.get("start_time", 0)) * 1000),
                     "title": ch.get("tags", {}).get("title", ""),
                 })
-            probed["chapters"] = chapter_markers
+            probed["chapter_markers"] = chapter_markers
 
 
         return {k: v for k, v in probed.items() if v is not None}

@@ -113,28 +113,25 @@ def test_ffprobe_enricher_extracts_chapters(tmp_path: Path, monkeypatch: Any) ->
     enricher = FFprobeEnricher()
     enriched = enricher.enrich(item)
 
-    # Verify probed data contains chapters
+    # Verify probed data contains chapter_markers (INV-CHAPTER-MARKER-SHAPE-001)
     assert enriched.probed is not None
-    assert "chapters" in enriched.probed
-    
-    chapters = enriched.probed["chapters"]
-    assert len(chapters) == 3
-    
+    assert "chapter_markers" in enriched.probed
+
+    markers = enriched.probed["chapter_markers"]
+    assert len(markers) == 3
+
     # Verify first chapter
-    assert chapters[0]["start_ms"] == 0
-    assert chapters[0]["end_ms"] == 180500
-    assert chapters[0]["title"] == "Opening"
-    
+    assert markers[0]["time_ms"] == 0
+    assert markers[0]["title"] == "Opening"
+
     # Verify second chapter
-    assert chapters[1]["start_ms"] == 180500
-    assert chapters[1]["end_ms"] == 6900000
-    assert chapters[1]["title"] == "Main Feature"
-    
+    assert markers[1]["time_ms"] == 180500
+    assert markers[1]["title"] == "Main Feature"
+
     # Verify third chapter
-    assert chapters[2]["start_ms"] == 6900000
-    assert chapters[2]["end_ms"] == 7200000
-    assert chapters[2]["title"] == "End Credits"
-    
+    assert markers[2]["time_ms"] == 6900000
+    assert markers[2]["title"] == "End Credits"
+
     # Verify labels still contain chapter count
     assert "chapters:3" in enriched.raw_labels
 
@@ -176,22 +173,20 @@ def test_ffprobe_enricher_handles_missing_chapter_titles(tmp_path: Path, monkeyp
     enricher = FFprobeEnricher()
     enriched = enricher.enrich(item)
 
-    # Verify chapters are still extracted
+    # Verify chapter_markers are still extracted (INV-CHAPTER-MARKER-SHAPE-001)
     assert enriched.probed is not None
-    assert "chapters" in enriched.probed
-    
-    chapters = enriched.probed["chapters"]
-    assert len(chapters) == 2
-    
+    assert "chapter_markers" in enriched.probed
+
+    markers = enriched.probed["chapter_markers"]
+    assert len(markers) == 2
+
     # Verify empty titles
-    assert chapters[0]["title"] == ""
-    assert chapters[1]["title"] == ""
-    
-    # Verify timestamps are still correct
-    assert chapters[0]["start_ms"] == 0
-    assert chapters[0]["end_ms"] == 150000
-    assert chapters[1]["start_ms"] == 150000
-    assert chapters[1]["end_ms"] == 300000
+    assert markers[0]["title"] == ""
+    assert markers[1]["title"] == ""
+
+    # Verify timestamps are correct
+    assert markers[0]["time_ms"] == 0
+    assert markers[1]["time_ms"] == 150000
 
 
 def test_ffprobe_enricher_no_chapters(tmp_path: Path, monkeypatch: Any) -> None:
@@ -220,9 +215,9 @@ def test_ffprobe_enricher_no_chapters(tmp_path: Path, monkeypatch: Any) -> None:
     enricher = FFprobeEnricher()
     enriched = enricher.enrich(item)
 
-    # Verify probed data exists but has no chapters key
+    # Verify probed data exists but has no chapter_markers key
     assert enriched.probed is not None
-    assert "chapters" not in enriched.probed
-    
+    assert "chapter_markers" not in enriched.probed
+
     # Verify no chapter labels
     assert not any(label.startswith("chapters:") for label in (enriched.raw_labels or []))
