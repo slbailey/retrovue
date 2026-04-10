@@ -15,7 +15,6 @@ obligation segments, displacing Tier 4 fill when possible.
 from __future__ import annotations
 
 import copy
-import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -139,7 +138,8 @@ def _insert_obligation(
     Placement rules per INV-CLOCK-OBLIGATIONS-OVERRIDE-001:
     1. Trigger at block boundary → prepend before all segments
     2. Trigger within a filler → insert into filler, reduce filler duration
-    3. Trigger within content → insert micro-break (split content)
+    3. Trigger within content → defer to nearest eligible point:
+       (a) next filler/break in same block, or (b) block boundary
     """
     obl_seg = {
         "segment_type": "obligation",
@@ -167,7 +167,7 @@ def _insert_obligation(
             if seg["segment_type"] == "filler":
                 return _insert_into_filler(segs, i, relative_trigger_ms, seg_start, obl_seg)
             elif seg["segment_type"] == "content":
-                return _insert_micro_break(segs, i, relative_trigger_ms, seg_start, obl_seg)
+                return _defer_obligation(segs, i, obl_seg)
             else:
                 # Presentation or other structural — defer to after this segment
                 new_segs = list(segs)
@@ -218,43 +218,32 @@ def _insert_into_filler(
     return new_segs
 
 
-def _insert_micro_break(
+def _defer_obligation(
     segs: list[dict],
     content_idx: int,
-    trigger_ms: int,
-    content_start_ms: int,
     obl_seg: dict,
 ) -> list[dict]:
-    """Insert a micro-break within content for an obligation.
+    """Defer an obligation that triggers within primary content.
 
-    The content is split at the trigger point. The obligation segment
-    is inserted between the two content halves. Total content duration
-    is preserved (INV-MOVIE-PRIMARY-ATOMIC: no cutting or shifting).
+    INV-CLOCK-OBLIGATIONS-OVERRIDE-001 rule 2: defer to the nearest
+    eligible placement point. Eligible points in priority order:
+      (a) next filler/break segment in the same block
+      (b) block boundary (append after last segment)
+
+    Content is NEVER split or interrupted.
     """
-    content = segs[content_idx]
-    split_offset = trigger_ms - content_start_ms
+    # Search for the next filler segment after the content segment
+    for j in range(content_idx + 1, len(segs)):
+        if segs[j]["segment_type"] == "filler":
+            # Insert obligation at the start of this filler
+            new_segs = list(segs[:j])
+            new_segs.append(obl_seg)
+            # Reduce filler by obligation duration
+            remaining_filler = segs[j]["duration_ms"] - obl_seg["duration_ms"]
+            if remaining_filler > 0:
+                new_segs.append({**segs[j], "duration_ms": remaining_filler})
+            new_segs.extend(segs[j + 1:])
+            return new_segs
 
-    # Content before the micro-break
-    before_ms = split_offset
-    after_ms = content["duration_ms"] - split_offset
-
-    new_segs = list(segs[:content_idx])
-
-    if before_ms > 0:
-        new_segs.append({
-            **content,
-            "duration_ms": before_ms,
-        })
-
-    new_segs.append(obl_seg)
-
-    if after_ms > 0:
-        asset_start = content.get("asset_start_offset_ms", 0)
-        new_segs.append({
-            **content,
-            "duration_ms": after_ms,
-            "asset_start_offset_ms": asset_start + split_offset,
-        })
-
-    new_segs.extend(segs[content_idx + 1:])
-    return new_segs
+    # No filler found after content — defer to block boundary
+    return list(segs) + [obl_seg]

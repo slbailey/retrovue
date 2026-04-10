@@ -126,7 +126,13 @@ class TestProgramDirectorDslPath:
 # ---------------------------------------------------------------------------
 
 class TestExtendForwardsTraffic:
-    """R-4: _extend_to_target forwards policy/break_config to expand_editorial_block."""
+    """R-4: _extend_to_target forwards policy/break_config to expand_editorial_block.
+
+    Since INV-BLOCKFILL-SUBPROCESS-ISOLATION-001 moved expansion into a
+    subprocess via _subprocess_expand_blocks, the invariant is verified by
+    capturing the payload dict that _extend_to_target builds for the
+    subprocess — which must contain the daemon's policy and break_config.
+    """
 
     def test_expand_called_with_policy_and_break_config(self):
         from retrovue.runtime.playlist_builder_daemon import PlaylistBuilderDaemon
@@ -155,6 +161,17 @@ class TestExtendForwardsTraffic:
             ],
         }
 
+        # Capture the payload sent to the subprocess and return a valid result.
+        captured_payloads = []
+
+        def fake_subprocess_expand(payload):
+            captured_payloads.append(payload)
+            return [{
+                "block_id": payload["blocks"][0]["block_id"],
+                "ok": True,
+                "serialized": payload["blocks"][0],
+            }]
+
         mock_filled = ScheduledBlock(
             block_id="blk-test-001",
             start_utc_ms=now_ms,
@@ -171,28 +188,48 @@ class TestExtendForwardsTraffic:
 
         mock_db = MagicMock()
 
+        # Patch ProcessPoolExecutor to run synchronously in-process so
+        # the _subprocess_expand_blocks mock is visible.
+        class _InProcessExecutor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+            def submit(self, fn, *args, **kwargs):
+                future = MagicMock()
+                future.result = MagicMock(return_value=fn(*args, **kwargs))
+                return future
+
         with patch.object(
             daemon, "_load_program_schedule_blocks", return_value=[fake_block],
         ), patch.object(
             daemon, "_batch_block_exists_in_txlog", return_value=set(),
         ), patch.object(
-            daemon, "_get_asset_library", return_value=None,
-        ), patch.object(
             daemon, "_write_to_txlog",
         ), patch(
-            "retrovue.runtime.playlist_builder_daemon.expand_editorial_block",
+            "retrovue.runtime.playlist_builder_daemon._subprocess_expand_blocks",
+            side_effect=fake_subprocess_expand,
+        ), patch(
+            "retrovue.runtime.playlist_builder_daemon.ProcessPoolExecutor",
+            return_value=_InProcessExecutor(),
+        ), patch(
+            "retrovue.runtime.dsl_schedule_service._deserialize_scheduled_block",
             return_value=mock_filled,
-        ) as mock_expand:
+        ):
             # Target: 3 hours of coverage from now
             daemon._extend_to_target(now_ms, 3 * 3_600_000, db=mock_db)
 
-            # THE INVARIANT: expand_editorial_block was called with the
-            # daemon's traffic policy and break_config, not None.
-            assert mock_expand.called, "expand_editorial_block was never called"
-            _, kwargs = mock_expand.call_args
-            assert kwargs["policy"] is sentinel_policy, (
-                f"Expected sentinel_policy, got {kwargs.get('policy')!r}"
+            # THE INVARIANT: the subprocess payload contains the daemon's
+            # traffic policy and break_config, not None.
+            assert len(captured_payloads) == 1, (
+                f"Expected 1 subprocess call, got {len(captured_payloads)}"
             )
-            assert kwargs["break_config"] is sentinel_break_config, (
-                f"Expected sentinel_break_config, got {kwargs.get('break_config')!r}"
+            payload = captured_payloads[0]
+            assert payload["policy"] is sentinel_policy, (
+                f"Expected sentinel_policy, got {payload.get('policy')!r}"
+            )
+            assert payload["break_config"] is sentinel_break_config, (
+                f"Expected sentinel_break_config, got {payload.get('break_config')!r}"
             )

@@ -217,23 +217,77 @@ class TestObligationInBreak:
 
 
 # ---------------------------------------------------------------------------
-# CLOCK-OBL-002: Trigger within primary content
+# CLOCK-OBL-002: Trigger within primary content — defers to eligible point
 # ---------------------------------------------------------------------------
 
 
-class TestObligationInContent:
-    """CLOCK-OBL-002: Obligation trigger within primary content inserts
-    micro-break at nearest safe point.
+class TestObligationInContentDefersToBreak:
+    """CLOCK-OBL-002: Obligation trigger within primary content defers to
+    the nearest eligible break in the same block.
 
     INV-CLOCK-OBLIGATIONS-OVERRIDE-001
     """
 
-    def test_micro_break_at_safe_point(self):
-        """Station ID at 21:00, block 20:45-21:15, no break near 21:00.
-        Content runs from 20:45. At minute 15 (21:00), trigger within content.
-        Micro-break inserted; content NOT cut or shifted.
+    def test_defers_to_next_break(self):
+        """Station ID at 21:00, block 20:45-21:15, midroll break at ~21:01.
+        Content runs from 20:45. At minute 15 (21:00), trigger falls in
+        content act 1. Obligation MUST defer to the midroll break, NOT
+        split content with a micro-break.
         """
-        # No midroll break — content spans the full trigger time
+        # Midroll break starts at offset 16min (= 21:01 from 20:45 start)
+        block = _make_block(
+            start_utc=SPANNING_BLOCK_START,
+            compiled_segments=_make_compiled_segments(
+                has_midroll_break=True,
+                midroll_position_ms=960_000,   # 16min into block = 21:01
+                midroll_filler_ms=240_000,     # 4min filler
+            ),
+        )
+
+        obligations = [_station_id_obligation(interval_minutes=60)]
+
+        result = evaluate_clock_obligations(
+            blocks=[block],
+            obligations=obligations,
+            broadcast_day="2026-03-27",
+        )
+
+        result_segs = result[0]["compiled_segments"]
+        obl_segs = [s for s in result_segs if s["segment_type"] == "obligation"]
+        assert len(obl_segs) == 1
+
+        # Content must NOT be split — content segments must be unchanged
+        content_segs = [s for s in result_segs if s["segment_type"] == "content"]
+        original_content_segs = [
+            s for s in block["compiled_segments"] if s["segment_type"] == "content"
+        ]
+        assert len(content_segs) == len(original_content_segs)
+        for orig, res in zip(original_content_segs, content_segs):
+            assert orig["duration_ms"] == res["duration_ms"]
+
+        # Obligation must be placed within/adjacent to the filler region, not in content
+        # Find obligation position index
+        obl_idx = next(
+            i for i, s in enumerate(result_segs) if s["segment_type"] == "obligation"
+        )
+        # The obligation should appear at or after the filler start, not within content
+        # It should be adjacent to filler (inside the break region)
+        assert result_segs[obl_idx - 1]["segment_type"] in ("content", "filler")
+        assert obl_idx > 0  # Not prepended at block head
+
+
+class TestObligationInContentDefersToBoundary:
+    """CLOCK-OBL-002b: Obligation trigger within primary content with no
+    subsequent break defers to block boundary.
+
+    INV-CLOCK-OBLIGATIONS-OVERRIDE-001
+    """
+
+    def test_defers_to_block_boundary(self):
+        """Station ID at 21:00, block 20:45-21:15, no midroll break.
+        Content spans entire trigger time. No break available.
+        Obligation MUST defer to block boundary (appended after last segment).
+        """
         block = _make_block(
             start_utc=SPANNING_BLOCK_START,
             compiled_segments=_make_compiled_segments(
@@ -255,11 +309,55 @@ class TestObligationInContent:
         obl_segs = [s for s in result_segs if s["segment_type"] == "obligation"]
         assert len(obl_segs) == 1
 
-        # Content total must be preserved (no cutting or shifting)
-        content_total = sum(
-            s["duration_ms"] for s in result_segs if s["segment_type"] == "content"
+        # Content must NOT be split
+        content_segs = [s for s in result_segs if s["segment_type"] == "content"]
+        assert len(content_segs) == 1  # Single unsplit content segment
+        assert content_segs[0]["duration_ms"] == EPISODE_22_MIN_MS
+
+        # Obligation must be at block boundary — after content, adjacent to
+        # or within trailing filler region (not splitting content)
+        obl_idx = next(
+            i for i, s in enumerate(result_segs) if s["segment_type"] == "obligation"
         )
-        assert content_total == EPISODE_22_MIN_MS
+        # Obligation should come after the content segment
+        content_idx = next(
+            i for i, s in enumerate(result_segs) if s["segment_type"] == "content"
+        )
+        assert obl_idx > content_idx
+
+
+class TestDeferredObligationAppearsInOutput:
+    """Deferred obligation still appears in compiled output — not silently
+    dropped.
+
+    INV-CLOCK-OBLIGATIONS-OVERRIDE-001
+    """
+
+    def test_deferred_obligation_not_dropped(self):
+        """Even when obligation trigger falls in content with no break,
+        the obligation segment MUST appear in the final output.
+        """
+        block = _make_block(
+            start_utc=SPANNING_BLOCK_START,
+            compiled_segments=_make_compiled_segments(
+                has_midroll_break=False,
+                content_duration_ms=EPISODE_22_MIN_MS,
+                filler_ms=GRID_30_MIN_MS - EPISODE_22_MIN_MS,
+            ),
+        )
+
+        obligations = [_station_id_obligation(interval_minutes=60)]
+
+        result = evaluate_clock_obligations(
+            blocks=[block],
+            obligations=obligations,
+            broadcast_day="2026-03-27",
+        )
+
+        result_segs = result[0]["compiled_segments"]
+        obl_segs = [s for s in result_segs if s["segment_type"] == "obligation"]
+        assert len(obl_segs) == 1
+        assert obl_segs[0]["obligation_type"] == "station_id"
 
 
 # ---------------------------------------------------------------------------
