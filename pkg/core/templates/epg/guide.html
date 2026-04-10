@@ -651,9 +651,11 @@ function showDetail(entry) {
   const startFmt = new Date(entry.start_time).toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit', timeZone:'America/New_York'});
   const endFmt = new Date(entry.end_time).toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit', timeZone:'America/New_York'});
   document.getElementById('detailTime').textContent = `${startFmt} — ${endFmt}`;
-  document.getElementById('detailDuration').textContent = entry.display_duration
-    ? `Duration: ${entry.display_duration}`
-    : `Duration: ${entry.slot_minutes} min slot`;
+  const contentMins = Math.round(entry.duration_minutes);
+  const contentDur = contentMins >= 60
+    ? (contentMins % 60 === 0 ? `${Math.floor(contentMins/60)}h` : `${Math.floor(contentMins/60)}h ${contentMins%60}m`)
+    : `${contentMins}m`;
+  document.getElementById('detailDuration').textContent = `Duration: ${contentDur}`;
   document.getElementById('detailChannel').textContent = `Channel: ${entry.channel_name}`;
   // Temporal status
   const now = new Date();
