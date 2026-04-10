@@ -107,9 +107,15 @@ def list_assets(
             "interstitial_category": payload.get("interstitial_category",""),
             "duration_ms": dur or 0, "file_path": uri, "tags": tmap.get(uid, []),
         })
+    # Return all container names so the scope selector covers movies, TV, etc.
+    with _pg() as conn2:
+        with conn2.cursor() as cur2:
+            cur2.execute("SELECT DISTINCT name FROM containers ORDER BY name")
+            all_collections = [r[0] for r in cur2.fetchall()]
+
     return jr({"assets": out, "total": total, "page": page, "per_page": per_page,
                "pages": max(1, math.ceil(total/per_page)), "untagged_count": untagged,
-               "collections": INTERSTITIAL_COLS})
+               "collections": all_collections})
 
 @router.get("/api/palette")
 def get_palette():

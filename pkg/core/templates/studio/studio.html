@@ -249,6 +249,7 @@ tr.row.selected .cb-check{display:block}
     <div id="view-toggle">
       <button class="view-btn active" data-view="list" title="List view">List</button>
       <button class="view-btn" data-view="grouped" title="Group by tag">By Tag</button>
+      <button class="view-btn" data-view="by-collection" title="Group by collection">By Collection</button>
     </div>
     <input id="search" placeholder="Search assets..." type="text">
     <div id="untagged-badge">-- untagged</div>
@@ -479,8 +480,7 @@ async function loadAssets() {
     collections = data.collections;
     populateScopeSelector();
   }
-  if (currentView === 'list') renderTable();
-  else renderGroupedView();
+  renderCurrentView();
   renderPagination();
   updateBadge();
   updateProgress();
@@ -516,6 +516,13 @@ function populateScopeSelector() {
       sel.appendChild(opt);
     }
   });
+}
+
+// == RENDER CURRENT VIEW HELPER ============================================
+function renderCurrentView() {
+  if (currentView === 'list') renderTable();
+  else if (currentView === 'grouped') renderGroupedView();
+  else if (currentView === 'by-collection') renderCollectionView();
 }
 
 // == TAG COLORS ===========================================================
@@ -833,10 +840,14 @@ document.querySelectorAll('.view-btn').forEach(btn => {
       tableEl.style.display = 'block';
       groupedEl.style.display = 'none';
       renderTable();
-    } else {
+    } else if (currentView === 'grouped') {
       tableEl.style.display = 'none';
       groupedEl.style.display = 'block';
       renderGroupedView();
+    } else if (currentView === 'by-collection') {
+      tableEl.style.display = 'none';
+      groupedEl.style.display = 'block';
+      renderCollectionView();
     }
   });
 });
@@ -1031,6 +1042,82 @@ function renderGroupedView() {
   }
 }
 
+// == COLLECTION GROUPED VIEW ==============================================
+function renderCollectionView() {
+  const container = document.getElementById('grouped-view');
+  container.innerHTML = '';
+
+  // Build collection -> assets map
+  const collMap = {};
+  assets.forEach(a => {
+    const coll = a.directory || 'unknown';
+    if (!collMap[coll]) collMap[coll] = [];
+    collMap[coll].push(a);
+  });
+
+  const sortedColls = Object.keys(collMap).sort();
+
+  sortedColls.forEach(coll => {
+    const group = collMap[coll];
+    const sec = document.createElement('div');
+    sec.className = 'group-section';
+
+    const hdr = document.createElement('div');
+    hdr.className = 'group-header';
+    hdr.innerHTML = `<span class="group-tag-pill" style="background:var(--bg4);color:var(--gold);font-size:15px">${coll}</span>
+      <span class="group-count">${group.length} asset${group.length !== 1 ? 's' : ''}</span>
+      <span class="group-chevron">&#x25BC;</span>`;
+    hdr.addEventListener('click', () => hdr.classList.toggle('collapsed'));
+    sec.appendChild(hdr);
+
+    const assetsDiv = document.createElement('div');
+    assetsDiv.className = 'group-assets';
+    group.forEach(a => {
+      const row = document.createElement('div');
+      row.className = 'group-asset-row';
+      const tagsHtml = a.tags.map(t => {
+        const c = getTagColor(t.category.toLowerCase(), t.tag);
+        return `<span class="group-inline-tag" style="background:${c.bg};color:${c.fg}">${t.tag}</span>`;
+      }).join('') || '<span style="font-size:12px;color:#804040;font-style:italic">untagged</span>';
+      row.innerHTML = `<span class="group-asset-name" title="${a.file_path}">${a.filename || a.title || '\u2014'}</span>
+        <span class="group-asset-dur">${formatDuration(a.duration_ms)}</span>
+        <span class="group-asset-tags">${tagsHtml}</span>`;
+
+      // Drag-drop target
+      row.addEventListener('dragover', e => {
+        if (!dragTag) return;
+        e.preventDefault();
+        row.style.background = 'var(--bg3)';
+        row.style.outline = '1px solid var(--blue)';
+      });
+      row.addEventListener('dragleave', () => {
+        row.style.background = '';
+        row.style.outline = '';
+      });
+      row.addEventListener('drop', async e => {
+        e.preventDefault();
+        row.style.background = '';
+        row.style.outline = '';
+        if (!dragTag) return;
+        await applyTag([a.id], dragTag.category, dragTag.tag);
+      });
+
+      row.addEventListener('click', () => {
+        selected.clear();
+        selected.add(a.id);
+        updateRightPanel();
+      });
+      assetsDiv.appendChild(row);
+    });
+    sec.appendChild(assetsDiv);
+    container.appendChild(sec);
+  });
+
+  if (sortedColls.length === 0) {
+    container.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text3);font-size:15px">No assets loaded</div>';
+  }
+}
+
 // == SELECTION ============================================================
 function handleRowClick(e, asset, idx) {
   if (e.shiftKey && lastClickedIdx !== null) {
@@ -1075,8 +1162,7 @@ async function applyTag(ids, category, tag) {
       a.tags.push({category, tag});
     }
   });
-  if (currentView === 'list') renderTable();
-  else renderGroupedView();
+  renderCurrentView();
   updateRightPanel();
   updateProgress();
   loadTagSummary(); // refresh counts
@@ -1131,8 +1217,7 @@ function renderBulkTagList(filter) {
           const a = assets.find(x => x.id === id);
           if (a) a.tags = a.tags.filter(x => !(x.category.toUpperCase()===t.ns.toUpperCase() && x.tag===t.name));
         });
-        if (currentView === 'list') renderTable();
-        else renderGroupedView();
+        renderCurrentView();
         updateRightPanel();
         updateProgress();
         loadTagSummary();
@@ -1176,8 +1261,7 @@ document.getElementById('bulk-clear-btn').addEventListener('click', async () => 
     }
     a.tags = [];
   }
-  if (currentView === 'list') renderTable();
-  else renderGroupedView();
+  renderCurrentView();
   updateRightPanel();
   updateProgress();
   loadTagSummary();
@@ -1270,8 +1354,7 @@ function renderSingleDetail() {
       span.querySelector('.rm').addEventListener('click', async () => {
         await api('DELETE', '/api/assets/tags', {asset_ids: [id], category: t.category, tag: t.tag});
         a.tags = a.tags.filter(x => !(x.category===t.category && x.tag===t.tag));
-        if (currentView === 'list') renderTable();
-        else renderGroupedView();
+        renderCurrentView();
         updateRightPanel();
         updateProgress();
         loadTagSummary();
@@ -1319,8 +1402,7 @@ function renderMultiDetail() {
         const a = assets.find(x => x.id === id);
         if (a) a.tags = a.tags.filter(t => !(t.category===tc.category && t.tag===tc.tag));
       });
-      if (currentView === 'list') renderTable();
-      else renderGroupedView();
+      renderCurrentView();
       updateRightPanel();
       updateProgress();
       loadTagSummary();
@@ -1352,8 +1434,7 @@ function renderMultiDetail() {
         const a = assets.find(x => x.id === id);
         if (a) a.tags = a.tags.filter(t => !(t.category===tc.category && t.tag===tc.tag));
       });
-      if (currentView === 'list') renderTable();
-      else renderGroupedView();
+      renderCurrentView();
       updateRightPanel();
       updateProgress();
       loadTagSummary();
