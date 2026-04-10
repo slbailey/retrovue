@@ -281,6 +281,24 @@ Canonical contract: [program_presentation.md](program_presentation.md)
 
 Canonical contract: [block_assembly_tiers.md](block_assembly_tiers.md)
 
+### Scheduling — Coming Up Next (CUN)
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-CUN-FEATURE-FLAG-001 | [invariants/core/cun/INV-CUN-FEATURE-FLAG-001.md](invariants/core/cun/INV-CUN-FEATURE-FLAG-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-CUN-SCHEDULE-SCOPED-001 | [invariants/core/cun/INV-CUN-SCHEDULE-SCOPED-001.md](invariants/core/cun/INV-CUN-SCHEDULE-SCOPED-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-CUN-RENDER-IDLE-001 | [invariants/core/cun/INV-CUN-RENDER-IDLE-001.md](invariants/core/cun/INV-CUN-RENDER-IDLE-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-CUN-RENDER-DEADLINE-001 | [invariants/core/cun/INV-CUN-RENDER-DEADLINE-001.md](invariants/core/cun/INV-CUN-RENDER-DEADLINE-001.md) | LAW-CONTENT-AUTHORITY, LAW-CLOCK |
+| INV-CUN-SKIP-IF-UNREADY-001 | [invariants/core/cun/INV-CUN-SKIP-IF-UNREADY-001.md](invariants/core/cun/INV-CUN-SKIP-IF-UNREADY-001.md) | LAW-LIVENESS, LAW-CONTENT-AUTHORITY |
+| INV-CUN-PRIORITY-PLAYOUT-001 | [invariants/core/cun/INV-CUN-PRIORITY-PLAYOUT-001.md](invariants/core/cun/INV-CUN-PRIORITY-PLAYOUT-001.md) | LAW-CONTENT-AUTHORITY, LAW-CLOCK |
+| INV-CUN-CACHE-UNTIL-USED-001 | [invariants/core/cun/INV-CUN-CACHE-UNTIL-USED-001.md](invariants/core/cun/INV-CUN-CACHE-UNTIL-USED-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-CUN-CACHE-SAFE-CLEANUP-001 | [invariants/core/cun/INV-CUN-CACHE-SAFE-CLEANUP-001.md](invariants/core/cun/INV-CUN-CACHE-SAFE-CLEANUP-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-CUN-DEDUP-BEFORE-RENDER-001 | [invariants/core/cun/INV-CUN-DEDUP-BEFORE-RENDER-001.md](invariants/core/cun/INV-CUN-DEDUP-BEFORE-RENDER-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-CUN-CACHE-DEDUP-001 | [invariants/core/cun/INV-CUN-CACHE-DEDUP-001.md](invariants/core/cun/INV-CUN-CACHE-DEDUP-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-CUN-TEMPLATE-DETERMINISTIC-001 | [invariants/core/cun/INV-CUN-TEMPLATE-DETERMINISTIC-001.md](invariants/core/cun/INV-CUN-TEMPLATE-DETERMINISTIC-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+
+Canonical contract: [cun_synthesis_contract.md](cun_synthesis_contract.md)
+
 ### Scheduling — Template Compilation
 
 | Invariant | File | Derived From |
@@ -444,6 +462,16 @@ Canonical contract: [schedule_constraints.md](schedule_constraints.md)
 | INV-ASSET-DURATION-CONTRACTUAL-TRUTH-001 | [invariants/core/asset/INV-ASSET-DURATION-CONTRACTUAL-TRUTH-001.md](invariants/core/asset/INV-ASSET-DURATION-CONTRACTUAL-TRUTH-001.md) | LAW-ELIGIBILITY, LAW-DERIVATION |
 | INV-ASSET-MARKER-BOUNDS-001 | [invariants/core/asset/INV-ASSET-MARKER-BOUNDS-001.md](invariants/core/asset/INV-ASSET-MARKER-BOUNDS-001.md) | — |
 
+### Asset — Tag Management
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-TAG-RENAME-ATOMIC-001 | [invariants/core/asset/INV-TAG-RENAME-ATOMIC-001.md](invariants/core/asset/INV-TAG-RENAME-ATOMIC-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-TAG-MERGE-DEDUP-001 | [invariants/core/asset/INV-TAG-MERGE-DEDUP-001.md](invariants/core/asset/INV-TAG-MERGE-DEDUP-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-TAG-BULK-REMOVE-001 | [invariants/core/asset/INV-TAG-BULK-REMOVE-001.md](invariants/core/asset/INV-TAG-BULK-REMOVE-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-TAG-SCOPE-ALL-001 | [invariants/core/asset/INV-TAG-SCOPE-ALL-001.md](invariants/core/asset/INV-TAG-SCOPE-ALL-001.md) | LAW-CONTENT-AUTHORITY |
+| INV-TAG-SUMMARY-COMPLETE-001 | [invariants/core/asset/INV-TAG-SUMMARY-COMPLETE-001.md](invariants/core/asset/INV-TAG-SUMMARY-COMPLETE-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+
 ### Asset — Schedulability & Library Boundary
 
 | Invariant | File | Derived From |
@@ -509,6 +537,7 @@ Canonical contract: [schedule_constraints.md](schedule_constraints.md)
 | INV-SLOW-CONSUMER-DISCONNECT-001 | [invariants/core/runtime/INV-SLOW-CONSUMER-DISCONNECT-001.md](invariants/core/runtime/INV-SLOW-CONSUMER-DISCONNECT-001.md) | LAW-LIVENESS, LAW-RUNTIME-AUTHORITY |
 | INV-PLAYOUT-MODULE-EXTRACTION-001 | [invariants/core/INV-PLAYOUT-MODULE-EXTRACTION-001.md](invariants/core/INV-PLAYOUT-MODULE-EXTRACTION-001.md) | LAW-SIMPLICITY |
 | INV-SCHEDULE-COMPILER-MODULE-SPLIT-001 | [invariants/core/runtime/INV-SCHEDULE-COMPILER-MODULE-SPLIT-001.md](invariants/core/runtime/INV-SCHEDULE-COMPILER-MODULE-SPLIT-001.md) | LAW-SIMPLICITY |
+| INV-CUN-SCHEDULE-SCOPED-001 | [invariants/core/runtime/INV-CUN-SCHEDULE-SCOPED-001.md](invariants/core/runtime/INV-CUN-SCHEDULE-SCOPED-001.md) | LAW-CONTENT-AUTHORITY |
 
 ### Delivery — HLS Segment Production
 

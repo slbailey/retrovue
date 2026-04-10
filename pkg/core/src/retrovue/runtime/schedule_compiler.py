@@ -1152,6 +1152,7 @@ def compile_schedule(
             continuity=continuity,
             broadcast_day=broadcast_day,
             channel_id=channel_id,
+            features=dsl.get("features"),
         )
         # Apply only the first block's result (the current block)
         updated = result[0]

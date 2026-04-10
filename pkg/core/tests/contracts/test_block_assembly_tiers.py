@@ -191,6 +191,7 @@ class TestTier3ResolvedAtCompileTime:
             continuity=continuity,
             broadcast_day="2026-03-27",
             channel_id="ch_test",
+            features={"coming_up_next": True},
         )
 
         tier3_types = {"channel_ident", "coming_up_next", "network_branding"}
@@ -228,6 +229,7 @@ class TestTier3IncludedInGridSizing:
             continuity=continuity,
             broadcast_day="2026-03-27",
             channel_id="ch_test",
+            features={"coming_up_next": True},
         )
 
         structural_types = {
@@ -274,6 +276,7 @@ class TestTier3ImmutableDuringExpansion:
             continuity=continuity,
             broadcast_day="2026-03-27",
             channel_id="ch_test",
+            features={"coming_up_next": True},
         )
 
         result2 = evaluate_optional_presentation(
@@ -281,6 +284,7 @@ class TestTier3ImmutableDuringExpansion:
             continuity=continuity,
             broadcast_day="2026-03-27",
             channel_id="ch_test",
+            features={"coming_up_next": True},
         )
 
         tier3_types = {"channel_ident", "coming_up_next", "network_branding"}
@@ -324,6 +328,7 @@ class TestComingUpNextUsesNextBlockTitle:
             continuity=continuity,
             broadcast_day="2026-03-27",
             channel_id="ch_test",
+            features={"coming_up_next": True},
         )
 
         # Find "coming_up_next" segment in the first block
@@ -360,6 +365,7 @@ class TestComingUpNextLastBlockNoError:
             continuity=continuity,
             broadcast_day="2026-03-27",
             channel_id="ch_test",
+            features={"coming_up_next": True},
         )
 
         # Last block must have zero "coming_up_next" segments
@@ -405,6 +411,7 @@ class TestSegmentOrderTiers:
             continuity=continuity,
             broadcast_day="2026-03-27",
             channel_id="ch_test",
+            features={"coming_up_next": True},
         )
 
         # Define tier order for each segment_type

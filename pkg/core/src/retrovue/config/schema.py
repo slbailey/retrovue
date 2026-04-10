@@ -393,6 +393,56 @@ class ChannelFillerYaml(BaseModel):
     duration_ms: int | None = None
     alignment: Literal["start", "end"] | None = None
 
+class ChannelFeatures(BaseModel):
+    """Channel feature flags (opt-in capabilities)."""
+    model_config = ConfigDict(extra="allow", strict=True)
+    coming_up_next: bool = False
+
+
+class CunTemplateTextArea(BaseModel):
+    """Text area coordinates within a CUN template background."""
+    model_config = ConfigDict(extra="forbid")
+    x: int
+    y: int
+    width: int
+    height: int
+
+
+class CunTemplate(BaseModel):
+    """A single CUN (Coming Up Next) template definition."""
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    background: str
+    text_area: CunTemplateTextArea
+    font: str
+    font_size: int
+    font_color: str
+    fade_in_ms: int = 500
+    fade_out_ms: int = 500
+
+
+class ContinuityCun(BaseModel):
+    """Coming Up Next continuity config block."""
+    model_config = ConfigDict(extra="forbid")
+    duration_ms: int
+    render_deadline_margin_ms: int
+    templates: list[CunTemplate]
+
+    @model_validator(mode="after")
+    def _require_at_least_one_template(self) -> "ContinuityCun":
+        if not self.templates:
+            raise ValueError(
+                "continuity.coming_up_next.templates must contain at least one template"
+            )
+        return self
+
+
+class ChannelContinuity(BaseModel):
+    """Channel continuity config (presentation automation blocks)."""
+    model_config = ConfigDict(extra="allow")
+    coming_up_next: ContinuityCun | None = None
+
+
 class ChannelYamlSchema(BaseModel):
     """
     Schema for channel YAML files.
@@ -412,6 +462,12 @@ class ChannelYamlSchema(BaseModel):
     name: str | None = None
     channel_type: str | None = None
     timezone: str | None = None
+
+    # --- feature flags ---
+    features: ChannelFeatures | None = None
+
+    # --- continuity automation ---
+    continuity: ChannelContinuity | None = None
 
     # --- pass-through (structural check only) ---
     format: ChannelFormat | None = None
@@ -512,6 +568,11 @@ def _format_errors(exc: ValidationError) -> list[dict[str, Any]]:
 __all__ = [
     "DefaultsSchema",
     "ChannelYamlSchema",
+    "ChannelFeatures",
+    "ChannelContinuity",
+    "ContinuityCun",
+    "CunTemplate",
+    "CunTemplateTextArea",
     "SchemaValidationError",
     "validate_defaults",
     "validate_channel_yaml",

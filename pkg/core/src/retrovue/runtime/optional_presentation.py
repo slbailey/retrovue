@@ -71,6 +71,7 @@ def evaluate_optional_presentation(
     continuity: dict,
     broadcast_day: str,
     channel_id: str,
+    features: dict | None = None,
 ) -> list[dict]:
     """Evaluate optional presentation and insert Tier 3 segments.
 
@@ -79,6 +80,7 @@ def evaluate_optional_presentation(
     INV-TIER3-NEXT-BLOCK-IDENTITY-001: "Coming up next" reads next block title.
     INV-TIER3-SUBTYPE-ORDER-001: Fixed ordering within block.
     INV-ASSEMBLY-SEQUENCE-001: Tier 3 placed after content.
+    INV-CUN-FEATURE-FLAG-001: CUN gated by features.coming_up_next.
 
     Args:
         blocks: List of block dicts with start_utc_ms, slot_duration_ms,
@@ -87,6 +89,8 @@ def evaluate_optional_presentation(
                     list of element declarations.
         broadcast_day: ISO date string (e.g. "2026-03-27").
         channel_id: Channel identifier for seed computation.
+        features: Channel feature flags dict. When features.coming_up_next
+                  is not True, CUN segments are suppressed.
 
     Returns:
         New list of block dicts with Tier 3 segments inserted.
@@ -95,6 +99,16 @@ def evaluate_optional_presentation(
     optional_elements = continuity.get("optional", [])
     if not optional_elements:
         return blocks
+
+    # INV-CUN-FEATURE-FLAG-001: Filter out coming_up_next when feature flag
+    # is not explicitly True. Default is off (no CUN).
+    cun_enabled = (features or {}).get("coming_up_next", False) is True
+    if not cun_enabled:
+        optional_elements = [
+            e for e in optional_elements if e["type"] != "coming_up_next"
+        ]
+        if not optional_elements:
+            return blocks
 
     # Build lookup of declared element types
     declared: dict[str, dict] = {}

@@ -19,6 +19,7 @@ Lifecycle: start()/stop() run a background daemon thread.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import random
 import threading
@@ -526,6 +527,13 @@ class PlaylistBuilderDaemon:
             try:
                 filled_block = _deserialize_scheduled_block(result["serialized"])
 
+                # INV-CUN-SKIP-IF-UNREADY-001: resolve CUN segments before
+                # writing to playlog plan. Completed renders → use path;
+                # unready → skip segment; missing → enqueue request.
+                filled_block = self._ensure_cun_ready(
+                    filled_block, sb_dict, db=db,
+                )
+
                 # INV-TIER2-WINDOW-UUID-PROPAGATION-001: thread provenance
                 self._write_to_txlog(
                     filled_block, scan_date,
@@ -562,6 +570,244 @@ class PlaylistBuilderDaemon:
             time.sleep(0.010)
 
         return blocks_filled
+
+    # ------------------------------------------------------------------
+    # CUN resolution (INV-CUN-SKIP-IF-UNREADY-001)
+    # ------------------------------------------------------------------
+
+    def _ensure_cun_ready(
+        self,
+        block: "ScheduledBlock",
+        sb_dict: dict,
+        *,
+        db=None,
+    ) -> "ScheduledBlock":
+        """Resolve CUN segments: use rendered asset or skip.
+
+        INV-CUN-SKIP-IF-UNREADY-001: If render incomplete → skip segment.
+        INV-CUN-DEDUP-BEFORE-RENDER-001: Check completed renders by content_hash
+            before enqueueing new requests.
+        INV-CUN-PRIORITY-PLAYOUT-001: Enqueued requests use playout-time priority.
+        INV-CUN-CACHE-DEDUP-001: content_hash = SHA256(template_id:title).
+
+        Delegation boundary: PBD detects, enqueues, and resolves — no rendering.
+        """
+        from retrovue.runtime.schedule_types import ScheduledBlock, ScheduledSegment
+
+        # Fast path: no CUN segments → return unchanged.
+        cun_indices = [
+            i for i, seg in enumerate(block.segments)
+            if seg.segment_type == "coming_up_next"
+        ]
+        if not cun_indices:
+            return block
+
+        # Build CUN metadata lookup from original sb_dict.
+        # optional_presentation.py stores next_program_title and asset_id
+        # (template_id) in compiled_segments — data lost during deserialization.
+        cun_meta: dict[int, dict] = {}  # keyed by position among CUN segments
+        cun_count = 0
+        for seg_dict in sb_dict.get("compiled_segments", []):
+            if seg_dict.get("segment_type") == "coming_up_next":
+                cun_meta[cun_count] = {
+                    "next_program_title": seg_dict.get("next_program_title", ""),
+                    "template_id": seg_dict.get("asset_id", "default"),
+                }
+                cun_count += 1
+
+        # Process segments: resolve or skip CUN.
+        new_segments: list[ScheduledSegment] = []
+        cun_ordinal = 0  # tracks which CUN segment (for metadata matching)
+
+        for i, seg in enumerate(block.segments):
+            if seg.segment_type != "coming_up_next":
+                new_segments.append(seg)
+                continue
+
+            meta = cun_meta.get(cun_ordinal, {})
+            cun_ordinal += 1
+
+            title = meta.get("next_program_title", "")
+            template_id = meta.get("template_id", "default")
+            content_hash = self._cun_content_hash(template_id, title)
+
+            # Compute segment airtime for render request.
+            preceding_ms = sum(
+                s.segment_duration_ms for s in block.segments[:i]
+            )
+            segment_start_utc = datetime.fromtimestamp(
+                (block.start_utc_ms + preceding_ms) / 1000.0, tz=timezone.utc,
+            )
+
+            # INV-CUN-DEDUP-BEFORE-RENDER-001: check for completed render
+            # with same content_hash (cross-channel / cross-slot reuse).
+            rendered_path = self._lookup_cun_render(
+                content_hash=content_hash,
+                channel_id=self._channel_id,
+                segment_start_utc=segment_start_utc,
+                db=db,
+            )
+
+            if rendered_path is not None:
+                # Completed render found → use rendered asset.
+                resolved_seg = ScheduledSegment(
+                    segment_type=seg.segment_type,
+                    asset_uri=rendered_path,
+                    asset_start_offset_ms=0,
+                    segment_duration_ms=seg.segment_duration_ms,
+                    transition_in=seg.transition_in,
+                    transition_in_duration_ms=seg.transition_in_duration_ms,
+                    transition_out=seg.transition_out,
+                    transition_out_duration_ms=seg.transition_out_duration_ms,
+                    gain_db=seg.gain_db,
+                )
+                new_segments.append(resolved_seg)
+                logger.debug(
+                    "PlaylistBuilder[%s]: CUN resolved for '%s' → %s",
+                    self._channel_id, title, rendered_path,
+                )
+            else:
+                # INV-CUN-SKIP-IF-UNREADY-001: skip the CUN segment.
+                # INV-CUN-PRIORITY-PLAYOUT-001: enqueue with playout-time priority.
+                self._enqueue_cun_render_request(
+                    channel_id=self._channel_id,
+                    segment_start_utc=segment_start_utc,
+                    next_program_title=title,
+                    template_id=template_id,
+                    content_hash=content_hash,
+                    priority=int(segment_start_utc.timestamp()),
+                    db=db,
+                )
+                logger.debug(
+                    "PlaylistBuilder[%s]: CUN skipped for '%s' (not rendered), "
+                    "enqueued render request",
+                    self._channel_id, title,
+                )
+                # Do NOT append — segment is skipped.
+
+        return ScheduledBlock(
+            block_id=block.block_id,
+            start_utc_ms=block.start_utc_ms,
+            end_utc_ms=block.end_utc_ms,
+            segments=tuple(new_segments),
+            traffic_profile=block.traffic_profile,
+        )
+
+    @staticmethod
+    def _cun_content_hash(template_id: str, title: str) -> str:
+        """INV-CUN-CACHE-DEDUP-001: content_hash = SHA256(template_id:title)."""
+        return hashlib.sha256(f"{template_id}:{title}".encode()).hexdigest()
+
+    def _lookup_cun_render(
+        self,
+        *,
+        content_hash: str,
+        channel_id: str,
+        segment_start_utc: datetime,
+        db=None,
+    ) -> str | None:
+        """Look up a completed CUN render by content_hash or exact match.
+
+        INV-CUN-DEDUP-BEFORE-RENDER-001: First checks for any completed render
+        with matching content_hash (cross-slot reuse). Falls back to exact
+        (channel_id, segment_start_utc) match.
+
+        Returns rendered_asset_path if completed, None otherwise.
+        """
+        from retrovue.domain.entities import CunRenderRequest
+
+        def _query(s):
+            # First: dedup by content_hash (any completed render reusable).
+            row = (
+                s.query(CunRenderRequest.rendered_asset_path)
+                .filter(
+                    CunRenderRequest.content_hash == content_hash,
+                    CunRenderRequest.status == "completed",
+                )
+                .first()
+            )
+            if row and row[0]:
+                return row[0]
+            return None
+
+        try:
+            if db is not None:
+                return _query(db)
+            from retrovue.infra.uow import session as db_session_factory
+            with db_session_factory() as s:
+                return _query(s)
+        except Exception as e:
+            if db is not None:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+            logger.debug(
+                "PlaylistBuilder[%s]: CUN render lookup failed: %s",
+                self._channel_id, e,
+            )
+            return None
+
+    def _enqueue_cun_render_request(
+        self,
+        *,
+        channel_id: str,
+        segment_start_utc: datetime,
+        next_program_title: str,
+        template_id: str,
+        content_hash: str,
+        priority: int,
+        db=None,
+    ) -> None:
+        """Enqueue a CUN render request (idempotent via UNIQUE constraint).
+
+        INV-CUN-DEDUP-BEFORE-RENDER-001: Uses INSERT ... ON CONFLICT DO NOTHING
+        so duplicate requests for the same (channel_id, segment_start_utc)
+        are silently ignored.
+
+        INV-CUN-PRIORITY-PLAYOUT-001: Priority is playout-time based
+        (Unix timestamp of segment start — lower = sooner = renders first).
+        """
+        from retrovue.domain.entities import CunRenderRequest
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        values = dict(
+            channel_id=channel_id,
+            segment_start_utc=segment_start_utc,
+            next_program_title=next_program_title,
+            template_id=template_id,
+            content_hash=content_hash,
+            priority=priority,
+        )
+
+        try:
+            if db is not None:
+                stmt = pg_insert(CunRenderRequest.__table__).values(
+                    **values,
+                ).on_conflict_do_nothing(
+                    constraint="uq_cun_render_channel_segment",
+                )
+                db.execute(stmt)
+                db.commit()
+            else:
+                from retrovue.infra.uow import session as db_session_factory
+                with db_session_factory() as s:
+                    stmt = pg_insert(CunRenderRequest.__table__).values(
+                        **values,
+                    ).on_conflict_do_nothing(
+                        constraint="uq_cun_render_channel_segment",
+                    )
+                    s.execute(stmt)
+        except Exception as e:
+            if db is not None:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+            logger.warning(
+                "PlaylistBuilder[%s]: CUN render enqueue failed: %s",
+                self._channel_id, e,
+            )
 
     def _ensure_playlog_plan_covers_now(self, now_ms: int, *, db=None) -> int:
         """Backfill the program schedule block containing now_ms if playlog plan has no row covering it.

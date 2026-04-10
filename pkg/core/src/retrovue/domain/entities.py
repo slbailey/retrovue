@@ -1404,3 +1404,78 @@ class PoolAssignment(Base):
     __table_args__ = (
         UniqueConstraint("pool_id", "channel_id", name="uq_pool_assignments_pool_channel"),
     )
+
+
+# =============================================================================
+# CUN (Coming Up Next) Synthesis Pipeline
+# See: INV-CUN-SCHEDULE-SCOPED-001 — separate table, NOT ProcessorJob queue.
+# =============================================================================
+
+
+class CunRenderRequest(Base):
+    """Render request for a Coming Up Next segment.
+
+    Schedule-scoped synthesis: each row represents a CUN segment that needs
+    a rendered video (background + title text). Workers claim rows via
+    SELECT FOR UPDATE SKIP LOCKED, ordered by priority ASC (soonest playout first).
+
+    Content-addressed dedup: hash(template_id, title) allows reuse across
+    channels and time slots when the visual output would be identical.
+    """
+
+    __tablename__ = "cun_render_requests"
+
+    id: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid_module.uuid4
+    )
+    channel_id: Mapped[uuid_module.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("channels.id"),
+        nullable=False,
+    )
+    segment_start_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+    )
+    next_program_title: Mapped[str] = mapped_column(Text, nullable=False)
+    template_id: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=sa.text("'pending'"),
+    )  # pending | running | completed | failed | skipped
+    rendered_asset_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    priority: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=sa.text("100"),
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "channel_id", "segment_start_utc",
+            name="uq_cun_render_channel_segment",
+        ),
+        Index(
+            "idx_cun_render_pending",
+            "status", "priority", "created_at",
+            postgresql_where=sa.text("status = 'pending'"),
+        ),
+        Index(
+            "idx_cun_render_content_hash",
+            "content_hash", "status",
+            postgresql_where=sa.text("status = 'completed'"),
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<CunRenderRequest(id={self.id!r}, channel_id={self.channel_id!r}, "
+            f"title={self.next_program_title!r}, status={self.status!r})>"
+        )
