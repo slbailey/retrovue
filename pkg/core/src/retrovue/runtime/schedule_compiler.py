@@ -435,7 +435,6 @@ def _expand_to_compiled_segments(
     return compiled
 
 
-
 # ---------------------------------------------------------------------------
 # Grid alignment
 # ---------------------------------------------------------------------------
@@ -447,8 +446,6 @@ def _grid_slot_duration(grid_minutes: int, episode_duration_sec: int) -> int:
     slots_needed = max(1, -(-episode_duration_sec // slot_sec))  # ceil division
     return slots_needed * slot_sec
 
-
-# _validate_grid_alignment moved to schedule_validation.py
 
 
 # ---------------------------------------------------------------------------
@@ -908,10 +905,6 @@ def _compile_program_block(
                 current_time = block.end_at()
 
     return blocks
-
-
-# Validation functions moved to schedule_validation.py
-# (imported above via INV-SCHEDULE-COMPILER-MODULE-SPLIT-001 block)
 
 
 # ---------------------------------------------------------------------------

@@ -264,16 +264,46 @@ Canonical contract: [program_presentation.md](program_presentation.md)
 |-----------|------|--------------|
 | INV-TIER-DISPLACEMENT-001 | [block_assembly_tiers.md](block_assembly_tiers.md) | LAW-CONTENT-AUTHORITY, LAW-GRID |
 | INV-TIER2-OBLIGATION-YAML-ONLY-001 | [block_assembly_tiers.md](block_assembly_tiers.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-CLOCK-OBLIGATIONS-OVERRIDE-001 | [invariants/core/block-assembly-tiers/INV-CLOCK-OBLIGATIONS-OVERRIDE-001.md](invariants/core/block-assembly-tiers/INV-CLOCK-OBLIGATIONS-OVERRIDE-001.md) | LAW-CONTENT-AUTHORITY, LAW-GRID, LAW-CLOCK |
 | INV-MIDROLL-INTERLEAVE-001 | [invariants/core/block-assembly-tiers/INV-MIDROLL-INTERLEAVE-001.md](invariants/core/block-assembly-tiers/INV-MIDROLL-INTERLEAVE-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
 | INV-STRUCTURAL-RESOLUTION-001 | [invariants/core/block-assembly-tiers/INV-STRUCTURAL-RESOLUTION-001.md](invariants/core/block-assembly-tiers/INV-STRUCTURAL-RESOLUTION-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
 | INV-GRID-SIZING-STRUCTURAL-001 | [invariants/core/block-assembly-tiers/INV-GRID-SIZING-STRUCTURAL-001.md](invariants/core/block-assembly-tiers/INV-GRID-SIZING-STRUCTURAL-001.md) | LAW-GRID, LAW-CONTENT-AUTHORITY |
 | INV-EXPANSION-NON-MUTATION-001 | [invariants/core/block-assembly-tiers/INV-EXPANSION-NON-MUTATION-001.md](invariants/core/block-assembly-tiers/INV-EXPANSION-NON-MUTATION-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
-| INV-TIER3-COMPILE-RESOLUTION-001 | [block_assembly_tiers.md](block_assembly_tiers.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
-| INV-TIER3-NEXT-BLOCK-IDENTITY-001 | [block_assembly_tiers.md](block_assembly_tiers.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-TIER3-COMPILE-RESOLUTION-001 | [invariants/core/block-assembly-tiers/INV-TIER3-COMPILE-RESOLUTION-001.md](invariants/core/block-assembly-tiers/INV-TIER3-COMPILE-RESOLUTION-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-TIER3-NEXT-BLOCK-IDENTITY-001 | [invariants/core/block-assembly-tiers/INV-TIER3-NEXT-BLOCK-IDENTITY-001.md](invariants/core/block-assembly-tiers/INV-TIER3-NEXT-BLOCK-IDENTITY-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-TIER3-POOL-DETERMINISTIC-001 | [invariants/core/block-assembly-tiers/INV-TIER3-POOL-DETERMINISTIC-001.md](invariants/core/block-assembly-tiers/INV-TIER3-POOL-DETERMINISTIC-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-TIER3-BUDGET-BEFORE-FILL-001 | [invariants/core/block-assembly-tiers/INV-TIER3-BUDGET-BEFORE-FILL-001.md](invariants/core/block-assembly-tiers/INV-TIER3-BUDGET-BEFORE-FILL-001.md) | LAW-GRID, LAW-CONTENT-AUTHORITY |
+| INV-TIER3-TEMPLATE-DECLARED-001 | [invariants/core/block-assembly-tiers/INV-TIER3-TEMPLATE-DECLARED-001.md](invariants/core/block-assembly-tiers/INV-TIER3-TEMPLATE-DECLARED-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-TIER3-SUBTYPE-ORDER-001 | [invariants/core/block-assembly-tiers/INV-TIER3-SUBTYPE-ORDER-001.md](invariants/core/block-assembly-tiers/INV-TIER3-SUBTYPE-ORDER-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
 | INV-STRUCTURAL-TIER-UNIFICATION-001 | [invariants/core/block-assembly-tiers/INV-STRUCTURAL-TIER-UNIFICATION-001.md](invariants/core/block-assembly-tiers/INV-STRUCTURAL-TIER-UNIFICATION-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
 | INV-ASSEMBLY-SEQUENCE-001 | [block_assembly_tiers.md](block_assembly_tiers.md) | LAW-CONTENT-AUTHORITY, LAW-GRID, LAW-DERIVATION |
 
 Canonical contract: [block_assembly_tiers.md](block_assembly_tiers.md)
+
+### Scheduling — Template Compilation
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-TEMPLATE-BEHAVIOR-NOT-DURATION-001 | [invariants/core/template-compilation/INV-TEMPLATE-BEHAVIOR-NOT-DURATION-001.md](invariants/core/template-compilation/INV-TEMPLATE-BEHAVIOR-NOT-DURATION-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-BREAK-BUDGET-DERIVED-001 | [invariants/core/template-compilation/INV-BREAK-BUDGET-DERIVED-001.md](invariants/core/template-compilation/INV-BREAK-BUDGET-DERIVED-001.md) | LAW-GRID, LAW-DERIVATION |
+| INV-BREAK-COUNT-DURATION-SEPARATED-001 | [invariants/core/template-compilation/INV-BREAK-COUNT-DURATION-SEPARATED-001.md](invariants/core/template-compilation/INV-BREAK-COUNT-DURATION-SEPARATED-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-BREAK-DENSITY-SCALES-001 | [invariants/core/template-compilation/INV-BREAK-DENSITY-SCALES-001.md](invariants/core/template-compilation/INV-BREAK-DENSITY-SCALES-001.md) | LAW-CONTENT-AUTHORITY, LAW-GRID |
+| INV-BREAK-EXPAND-TO-FILL-001 | [invariants/core/template-compilation/INV-BREAK-EXPAND-TO-FILL-001.md](invariants/core/template-compilation/INV-BREAK-EXPAND-TO-FILL-001.md) | LAW-GRID, LAW-CONTENT-AUTHORITY |
+| INV-CONFORMANCE-MANDATORY-001 | [invariants/core/template-compilation/INV-CONFORMANCE-MANDATORY-001.md](invariants/core/template-compilation/INV-CONFORMANCE-MANDATORY-001.md) | LAW-GRID, LAW-CONTENT-AUTHORITY |
+| INV-CONTINUITY-DURATION-FILTER-001 | [invariants/core/template-compilation/INV-CONTINUITY-DURATION-FILTER-001.md](invariants/core/template-compilation/INV-CONTINUITY-DURATION-FILTER-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-BREAK-PLACEMENT-PRIORITY-001 | [invariants/core/template-compilation/INV-BREAK-PLACEMENT-PRIORITY-001.md](invariants/core/template-compilation/INV-BREAK-PLACEMENT-PRIORITY-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+
+Canonical contracts: [timeline_compilation_templates.md](timeline_compilation_templates.md), [chapter_marker_break_placement.md](chapter_marker_break_placement.md)
+
+### Scheduling — Traffic Profiles & Conformance
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-OVERCONSTRAINED-POLICY-001 | [invariants/core/traffic-conformance/INV-OVERCONSTRAINED-POLICY-001.md](invariants/core/traffic-conformance/INV-OVERCONSTRAINED-POLICY-001.md) | LAW-CONTENT-AUTHORITY, LAW-GRID |
+| INV-TRAFFIC-PROFILE-RESOLVED-001 | [invariants/core/traffic-conformance/INV-TRAFFIC-PROFILE-RESOLVED-001.md](invariants/core/traffic-conformance/INV-TRAFFIC-PROFILE-RESOLVED-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
+| INV-UNDERRUN-WARNING-001 | [invariants/core/traffic-conformance/INV-UNDERRUN-WARNING-001.md](invariants/core/traffic-conformance/INV-UNDERRUN-WARNING-001.md) | LAW-GRID, LAW-CONTENT-AUTHORITY |
+
+Canonical contract: [traffic_profiles_conformance.md](traffic_profiles_conformance.md)
 
 ### Scheduling — Programming Pools
 
@@ -307,6 +337,7 @@ Canonical contracts: [core/programming_pools.md](core/programming_pools.md), [po
 | INV-VALIDATOR-RESULT-PERSISTENCE-001 | [invariants/core/ingest/INV-VALIDATOR-RESULT-PERSISTENCE-001.md](invariants/core/ingest/INV-VALIDATOR-RESULT-PERSISTENCE-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
 | INV-TAG-CANONICAL-FORM-001 | [invariants/core/ingest/INV-TAG-CANONICAL-FORM-001.md](invariants/core/ingest/INV-TAG-CANONICAL-FORM-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
 | INV-TAG-MIGRATION-IDEMPOTENT-001 | [invariants/core/ingest/INV-TAG-MIGRATION-IDEMPOTENT-001.md](invariants/core/ingest/INV-TAG-MIGRATION-IDEMPOTENT-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
+| INV-CHAPTER-MARKER-SHAPE-001 | [invariants/core/ingest/INV-CHAPTER-MARKER-SHAPE-001.md](invariants/core/ingest/INV-CHAPTER-MARKER-SHAPE-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
 
 Canonical contracts: [tag_canonical_form.md](tag_canonical_form.md)
 
@@ -475,6 +506,8 @@ Canonical contract: [schedule_constraints.md](schedule_constraints.md)
 | INV-AUTHORITY-SINGLE-OWNER-001 | [invariants/core/runtime/INV-AUTHORITY-SINGLE-OWNER-001.md](invariants/core/runtime/INV-AUTHORITY-SINGLE-OWNER-001.md) | LAW-RUNTIME-AUTHORITY, LAW-CLOCK |
 | INV-SINGLE-ACTIVATION-PATH-001 | [invariants/core/runtime/INV-SINGLE-ACTIVATION-PATH-001.md](invariants/core/runtime/INV-SINGLE-ACTIVATION-PATH-001.md) | LAW-RUNTIME-AUTHORITY, LAW-LIVENESS |
 | INV-SLOW-CONSUMER-DISCONNECT-001 | [invariants/core/runtime/INV-SLOW-CONSUMER-DISCONNECT-001.md](invariants/core/runtime/INV-SLOW-CONSUMER-DISCONNECT-001.md) | LAW-LIVENESS, LAW-RUNTIME-AUTHORITY |
+| INV-PLAYOUT-MODULE-EXTRACTION-001 | [invariants/core/INV-PLAYOUT-MODULE-EXTRACTION-001.md](invariants/core/INV-PLAYOUT-MODULE-EXTRACTION-001.md) | LAW-SIMPLICITY |
+| INV-SCHEDULE-COMPILER-MODULE-SPLIT-001 | [invariants/core/runtime/INV-SCHEDULE-COMPILER-MODULE-SPLIT-001.md](invariants/core/runtime/INV-SCHEDULE-COMPILER-MODULE-SPLIT-001.md) | LAW-SIMPLICITY |
 
 ### Delivery — HLS Segment Production
 

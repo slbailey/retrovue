@@ -269,6 +269,9 @@ All test definitions in sections 6–7 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-NO-FOREIGN-CONTENT-001 | `TestInvNoForeignContent001` | `test_cross_foreign_001_foreign_asset_in_scheduleday_rejected`, `test_cross_foreign_001_eligible_assets_pass`, `test_cross_foreign_002_foreign_asset_in_transmission_log_rejected`, `test_cross_foreign_002_eligible_assets_pass`, `test_cross_foreign_003_foreign_asset_in_execution_entry_rejected`, `test_cross_foreign_003_eligible_assets_pass`, `test_cross_foreign_003_operator_override_exempt` | PASS |
 | INV-NO-MID-PROGRAM-CUT-001 | `TestInvNoMidProgramCut001` | `test_cross_001_90min_no_breakpoints_no_cut`, `test_cross_001_90min_cut_detected`, `test_cross_002_120min_spans_4_blocks_no_cut`, `test_cross_002_120min_cut_detected`, `test_program_with_breakpoints_allows_cut` | PASS |
 | INV-PLAYLOG-NO-RETROACTIVE-FILL-001 | TODO | TODO | TODO |
+| INV-OVERCONSTRAINED-POLICY-001 | TODO | `test_overconstrained_bleed_extends_slot`, `test_overconstrained_reject_raises_error`, `test_overconstrained_default_is_bleed`, `test_overconstrained_per_template_independent`, `test_overconstrained_inherits_via_extends`, `test_overconstrained_child_overrides_parent` | TODO |
+| INV-TRAFFIC-PROFILE-RESOLVED-001 | TODO | `test_traffic_profile_resolved_from_template`, `test_traffic_profile_block_override_wins`, `test_traffic_profile_falls_back_to_channel_default`, `test_traffic_profile_missing_fails_validation`, `test_traffic_profile_invalid_reference_fails`, `test_traffic_profile_carried_on_break_structure`, `test_trailing_block_own_profile`, `test_trailing_block_fallback_to_breaks_profile` | TODO |
+| INV-UNDERRUN-WARNING-001 | TODO | `test_underrun_warning_below_50_pct`, `test_underrun_no_warning_above_50_pct`, `test_underrun_warning_does_not_halt`, `test_underrun_budget_cascade_tier3_first` | TODO |
 
 #### Tier 3 — Runtime and Integration
 
@@ -344,6 +347,9 @@ All test definitions in sections 6–7 (SCHED-DAY-*, PLAYLOG-*, CROSS-*, GRID-ST
 | INV-RUNTIME-CACHE-DERIVED-001 | CACHE-DERIVED-001, CACHE-DERIVED-002 | ScheduleCompiler |
 | INV-CARRY-IN-DAY-MINUS-ONE-ONLY-001 | CARRY-IN-D1-001 | ScheduleCompiler |
 | INV-PLAYLOG-NO-RETROACTIVE-FILL-001 | PLAYLOG-NO-RETRO-001 | Cross-cutting |
+| INV-OVERCONSTRAINED-POLICY-001 | CONFORM-OC-001..006 | TemplateCompilation |
+| INV-TRAFFIC-PROFILE-RESOLVED-001 | TRAFFIC-PROF-001..008 | TemplateCompilation |
+| INV-UNDERRUN-WARNING-001 | CONFORM-UC-001..004 | TemplateCompilation |
 
 #### Tier 3 — Runtime and Integration
 
@@ -2261,6 +2267,19 @@ The following domain tables group tests by functional area. Each test is classif
 | TIER-UNIF-001 | INV-STRUCTURAL-TIER-UNIFICATION-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | All T0–T3 tiers: asset selected at compile, duration known, immutable in expansion |
 | TIER3-NEXT-001 | INV-TIER3-NEXT-BLOCK-IDENTITY-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | "Coming up next" references next block's program title |
 | TIER3-NEXT-002 | INV-TIER3-NEXT-BLOCK-IDENTITY-001 | LAW-DERIVATION | Last block of broadcast day has no "coming up next", no error |
+| TIER3-NEXT-003 | INV-TIER3-NEXT-BLOCK-IDENTITY-001 | LAW-CONTENT-AUTHORITY | "Coming up next" omitted at cross-day boundary without error |
+| TIER3-POOL-001 | INV-TIER3-POOL-DETERMINISTIC-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Same pool + seed inputs produce identical Tier 3 asset selection across compilations |
+| TIER3-POOL-002 | INV-TIER3-POOL-DETERMINISTIC-001 | LAW-DERIVATION | No uncontrolled RNG in Tier 3 selection path |
+| TIER3-POOL-003 | INV-TIER3-POOL-DETERMINISTIC-001 | LAW-CONTENT-AUTHORITY | Assets exceeding max_duration_sec excluded from candidate set |
+| TIER3-BUDGET-001 | INV-TIER3-BUDGET-BEFORE-FILL-001 | LAW-GRID, LAW-CONTENT-AUTHORITY | Break budget equals slot - T0 - T1 - T2 - T3 when Tier 3 present |
+| TIER3-BUDGET-002 | INV-TIER3-BUDGET-BEFORE-FILL-001 | LAW-GRID | Tier 3 causes grid growth rather than being dropped when structural total exceeds slot |
+| TIER3-TMPL-001 | INV-TIER3-TEMPLATE-DECLARED-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Block without template has no Tier 3 elements in compiled_segments |
+| TIER3-TMPL-002 | INV-TIER3-TEMPLATE-DECLARED-001 | LAW-CONTENT-AUTHORITY | Tier 3 segments only appear when template continuity.optional declares them |
+| TIER3-ORD-001 | INV-TIER3-SUBTYPE-ORDER-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Tier 3 sub-types: channel_ident, network_branding, coming_up_next in fixed order |
+| TIER3-ORD-002 | INV-TIER3-SUBTYPE-ORDER-001 | LAW-DERIVATION | Partial Tier 3 (ident + next, no branding) preserves canonical ordering |
+| TIER3-ORD-003 | INV-TIER3-SUBTYPE-ORDER-001 | LAW-CONTENT-AUTHORITY | Channel ident after content, not mid-content or within breaks |
+| TIER3-ORD-004 | INV-TIER3-SUBTYPE-ORDER-001 | LAW-CONTENT-AUTHORITY | At most one network branding segment per block |
+| TIER3-T2-001 | INV-EXPANSION-NON-MUTATION-001 | LAW-DERIVATION | Tier 3 resolution does not alter existing Tier 2 obligation segments |
 | TIER-SEQ-001 | INV-ASSEMBLY-SEQUENCE-001 | LAW-CONTENT-AUTHORITY, LAW-GRID, LAW-DERIVATION | Segment order: obligation, presentation, content, optional |
 | TIER-CONS-001 | INV-BLOCK-SEGMENT-CONSERVATION-001 | LAW-GRID | Sum of all tier segment durations equals block duration |
 
@@ -2292,3 +2311,19 @@ The following domain tables group tests by functional area. Each test is classif
 | POL-EMPTY-001 | INV-POLICY-PURE-001, INV-POLICY-IDEMPOTENT-001 | LAW-ELIGIBILITY | Empty candidate list returns empty eligible list and no violations |
 | POL-EMPTY-002 | INV-POLICY-PURE-001, INV-POLICY-IDEMPOTENT-001 | LAW-ELIGIBILITY | Empty policy (no rules) returns all candidates eligible |
 | POL-MULTI-001 | INV-POLICY-VIOLATION-STRUCTURED-001 | LAW-DERIVATION | Asset failing multiple rule types reports all violations, not just first |
+
+---
+
+### Module Split — Schedule Compiler Decomposition
+
+**Contract:** `docs/contracts/invariants/core/runtime/INV-SCHEDULE-COMPILER-MODULE-SPLIT-001.md`
+
+**Test file:** `pkg/core/tests/contracts/test_schedule_compiler_module_split.py`
+
+| Test ID | Invariant(s) | Law(s) | Scenario |
+|---------|-------------|--------|----------|
+| SPLIT-RESOLUTION-001 | INV-SCHEDULE-COMPILER-MODULE-SPLIT-001 | LAW-SIMPLICITY | All resolution symbols importable from `template_resolution` |
+| SPLIT-VALIDATION-001 | INV-SCHEDULE-COMPILER-MODULE-SPLIT-001 | LAW-SIMPLICITY | All validation symbols importable from `schedule_validation` |
+| SPLIT-REEXPORT-001 | INV-SCHEDULE-COMPILER-MODULE-SPLIT-001 | LAW-SIMPLICITY | All public symbols importable from `schedule_compiler` via re-exports |
+| SPLIT-BOUNDARY-001 | INV-SCHEDULE-COMPILER-MODULE-SPLIT-001 | LAW-SIMPLICITY | `template_resolution` contains no compilation or validation logic |
+| SPLIT-BOUNDARY-002 | INV-SCHEDULE-COMPILER-MODULE-SPLIT-001 | LAW-SIMPLICITY | `schedule_validation` contains no compilation or resolution logic |
