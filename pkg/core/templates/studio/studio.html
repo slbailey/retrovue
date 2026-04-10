@@ -10,7 +10,8 @@
   --border:#1e2436;--border2:#262d40;
   --text:#c8d0e0;--text2:#8090b0;--text3:#4a5878;
   --gold:#e6b91e;--blue:#4a82d8;--green:#3ab468;--red:#c84040;
-  --sidebar:220px;--rightpanel:300px;
+  --orange:#d89c4a;--purple:#8a6ad8;
+  --sidebar:260px;--rightpanel:320px;
 }
 body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px;display:flex;flex-direction:column;height:100vh;overflow:hidden}
 
@@ -29,41 +30,70 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 /* MAIN LAYOUT */
 #main{display:flex;flex:1;overflow:hidden}
 
-/* LEFT PALETTE */
-#palette{width:var(--sidebar);background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;flex-shrink:0}
-#palette-header{padding:10px 12px 6px;border-bottom:1px solid var(--border)}
-#palette-header h3{font-size:10px;font-weight:700;color:var(--text3);letter-spacing:1px;text-transform:uppercase}
-#palette-header p{font-size:10px;color:var(--text3);margin-top:2px}
-#palette-body{flex:1;overflow-y:auto;padding:8px 0}
-.cat-section{margin-bottom:4px}
-.cat-header{display:flex;align-items:center;justify-content:space-between;padding:4px 12px;cursor:pointer}
-.cat-name{font-size:10px;font-weight:700;color:var(--text3);letter-spacing:1px;text-transform:uppercase}
-.cat-add{background:none;border:none;color:var(--text3);cursor:pointer;font-size:16px;line-height:1;padding:0 2px;opacity:.6}
-.cat-add:hover{color:var(--text2);opacity:1}
-.cat-tags{padding:0 8px 4px}
-.tag-pill{display:flex;align-items:center;gap:4px;padding:4px 8px;border-radius:4px;margin-bottom:3px;cursor:grab;font-size:11px;font-weight:600;border:1px solid transparent;user-select:none;transition:opacity .15s}
-.tag-pill:hover{filter:brightness(1.2)}
-.tag-pill:active{cursor:grabbing;opacity:.7}
-.tag-pill .drag-handle{opacity:.5;font-size:10px}
-.tag-pill .del-tag{margin-left:auto;opacity:0;cursor:pointer;font-size:13px;line-height:1}
-.tag-pill:hover .del-tag{opacity:.6}
-.tag-pill .del-tag:hover{opacity:1;color:#f08080!important}
-.add-tag-input{display:none;margin:2px 8px 4px;padding:4px 8px;background:var(--bg3);border:1px solid var(--border2);color:var(--text);border-radius:4px;font-size:11px;width:calc(100% - 16px);outline:none}
-.add-tag-input:focus{border-color:var(--blue)}
-#palette-footer{padding:8px 12px;border-top:1px solid var(--border)}
-#add-category-btn{width:100%;padding:6px;background:var(--bg3);border:1px dashed var(--border2);color:var(--text3);border-radius:4px;cursor:pointer;font-size:11px;text-align:center}
+/* LEFT — TAG EXPLORER */
+#tag-explorer{width:var(--sidebar);background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;flex-shrink:0}
+#explorer-header{padding:10px 12px 8px;border-bottom:1px solid var(--border)}
+#explorer-header h3{font-size:10px;font-weight:700;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px}
+#tag-search{width:100%;padding:5px 8px;background:var(--bg3);border:1px solid var(--border2);color:var(--text);border-radius:4px;font-size:11px;outline:none}
+#tag-search:focus{border-color:var(--blue)}
+#tag-search::placeholder{color:var(--text3)}
+#explorer-body{flex:1;overflow-y:auto;padding:6px 0}
+.ns-section{margin-bottom:2px}
+.ns-header{display:flex;align-items:center;gap:6px;padding:5px 12px;cursor:pointer;user-select:none;transition:background .1s}
+.ns-header:hover{background:var(--bg3)}
+.ns-chevron{font-size:8px;color:var(--text3);transition:transform .15s;width:10px;text-align:center}
+.ns-header.collapsed .ns-chevron{transform:rotate(-90deg)}
+.ns-name{font-size:10px;font-weight:700;color:var(--text3);letter-spacing:1px;text-transform:uppercase;flex:1}
+.ns-count{font-size:9px;color:var(--text3);background:var(--bg3);padding:1px 5px;border-radius:8px}
+.ns-tags{padding:0 6px 2px 18px}
+.ns-header.collapsed+.ns-tags{display:none}
+.explorer-tag{display:flex;align-items:center;gap:6px;padding:4px 8px;border-radius:4px;margin-bottom:2px;cursor:grab;font-size:11px;font-weight:500;user-select:none;transition:background .1s,opacity .15s;position:relative}
+.explorer-tag:hover{filter:brightness(1.15)}
+.explorer-tag:active{cursor:grabbing;opacity:.7}
+.explorer-tag .tag-label{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.explorer-tag .tag-count{font-size:9px;opacity:.7;background:rgba(0,0,0,.3);padding:1px 5px;border-radius:8px;flex-shrink:0}
+.explorer-tag.orphaned{border:1px dashed var(--orange);opacity:.7}
+.explorer-tag.empty-tag{border:1px dashed var(--red);opacity:.6}
+#explorer-footer{padding:8px 12px;border-top:1px solid var(--border);display:flex;gap:6px}
+#add-category-btn{flex:1;padding:6px;background:var(--bg3);border:1px dashed var(--border2);color:var(--text3);border-radius:4px;cursor:pointer;font-size:11px;text-align:center}
 #add-category-btn:hover{border-color:var(--blue);color:var(--text2)}
 #new-cat-input{display:none;width:100%;padding:6px 8px;background:var(--bg3);border:1px solid var(--blue);color:var(--text);border-radius:4px;font-size:11px;margin-top:4px;outline:none}
 
+/* CONTEXT MENU */
+#context-menu{display:none;position:fixed;z-index:500;background:var(--bg4);border:1px solid var(--border2);border-radius:6px;padding:4px 0;min-width:180px;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+.ctx-item{padding:7px 14px;font-size:12px;color:var(--text);cursor:pointer;display:flex;align-items:center;gap:8px}
+.ctx-item:hover{background:var(--bg3)}
+.ctx-item .ctx-icon{width:16px;text-align:center;font-size:13px;opacity:.7}
+.ctx-sep{height:1px;background:var(--border);margin:4px 0}
+.ctx-item.danger{color:var(--red)}
+.ctx-item.danger:hover{background:#1a0d0d}
+
 /* CENTER LIST */
 #list-wrap{flex:1;display:flex;flex-direction:column;overflow:hidden}
-#list-toolbar{height:36px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 12px;gap:12px;flex-shrink:0}
+#list-toolbar{background:var(--bg2);border-bottom:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
+#toolbar-main{height:36px;display:flex;align-items:center;padding:0 12px;gap:12px}
+#scope-selector{display:flex;align-items:center;gap:4px}
+#scope-selector label{font-size:10px;font-weight:700;color:var(--text3);letter-spacing:.5px;text-transform:uppercase}
+#scope-select{background:var(--bg3);border:1px solid var(--border2);color:var(--text);padding:3px 8px;border-radius:4px;font-size:11px;outline:none;cursor:pointer}
+#scope-select:focus{border-color:var(--blue)}
 #sel-count{font-size:11px;color:var(--text3)}
 #filter-untagged{display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px;color:var(--text3);user-select:none}
 #filter-untagged:hover{color:var(--text2)}
 #progress-wrap{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text3)}
 #progress-bar-outer{width:120px;height:6px;background:var(--bg3);border-radius:3px;overflow:hidden}
 #progress-bar-inner{height:100%;background:var(--green);border-radius:3px;transition:width .3s}
+#bulk-bar{display:none;height:36px;background:var(--bg3);border-bottom:1px solid var(--border);align-items:center;padding:0 12px;gap:8px}
+#bulk-bar.visible{display:flex}
+.bulk-btn{padding:4px 10px;background:var(--bg4);border:1px solid var(--border2);color:var(--text2);border-radius:4px;cursor:pointer;font-size:11px;font-weight:600;display:flex;align-items:center;gap:4px}
+.bulk-btn:hover{border-color:var(--blue);color:var(--text)}
+.bulk-btn.danger{color:var(--red)}
+.bulk-btn.danger:hover{border-color:var(--red)}
+#bulk-tag-dropdown{display:none;position:absolute;z-index:200;background:var(--bg4);border:1px solid var(--border2);border-radius:6px;padding:6px;min-width:220px;max-height:300px;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+#bulk-tag-search{width:100%;padding:5px 8px;background:var(--bg3);border:1px solid var(--border2);color:var(--text);border-radius:4px;font-size:11px;outline:none;margin-bottom:6px}
+#bulk-tag-search:focus{border-color:var(--blue)}
+.bulk-tag-option{padding:5px 8px;border-radius:3px;font-size:11px;cursor:pointer;display:flex;align-items:center;gap:6px}
+.bulk-tag-option:hover{background:var(--bg3)}
+.bulk-tag-option .tag-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
 #list-container{flex:1;overflow:hidden;position:relative}
 #drop-overlay{display:none;position:absolute;inset:0;background:rgba(74,130,216,.08);border:2px solid var(--blue);z-index:50;pointer-events:none;border-radius:4px}
 #drop-overlay-text{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--blue);color:#fff;padding:10px 20px;border-radius:6px;font-weight:700;font-size:14px}
@@ -106,6 +136,7 @@ tr.row.selected .cb-check{display:block}
 #right-panel{width:var(--rightpanel);background:var(--bg2);border-left:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;overflow:hidden}
 #rp-empty{flex:1;display:flex;align-items:center;justify-content:center;color:var(--text3);font-size:12px;text-align:center;padding:20px}
 #rp-detail{display:none;flex:1;overflow-y:auto;padding:14px}
+#rp-multi{display:none;flex:1;overflow-y:auto;padding:14px}
 #rp-filename{font-size:13px;font-weight:600;color:var(--text);word-break:break-all;line-height:1.4}
 #rp-dir{font-size:11px;color:var(--text3);margin-top:3px}
 #rp-meta{font-size:11px;color:var(--text3);margin-top:3px}
@@ -119,9 +150,51 @@ tr.row.selected .cb-check{display:block}
 .rp-tag .rm:hover{opacity:1;color:#f08080!important}
 #rp-no-tags{font-size:11px;color:var(--text3);font-style:italic}
 
+/* MULTI-SELECT RIGHT PANEL */
+#rp-multi-title{font-size:13px;font-weight:600;color:var(--text);margin-bottom:4px}
+#rp-multi-count{font-size:11px;color:var(--text3);margin-bottom:12px}
+.rp-multi-group{margin-bottom:12px}
+.rp-multi-group-title{font-size:10px;font-weight:700;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px;display:flex;align-items:center;gap:6px}
+.rp-multi-group-title .indicator{font-size:10px}
+#rp-common-tags,#rp-partial-tags{display:flex;flex-wrap:wrap;gap:4px}
+.rp-multi-tag{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:4px;font-size:11px;font-weight:600;cursor:default}
+.rp-multi-tag .state-icon{font-size:10px;opacity:.7}
+.rp-multi-tag .rm{cursor:pointer;opacity:.5;font-size:12px}
+.rp-multi-tag .rm:hover{opacity:1;color:#f08080!important}
+.rp-multi-tag .add{cursor:pointer;opacity:.5;font-size:12px}
+.rp-multi-tag .add:hover{opacity:1;color:var(--green)!important}
+
+/* MODAL */
+.modal-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(4px);z-index:800;align-items:center;justify-content:center}
+.modal-backdrop.open{display:flex}
+.modal{background:var(--bg2);border:1px solid var(--border2);border-radius:10px;padding:24px;min-width:400px;max-width:500px;width:90%;box-shadow:0 16px 48px rgba(0,0,0,.6)}
+.modal h2{font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px}
+.modal .modal-sub{font-size:11px;color:var(--text3);margin-bottom:16px}
+.modal label{display:block;font-size:10px;font-weight:700;color:var(--text3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:4px}
+.modal input[type="text"],.modal select{width:100%;padding:8px 10px;background:var(--bg3);border:1px solid var(--border2);color:var(--text);border-radius:4px;font-size:12px;outline:none;margin-bottom:12px}
+.modal input[type="text"]:focus,.modal select:focus{border-color:var(--blue)}
+.modal-preview{background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:16px;font-size:11px;color:var(--text2)}
+.modal-preview .preview-row{display:flex;justify-content:space-between;padding:3px 0}
+.modal-preview .preview-label{color:var(--text3)}
+.modal-preview .preview-val{color:var(--text);font-weight:600}
+.modal-preview .preview-warn{color:var(--orange);font-size:11px;margin-top:6px;display:flex;align-items:center;gap:4px}
+.modal-actions{display:flex;gap:8px;justify-content:flex-end}
+.modal-btn{padding:8px 18px;border-radius:5px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--border2);transition:background .1s}
+.modal-btn.cancel{background:var(--bg3);color:var(--text2)}
+.modal-btn.cancel:hover{background:var(--bg4);color:var(--text)}
+.modal-btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+.modal-btn.primary:hover{filter:brightness(1.1)}
+.modal-btn.danger{background:var(--red);border-color:var(--red);color:#fff}
+.modal-btn.danger:hover{filter:brightness(1.1)}
+.modal-btn:disabled{opacity:.4;cursor:default}
+
 /* TOAST */
 #toast{position:fixed;bottom:20px;right:20px;background:var(--bg4);border:1px solid var(--border2);color:var(--text);padding:10px 16px;border-radius:6px;font-size:12px;z-index:999;opacity:0;transition:opacity .2s;pointer-events:none}
 #toast.show{opacity:1}
+
+/* LOADING SPINNER */
+.spinner{display:inline-block;width:12px;height:12px;border:2px solid var(--border2);border-top-color:var(--blue);border-radius:50%;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 
 /* SCROLLBAR */
 ::-webkit-scrollbar{width:6px;height:6px}
@@ -142,36 +215,61 @@ tr.row.selected .cb-check{display:block}
   <div id="search-wrap">
     <input id="search" placeholder="Search filename..." type="text">
   </div>
-  <div id="untagged-badge">— untagged</div>
+  <div id="untagged-badge">-- untagged</div>
 </div>
 
 <!-- MAIN -->
 <div id="main">
 
-  <!-- LEFT PALETTE -->
-  <div id="palette">
-    <div id="palette-header">
-      <h3>Tag Palette</h3>
-      <p>Drag tags onto selected rows</p>
+  <!-- LEFT — TAG EXPLORER -->
+  <div id="tag-explorer">
+    <div id="explorer-header">
+      <h3>Tag Explorer</h3>
+      <input id="tag-search" placeholder="Filter tags..." type="text">
     </div>
-    <div id="palette-body"></div>
-    <div id="palette-footer">
+    <div id="explorer-body"></div>
+    <div id="explorer-footer">
       <button id="add-category-btn">+ New Category</button>
       <input id="new-cat-input" placeholder="Category name..." type="text">
     </div>
   </div>
 
+  <!-- CONTEXT MENU -->
+  <div id="context-menu">
+    <div class="ctx-item" data-action="show-assets"><span class="ctx-icon">&#x1F50D;</span>Show Assets</div>
+    <div class="ctx-sep"></div>
+    <div class="ctx-item" data-action="rename"><span class="ctx-icon">&#x270F;</span>Rename Tag</div>
+    <div class="ctx-item" data-action="merge"><span class="ctx-icon">&#x2B05;</span>Merge Into...</div>
+    <div class="ctx-sep"></div>
+    <div class="ctx-item danger" data-action="delete-all"><span class="ctx-icon">&#x2716;</span>Delete from All Assets</div>
+  </div>
+
   <!-- CENTER LIST -->
   <div id="list-wrap">
     <div id="list-toolbar">
-      <span id="sel-count">No selection</span>
-      <label id="filter-untagged">
-        <input type="checkbox" id="untagged-only" style="accent-color:var(--blue)">
-        Untagged only
-      </label>
-      <div id="progress-wrap">
-        <span id="progress-text">Loading...</span>
-        <div id="progress-bar-outer"><div id="progress-bar-inner" style="width:0%"></div></div>
+      <div id="toolbar-main">
+        <div id="scope-selector">
+          <label>Scope:</label>
+          <select id="scope-select">
+            <option value="all">All Assets</option>
+            <option value="interstitials">Interstitials</option>
+          </select>
+        </div>
+        <span id="sel-count">No selection</span>
+        <label id="filter-untagged">
+          <input type="checkbox" id="untagged-only" style="accent-color:var(--blue)">
+          Untagged only
+        </label>
+        <div id="progress-wrap">
+          <span id="progress-text">Loading...</span>
+          <div id="progress-bar-outer"><div id="progress-bar-inner" style="width:0%"></div></div>
+        </div>
+      </div>
+      <div id="bulk-bar">
+        <span style="font-size:11px;color:var(--text3);font-weight:600">Bulk:</span>
+        <button class="bulk-btn" id="bulk-apply-btn">+ Apply Tag</button>
+        <button class="bulk-btn" id="bulk-remove-btn">- Remove Tag</button>
+        <button class="bulk-btn danger" id="bulk-clear-btn">Clear All Tags</button>
       </div>
     </div>
     <div id="list-container">
@@ -194,9 +292,15 @@ tr.row.selected .cb-check{display:block}
     <div id="pagination"></div>
   </div>
 
+  <!-- BULK TAG DROPDOWN (positioned absolutely) -->
+  <div id="bulk-tag-dropdown">
+    <input id="bulk-tag-search" placeholder="Search tags..." type="text">
+    <div id="bulk-tag-list"></div>
+  </div>
+
   <!-- RIGHT PANEL -->
   <div id="right-panel">
-    <div id="rp-empty">Select a single asset<br>to see details</div>
+    <div id="rp-empty">Select an asset<br>to see details</div>
     <div id="rp-detail">
       <div id="rp-filename"></div>
       <div id="rp-dir"></div>
@@ -204,23 +308,96 @@ tr.row.selected .cb-check{display:block}
       <div id="rp-preview"></div>
       <div class="rp-section-title">Tags</div>
       <div id="rp-tags"></div>
-      <div id="rp-no-tags" style="display:none">No tags yet — drag from palette</div>
+      <div id="rp-no-tags" style="display:none">No tags yet</div>
+    </div>
+    <div id="rp-multi">
+      <div id="rp-multi-title">Multiple Selection</div>
+      <div id="rp-multi-count"></div>
+      <div class="rp-multi-group">
+        <div class="rp-multi-group-title"><span class="indicator" style="color:var(--green)">&#x2713;</span> Common to All</div>
+        <div id="rp-common-tags"></div>
+      </div>
+      <div class="rp-multi-group">
+        <div class="rp-multi-group-title"><span class="indicator" style="color:var(--orange)">&#xBD;</span> On Some</div>
+        <div id="rp-partial-tags"></div>
+      </div>
     </div>
   </div>
 
 </div>
 
+<!-- RENAME MODAL -->
+<div class="modal-backdrop" id="rename-modal">
+  <div class="modal">
+    <h2>Rename Tag</h2>
+    <div class="modal-sub">Renames this tag across all assets atomically</div>
+    <label>Current Tag</label>
+    <input type="text" id="rename-old" readonly>
+    <label>New Tag Name</label>
+    <input type="text" id="rename-new" placeholder="e.g. genre.drama">
+    <div class="modal-preview" id="rename-preview" style="display:none">
+      <div class="preview-row"><span class="preview-label">Affected assets</span><span class="preview-val" id="rename-affected">--</span></div>
+      <div class="preview-row"><span class="preview-label">Pool references</span><span class="preview-val" id="rename-pools">--</span></div>
+      <div class="preview-warn" id="rename-pool-warn" style="display:none">&#x26A0; This tag is used in channel pool configs</div>
+    </div>
+    <div class="modal-actions">
+      <button class="modal-btn cancel" onclick="closeModal('rename-modal')">Cancel</button>
+      <button class="modal-btn primary" id="rename-confirm" disabled>Rename</button>
+    </div>
+  </div>
+</div>
+
+<!-- MERGE MODAL -->
+<div class="modal-backdrop" id="merge-modal">
+  <div class="modal">
+    <h2>Merge Tag</h2>
+    <div class="modal-sub">Merge source tag into target &mdash; source is deleted</div>
+    <label>Source Tag (will be removed)</label>
+    <input type="text" id="merge-source" readonly>
+    <label>Target Tag (will receive assets)</label>
+    <select id="merge-target"></select>
+    <div class="modal-preview" id="merge-preview" style="display:none">
+      <div class="preview-row"><span class="preview-label">Assets to move</span><span class="preview-val" id="merge-move-count">--</span></div>
+      <div class="preview-row"><span class="preview-label">Already on target</span><span class="preview-val" id="merge-overlap-count">--</span></div>
+    </div>
+    <div class="modal-actions">
+      <button class="modal-btn cancel" onclick="closeModal('merge-modal')">Cancel</button>
+      <button class="modal-btn primary" id="merge-confirm" disabled>Merge</button>
+    </div>
+  </div>
+</div>
+
+<!-- DELETE CONFIRM MODAL -->
+<div class="modal-backdrop" id="delete-modal">
+  <div class="modal">
+    <h2>Delete Tag from All Assets</h2>
+    <div class="modal-sub">This removes the tag from every asset that has it</div>
+    <div class="modal-preview">
+      <div class="preview-row"><span class="preview-label">Tag</span><span class="preview-val" id="delete-tag-name">--</span></div>
+      <div class="preview-row"><span class="preview-label">Affected assets</span><span class="preview-val" id="delete-count">--</span></div>
+    </div>
+    <div class="modal-actions">
+      <button class="modal-btn cancel" onclick="closeModal('delete-modal')">Cancel</button>
+      <button class="modal-btn danger" id="delete-confirm">Delete from All</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script>
-// ── STATE ────────────────────────────────────────────────────────────────
-let assets = [], palette = {}, selected = new Set();
+// == STATE ================================================================
+let assets = [], palette = {}, tagSummary = {namespaces:{}, orphaned:[]};
+let selected = new Set();
 let currentPage = 1, totalPages = 1, totalAssets = 0, untaggedCount = 0;
-let searchTerm = '', untaggedOnly = false;
-let dragTag = null;  // {category, tag, color_bg, color_fg}
+let searchTerm = '', untaggedOnly = false, currentScope = 'all';
+let dragTag = null;
 let lastClickedIdx = null;
+let contextTag = null; // {canonical, name, ns, asset_count}
+let allTagsList = []; // flat list for dropdowns
+let collections = [];
 
-// ── API ──────────────────────────────────────────────────────────────────
+// == API ==================================================================
 async function api(method, path, body) {
   const opts = { method, headers: {'Content-Type':'application/json'} };
   if (body) opts.body = JSON.stringify(body);
@@ -228,7 +405,7 @@ async function api(method, path, body) {
   return r.json();
 }
 
-// ── TOAST ────────────────────────────────────────────────────────────────
+// == TOAST ================================================================
 let toastTimer;
 function toast(msg, type='info') {
   const el = document.getElementById('toast');
@@ -239,9 +416,16 @@ function toast(msg, type='info') {
   toastTimer = setTimeout(() => el.classList.remove('show'), 2200);
 }
 
-// ── LOAD DATA ────────────────────────────────────────────────────────────
+// == MODAL HELPERS ========================================================
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.modal-backdrop').forEach(m => {
+  m.addEventListener('click', e => { if (e.target === m) closeModal(m.id); });
+});
+
+// == LOAD DATA ============================================================
 async function loadAssets() {
-  const params = new URLSearchParams({page: currentPage, per_page: 100});
+  const params = new URLSearchParams({page: currentPage, per_page: 100, scope: currentScope});
   if (searchTerm) params.set('search', searchTerm);
   if (untaggedOnly) params.set('untagged_only', 'true');
   const data = await api('GET', '/api/assets?' + params);
@@ -249,6 +433,10 @@ async function loadAssets() {
   totalPages = data.pages;
   totalAssets = data.total;
   untaggedCount = data.untagged_count;
+  if (data.collections && collections.length === 0) {
+    collections = data.collections;
+    populateScopeSelector();
+  }
   renderTable();
   renderPagination();
   updateBadge();
@@ -257,104 +445,350 @@ async function loadAssets() {
 
 async function loadPalette() {
   palette = await api('GET', '/api/palette');
-  renderPalette();
 }
 
-// ── RENDER PALETTE ───────────────────────────────────────────────────────
-function renderPalette() {
-  const body = document.getElementById('palette-body');
+async function loadTagSummary() {
+  const data = await api('GET', '/api/tags/summary');
+  tagSummary = data;
+  buildAllTagsList();
+  renderExplorer();
+}
+
+function buildAllTagsList() {
+  allTagsList = [];
+  for (const [ns, tags] of Object.entries(tagSummary.namespaces || {})) {
+    for (const t of tags) {
+      allTagsList.push({canonical: t.canonical, name: t.name, ns, asset_count: t.asset_count});
+    }
+  }
+  allTagsList.sort((a,b) => a.canonical.localeCompare(b.canonical));
+}
+
+function populateScopeSelector() {
+  const sel = document.getElementById('scope-select');
+  // Keep existing All + Interstitials, add individual collections
+  collections.forEach(c => {
+    if (!sel.querySelector(`option[value="${c}"]`)) {
+      const opt = document.createElement('option');
+      opt.value = c; opt.textContent = c;
+      sel.appendChild(opt);
+    }
+  });
+}
+
+// == TAG EXPLORER =========================================================
+let tagSearchTerm = '';
+
+function renderExplorer() {
+  const body = document.getElementById('explorer-body');
   body.innerHTML = '';
-  for (const [cat, tags] of Object.entries(palette)) {
+  const filter = tagSearchTerm.toLowerCase();
+
+  // Render namespaces
+  const nsEntries = Object.entries(tagSummary.namespaces || {}).sort((a,b) => a[0].localeCompare(b[0]));
+  for (const [ns, tags] of nsEntries) {
+    let filteredTags = tags;
+    if (filter) {
+      filteredTags = tags.filter(t => t.name.toLowerCase().includes(filter) || t.canonical.toLowerCase().includes(filter));
+      if (filteredTags.length === 0) continue;
+    }
+
     const sec = document.createElement('div');
-    sec.className = 'cat-section';
-    sec.dataset.cat = cat;
+    sec.className = 'ns-section';
 
     const hdr = document.createElement('div');
-    hdr.className = 'cat-header';
-    hdr.innerHTML = `<span class="cat-name">${cat}</span><button class="cat-add" title="Add tag">+</button>`;
+    hdr.className = 'ns-header';
+    const totalCount = filteredTags.reduce((s, t) => s + t.asset_count, 0);
+    hdr.innerHTML = `<span class="ns-chevron">&#x25BC;</span><span class="ns-name">${ns}</span><span class="ns-count">${filteredTags.length}</span>`;
+    hdr.addEventListener('click', () => hdr.classList.toggle('collapsed'));
     sec.appendChild(hdr);
 
     const tagsDiv = document.createElement('div');
-    tagsDiv.className = 'cat-tags';
-    tags.forEach(t => tagsDiv.appendChild(makePill(cat, t)));
+    tagsDiv.className = 'ns-tags';
+    filteredTags.sort((a,b) => a.name.localeCompare(b.name)).forEach(t => {
+      const tag = document.createElement('div');
+      tag.className = 'explorer-tag';
+      if (t.asset_count === 0) tag.classList.add('empty-tag');
+      const clr = getTagColor(ns, t.name);
+      tag.style.background = clr.bg;
+      tag.style.color = clr.fg;
+      tag.style.borderColor = clr.fg + '30';
+      tag.draggable = true;
+      tag.innerHTML = `<span class="tag-label">${t.name}</span><span class="tag-count">${t.asset_count}</span>`;
+      tag.dataset.canonical = t.canonical;
+      tag.dataset.name = t.name;
+      tag.dataset.ns = ns;
+      tag.dataset.count = t.asset_count;
+
+      tag.addEventListener('dragstart', e => {
+        const cat = ns.toUpperCase();
+        dragTag = {category: cat, tag: t.name, color_bg: clr.bg, color_fg: clr.fg};
+        e.dataTransfer.effectAllowed = 'copy';
+      });
+      tag.addEventListener('dragend', () => { dragTag = null; });
+
+      tag.addEventListener('contextmenu', e => {
+        e.preventDefault();
+        contextTag = {canonical: t.canonical, name: t.name, ns, asset_count: t.asset_count};
+        showContextMenu(e.clientX, e.clientY);
+      });
+
+      tag.addEventListener('click', () => {
+        // Click to filter assets by this tag
+        document.getElementById('search').value = t.name;
+        searchTerm = t.name;
+        currentPage = 1; selected.clear();
+        loadAssets();
+      });
+
+      tagsDiv.appendChild(tag);
+    });
     sec.appendChild(tagsDiv);
+    body.appendChild(sec);
+  }
 
-    // Inline add input
-    const inp = document.createElement('input');
-    inp.type = 'text'; inp.className = 'add-tag-input'; inp.placeholder = 'New tag name...';
-    sec.appendChild(inp);
+  // Render orphaned palette tags
+  let orphaned = tagSummary.orphaned || [];
+  if (filter) {
+    orphaned = orphaned.filter(t => t.tag.toLowerCase().includes(filter));
+  }
+  if (orphaned.length > 0) {
+    const sec = document.createElement('div');
+    sec.className = 'ns-section';
+    const hdr = document.createElement('div');
+    hdr.className = 'ns-header';
+    hdr.innerHTML = `<span class="ns-chevron">&#x25BC;</span><span class="ns-name" style="color:var(--orange)">orphaned</span><span class="ns-count">${orphaned.length}</span>`;
+    hdr.addEventListener('click', () => hdr.classList.toggle('collapsed'));
+    sec.appendChild(hdr);
 
-    hdr.querySelector('.cat-add').addEventListener('click', (e) => {
-      e.stopPropagation();
-      inp.style.display = inp.style.display === 'block' ? 'none' : 'block';
-      if (inp.style.display === 'block') inp.focus();
+    const tagsDiv = document.createElement('div');
+    tagsDiv.className = 'ns-tags';
+    orphaned.forEach(t => {
+      const tag = document.createElement('div');
+      tag.className = 'explorer-tag orphaned';
+      tag.style.background = t.color_bg;
+      tag.style.color = t.color_fg;
+      tag.innerHTML = `<span class="tag-label">${t.tag}</span><span class="tag-count">0</span>`;
+      tag.draggable = true;
+      tag.addEventListener('dragstart', e => {
+        dragTag = {category: t.category, tag: t.tag, color_bg: t.color_bg, color_fg: t.color_fg};
+        e.dataTransfer.effectAllowed = 'copy';
+      });
+      tag.addEventListener('dragend', () => { dragTag = null; });
+      tagsDiv.appendChild(tag);
     });
-    inp.addEventListener('keydown', async (e) => {
-      if (e.key === 'Enter') {
-        const tag = inp.value.trim().toLowerCase();
-        if (!tag) return;
-        await api('POST', '/api/palette/tag', {category: cat, tag});
-        inp.value = ''; inp.style.display = 'none';
-        await loadPalette();
-        toast('Tag added', 'success');
-      } else if (e.key === 'Escape') {
-        inp.value = ''; inp.style.display = 'none';
-      }
-    });
-
+    sec.appendChild(tagsDiv);
     body.appendChild(sec);
   }
 }
 
-function makePill(cat, t) {
-  const pill = document.createElement('div');
-  pill.className = 'tag-pill';
-  pill.draggable = true;
-  pill.style.background = t.color_bg;
-  pill.style.color = t.color_fg;
-  pill.style.borderColor = t.color_fg + '40';
-  pill.innerHTML = `<span class="drag-handle">⠿</span><span>${t.tag}</span><span class="del-tag" title="Delete">×</span>`;
-
-  pill.addEventListener('dragstart', (e) => {
-    dragTag = {category: cat, tag: t.tag, color_bg: t.color_bg, color_fg: t.color_fg};
-    e.dataTransfer.effectAllowed = 'copy';
-  });
-  pill.addEventListener('dragend', () => { dragTag = null; });
-
-  pill.querySelector('.del-tag').addEventListener('click', async (e) => {
-    e.stopPropagation();
-    if (!confirm(`Delete tag "${t.tag}" from ${cat}?`)) return;
-    await api('DELETE', '/api/palette/tag', {category: cat, tag: t.tag});
-    await loadPalette();
-    toast('Tag deleted');
-  });
-  return pill;
+function getTagColor(ns, tagName) {
+  // Try palette first
+  const catTags = palette[ns.toUpperCase()] || palette[ns] || [];
+  const t = catTags.find(x => x.tag === tagName);
+  if (t) return {bg: t.color_bg, fg: t.color_fg};
+  // Namespace-based defaults
+  const defaults = {
+    tag: {bg:'#1a2840', fg:'#6496d2'},
+    genre: {bg:'#1a3028', fg:'#64c896'},
+    network: {bg:'#2a1a40', fg:'#a078d2'},
+    rating: {bg:'#402a1a', fg:'#d2a064'},
+  };
+  return defaults[ns] || {bg:'#1a2840', fg:'#6496d2'};
 }
 
-// ── NEW CATEGORY ─────────────────────────────────────────────────────────
+// == TAG SEARCH ===========================================================
+document.getElementById('tag-search').addEventListener('input', e => {
+  tagSearchTerm = e.target.value.trim();
+  renderExplorer();
+});
+
+// == NEW CATEGORY =========================================================
 document.getElementById('add-category-btn').addEventListener('click', () => {
   const inp = document.getElementById('new-cat-input');
   inp.style.display = inp.style.display === 'block' ? 'none' : 'block';
   if (inp.style.display === 'block') inp.focus();
 });
-document.getElementById('new-cat-input').addEventListener('keydown', async (e) => {
+document.getElementById('new-cat-input').addEventListener('keydown', async e => {
   const inp = e.target;
   if (e.key === 'Enter') {
     const cat = inp.value.trim().toUpperCase();
     if (!cat) return;
-    // Add a placeholder tag so category shows up
     await api('POST', '/api/palette/tag', {category: cat, tag: '...add tags'});
     inp.value = ''; inp.style.display = 'none';
     await loadPalette();
+    await loadTagSummary();
     toast('Category added', 'success');
   } else if (e.key === 'Escape') {
     inp.value = ''; inp.style.display = 'none';
   }
 });
 
-// ── RENDER TABLE ─────────────────────────────────────────────────────────
+// == CONTEXT MENU =========================================================
+function showContextMenu(x, y) {
+  const menu = document.getElementById('context-menu');
+  menu.style.display = 'block';
+  menu.style.left = Math.min(x, window.innerWidth - 200) + 'px';
+  menu.style.top = Math.min(y, window.innerHeight - 180) + 'px';
+}
+
+function hideContextMenu() {
+  document.getElementById('context-menu').style.display = 'none';
+}
+
+document.addEventListener('click', hideContextMenu);
+document.addEventListener('contextmenu', e => {
+  if (!e.target.closest('.explorer-tag')) hideContextMenu();
+});
+
+document.querySelectorAll('.ctx-item').forEach(item => {
+  item.addEventListener('click', e => {
+    e.stopPropagation();
+    hideContextMenu();
+    if (!contextTag) return;
+    const action = item.dataset.action;
+    if (action === 'show-assets') filterByTag(contextTag);
+    else if (action === 'rename') showRenameDialog(contextTag);
+    else if (action === 'merge') showMergeDialog(contextTag);
+    else if (action === 'delete-all') showDeleteDialog(contextTag);
+  });
+});
+
+function filterByTag(tag) {
+  document.getElementById('search').value = tag.name;
+  searchTerm = tag.name;
+  currentPage = 1; selected.clear();
+  loadAssets();
+}
+
+// == RENAME DIALOG ========================================================
+let renamePreviewTimer;
+
+function showRenameDialog(tag) {
+  document.getElementById('rename-old').value = tag.canonical;
+  document.getElementById('rename-new').value = '';
+  document.getElementById('rename-preview').style.display = 'none';
+  document.getElementById('rename-confirm').disabled = true;
+  openModal('rename-modal');
+  document.getElementById('rename-new').focus();
+}
+
+document.getElementById('rename-new').addEventListener('input', e => {
+  clearTimeout(renamePreviewTimer);
+  const newVal = e.target.value.trim();
+  const btn = document.getElementById('rename-confirm');
+  if (!newVal) { btn.disabled = true; document.getElementById('rename-preview').style.display = 'none'; return; }
+  renamePreviewTimer = setTimeout(async () => {
+    const old = document.getElementById('rename-old').value;
+    const data = await api('POST', '/api/tags/rename/preview', {old_tag: old, new_tag: newVal});
+    document.getElementById('rename-affected').textContent = data.affected_assets;
+    document.getElementById('rename-pools').textContent = data.pool_references.length;
+    const warn = document.getElementById('rename-pool-warn');
+    if (data.pool_references.length > 0) {
+      warn.style.display = 'flex';
+      warn.textContent = '\u26A0 Used in: ' + data.pool_references.map(r => r.channel + '/' + r.pool_name).join(', ');
+    } else {
+      warn.style.display = 'none';
+    }
+    document.getElementById('rename-preview').style.display = 'block';
+    btn.disabled = false;
+  }, 400);
+});
+
+document.getElementById('rename-confirm').addEventListener('click', async () => {
+  const old = document.getElementById('rename-old').value;
+  const newTag = document.getElementById('rename-new').value.trim();
+  if (!newTag) return;
+  const btn = document.getElementById('rename-confirm');
+  btn.disabled = true; btn.textContent = 'Renaming...';
+  const result = await api('POST', '/api/tags/rename', {old_tag: old, new_tag: newTag});
+  btn.textContent = 'Rename';
+  closeModal('rename-modal');
+  if (result.ok) {
+    toast(`Renamed: ${result.affected_assets} assets updated`, 'success');
+    await Promise.all([loadTagSummary(), loadAssets(), loadPalette()]);
+  } else {
+    toast('Rename failed', 'error');
+  }
+});
+
+// == MERGE DIALOG =========================================================
+function showMergeDialog(tag) {
+  document.getElementById('merge-source').value = tag.canonical;
+  const sel = document.getElementById('merge-target');
+  sel.innerHTML = '<option value="">-- select target --</option>';
+  allTagsList.filter(t => t.canonical !== tag.canonical).forEach(t => {
+    const opt = document.createElement('option');
+    opt.value = t.canonical;
+    opt.textContent = t.canonical + ' (' + t.asset_count + ')';
+    sel.appendChild(opt);
+  });
+  document.getElementById('merge-preview').style.display = 'none';
+  document.getElementById('merge-confirm').disabled = true;
+  openModal('merge-modal');
+}
+
+document.getElementById('merge-target').addEventListener('change', async e => {
+  const target = e.target.value;
+  const btn = document.getElementById('merge-confirm');
+  if (!target) { btn.disabled = true; document.getElementById('merge-preview').style.display = 'none'; return; }
+  const source = document.getElementById('merge-source').value;
+  // Show a simple preview (source count will move to target)
+  const srcTag = allTagsList.find(t => t.canonical === source);
+  const tgtTag = allTagsList.find(t => t.canonical === target);
+  document.getElementById('merge-move-count').textContent = srcTag ? srcTag.asset_count : '?';
+  document.getElementById('merge-overlap-count').textContent = '(calculated on merge)';
+  document.getElementById('merge-preview').style.display = 'block';
+  btn.disabled = false;
+});
+
+document.getElementById('merge-confirm').addEventListener('click', async () => {
+  const source = document.getElementById('merge-source').value;
+  const target = document.getElementById('merge-target').value;
+  if (!target) return;
+  const btn = document.getElementById('merge-confirm');
+  btn.disabled = true; btn.textContent = 'Merging...';
+  const result = await api('POST', '/api/tags/merge', {source_tag: source, target_tag: target});
+  btn.textContent = 'Merge';
+  closeModal('merge-modal');
+  if (result.ok) {
+    toast(`Merged: ${result.affected_assets} assets updated, ${result.already_had_target} deduped`, 'success');
+    await Promise.all([loadTagSummary(), loadAssets(), loadPalette()]);
+  } else {
+    toast('Merge failed', 'error');
+  }
+});
+
+// == DELETE DIALOG ========================================================
+function showDeleteDialog(tag) {
+  document.getElementById('delete-tag-name').textContent = tag.canonical;
+  document.getElementById('delete-count').textContent = tag.asset_count;
+  openModal('delete-modal');
+  document.getElementById('delete-confirm').onclick = async () => {
+    const btn = document.getElementById('delete-confirm');
+    btn.disabled = true; btn.textContent = 'Deleting...';
+    const result = await api('POST', '/api/tags/bulk-remove', {tag: tag.canonical});
+    btn.disabled = false; btn.textContent = 'Delete from All';
+    closeModal('delete-modal');
+    if (result.ok) {
+      toast(`Deleted from ${result.affected_assets} assets`, 'success');
+      await Promise.all([loadTagSummary(), loadAssets()]);
+    } else {
+      toast('Delete failed', 'error');
+    }
+  };
+}
+
+// == SCOPE SELECTOR =======================================================
+document.getElementById('scope-select').addEventListener('change', e => {
+  currentScope = e.target.value;
+  currentPage = 1; selected.clear();
+  loadAssets();
+});
+
+// == RENDER TABLE =========================================================
 function formatDuration(ms) {
-  if (!ms) return '—';
+  if (!ms) return '\u2014';
   const s = Math.round(ms / 1000);
   const m = Math.floor(s / 60), ss = s % 60;
   return m + ':' + String(ss).padStart(2,'0');
@@ -369,31 +803,30 @@ function renderTable() {
     tr.dataset.id = asset.id;
     tr.dataset.idx = idx;
 
-    // Tags HTML
     const tagsHtml = asset.tags.length
       ? asset.tags.map(t => {
-          const clr = getPaletteColor(t.category, t.tag);
+          const clr = getTagColor(t.category.toLowerCase(), t.tag);
           return `<span class="inline-tag" style="background:${clr.bg};color:${clr.fg}" data-cat="${t.category}" data-tag="${t.tag}">
-            ${t.tag}<span class="rm" data-assetid="${asset.id}" data-cat="${t.category}" data-tag="${t.tag}">×</span>
+            ${t.tag}<span class="rm" data-assetid="${asset.id}" data-cat="${t.category}" data-tag="${t.tag}">\u00D7</span>
           </span>`;
         }).join('')
       : '<span class="untagged-hint">untagged</span>';
 
     tr.innerHTML = `
-      <td><div class="cb"><span class="cb-check">✓</span></div></td>
-      <td class="col-filename" title="${asset.file_path}">${asset.filename || asset.title || '—'}</td>
+      <td><div class="cb"><span class="cb-check">\u2713</span></div></td>
+      <td class="col-filename" title="${asset.file_path}">${asset.filename || asset.title || '\u2014'}</td>
       <td class="col-dir" title="${asset.directory_full}">${asset.directory}</td>
       <td class="col-dur">${formatDuration(asset.duration_ms)}</td>
       <td class="col-tags">${tagsHtml}</td>
     `;
 
-    tr.addEventListener('click', (e) => {
+    tr.addEventListener('click', e => {
       if (e.target.classList.contains('rm')) return;
       handleRowClick(e, asset, idx);
     });
 
-    // Drag-over highlight
-    tr.addEventListener('dragover', (e) => {
+    // Drag-drop target
+    tr.addEventListener('dragover', e => {
       if (!dragTag) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'copy';
@@ -407,7 +840,7 @@ function renderTable() {
       tr.classList.remove('drop-target');
       document.querySelectorAll('tr.row.selected').forEach(r => r.classList.remove('drop-target'));
     });
-    tr.addEventListener('drop', async (e) => {
+    tr.addEventListener('drop', async e => {
       e.preventDefault();
       tr.classList.remove('drop-target');
       document.querySelectorAll('tr.row.selected').forEach(r => r.classList.remove('drop-target'));
@@ -419,11 +852,11 @@ function renderTable() {
     tbody.appendChild(tr);
   });
 
-  // Wire remove tag buttons
+  // Wire inline remove buttons
   tbody.querySelectorAll('.rm').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
+    btn.addEventListener('click', async e => {
       e.stopPropagation();
-      const aid = parseInt(btn.dataset.assetid);
+      const aid = btn.dataset.assetid;
       const cat = btn.dataset.cat, tag = btn.dataset.tag;
       await api('DELETE', '/api/assets/tags', {asset_ids: [aid], category: cat, tag});
       const a = assets.find(x => x.id === aid);
@@ -436,15 +869,10 @@ function renderTable() {
   });
 
   updateSelCount();
+  updateBulkBar();
 }
 
-function getPaletteColor(cat, tag) {
-  const catTags = palette[cat] || [];
-  const t = catTags.find(x => x.tag === tag);
-  return t ? {bg: t.color_bg, fg: t.color_fg} : {bg:'#1a2840', fg:'#6496d2'};
-}
-
-// ── SELECTION ────────────────────────────────────────────────────────────
+// == SELECTION ============================================================
 function handleRowClick(e, asset, idx) {
   if (e.shiftKey && lastClickedIdx !== null) {
     const lo = Math.min(lastClickedIdx, idx), hi = Math.max(lastClickedIdx, idx);
@@ -461,7 +889,7 @@ function handleRowClick(e, asset, idx) {
   updateRightPanel();
 }
 
-document.getElementById('select-all').addEventListener('change', (e) => {
+document.getElementById('select-all').addEventListener('change', e => {
   if (e.target.checked) assets.forEach(a => selected.add(a.id));
   else selected.clear();
   renderTable();
@@ -473,10 +901,15 @@ function updateSelCount() {
   document.getElementById('sel-count').textContent = n === 0 ? 'No selection' : `${n} selected`;
 }
 
-// ── APPLY TAG ────────────────────────────────────────────────────────────
+function updateBulkBar() {
+  const bar = document.getElementById('bulk-bar');
+  if (selected.size > 1) bar.classList.add('visible');
+  else bar.classList.remove('visible');
+}
+
+// == APPLY TAG ============================================================
 async function applyTag(ids, category, tag) {
   await api('POST', '/api/assets/tags', {asset_ids: ids, category, tag});
-  // Update local state
   ids.forEach(id => {
     const a = assets.find(x => x.id === id);
     if (a && !a.tags.find(t => t.category===category && t.tag===tag)) {
@@ -486,45 +919,158 @@ async function applyTag(ids, category, tag) {
   renderTable();
   updateRightPanel();
   updateProgress();
+  loadTagSummary(); // refresh counts
   toast(`Applied "${tag}" to ${ids.length} item${ids.length>1?'s':''}`, 'success');
 }
 
-// ── DROP ON LIST CONTAINER ───────────────────────────────────────────────
+// == BULK ACTIONS =========================================================
+let bulkDropdownMode = null; // 'apply' or 'remove'
+
+function showBulkDropdown(anchorEl, mode) {
+  bulkDropdownMode = mode;
+  const dd = document.getElementById('bulk-tag-dropdown');
+  const rect = anchorEl.getBoundingClientRect();
+  dd.style.display = 'block';
+  dd.style.left = rect.left + 'px';
+  dd.style.top = (rect.bottom + 4) + 'px';
+  document.getElementById('bulk-tag-search').value = '';
+  renderBulkTagList('');
+  document.getElementById('bulk-tag-search').focus();
+}
+
+function hideBulkDropdown() {
+  document.getElementById('bulk-tag-dropdown').style.display = 'none';
+  bulkDropdownMode = null;
+}
+
+function renderBulkTagList(filter) {
+  const list = document.getElementById('bulk-tag-list');
+  list.innerHTML = '';
+  let tags;
+  if (bulkDropdownMode === 'remove') {
+    // Show only tags shared by selected assets
+    tags = getSharedTags();
+  } else {
+    tags = allTagsList;
+  }
+  if (filter) {
+    tags = tags.filter(t => t.canonical.toLowerCase().includes(filter.toLowerCase()) || t.name.toLowerCase().includes(filter.toLowerCase()));
+  }
+  tags.slice(0, 50).forEach(t => {
+    const div = document.createElement('div');
+    div.className = 'bulk-tag-option';
+    const clr = getTagColor(t.ns, t.name);
+    div.innerHTML = `<span class="tag-dot" style="background:${clr.fg}"></span>${t.canonical}`;
+    div.addEventListener('click', async () => {
+      hideBulkDropdown();
+      const ids = [...selected];
+      if (bulkDropdownMode === 'apply') {
+        await applyTag(ids, t.ns.toUpperCase(), t.name);
+      } else if (bulkDropdownMode === 'remove') {
+        await api('DELETE', '/api/assets/tags', {asset_ids: ids, category: t.ns.toUpperCase(), tag: t.name});
+        ids.forEach(id => {
+          const a = assets.find(x => x.id === id);
+          if (a) a.tags = a.tags.filter(x => !(x.category.toUpperCase()===t.ns.toUpperCase() && x.tag===t.name));
+        });
+        renderTable();
+        updateRightPanel();
+        updateProgress();
+        loadTagSummary();
+        toast(`Removed "${t.name}" from ${ids.length} items`, 'success');
+      }
+    });
+    list.appendChild(div);
+  });
+  if (tags.length === 0) {
+    list.innerHTML = '<div style="padding:8px;color:var(--text3);font-size:11px;text-align:center">No tags found</div>';
+  }
+}
+
+function getSharedTags() {
+  const selAssets = assets.filter(a => selected.has(a.id));
+  if (selAssets.length === 0) return [];
+  // Tags that appear on ANY selected asset
+  const tagMap = {};
+  selAssets.forEach(a => a.tags.forEach(t => {
+    const key = t.category + ':' + t.tag;
+    if (!tagMap[key]) tagMap[key] = {canonical: key, name: t.tag, ns: t.category.toLowerCase(), count: 0};
+    tagMap[key].count++;
+  }));
+  return Object.values(tagMap);
+}
+
+document.getElementById('bulk-apply-btn').addEventListener('click', e => showBulkDropdown(e.target, 'apply'));
+document.getElementById('bulk-remove-btn').addEventListener('click', e => showBulkDropdown(e.target, 'remove'));
+document.getElementById('bulk-tag-search').addEventListener('input', e => renderBulkTagList(e.target.value));
+document.addEventListener('click', e => {
+  if (!e.target.closest('#bulk-tag-dropdown') && !e.target.closest('.bulk-btn')) hideBulkDropdown();
+});
+
+document.getElementById('bulk-clear-btn').addEventListener('click', async () => {
+  const ids = [...selected];
+  const count = ids.length;
+  if (!confirm(`Remove ALL tags from ${count} selected assets?`)) return;
+  // Remove each tag from each selected asset
+  const selAssets = assets.filter(a => selected.has(a.id));
+  for (const a of selAssets) {
+    for (const t of [...a.tags]) {
+      await api('DELETE', '/api/assets/tags', {asset_ids: [a.id], category: t.category, tag: t.tag});
+    }
+    a.tags = [];
+  }
+  renderTable();
+  updateRightPanel();
+  updateProgress();
+  loadTagSummary();
+  toast(`Cleared tags from ${count} assets`, 'success');
+});
+
+// == DROP ON LIST CONTAINER ===============================================
 const listContainer = document.getElementById('list-container');
 const dropOverlay = document.getElementById('drop-overlay');
 
-listContainer.addEventListener('dragover', (e) => {
+listContainer.addEventListener('dragover', e => {
   if (!dragTag || selected.size === 0) return;
   e.preventDefault();
   dropOverlay.style.display = 'block';
 });
-listContainer.addEventListener('dragleave', (e) => {
+listContainer.addEventListener('dragleave', e => {
   if (!listContainer.contains(e.relatedTarget)) dropOverlay.style.display = 'none';
 });
-listContainer.addEventListener('drop', async (e) => {
+listContainer.addEventListener('drop', async e => {
   e.preventDefault();
   dropOverlay.style.display = 'none';
   if (!dragTag || selected.size === 0) return;
   await applyTag([...selected], dragTag.category, dragTag.tag);
 });
 
-// ── RIGHT PANEL ──────────────────────────────────────────────────────────
+// == RIGHT PANEL ==========================================================
 function updateRightPanel() {
   const empty = document.getElementById('rp-empty');
   const detail = document.getElementById('rp-detail');
-  if (selected.size !== 1) {
-    empty.style.display = 'flex';
-    detail.style.display = 'none';
+  const multi = document.getElementById('rp-multi');
+
+  if (selected.size === 0) {
+    empty.style.display = 'flex'; detail.style.display = 'none'; multi.style.display = 'none';
     return;
   }
+  if (selected.size === 1) {
+    empty.style.display = 'none'; detail.style.display = 'block'; multi.style.display = 'none';
+    renderSingleDetail();
+    return;
+  }
+  // Multi-select
+  empty.style.display = 'none'; detail.style.display = 'none'; multi.style.display = 'block';
+  renderMultiDetail();
+}
+
+function renderSingleDetail() {
   const id = [...selected][0];
   const a = assets.find(x => x.id === id);
   if (!a) return;
-  empty.style.display = 'none';
-  detail.style.display = 'block';
   document.getElementById('rp-filename').textContent = a.filename || a.title;
   document.getElementById('rp-dir').textContent = a.directory_full;
-  document.getElementById('rp-meta').textContent = formatDuration(a.duration_ms) + '  •  ' + (a.kind || '');
+  document.getElementById('rp-meta').textContent = formatDuration(a.duration_ms) + '  \u2022  ' + (a.kind || '');
   document.getElementById('rp-preview').innerHTML = `<a href="${a.file_path}" target="_blank">Open file path</a>`;
 
   const tagsEl = document.getElementById('rp-tags');
@@ -535,18 +1081,19 @@ function updateRightPanel() {
   } else {
     noTags.style.display = 'none';
     a.tags.forEach(t => {
-      const clr = getPaletteColor(t.category, t.tag);
+      const clr = getTagColor(t.category.toLowerCase(), t.tag);
       const span = document.createElement('span');
       span.className = 'rp-tag';
       span.style.background = clr.bg;
       span.style.color = clr.fg;
-      span.innerHTML = `${t.tag} <span class="rm">×</span>`;
+      span.innerHTML = `${t.tag} <span class="rm">\u00D7</span>`;
       span.querySelector('.rm').addEventListener('click', async () => {
         await api('DELETE', '/api/assets/tags', {asset_ids: [id], category: t.category, tag: t.tag});
         a.tags = a.tags.filter(x => !(x.category===t.category && x.tag===t.tag));
         renderTable();
         updateRightPanel();
         updateProgress();
+        loadTagSummary();
         toast('Tag removed');
       });
       tagsEl.appendChild(span);
@@ -554,12 +1101,92 @@ function updateRightPanel() {
   }
 }
 
-// ── PAGINATION ───────────────────────────────────────────────────────────
+function renderMultiDetail() {
+  const selAssets = assets.filter(a => selected.has(a.id));
+  document.getElementById('rp-multi-count').textContent = selAssets.length + ' assets selected';
+
+  // Compute common vs partial tags
+  const tagCounts = {};
+  selAssets.forEach(a => a.tags.forEach(t => {
+    const key = t.category + ':' + t.tag;
+    if (!tagCounts[key]) tagCounts[key] = {category: t.category, tag: t.tag, count: 0};
+    tagCounts[key].count++;
+  }));
+
+  const total = selAssets.length;
+  const common = [], partial = [];
+  for (const tc of Object.values(tagCounts)) {
+    if (tc.count === total) common.push(tc);
+    else partial.push(tc);
+  }
+
+  const commonEl = document.getElementById('rp-common-tags');
+  commonEl.innerHTML = '';
+  if (common.length === 0) {
+    commonEl.innerHTML = '<span style="font-size:11px;color:var(--text3);font-style:italic">None</span>';
+  }
+  common.forEach(tc => {
+    const clr = getTagColor(tc.category.toLowerCase(), tc.tag);
+    const span = document.createElement('span');
+    span.className = 'rp-multi-tag';
+    span.style.background = clr.bg;
+    span.style.color = clr.fg;
+    span.innerHTML = `<span class="state-icon">\u2713</span>${tc.tag}<span class="rm">\u00D7</span>`;
+    span.querySelector('.rm').addEventListener('click', async () => {
+      const ids = [...selected];
+      await api('DELETE', '/api/assets/tags', {asset_ids: ids, category: tc.category, tag: tc.tag});
+      ids.forEach(id => {
+        const a = assets.find(x => x.id === id);
+        if (a) a.tags = a.tags.filter(t => !(t.category===tc.category && t.tag===tc.tag));
+      });
+      renderTable();
+      updateRightPanel();
+      updateProgress();
+      loadTagSummary();
+      toast(`Removed "${tc.tag}" from ${ids.length} items`);
+    });
+    commonEl.appendChild(span);
+  });
+
+  const partialEl = document.getElementById('rp-partial-tags');
+  partialEl.innerHTML = '';
+  if (partial.length === 0) {
+    partialEl.innerHTML = '<span style="font-size:11px;color:var(--text3);font-style:italic">None</span>';
+  }
+  partial.forEach(tc => {
+    const clr = getTagColor(tc.category.toLowerCase(), tc.tag);
+    const span = document.createElement('span');
+    span.className = 'rp-multi-tag';
+    span.style.background = clr.bg;
+    span.style.color = clr.fg;
+    span.innerHTML = `<span class="state-icon">${tc.count}/${total}</span>${tc.tag}<span class="add" title="Apply to all">+</span><span class="rm" title="Remove from all">\u00D7</span>`;
+    span.querySelector('.add').addEventListener('click', async () => {
+      const ids = [...selected];
+      await applyTag(ids, tc.category, tc.tag);
+    });
+    span.querySelector('.rm').addEventListener('click', async () => {
+      const ids = [...selected];
+      await api('DELETE', '/api/assets/tags', {asset_ids: ids, category: tc.category, tag: tc.tag});
+      ids.forEach(id => {
+        const a = assets.find(x => x.id === id);
+        if (a) a.tags = a.tags.filter(t => !(t.category===tc.category && t.tag===tc.tag));
+      });
+      renderTable();
+      updateRightPanel();
+      updateProgress();
+      loadTagSummary();
+      toast(`Removed "${tc.tag}" from ${ids.length} items`);
+    });
+    partialEl.appendChild(span);
+  });
+}
+
+// == PAGINATION ===========================================================
 function renderPagination() {
   const el = document.getElementById('pagination');
   el.innerHTML = '';
   const prev = document.createElement('button');
-  prev.className = 'page-btn'; prev.textContent = '← Prev';
+  prev.className = 'page-btn'; prev.textContent = '\u2190 Prev';
   prev.disabled = currentPage <= 1;
   prev.addEventListener('click', () => { currentPage--; selected.clear(); loadAssets(); });
   el.appendChild(prev);
@@ -570,13 +1197,13 @@ function renderPagination() {
   el.appendChild(info);
 
   const next = document.createElement('button');
-  next.className = 'page-btn'; next.textContent = 'Next →';
+  next.className = 'page-btn'; next.textContent = 'Next \u2192';
   next.disabled = currentPage >= totalPages;
   next.addEventListener('click', () => { currentPage++; selected.clear(); loadAssets(); });
   el.appendChild(next);
 }
 
-// ── BADGE + PROGRESS ─────────────────────────────────────────────────────
+// == BADGE + PROGRESS =====================================================
 function updateBadge() {
   document.getElementById('untagged-badge').textContent = untaggedCount + ' untagged';
 }
@@ -587,9 +1214,9 @@ function updateProgress() {
   document.getElementById('progress-text').textContent = `${tagged} / ${totalAssets} tagged (${pct}%)`;
 }
 
-// ── SEARCH + FILTER ───────────────────────────────────────────────────────
+// == SEARCH + FILTER ======================================================
 let searchTimer;
-document.getElementById('search').addEventListener('input', (e) => {
+document.getElementById('search').addEventListener('input', e => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
     searchTerm = e.target.value.trim();
@@ -597,15 +1224,18 @@ document.getElementById('search').addEventListener('input', (e) => {
     loadAssets();
   }, 300);
 });
-document.getElementById('untagged-only').addEventListener('change', (e) => {
+document.getElementById('untagged-only').addEventListener('change', e => {
   untaggedOnly = e.target.checked;
   currentPage = 1; selected.clear();
   loadAssets();
 });
 
-// ── INIT ──────────────────────────────────────────────────────────────────
-loadPalette();
-loadAssets();
+// == INIT =================================================================
+async function init() {
+  await loadPalette();
+  await Promise.all([loadAssets(), loadTagSummary()]);
+}
+init();
 </script>
 </body>
 </html>
