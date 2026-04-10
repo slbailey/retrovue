@@ -85,6 +85,17 @@ Always merge `relationships/cross-domain.yaml` when tracing cross-domain seams.
 | INV-TAG-MIGRATION-IDEMPOTENT-001 | invariant | `invariants/ingest/INV-TAG-MIGRATION-IDEMPOTENT-001.md` | ingest | `by-domain/ingest.yaml` |
 | INV-WATCH-DELEGATES-001 | invariant | `invariants/ingest/INV-WATCH-DELEGATES-001.md` | ingest | `by-domain/ingest.yaml` |
 | INV-WATCH-DEBOUNCE-001 | invariant | `invariants/ingest/INV-WATCH-DEBOUNCE-001.md` | ingest | `by-domain/ingest.yaml` |
+| INV-VALIDATOR-OUTPUT-SHAPE-001 | invariant | `invariants/ingest/INV-VALIDATOR-OUTPUT-SHAPE-001.md` | ingest | `by-domain/ingest.yaml` |
+| INV-VALIDATOR-RESULT-PERSISTENCE-001 | invariant | `invariants/ingest/INV-VALIDATOR-RESULT-PERSISTENCE-001.md` | ingest | `by-domain/ingest.yaml` |
+| INV-CATALOG-READY-SCHEDULABLE-001 | invariant | `invariants/ingest/INV-CATALOG-READY-SCHEDULABLE-001.md` | ingest | `by-domain/ingest.yaml`, `cross-domain.yaml` |
+| INV-ENRICHER-IDEMPOTENT-001 | invariant | `invariants/ingest/INV-ENRICHER-IDEMPOTENT-001.md` | ingest | `by-domain/ingest.yaml` |
+| INV-ENRICHER-EXECUTION-MODE-001 | invariant | `invariants/ingest/INV-ENRICHER-EXECUTION-MODE-001.md` | ingest | `by-domain/ingest.yaml` |
+| INV-PATH-MAPPING-SOURCE-SCOPED-001 | invariant | `invariants/ingest/INV-PATH-MAPPING-SOURCE-SCOPED-001.md` | ingest | `by-domain/ingest.yaml` |
+| INV-PATH-VALIDATION-ON-IMPORT-001 | invariant | `invariants/ingest/INV-PATH-VALIDATION-ON-IMPORT-001.md` | ingest | `by-domain/ingest.yaml` |
+| INV-SOURCE-TYPE-REGISTRY-001 | invariant | `invariants/ingest/INV-SOURCE-TYPE-REGISTRY-001.md` | ingest | `by-domain/ingest.yaml` |
+| INV-ASSET-LIFECYCLE-COMPLETION-001 | invariant | `invariants/ingest/INV-ASSET-LIFECYCLE-COMPLETION-001.md` | ingest | `by-domain/ingest.yaml` |
+| INV-ASSET-TAGS-PERSISTED-CORRECTLY-001 | invariant | `invariants/ingest/INV-ASSET-TAGS-PERSISTED-CORRECTLY-001.md` | ingest | `by-domain/ingest.yaml` |
+| INV-ASSET-INTERSTITIAL-TYPE-PERSISTED-001 | invariant | `invariants/ingest/INV-ASSET-INTERSTITIAL-TYPE-PERSISTED-001.md` | ingest | `by-domain/ingest.yaml` |
 | INV-CLI-NO-BUSINESS-LOGIC-001 | invariant | `invariants/systems/INV-CLI-NO-BUSINESS-LOGIC-001.md` | systems | `by-domain/ingest.yaml`, `by-domain/systems.yaml` |
 | INV-WORKFLOW-FLAT-NESTING-001 | invariant | `invariants/systems/INV-WORKFLOW-FLAT-NESTING-001.md` | systems | `by-domain/ingest.yaml`, `by-domain/systems.yaml` |
 | INV-AUTHORITY-SINGLE-OWNER-001 | invariant | `invariants/systems/INV-AUTHORITY-SINGLE-OWNER-001.md` | systems | `by-domain/systems.yaml` |

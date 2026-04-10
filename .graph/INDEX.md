@@ -32,8 +32,8 @@ Pick **one** domain to open first. Read `domains/<domain>.md` for depth; stay sh
 
 | | |
 |--|--|
-| **Start here when the question is about** | Where **assets** and catalog rows come from, importers, containers/sources, enrichment/probes, eligibility **inputs** to scheduling—not the broadcast grid or playout control. |
-| **Responsible for** | `source`, `container`, `discovered-item`, `asset`; `importer`; pipeline/enrichment obligations. |
+| **Start here when the question is about** | Where **assets** and catalog rows come from, importers, containers/sources, enrichment/probes, validators, path mapping, source watch, eligibility **inputs** to scheduling—not the broadcast grid or playout control. |
+| **Responsible for** | `source`, `container`, `discovered-item`, `asset`, `enricher-run`; `importer`, `source-watch-service`; validation pipeline, enricher pipeline, path mapping, tag normalization, auto-approve. |
 | **Does NOT handle** | SchedulePlan, zones, EPG, playlog, playlists as execution authority, AIR, HTTP delivery, channel lifecycle. |
 
 ### Systems
@@ -56,8 +56,10 @@ For each pattern: **start domain** → then **entities** / **services** / **inva
 | **What does runtime execution consume (not re-plan)?** | playout | `playlog`, `execution-entry`* | `channel-manager`, `block-plan-producer` | `INV-CHANNELMANAGER-NO-PLANNING-001`, `INV-EPG-NONAUTHORITATIVE-FOR-PLAYOUT-001` |
 | **How is content executed on the wire / in the engine?** | playout | `block-plan`, `playout-instance` | `air-playout-engine`, `channel-manager`, `playout-session` | (see playout domain list in `domains/playout.md`) |
 | **How do viewers get HLS or TS?** | playout | `segment-ring` | `hls-segmenter`, `hls-consumption-adapter`, `ts-consumption-adapter`, `program-director` | `INV-HLS-NO-DISK-IO-001`, `INV-SINGLE-ACTIVATION-PATH-001`, `INV-LIFECYCLE-OBSERVABILITY-001` |
-| **Where do assets come from / what is eligible to schedule?** | ingest | `asset`, `container`, `source`, `discovered-item` | `importer`, `source-ingest-workflow`, `container-ingest-workflow` | `INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001` |
-| **What enricher ran / what version produced this result?** | ingest | `asset`, `enricher-run` | `container-ingest-workflow` | `INV-ENRICHER-OBSERVABILITY-001`, `INV-ENRICHER-RESULT-VERSIONED-001` |
+| **Where do assets come from / what is eligible to schedule?** | ingest | `asset`, `container`, `source`, `discovered-item` | `importer`, `source-ingest-workflow`, `container-ingest-workflow`, `source-watch-service` | `INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001`, `INV-CATALOG-READY-SCHEDULABLE-001`, `INV-ASSET-LIFECYCLE-COMPLETION-001` |
+| **What enricher ran / what version produced this result?** | ingest | `asset`, `enricher-run` | `container-ingest-workflow` | `INV-ENRICHER-OBSERVABILITY-001`, `INV-ENRICHER-RESULT-VERSIONED-001`, `INV-ENRICHER-IDEMPOTENT-001` |
+| **Why did validation fail / what validators run?** | ingest | `asset` | `container-ingest-workflow` | `INV-VALIDATOR-OUTPUT-SHAPE-001`, `INV-VALIDATOR-RESULT-PERSISTENCE-001` |
+| **How are asset paths resolved from source to retrovue?** | ingest | `asset`, `source`, `container` | `container-ingest-workflow` | `INV-PATH-MAPPING-SOURCE-SCOPED-001`, `INV-PATH-VALIDATION-ON-IMPORT-001` |
 | **Who is allowed to call AIR or extend the plan at runtime?** | systems → then playout/scheduling | — | (infer targets from YAML `forbids` / `constrained_by`) | `INV-SCHEDULEMANAGER-NO-AIR-ACCESS-001`, `INV-CHANNELMANAGER-NO-PLANNING-001`, `INV-AUTHORITY-SINGLE-OWNER-001` |
 | **Is this code in the right layer / module class?** | systems | — | — | `INV-PRODUCTION-BOUNDARY-001`, `INV-NO-GHOST-METHODS-001`, `INV-CLI-NO-BUSINESS-LOGIC-001`, `INV-WORKFLOW-FLAT-NESTING-001` |
 | **How does ingest orchestration work (source/container sync)?** | ingest | `source`, `container`, `asset` | `source-ingest-workflow`, `container-ingest-workflow`, `importer` | `INV-WORKFLOW-FLAT-NESTING-001`, `INV-CLI-NO-BUSINESS-LOGIC-001` |

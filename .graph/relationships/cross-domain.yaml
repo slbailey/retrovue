@@ -22,6 +22,11 @@
   to: { kind: entity, id: asset }
   note: DSL schedule blocks resolve to eligible catalog material via asset pools; not a runtime library call from ChannelManager
 
+- type: constrained_by
+  from: { kind: service, id: dsl-schedule-service }
+  to: { kind: invariant, id: INV-CATALOG-READY-SCHEDULABLE-001 }
+  note: Scheduling trusts "ready" without re-validating; ingest owns the trust boundary
+
 # Ambiguity anchors (disambiguation nodes)
 
 - type: depends_on

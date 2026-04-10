@@ -131,3 +131,59 @@
   from: { kind: service, id: source-watch-service }
   to: { kind: invariant, id: INV-CLI-NO-BUSINESS-LOGIC-001 }
   note: Watch business logic lives in workflow, not CLI
+
+# Validators and readiness (RETA-134)
+
+- type: constrained_by
+  from: { kind: entity, id: asset }
+  to: { kind: invariant, id: INV-VALIDATOR-OUTPUT-SHAPE-001 }
+  note: Validator results drive asset state transitions (validated/failed)
+
+- type: constrained_by
+  from: { kind: entity, id: asset }
+  to: { kind: invariant, id: INV-ASSET-LIFECYCLE-COMPLETION-001 }
+  note: Asset state machine (new/enriching/ready/retired) with legal transitions only
+
+- type: constrained_by
+  from: { kind: entity, id: asset }
+  to: { kind: invariant, id: INV-CATALOG-READY-SCHEDULABLE-001 }
+  note: "ready" is the trust boundary between ingest and scheduling
+
+- type: constrained_by
+  from: { kind: entity, id: asset }
+  to: { kind: invariant, id: INV-ASSET-TAGS-PERSISTED-CORRECTLY-001 }
+  note: Tags stored as queryable rows in asset_tags, not buried in JSONB
+
+- type: constrained_by
+  from: { kind: service, id: container-ingest-workflow }
+  to: { kind: invariant, id: INV-VALIDATOR-OUTPUT-SHAPE-001 }
+  note: Validation pipeline produces canonical result shape
+
+- type: constrained_by
+  from: { kind: service, id: container-ingest-workflow }
+  to: { kind: invariant, id: INV-PATH-MAPPING-SOURCE-SCOPED-001 }
+  note: Resolves effective path mappings (source + container overrides) at import time
+
+- type: constrained_by
+  from: { kind: service, id: container-ingest-workflow }
+  to: { kind: invariant, id: INV-PATH-VALIDATION-ON-IMPORT-001 }
+  note: Validates sampled asset paths against effective mappings before persisting
+
+# Enricher contracts (RETA-134)
+
+- type: constrained_by
+  from: { kind: entity, id: enricher-run }
+  to: { kind: invariant, id: INV-ENRICHER-IDEMPOTENT-001 }
+  note: Same version + same asset = same result; re-run is safe
+
+- type: constrained_by
+  from: { kind: entity, id: enricher-run }
+  to: { kind: invariant, id: INV-ENRICHER-EXECUTION-MODE-001 }
+  note: Each enricher declares IMMEDIATE, LAZY_ON_ACCESS, or BACKGROUND
+
+# Source type registry (RETA-134)
+
+- type: constrained_by
+  from: { kind: service, id: source-ingest-workflow }
+  to: { kind: invariant, id: INV-SOURCE-TYPE-REGISTRY-001 }
+  note: Source type dispatch through single registry, no inline type-dispatch

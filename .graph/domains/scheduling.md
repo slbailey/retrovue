@@ -42,7 +42,7 @@ The former SchedulePlan → Zone → Program CRUD island has been **retired** (R
 
 ## Key entities (slugs)
 
-`schedule-day`, `channel`, `execution-entry`, `transmission-log`, `epg`, `scheduling-policy`
+`schedule-day`, `channel`, `execution-entry`, `transmission-log`, `epg`, `scheduling-policy`, `pool`
 
 Retired: `schedule-plan`, `zone`, `program` (RETA-88)
 
