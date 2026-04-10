@@ -182,6 +182,7 @@ def _expand_to_compiled_segments(
     target_segment_minutes: int | None = None,
     template_preroll: list[dict[str, Any]] | None = None,
     break_strategy: str | None = None,
+    traffic_profile: str | None = None,
 ) -> list[dict[str, Any]]:
     """Expand an AssemblyResult into break-aware compiled_segments.
 
@@ -382,7 +383,7 @@ def _expand_to_compiled_segments(
         else:
             gain_db = 0.0
 
-        compiled.append({
+        seg_dict: dict[str, Any] = {
             "segment_type": seg_type,
             "asset_id": asset_id,
             "duration_ms": seg["duration_ms"],
@@ -397,7 +398,12 @@ def _expand_to_compiled_segments(
                 and channel_type in ("movie", "premium")
                 and len(layout.midroll.opportunities) == 0
             ),
-        })
+        }
+        # INV-TRAFFIC-PROFILE-RESOLVED-001: carry resolved traffic profile
+        # on each filler/break segment.
+        if seg_type == "filler" and traffic_profile:
+            seg_dict["traffic_profile"] = traffic_profile
+        compiled.append(seg_dict)
 
     return compiled
 
@@ -774,6 +780,117 @@ def get_grid_minutes(template: str, grid_minutes: dict[str, int] | None = None) 
 
 
 # ---------------------------------------------------------------------------
+# Traffic profile resolution (traffic_profiles_conformance.md)
+# ---------------------------------------------------------------------------
+
+
+def _resolve_block_traffic_profile(
+    block_def: dict[str, Any],
+    resolved_template: dict[str, Any] | None,
+    dsl: dict[str, Any],
+) -> str | None:
+    """Resolve traffic profile for a compiled block.
+
+    INV-TRAFFIC-PROFILE-RESOLVED-001: Resolution precedence:
+        1. Block-level override (schedule block traffic_profile)
+        2. Template breaks.traffic_profile
+        3. Channel traffic.default
+
+    Returns the resolved profile name, or None if no traffic section exists.
+    """
+    # 1. Block-level override
+    block_profile = block_def.get("traffic_profile")
+    if block_profile:
+        return block_profile
+
+    # 2. Template breaks.traffic_profile
+    if resolved_template:
+        template_profile = (
+            resolved_template.get("breaks", {}).get("traffic_profile")
+        )
+        if template_profile:
+            return template_profile
+
+    # 3. Channel traffic.default
+    traffic = dsl.get("traffic")
+    if traffic:
+        return traffic.get("default")
+
+    return None
+
+
+def _validate_traffic_profile_refs(dsl: dict[str, Any]) -> list[str]:
+    """Validate that all traffic_profile references in templates and schedule
+    blocks resolve to profiles declared in traffic.profiles.
+
+    INV-TRAFFIC-PROFILE-RESOLVED-001: Unresolvable references are rejected
+    at validation time.
+    """
+    errors: list[str] = []
+    traffic = dsl.get("traffic")
+    if not traffic:
+        return errors  # No traffic section — validation of missing profiles
+        # happens at compile time, not here.
+
+    profiles = traffic.get("profiles", {})
+
+    # Validate traffic.default
+    default_ref = traffic.get("default")
+    if default_ref and default_ref not in profiles:
+        errors.append(
+            f"INV-TRAFFIC-PROFILE-RESOLVED-001: traffic.default "
+            f"'{default_ref}' not found in traffic.profiles"
+        )
+
+    # Validate template breaks.traffic_profile references
+    templates = dsl.get("templates", {})
+    for tpl_name, tpl in templates.items():
+        if not isinstance(tpl, dict):
+            continue
+        breaks = tpl.get("breaks", {})
+        if isinstance(breaks, dict):
+            ref = breaks.get("traffic_profile")
+            if ref and ref not in profiles:
+                errors.append(
+                    f"INV-TRAFFIC-PROFILE-RESOLVED-001: template '{tpl_name}' "
+                    f"references traffic_profile '{ref}' not found in "
+                    f"traffic.profiles"
+                )
+        # Validate trailing block profiles
+        trailing = tpl.get("trailing", [])
+        if isinstance(trailing, list):
+            for i, entry in enumerate(trailing):
+                if isinstance(entry, dict):
+                    ref = entry.get("traffic_profile")
+                    if ref and ref not in profiles:
+                        errors.append(
+                            f"INV-TRAFFIC-PROFILE-RESOLVED-001: template "
+                            f"'{tpl_name}' trailing[{i}] references "
+                            f"traffic_profile '{ref}' not found in "
+                            f"traffic.profiles"
+                        )
+
+    # Validate schedule block traffic_profile overrides
+    schedule = dsl.get("schedule", {})
+    for day_key, day_value in schedule.items():
+        blocks = [day_value] if isinstance(day_value, dict) else (
+            day_value if isinstance(day_value, list) else []
+        )
+        for item in blocks:
+            if not isinstance(item, dict):
+                continue
+            ref = item.get("traffic_profile")
+            if ref and ref not in profiles:
+                errors.append(
+                    f"INV-TRAFFIC-PROFILE-RESOLVED-001: schedule.{day_key} "
+                    f"references traffic_profile '{ref}' not found in "
+                    f"traffic.profiles"
+                )
+
+    return errors
+
+
+# ---------------------------------------------------------------------------
 # V2 Program Resolution (channel_dsl.md §5–§6)
 # ---------------------------------------------------------------------------
 
@@ -794,6 +911,7 @@ def _compile_program_block(
     channel_type: str = "network",
     presentation_defs: dict[str, Any] | None = None,
     templates_defs: dict[str, Any] | None = None,
+    dsl: dict[str, Any] | None = None,
 ) -> list[ProgramBlockOutput]:
     """Compile a V2 schedule block into program blocks.
 
@@ -932,10 +1050,55 @@ def _compile_program_block(
                 needed_blocks = min(needed_blocks, uniform_grid_blocks_max, remaining_slots)
                 slot_duration = needed_blocks * slot_sec
 
+                resolved_tpl = prog_def.get("_resolved_template", {})
+
+                # INV-OVERCONSTRAINED-POLICY-001: Check overconstrained policy
+                overconstrained_policy = resolved_tpl.get("overconstrained", "bleed")
+
                 # Bleed: if content exceeds even the capped slot, expand
                 if bleed and result.total_runtime_ms > slot_duration * 1000:
+                    if overconstrained_policy == "reject":
+                        raise CompileError(
+                            f"INV-OVERCONSTRAINED-POLICY-001: overconstrained "
+                            f"reject — block '{ep_meta.title or chosen_ref}' "
+                            f"(template '{prog_def.get('template', '?')}') "
+                            f"content_duration={result.total_runtime_ms}ms "
+                            f"exceeds slot_duration={slot_duration * 1000}ms "
+                            f"(deficit={result.total_runtime_ms - slot_duration * 1000}ms)"
+                        )
                     slot_duration = _grid_slot_duration(grid_minutes, result.total_runtime_ms // 1000)
                     needed_blocks = slot_duration // slot_sec
+                elif not bleed and result.total_runtime_ms > slot_duration * 1000:
+                    if overconstrained_policy == "reject":
+                        raise CompileError(
+                            f"INV-OVERCONSTRAINED-POLICY-001: overconstrained "
+                            f"reject — block '{ep_meta.title or chosen_ref}' "
+                            f"(template '{prog_def.get('template', '?')}') "
+                            f"content_duration={result.total_runtime_ms}ms "
+                            f"exceeds slot_duration={slot_duration * 1000}ms "
+                            f"(deficit={result.total_runtime_ms - slot_duration * 1000}ms)"
+                        )
+
+                # INV-TRAFFIC-PROFILE-RESOLVED-001: Resolve traffic profile
+                resolved_profile = _resolve_block_traffic_profile(
+                    block_def, resolved_tpl, dsl or {},
+                )
+
+                # INV-UNDERRUN-WARNING-001: Emit warning for extreme underrun
+                slot_ms = slot_duration * 1000
+                if result.total_runtime_ms < 0.5 * slot_ms:
+                    utilization = (result.total_runtime_ms / slot_ms) * 100 if slot_ms > 0 else 0
+                    logger.warning(
+                        "INV-UNDERRUN-WARNING-001: extreme underrun — "
+                        "block='%s' template='%s' "
+                        "content_duration=%dms slot_duration=%dms "
+                        "utilization=%.1f%%",
+                        ep_meta.title or chosen_ref,
+                        prog_def.get("template", "none"),
+                        result.total_runtime_ms,
+                        slot_ms,
+                        utilization,
+                    )
 
                 block = ProgramBlockOutput(
                     title=ep_meta.title or chosen_ref,
@@ -949,6 +1112,11 @@ def _compile_program_block(
                         "pool": pool,
                         "program": chosen_ref,
                         "fill_mode": prog_def.get("fill_mode", "single"),
+                        "_continuity_optional": (
+                            resolved_tpl
+                            .get("continuity", {})
+                            .get("optional")
+                        ),
                     },
                     compiled_segments=_expand_to_compiled_segments(
                         result, resolver,
@@ -957,22 +1125,23 @@ def _compile_program_block(
                         channel_type=channel_type,
                         dsl_midroll=prog_def.get("presentation_midroll"),
                         target_segment_minutes=(
-                            prog_def.get("_resolved_template", {})
+                            resolved_tpl
                             .get("breaks", {})
                             .get("target_segment_minutes")
                         ),
                         template_preroll=(
-                            prog_def.get("_resolved_template", {})
+                            resolved_tpl
                             .get("continuity", {})
                             .get("presentation")
                         ),
                         break_strategy=(
-                            prog_def.get("_resolved_template", {})
+                            resolved_tpl
                             .get("breaks", {})
                             .get("strategy")
                         ),
+                        traffic_profile=resolved_profile,
                     ),
-                    traffic_profile=block_def.get("traffic_profile"),
+                    traffic_profile=resolved_profile,
                 )
                 blocks.append(block)
                 current_time = block.end_at()
@@ -1024,8 +1193,53 @@ def _compile_program_block(
                 grid_blocks = prog_def.get("grid_blocks", 1)
                 slot_duration = grid_blocks * grid_minutes * 60
 
+                resolved_tpl = prog_def.get("_resolved_template", {})
+
+                # INV-OVERCONSTRAINED-POLICY-001: Check overconstrained policy
+                overconstrained_policy = resolved_tpl.get("overconstrained", "bleed")
+
                 if bleed and result.total_runtime_ms > slot_duration * 1000:
+                    if overconstrained_policy == "reject":
+                        raise CompileError(
+                            f"INV-OVERCONSTRAINED-POLICY-001: overconstrained "
+                            f"reject — block '{ep_meta.title or chosen_ref}' "
+                            f"(template '{prog_def.get('template', '?')}') "
+                            f"content_duration={result.total_runtime_ms}ms "
+                            f"exceeds slot_duration={slot_duration * 1000}ms "
+                            f"(deficit={result.total_runtime_ms - slot_duration * 1000}ms)"
+                        )
                     slot_duration = _grid_slot_duration(grid_minutes, result.total_runtime_ms // 1000)
+                elif not bleed and result.total_runtime_ms > slot_duration * 1000:
+                    if overconstrained_policy == "reject":
+                        raise CompileError(
+                            f"INV-OVERCONSTRAINED-POLICY-001: overconstrained "
+                            f"reject — block '{ep_meta.title or chosen_ref}' "
+                            f"(template '{prog_def.get('template', '?')}') "
+                            f"content_duration={result.total_runtime_ms}ms "
+                            f"exceeds slot_duration={slot_duration * 1000}ms "
+                            f"(deficit={result.total_runtime_ms - slot_duration * 1000}ms)"
+                        )
+
+                # INV-TRAFFIC-PROFILE-RESOLVED-001: Resolve traffic profile
+                resolved_profile = _resolve_block_traffic_profile(
+                    block_def, resolved_tpl, dsl or {},
+                )
+
+                # INV-UNDERRUN-WARNING-001: Emit warning for extreme underrun
+                slot_ms = slot_duration * 1000
+                if result.total_runtime_ms < 0.5 * slot_ms:
+                    utilization = (result.total_runtime_ms / slot_ms) * 100 if slot_ms > 0 else 0
+                    logger.warning(
+                        "INV-UNDERRUN-WARNING-001: extreme underrun — "
+                        "block='%s' template='%s' "
+                        "content_duration=%dms slot_duration=%dms "
+                        "utilization=%.1f%%",
+                        ep_meta.title or chosen_ref,
+                        prog_def.get("template", "none"),
+                        result.total_runtime_ms,
+                        slot_ms,
+                        utilization,
+                    )
 
                 block = ProgramBlockOutput(
                     title=ep_meta.title or chosen_ref,
@@ -1039,6 +1253,11 @@ def _compile_program_block(
                         "pool": pool,
                         "program": chosen_ref,
                         "fill_mode": prog_def.get("fill_mode", "single"),
+                        "_continuity_optional": (
+                            resolved_tpl
+                            .get("continuity", {})
+                            .get("optional")
+                        ),
                     },
                     compiled_segments=_expand_to_compiled_segments(
                         result, resolver,
@@ -1047,22 +1266,23 @@ def _compile_program_block(
                         channel_type=channel_type,
                         dsl_midroll=prog_def.get("presentation_midroll"),
                         target_segment_minutes=(
-                            prog_def.get("_resolved_template", {})
+                            resolved_tpl
                             .get("breaks", {})
                             .get("target_segment_minutes")
                         ),
                         template_preroll=(
-                            prog_def.get("_resolved_template", {})
+                            resolved_tpl
                             .get("continuity", {})
                             .get("presentation")
                         ),
                         break_strategy=(
-                            prog_def.get("_resolved_template", {})
+                            resolved_tpl
                             .get("breaks", {})
                             .get("strategy")
                         ),
+                        traffic_profile=resolved_profile,
                     ),
-                    traffic_profile=block_def.get("traffic_profile"),
+                    traffic_profile=resolved_profile,
                 )
                 blocks.append(block)
                 current_time = block.end_at()
@@ -1143,6 +1363,9 @@ def validate_dsl(dsl: dict[str, Any], resolver: AssetResolver) -> list[str]:
     raw_templates = dsl.get("templates")
     if raw_templates and isinstance(raw_templates, dict):
         errors.extend(_validate_templates(raw_templates))
+
+    # INV-TRAFFIC-PROFILE-RESOLVED-001: Validate traffic profile references
+    errors.extend(_validate_traffic_profile_refs(dsl))
 
     return errors
 
@@ -1418,6 +1641,7 @@ def compile_schedule(
                 channel_type=dsl.get("channel_type", "network"),
                 presentation_defs=dsl.get("presentation"),
                 templates_defs=dsl.get("templates"),
+                dsl=dsl,
             )
             all_blocks.extend(blocks)
 
@@ -1476,6 +1700,61 @@ def compile_schedule(
 
     # Post-compaction revalidation
     _validate_grid_alignment(all_blocks, grid_minutes)
+
+    # Tier 3 optional presentation second pass
+    # INV-TIER3-COMPILE-RESOLUTION-001: Resolve T3 after compaction
+    from retrovue.runtime.optional_presentation import evaluate_optional_presentation
+
+    for i, block in enumerate(all_blocks):
+        continuity_optional = (
+            block.selector.get("_continuity_optional")
+            if block.selector else None
+        )
+        if not continuity_optional:
+            continue
+        continuity = {"optional": continuity_optional}
+        # Build block dicts for this block and all following (for "coming up next" lookahead)
+        block_dicts = []
+        for b in all_blocks[i:]:
+            block_dicts.append({
+                "start_utc_ms": int(b.start_at.timestamp() * 1000),
+                "slot_duration_ms": b.slot_duration_sec * 1000,
+                "compiled_segments": b.compiled_segments or [],
+                "title": b.title,
+            })
+        result = evaluate_optional_presentation(
+            blocks=block_dicts,
+            continuity=continuity,
+            broadcast_day=broadcast_day,
+            channel_id=channel_id,
+        )
+        # Apply only the first block's result (the current block)
+        updated = result[0]
+        all_blocks[i] = replace(
+            block,
+            compiled_segments=updated["compiled_segments"],
+            slot_duration_sec=max(
+                block.slot_duration_sec,
+                updated["slot_duration_ms"] // 1000,
+            ),
+        )
+
+    # INV-TRAFFIC-PROFILE-RESOLVED-001: Every block with breaks must have a
+    # resolvable traffic profile. Only enforced when the DSL declares a
+    # traffic section (backward compat: no traffic section → current behavior).
+    if dsl.get("traffic"):
+        for block in all_blocks:
+            if block.compiled_segments:
+                has_filler = any(
+                    s.get("segment_type") == "filler"
+                    for s in block.compiled_segments
+                )
+                if has_filler and not block.traffic_profile:
+                    raise ValidationError([
+                        f"INV-TRAFFIC-PROFILE-RESOLVED-001: block '{block.title}' "
+                        f"contains breaks but has no resolvable traffic profile "
+                        f"(no block-level, template, or channel default traffic_profile)"
+                    ])
 
     # Build output
     plan: dict[str, Any] = {
