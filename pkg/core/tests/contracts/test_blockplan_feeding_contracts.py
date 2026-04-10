@@ -3041,7 +3041,7 @@ class TestMissLatenessMetric:
         mock_histogram.labels.return_value = mock_labels
 
         with patch(
-            "retrovue.runtime.channel_manager.feed_ahead_miss_lateness_ms",
+            "retrovue.runtime.block_plan_producer.feed_ahead_miss_lateness_ms",
             mock_histogram,
         ):
             producer._feed_ahead()
