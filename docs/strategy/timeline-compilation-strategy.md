@@ -420,6 +420,92 @@ schedule:
 | `INV-BREAK-PLACEMENT-PRIORITY-001`       | Strict break placement priority          | Formalizes chapter > boundary > synthetic ordering                         |
 | `INV-OVERCONSTRAINED-POLICY-001`         | Over/underconstrained policy defined     | Explicit bleed/reject/expand policy per template                           |
 | `INV-CLOCK-OBLIGATIONS-OVERRIDE-001`     | Clock obligations override structure     | Timeline-level inserts independent of block/template                       |
+| `INV-CONTINUITY-DURATION-FILTER-001`     | Continuity element duration is a selection filter | `max_duration_sec` filters pool selection; does not truncate or cap assets |
+
+***
+
+## Continuity Element Duration Semantics
+
+### INV-CONTINUITY-DURATION-FILTER-001: Duration Fields Are Selection Filters
+
+When a template specifies `max_duration_sec` on a continuity element (intro, bumper, rating card, etc.), this is a **pool selection filter**, not a runtime truncation cap:
+
+* The compiler queries the pool for assets with `duration <= max_duration_sec`.
+* If no asset in the pool satisfies the constraint, the element is **skipped** (not filled with a truncated asset).
+* The actual asset duration (from probed metadata) is used for break budget calculation — never the `max_duration_sec` value.
+
+**Why selection filter, not truncation?** Truncating a 17-second intro to 15 seconds produces a jarring cut. Skipping it or selecting a shorter alternative preserves broadcast quality. Budget calculation must use real durations to maintain segment conservation (`INV-BLOCK-SEGMENT-CONSERVATION-001`).
+
+**When `max_duration_sec` is omitted:** No duration filter is applied. Any asset from the pool is eligible. The operator is responsible for curating pool contents to appropriate durations.
+
+**Override: `overflow_policy`** (optional, per-element):
+* `skip` (default) — skip the element if no asset fits
+* `allow` — select any asset regardless of duration; break budget absorbs the difference
+* `truncate` — select any asset but cap its scheduled duration (requires the asset to have a clean cut point — not recommended for presentation elements)
+
+***
+
+## Existing YAML Migration Path (Phase A.1)
+
+The strategy is designed to be backward-compatible with existing channel YAMLs. Migration is incremental:
+
+### cheers-24-7.yaml
+
+Current state: already uses `presentation: sitcom_30` on the program definition and has a `presentation.programs.sitcom_30` section with midroll/traffic config. This *is* a template — it's just declared inline.
+
+Migration steps:
+1. Add `templates.sitcom` section with `target_segment_minutes: 11`, `strategy: chapter_markers_preferred`, `overconstrained: bleed`
+2. Change `presentation: sitcom_30` → `template: sitcom` on the program definition
+3. Move `presentation.programs.sitcom_30` config into `templates.sitcom.continuity` and `templates.sitcom.breaks`
+4. Deprecate `presentation.programs` section (keep as alias during transition)
+
+### hbo.yaml
+
+Current state: already has `presentation.programs.movies` with preroll/postroll and `presentation.dayparts.late_night`. This is 90% of the template model.
+
+Migration steps:
+1. Add `templates.movie_premium` with `strategy: none` (no mid-content breaks), `overconstrained: bleed`
+2. Move `presentation.programs.movies.preroll` → `templates.movie_premium.continuity.presentation`
+3. Move `presentation.programs.movies.postroll` → `templates.movie_premium.trailing`
+4. Add `templates.late_night_movie` that `extends: movie_premium` with the daypart intro
+5. Change schedule blocks to reference templates explicitly
+6. Deprecate `presentation.programs` and `presentation.dayparts` sections
+
+### Backward Compatibility Rule
+
+During migration, the compiler supports both `presentation:` (legacy) and `template:` (new) on program definitions. If both are present, `template:` wins. If neither is present, the compiler uses default break behavior (existing). This allows per-channel migration without a flag day.
+
+***
+
+## YAML → UI Migration Path
+
+### Current: YAML as Authoring Surface
+
+```
+Operator writes YAML → compile_schedule() → ScheduleRevision (DB) → playout
+```
+
+Templates, pools, programs, and schedules are all YAML config today. The database stores the *compiled* output (ScheduleRevision, BlockPlan, PlaylistEvent), not the source config.
+
+### Future: UI as Authoring Surface
+
+```
+Operator uses UI → writes to DB (template/schedule tables) → compile_schedule() → ScheduleRevision → playout
+```
+
+The key architectural decision: **templates are data structures, not code.** Whether authored in YAML or written to Postgres by a UI, the compilation pipeline is identical. The strategy does not need to change for a UI — only the authoring surface changes.
+
+### Migration sequence:
+1. **Phase 1 (current):** YAML is the only authoring surface. All template/schedule definitions live in YAML files.
+2. **Phase 2:** Add DB tables for template definitions, pool configs, and schedule structures. YAML import writes to these tables. `compile_schedule()` reads from DB instead of YAML.
+3. **Phase 3:** UI writes directly to the same DB tables. YAML becomes an import/export format for backup, version control, and bulk operations.
+4. **Phase 4:** YAML is optional. UI is the primary authoring path. YAML export allows operator review and version control.
+
+### What stays the same across all phases:
+* The compilation pipeline (`compile_schedule()` → ScheduleRevision → playout)
+* All invariants (segment conservation, break budget derivation, conformance)
+* Template semantics (behavior, not duration)
+* Domain boundaries (scheduling compiles, playout executes)
 
 ***
 
@@ -432,7 +518,14 @@ schedule:
 * Template resolution in `compile_schedule()` first pass
 * `target_segment_minutes` replaces hardcoded break counts
 * Contract: `timeline_compilation_templates.md`
-* Invariants: `INV-TEMPLATE-BEHAVIOR-NOT-DURATION-001`, `INV-BREAK-BUDGET-DERIVED-001`, `INV-BREAK-COUNT-DURATION-SEPARATED-001`, `INV-BREAK-DENSITY-SCALES-001`, `INV-BREAK-EXPAND-TO-FILL-001`, `INV-CONFORMANCE-MANDATORY-001`
+* Invariants: `INV-TEMPLATE-BEHAVIOR-NOT-DURATION-001`, `INV-BREAK-BUDGET-DERIVED-001`, `INV-BREAK-COUNT-DURATION-SEPARATED-001`, `INV-BREAK-DENSITY-SCALES-001`, `INV-BREAK-EXPAND-TO-FILL-001`, `INV-CONFORMANCE-MANDATORY-001`, `INV-CONTINUITY-DURATION-FILTER-001`
+
+**Phase A.1 — Existing YAML Migration**
+
+* Migrate `cheers-24-7.yaml` from `presentation.programs.sitcom_30` to `templates.sitcom`
+* Migrate `hbo.yaml` from `presentation.programs.movies` + `presentation.dayparts` to `templates.movie_premium` + `templates.late_night_movie`
+* Backward-compatible: compiler accepts both `presentation:` (legacy) and `template:` (new)
+* No flag day — per-channel migration at operator's pace
 
 **Phase B — Chapter Markers**
 
