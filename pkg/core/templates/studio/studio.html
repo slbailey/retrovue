@@ -6,381 +6,311 @@
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{
-  --bg:#0a0c12;--bg2:#0d1018;--bg3:#13161f;--bg4:#181c28;
-  --border:#1e2436;--border2:#262d40;
-  --text:#c8d0e0;--text2:#8090b0;--text3:#4a5878;
-  --gold:#e6b91e;--blue:#4a82d8;--green:#3ab468;--red:#c84040;
-  --orange:#d89c4a;--purple:#8a6ad8;
-  --sidebar:300px;--rightpanel:340px;
+  --bg:#191919;--bg2:#202020;--bg3:#2b2b2b;--bg4:#333;
+  --border:#363636;--border2:#444;
+  --text:#e0e0e0;--text2:#999;--text3:#666;
+  --accent:#2eaadc;--accent-bg:rgba(46,170,220,.15);
+  --green:#4dab5c;--green-bg:rgba(77,171,92,.15);
+  --red:#e03e3e;--red-bg:rgba(224,62,62,.15);
+  --orange:#d9730d;--orange-bg:rgba(217,115,13,.15);
+  --purple:#9065b0;--purple-bg:rgba(144,101,176,.15);
+  --pink:#d44c8f;--pink-bg:rgba(212,76,143,.15);
+  --yellow:#dfab01;--yellow-bg:rgba(223,171,1,.15);
+  --blue:#337ea9;--blue-bg:rgba(51,126,169,.15);
+  --brown:#86540b;--brown-bg:rgba(134,84,11,.15);
+  --gray:#787774;--gray-bg:rgba(120,119,116,.15);
 }
-body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:15px;display:flex;flex-direction:column;height:100vh;overflow:hidden}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif;font-size:14px;display:flex;flex-direction:column;height:100vh;overflow:hidden;-webkit-font-smoothing:antialiased}
 
-/* TOP BAR */
-#topbar{height:54px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:0;flex-shrink:0;z-index:100}
-#logo{padding:0 20px;font-size:18px;font-weight:700;color:var(--gold);letter-spacing:2px;white-space:nowrap}
-#logo span{color:var(--text3);font-weight:400;font-size:14px;letter-spacing:0;margin-left:6px}
-.nav-tab{padding:0 18px;height:54px;display:flex;align-items:center;color:var(--text3);cursor:pointer;border-bottom:2px solid transparent;font-size:13px;font-weight:600;letter-spacing:.5px;text-transform:uppercase}
-.nav-tab.active{color:var(--text);border-bottom-color:var(--gold)}
-.nav-tab:hover{color:var(--text2)}
-#topbar-right{margin-left:auto;display:flex;align-items:center;gap:12px;padding-right:16px}
-#search{background:var(--bg3);border:1px solid var(--border2);color:var(--text);padding:8px 14px;border-radius:6px;width:260px;font-size:14px;outline:none}
-#search:focus{border-color:var(--blue)}
-#search::placeholder{color:var(--text3)}
-#untagged-badge{background:#5a1a1a;color:#f08080;padding:5px 14px;border-radius:14px;font-size:13px;font-weight:600;white-space:nowrap}
-#view-toggle{display:flex;gap:2px;background:var(--bg3);border-radius:6px;padding:2px}
-.view-btn{padding:6px 12px;border-radius:4px;cursor:pointer;font-size:13px;color:var(--text3);font-weight:600;border:none;background:transparent}
-.view-btn.active{background:var(--bg4);color:var(--text)}
-.view-btn:hover{color:var(--text2)}
+/* HEADER */
+#header{padding:12px 24px 0;flex-shrink:0}
+#header-top{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+#page-icon{font-size:28px}
+#page-title{font-size:28px;font-weight:700;color:var(--text);letter-spacing:-.5px}
+#header-actions{margin-left:auto;display:flex;gap:8px;align-items:center}
+#search-box{background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:6px 12px 6px 32px;border-radius:6px;width:240px;font-size:14px;outline:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%23666' viewBox='0 0 16 16'%3E%3Cpath d='M11.742 10.344a6.5 6.5 0 10-1.397 1.398h-.001l3.85 3.85a1 1 0 001.415-1.414l-3.85-3.85zm-5.242.156a5 5 0 110-10 5 5 0 010 10z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:10px center}
+#search-box:focus{border-color:var(--accent)}
+#search-box::placeholder{color:var(--text3)}
+#untagged-badge{background:var(--red-bg);color:var(--red);padding:4px 12px;border-radius:12px;font-size:13px;font-weight:600}
 
-/* MAIN LAYOUT */
-#main{display:flex;flex:1;overflow:hidden}
+/* VIEW TABS */
+#view-tabs{display:flex;gap:0;border-bottom:1px solid var(--border);margin:0 -24px;padding:0 24px}
+.view-tab{padding:8px 14px;font-size:14px;color:var(--text2);cursor:pointer;border-bottom:2px solid transparent;font-weight:500;transition:color .1s}
+.view-tab:hover{color:var(--text)}
+.view-tab.active{color:var(--accent);border-bottom-color:var(--accent)}
 
-/* LEFT — TAG CLOUD */
-#tag-cloud-panel{width:var(--sidebar);background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;flex-shrink:0}
-#cloud-header{padding:14px 16px 10px;border-bottom:1px solid var(--border)}
-#cloud-header h3{font-size:16px;font-weight:700;color:var(--text);letter-spacing:.5px;margin-bottom:8px}
-#cloud-header .subtitle{font-size:12px;color:var(--text3);margin-bottom:8px}
-#tag-search{width:100%;padding:8px 12px;background:var(--bg3);border:1px solid var(--border2);color:var(--text);border-radius:6px;font-size:14px;outline:none}
-#tag-search:focus{border-color:var(--blue)}
-#tag-search::placeholder{color:var(--text3)}
-#cloud-body{flex:1;overflow-y:auto;padding:12px}
-.tag-cloud-section{margin-bottom:16px}
-.cloud-ns-header{display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;user-select:none;border-radius:6px;transition:background .15s}
-.cloud-ns-header:hover{background:var(--bg3)}
-.cloud-ns-chevron{font-size:10px;color:var(--text3);transition:transform .15s;width:12px;text-align:center}
-.cloud-ns-header.collapsed .cloud-ns-chevron{transform:rotate(-90deg)}
-.cloud-ns-name{font-size:14px;font-weight:700;color:var(--text2);text-transform:uppercase;flex:1;letter-spacing:1px}
-.cloud-ns-count{font-size:11px;color:var(--text3);background:var(--bg3);padding:2px 8px;border-radius:10px}
-.cloud-tags{display:flex;flex-wrap:wrap;gap:6px;padding:8px 8px 4px 8px}
-.cloud-ns-header.collapsed+.cloud-tags{display:none}
-.cloud-tag{display:inline-flex;align-items:center;gap:5px;padding:6px 12px;border-radius:6px;font-size:13px;font-weight:600;cursor:grab;user-select:none;transition:all .15s;position:relative;border:2px solid transparent}
-.cloud-tag:hover{filter:brightness(1.2);transform:translateY(-1px);box-shadow:0 4px 12px rgba(0,0,0,.3)}
-.cloud-tag:active{cursor:grabbing;opacity:.7;transform:scale(.95)}
-.cloud-tag .tag-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cloud-tag .tag-badge{font-size:10px;opacity:.8;background:rgba(0,0,0,.4);padding:1px 6px;border-radius:8px;flex-shrink:0;font-weight:700}
-.cloud-tag.orphaned{border:2px dashed var(--orange);opacity:.7}
-.cloud-tag.empty-tag{border:2px dashed var(--red);opacity:.6}
-#cloud-footer{padding:10px 16px;border-top:1px solid var(--border);display:flex;gap:8px}
-#add-category-btn{flex:1;padding:8px;background:var(--bg3);border:1px dashed var(--border2);color:var(--text3);border-radius:6px;cursor:pointer;font-size:13px;text-align:center;font-weight:600}
-#add-category-btn:hover{border-color:var(--blue);color:var(--text2)}
-#new-cat-input{display:none;width:100%;padding:8px 12px;background:var(--bg3);border:1px solid var(--blue);color:var(--text);border-radius:6px;font-size:14px;margin-top:6px;outline:none}
+/* FILTER BAR */
+#filter-bar{display:flex;align-items:center;gap:8px;padding:10px 24px;border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap}
+.filter-chip{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;font-size:13px;color:var(--text2);cursor:pointer;transition:all .1s;white-space:nowrap}
+.filter-chip:hover{background:var(--bg4);color:var(--text)}
+.filter-chip.active{background:var(--accent-bg);border-color:var(--accent);color:var(--accent)}
+.filter-chip .chip-x{font-size:14px;opacity:.5;margin-left:2px}
+.filter-chip .chip-x:hover{opacity:1}
+#add-filter-btn{padding:4px 10px;background:transparent;border:1px dashed var(--border);border-radius:6px;font-size:13px;color:var(--text3);cursor:pointer}
+#add-filter-btn:hover{border-color:var(--text2);color:var(--text2)}
+.filter-sep{width:1px;height:20px;background:var(--border);margin:0 4px}
+#progress-mini{display:flex;align-items:center;gap:8px;margin-left:auto;font-size:13px;color:var(--text3)}
+#progress-mini-bar{width:100px;height:4px;background:var(--bg3);border-radius:2px;overflow:hidden}
+#progress-mini-fill{height:100%;background:var(--green);border-radius:2px;transition:width .3s}
 
-/* CONTEXT MENU */
-#context-menu{display:none;position:fixed;z-index:500;background:var(--bg4);border:1px solid var(--border2);border-radius:8px;padding:4px 0;min-width:200px;box-shadow:0 8px 24px rgba(0,0,0,.5)}
-.ctx-item{padding:8px 16px;font-size:14px;color:var(--text);cursor:pointer;display:flex;align-items:center;gap:10px}
-.ctx-item:hover{background:var(--bg3)}
-.ctx-item .ctx-icon{width:18px;text-align:center;font-size:15px;opacity:.7}
-.ctx-sep{height:1px;background:var(--border);margin:4px 0}
-.ctx-item.danger{color:var(--red)}
-.ctx-item.danger:hover{background:#1a0d0d}
-
-/* CENTER LIST */
-#list-wrap{flex:1;display:flex;flex-direction:column;overflow:hidden}
-#list-toolbar{background:var(--bg2);border-bottom:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
-#toolbar-main{height:44px;display:flex;align-items:center;padding:0 16px;gap:14px}
-#scope-selector{display:flex;align-items:center;gap:6px}
-#scope-selector label{font-size:12px;font-weight:700;color:var(--text3);letter-spacing:.5px;text-transform:uppercase}
-#scope-select{background:var(--bg3);border:1px solid var(--border2);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px;outline:none;cursor:pointer}
-#scope-select:focus{border-color:var(--blue)}
-#sel-count{font-size:13px;color:var(--text3);font-weight:600}
-#filter-untagged{display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;color:var(--text3);user-select:none}
-#filter-untagged:hover{color:var(--text2)}
-#progress-wrap{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text3)}
-#progress-bar-outer{width:140px;height:8px;background:var(--bg3);border-radius:4px;overflow:hidden}
-#progress-bar-inner{height:100%;background:var(--green);border-radius:4px;transition:width .3s}
-#bulk-bar{display:none;height:44px;background:var(--bg3);border-bottom:1px solid var(--border);align-items:center;padding:0 16px;gap:10px}
-#bulk-bar.visible{display:flex}
-.bulk-btn{padding:6px 14px;background:var(--bg4);border:1px solid var(--border2);color:var(--text2);border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px}
-.bulk-btn:hover{border-color:var(--blue);color:var(--text)}
-.bulk-btn.danger{color:var(--red)}
-.bulk-btn.danger:hover{border-color:var(--red)}
-#bulk-tag-dropdown{display:none;position:absolute;z-index:200;background:var(--bg4);border:1px solid var(--border2);border-radius:8px;padding:8px;min-width:260px;max-height:340px;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,.5)}
-#bulk-tag-search{width:100%;padding:8px 10px;background:var(--bg3);border:1px solid var(--border2);color:var(--text);border-radius:6px;font-size:13px;outline:none;margin-bottom:8px}
-#bulk-tag-search:focus{border-color:var(--blue)}
-.bulk-tag-option{padding:7px 10px;border-radius:5px;font-size:13px;cursor:pointer;display:flex;align-items:center;gap:8px}
-.bulk-tag-option:hover{background:var(--bg3)}
-.bulk-tag-option .tag-pill{padding:3px 10px;border-radius:4px;font-weight:600;font-size:12px}
-#list-container{flex:1;overflow:hidden;position:relative}
-#drop-overlay{display:none;position:absolute;inset:0;background:rgba(74,130,216,.08);border:3px solid var(--blue);z-index:50;pointer-events:none;border-radius:6px}
-#drop-overlay-text{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--blue);color:#fff;padding:12px 24px;border-radius:8px;font-weight:700;font-size:16px}
+/* MAIN CONTENT */
+#content{flex:1;overflow:hidden;display:flex;flex-direction:column}
 
 /* TABLE VIEW */
-#asset-table{width:100%;height:100%;overflow-y:auto;overflow-x:hidden}
-table{width:100%;border-collapse:collapse}
-thead{position:sticky;top:0;z-index:10;background:var(--bg2)}
-th{padding:10px 12px;text-align:left;font-size:12px;font-weight:700;color:var(--text3);letter-spacing:.5px;text-transform:uppercase;border-bottom:1px solid var(--border);cursor:pointer;user-select:none;white-space:nowrap}
-th:hover{color:var(--text2)}
-td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:middle}
-tr.row{cursor:pointer}
-tr.row:hover td{background:var(--bg3)}
-tr.row.selected td{background:#111d30}
-tr.row.selected td:first-child{border-left:3px solid var(--blue)}
-tr.row.drop-target td{background:#0d1e38;outline:1px solid var(--blue)}
-.cb{width:18px;height:18px;border:1px solid var(--border2);background:var(--bg3);border-radius:4px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
-tr.row.selected .cb{background:var(--blue);border-color:var(--blue)}
-.cb-check{display:none;color:#fff;font-size:12px}
+#table-view{flex:1;overflow-y:auto;overflow-x:hidden}
+#table-view table{width:100%;border-collapse:collapse}
+#table-view thead{position:sticky;top:0;z-index:10;background:var(--bg)}
+#table-view th{padding:6px 12px;text-align:left;font-size:12px;font-weight:500;color:var(--text3);border-bottom:1px solid var(--border);cursor:pointer;user-select:none;white-space:nowrap}
+#table-view th:hover{background:var(--bg2)}
+#table-view td{padding:4px 12px;border-bottom:1px solid var(--border);vertical-align:middle}
+#table-view tr.row{cursor:default;transition:background .05s}
+#table-view tr.row:hover td{background:var(--bg2)}
+#table-view tr.row.selected td{background:var(--accent-bg)}
+.cb-cell{width:28px}
+.cb{width:16px;height:16px;border:1.5px solid var(--border2);background:transparent;border-radius:3px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .1s}
+.cb:hover{border-color:var(--accent)}
+tr.row.selected .cb{background:var(--accent);border-color:var(--accent)}
+.cb-check{display:none;color:#fff;font-size:10px;font-weight:700}
 tr.row.selected .cb-check{display:block}
-.col-filename{color:var(--text);font-size:14px;font-weight:500;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.col-dir{color:var(--text3);font-size:13px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.col-dur{color:var(--text3);font-size:13px;white-space:nowrap}
-.col-tags{display:flex;flex-wrap:wrap;gap:4px;max-width:400px}
-.inline-tag{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:5px;font-size:12px;font-weight:600;cursor:default;transition:filter .1s}
-.inline-tag:hover{filter:brightness(1.15)}
-.inline-tag .rm{opacity:0;cursor:pointer;font-size:13px;margin-left:2px}
-.inline-tag:hover .rm{opacity:.7}
-.inline-tag .rm:hover{opacity:1}
-.untagged-hint{color:#804040;font-size:13px;font-style:italic}
+.col-title{font-size:14px;color:var(--text);font-weight:400;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.col-collection{font-size:13px;color:var(--text2);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.col-dur{font-size:13px;color:var(--text2);white-space:nowrap}
+.col-tags{display:flex;flex-wrap:wrap;gap:4px;align-items:center;min-height:28px;cursor:pointer;padding:2px 0}
+.col-tags:hover{background:var(--bg3);border-radius:4px;margin:-2px -4px;padding:2px 4px}
+
+/* TAG PILLS — Notion-style colored */
+.tag-pill{display:inline-flex;align-items:center;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:500;white-space:nowrap;line-height:1.4;transition:filter .1s}
+.tag-pill:hover{filter:brightness(1.1)}
+.tag-pill .pill-rm{display:none;cursor:pointer;margin-left:4px;font-size:12px;opacity:.6}
+.tag-pill:hover .pill-rm{display:inline}
+.tag-pill .pill-rm:hover{opacity:1}
+.empty-tags{font-size:13px;color:var(--text3)}
+
+/* TAG POPOVER — inline Notion-style */
+#tag-popover{display:none;position:fixed;z-index:500;background:var(--bg2);border:1px solid var(--border);border-radius:8px;width:280px;max-height:360px;box-shadow:0 4px 24px rgba(0,0,0,.5);overflow:hidden}
+#tag-popover-search{width:100%;padding:10px 12px;background:transparent;border:none;border-bottom:1px solid var(--border);color:var(--text);font-size:14px;outline:none}
+#tag-popover-search::placeholder{color:var(--text3)}
+#tag-popover-list{max-height:260px;overflow-y:auto;padding:4px}
+.popover-tag{display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:4px;cursor:pointer;font-size:14px;transition:background .05s}
+.popover-tag:hover{background:var(--bg3)}
+.popover-tag .pop-pill{padding:2px 8px;border-radius:4px;font-size:12px;font-weight:500}
+.popover-tag .pop-check{width:16px;text-align:center;font-size:13px;color:var(--accent);flex-shrink:0}
+#tag-popover-create{padding:8px 12px;border-top:1px solid var(--border);font-size:13px;color:var(--text3);cursor:pointer;display:none}
+#tag-popover-create:hover{background:var(--bg3);color:var(--text)}
 
 /* GROUPED VIEW */
-#grouped-view{display:none;width:100%;height:100%;overflow-y:auto;padding:16px}
-.group-section{margin-bottom:20px;background:var(--bg2);border:1px solid var(--border);border-radius:10px;overflow:hidden}
-.group-header{display:flex;align-items:center;gap:10px;padding:12px 16px;cursor:pointer;user-select:none;border-bottom:1px solid var(--border)}
-.group-header:hover{background:var(--bg3)}
-.group-tag-pill{padding:5px 14px;border-radius:6px;font-size:14px;font-weight:700}
-.group-count{font-size:13px;color:var(--text3);font-weight:600}
-.group-chevron{margin-left:auto;font-size:12px;color:var(--text3);transition:transform .15s}
+#grouped-view{display:none;flex:1;overflow-y:auto;padding:0 24px 16px}
+.group-section{margin-bottom:4px}
+.group-header{display:flex;align-items:center;gap:8px;padding:8px 8px;cursor:pointer;user-select:none;border-radius:4px}
+.group-header:hover{background:var(--bg2)}
+.group-chevron{font-size:10px;color:var(--text3);transition:transform .15s;width:14px;text-align:center}
 .group-header.collapsed .group-chevron{transform:rotate(-90deg)}
-.group-assets{padding:0}
-.group-header.collapsed+.group-assets{display:none}
-.group-asset-row{display:flex;align-items:center;gap:12px;padding:8px 16px;border-bottom:1px solid var(--border);cursor:pointer}
-.group-asset-row:last-child{border-bottom:none}
-.group-asset-row:hover{background:var(--bg3)}
-.group-asset-name{font-size:14px;color:var(--text);font-weight:500;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.group-asset-dir{font-size:12px;color:var(--text3);max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.group-asset-dur{font-size:12px;color:var(--text3);white-space:nowrap;min-width:40px}
-.group-asset-tags{display:flex;flex-wrap:wrap;gap:3px}
-.group-inline-tag{padding:3px 8px;border-radius:4px;font-size:11px;font-weight:600}
+.group-pill{padding:3px 10px;border-radius:4px;font-size:13px;font-weight:600}
+.group-count{font-size:13px;color:var(--text3)}
+.group-items{padding-left:22px}
+.group-header.collapsed+.group-items{display:none}
+.group-row{display:flex;align-items:center;gap:12px;padding:5px 8px;border-radius:4px;cursor:default}
+.group-row:hover{background:var(--bg2)}
+.group-row-name{font-size:14px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.group-row-coll{font-size:12px;color:var(--text3);min-width:80px}
+.group-row-dur{font-size:12px;color:var(--text3);min-width:40px}
+.group-row-tags{display:flex;gap:3px;flex-wrap:wrap}
 
-/* PAGINATION */
-#pagination{height:44px;background:var(--bg2);border-top:1px solid var(--border);display:flex;align-items:center;justify-content:center;gap:10px;flex-shrink:0}
-.page-btn{padding:6px 16px;background:var(--bg3);border:1px solid var(--border2);color:var(--text2);border-radius:6px;cursor:pointer;font-size:13px;font-weight:600}
-.page-btn:hover{border-color:var(--blue);color:var(--text)}
-.page-btn.active{background:var(--blue);border-color:var(--blue);color:#fff}
+/* BOTTOM BAR */
+#bottom-bar{height:40px;background:var(--bg);border-top:1px solid var(--border);display:flex;align-items:center;padding:0 24px;gap:12px;flex-shrink:0}
+#sel-info{font-size:13px;color:var(--text3)}
+#bulk-actions{display:none;align-items:center;gap:6px}
+#bulk-actions.visible{display:flex}
+.bulk-btn{padding:4px 10px;background:var(--bg3);border:1px solid var(--border);color:var(--text2);border-radius:6px;cursor:pointer;font-size:13px;font-weight:500}
+.bulk-btn:hover{background:var(--bg4);color:var(--text)}
+.bulk-btn.danger{color:var(--red)}
+.bulk-btn.danger:hover{background:var(--red-bg)}
+#page-nav{margin-left:auto;display:flex;align-items:center;gap:8px}
+.page-btn{padding:4px 12px;background:var(--bg3);border:1px solid var(--border);color:var(--text2);border-radius:6px;cursor:pointer;font-size:13px}
+.page-btn:hover{background:var(--bg4);color:var(--text)}
 .page-btn:disabled{opacity:.3;cursor:default}
 #page-info{font-size:13px;color:var(--text3)}
 
-/* RIGHT PANEL */
-#right-panel{width:var(--rightpanel);background:var(--bg2);border-left:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;overflow:hidden}
-#rp-empty{flex:1;display:flex;align-items:center;justify-content:center;color:var(--text3);font-size:14px;text-align:center;padding:24px;line-height:1.6}
-#rp-detail{display:none;flex:1;overflow-y:auto;padding:18px}
-#rp-multi{display:none;flex:1;overflow-y:auto;padding:18px}
-#rp-filename{font-size:16px;font-weight:600;color:var(--text);word-break:break-all;line-height:1.4}
-#rp-dir{font-size:13px;color:var(--text3);margin-top:4px}
-#rp-meta{font-size:13px;color:var(--text3);margin-top:4px}
-#rp-preview{margin-top:14px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:12px;text-align:center;font-size:13px;color:var(--text3)}
-#rp-preview a{color:var(--blue);text-decoration:none;font-weight:500}
-#rp-preview a:hover{text-decoration:underline}
-.rp-section-title{font-size:12px;font-weight:700;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin:16px 0 8px}
-#rp-tags{display:flex;flex-wrap:wrap;gap:6px}
-.rp-tag{display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border-radius:6px;font-size:13px;font-weight:600;transition:filter .1s}
-.rp-tag:hover{filter:brightness(1.15)}
-.rp-tag .rm{cursor:pointer;opacity:.5;font-size:14px}
-.rp-tag .rm:hover{opacity:1;color:#f08080!important}
-#rp-no-tags{font-size:13px;color:var(--text3);font-style:italic}
+/* SIDEBAR (tag cloud, toggled) */
+#sidebar{display:none;width:280px;background:var(--bg);border-left:1px solid var(--border);flex-shrink:0;flex-direction:column;overflow:hidden}
+#sidebar.open{display:flex}
+#sidebar-header{padding:12px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px}
+#sidebar-header h3{font-size:14px;font-weight:600;color:var(--text);flex:1}
+#sidebar-close{cursor:pointer;color:var(--text3);font-size:18px;padding:2px 6px;border-radius:4px}
+#sidebar-close:hover{background:var(--bg3);color:var(--text)}
+#sidebar-search{width:100%;padding:8px 12px;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:13px;outline:none;margin:8px 14px;width:calc(100% - 28px)}
+#sidebar-search:focus{border-color:var(--accent)}
+#sidebar-search::placeholder{color:var(--text3)}
+#sidebar-body{flex:1;overflow-y:auto;padding:4px 8px}
+.sb-section{margin-bottom:4px}
+.sb-ns-header{display:flex;align-items:center;gap:6px;padding:4px 8px;cursor:pointer;border-radius:4px;font-size:13px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px}
+.sb-ns-header:hover{background:var(--bg3)}
+.sb-ns-chevron{font-size:8px;color:var(--text3);transition:transform .1s;width:10px}
+.sb-ns-header.collapsed .sb-ns-chevron{transform:rotate(-90deg)}
+.sb-ns-count{font-size:11px;color:var(--text3);margin-left:auto}
+.sb-tags{display:flex;flex-wrap:wrap;gap:4px;padding:4px 8px 8px 18px}
+.sb-ns-header.collapsed+.sb-tags{display:none}
+.sb-tag{padding:4px 10px;border-radius:4px;font-size:12px;font-weight:500;cursor:grab;transition:all .1s}
+.sb-tag:hover{filter:brightness(1.15);transform:translateY(-1px)}
+.sb-tag:active{cursor:grabbing;opacity:.7}
 
-/* Tag drop zone in right panel */
-#rp-drop-zone{margin-top:12px;padding:14px;border:2px dashed var(--border2);border-radius:8px;text-align:center;color:var(--text3);font-size:13px;transition:all .15s}
-#rp-drop-zone.drag-over{border-color:var(--blue);background:rgba(74,130,216,.06);color:var(--text2)}
-
-/* MULTI-SELECT RIGHT PANEL */
-#rp-multi-title{font-size:16px;font-weight:600;color:var(--text);margin-bottom:6px}
-#rp-multi-count{font-size:13px;color:var(--text3);margin-bottom:14px}
-.rp-multi-group{margin-bottom:14px}
-.rp-multi-group-title{font-size:12px;font-weight:700;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;display:flex;align-items:center;gap:8px}
-.rp-multi-group-title .indicator{font-size:12px}
-#rp-common-tags,#rp-partial-tags{display:flex;flex-wrap:wrap;gap:6px}
-.rp-multi-tag{display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border-radius:6px;font-size:13px;font-weight:600;cursor:default;transition:filter .1s}
-.rp-multi-tag:hover{filter:brightness(1.15)}
-.rp-multi-tag .state-icon{font-size:12px;opacity:.7}
-.rp-multi-tag .rm{cursor:pointer;opacity:.5;font-size:14px}
-.rp-multi-tag .rm:hover{opacity:1;color:#f08080!important}
-.rp-multi-tag .add{cursor:pointer;opacity:.5;font-size:14px}
-.rp-multi-tag .add:hover{opacity:1;color:var(--green)!important}
+/* CONTEXT MENU */
+#context-menu{display:none;position:fixed;z-index:600;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:4px 0;min-width:200px;box-shadow:0 4px 24px rgba(0,0,0,.5)}
+.ctx-item{padding:6px 14px;font-size:14px;color:var(--text);cursor:pointer;display:flex;align-items:center;gap:8px}
+.ctx-item:hover{background:var(--bg3)}
+.ctx-sep{height:1px;background:var(--border);margin:3px 0}
+.ctx-item.danger{color:var(--red)}
+.ctx-item.danger:hover{background:var(--red-bg)}
 
 /* MODAL */
-.modal-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(4px);z-index:800;align-items:center;justify-content:center}
+.modal-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);backdrop-filter:blur(3px);z-index:800;align-items:center;justify-content:center}
 .modal-backdrop.open{display:flex}
-.modal{background:var(--bg2);border:1px solid var(--border2);border-radius:12px;padding:28px;min-width:420px;max-width:520px;width:90%;box-shadow:0 16px 48px rgba(0,0,0,.6)}
-.modal h2{font-size:18px;font-weight:700;color:var(--text);margin-bottom:6px}
-.modal .modal-sub{font-size:13px;color:var(--text3);margin-bottom:18px}
-.modal label{display:block;font-size:12px;font-weight:700;color:var(--text3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:6px}
-.modal input[type="text"],.modal select{width:100%;padding:10px 12px;background:var(--bg3);border:1px solid var(--border2);color:var(--text);border-radius:6px;font-size:14px;outline:none;margin-bottom:14px}
-.modal input[type="text"]:focus,.modal select:focus{border-color:var(--blue)}
-.modal-preview{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:18px;font-size:13px;color:var(--text2)}
-.modal-preview .preview-row{display:flex;justify-content:space-between;padding:4px 0}
+.modal{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:24px;min-width:400px;max-width:480px;width:90%;box-shadow:0 16px 48px rgba(0,0,0,.5)}
+.modal h2{font-size:16px;font-weight:600;color:var(--text);margin-bottom:4px}
+.modal .modal-sub{font-size:13px;color:var(--text3);margin-bottom:16px}
+.modal label{display:block;font-size:12px;font-weight:600;color:var(--text2);margin-bottom:4px}
+.modal input[type="text"],.modal select{width:100%;padding:8px 10px;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:14px;outline:none;margin-bottom:12px}
+.modal input:focus,.modal select:focus{border-color:var(--accent)}
+.modal-preview{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:16px;font-size:13px}
+.modal-preview .preview-row{display:flex;justify-content:space-between;padding:3px 0}
 .modal-preview .preview-label{color:var(--text3)}
 .modal-preview .preview-val{color:var(--text);font-weight:600}
-.modal-preview .preview-warn{color:var(--orange);font-size:13px;margin-top:8px;display:flex;align-items:center;gap:6px}
-.modal-actions{display:flex;gap:10px;justify-content:flex-end}
-.modal-btn{padding:10px 22px;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;border:1px solid var(--border2);transition:all .15s}
+.modal-preview .preview-warn{color:var(--orange);font-size:13px;margin-top:6px}
+.modal-actions{display:flex;gap:8px;justify-content:flex-end}
+.modal-btn{padding:8px 18px;border-radius:6px;font-size:14px;font-weight:500;cursor:pointer;border:1px solid var(--border);transition:all .1s}
 .modal-btn.cancel{background:var(--bg3);color:var(--text2)}
 .modal-btn.cancel:hover{background:var(--bg4);color:var(--text)}
-.modal-btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+.modal-btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 .modal-btn.primary:hover{filter:brightness(1.1)}
 .modal-btn.danger{background:var(--red);border-color:var(--red);color:#fff}
 .modal-btn.danger:hover{filter:brightness(1.1)}
 .modal-btn:disabled{opacity:.4;cursor:default}
 
 /* TOAST */
-#toast{position:fixed;bottom:24px;right:24px;background:var(--bg4);border:1px solid var(--border2);color:var(--text);padding:12px 20px;border-radius:8px;font-size:14px;z-index:999;opacity:0;transition:opacity .2s;pointer-events:none;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+#toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:10px 20px;border-radius:8px;font-size:14px;z-index:999;opacity:0;transition:opacity .2s;pointer-events:none;box-shadow:0 4px 16px rgba(0,0,0,.4)}
 #toast.show{opacity:1}
 
-/* LOADING SPINNER */
-.spinner{display:inline-block;width:14px;height:14px;border:2px solid var(--border2);border-top-color:var(--blue);border-radius:50%;animation:spin .6s linear infinite}
-@keyframes spin{to{transform:rotate(360deg)}}
+/* DROP INDICATOR */
+.drop-highlight td{background:var(--accent-bg)!important;outline:1px solid var(--accent)}
 
 /* SCROLLBAR */
-::-webkit-scrollbar{width:7px;height:7px}
+::-webkit-scrollbar{width:6px;height:6px}
 ::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 ::-webkit-scrollbar-thumb:hover{background:var(--text3)}
 </style>
 </head>
 <body>
 
-<!-- TOP BAR -->
-<div id="topbar">
-  <div id="logo">RETROVUE <span>Studio</span></div>
-  <div class="nav-tab active">Library</div>
-  <div class="nav-tab">Channels</div>
-  <div class="nav-tab">Schedule</div>
-  <div class="nav-tab">Traffic</div>
-  <div id="topbar-right">
-    <div id="view-toggle">
-      <button class="view-btn active" data-view="list" title="List view">List</button>
-      <button class="view-btn" data-view="grouped" title="Group by tag">By Tag</button>
-      <button class="view-btn" data-view="by-collection" title="Group by collection">By Collection</button>
+<!-- HEADER -->
+<div id="header">
+  <div id="header-top">
+    <span id="page-icon">&#x1F3AC;</span>
+    <span id="page-title">Studio</span>
+    <div id="header-actions">
+      <input id="search-box" placeholder="Search..." type="text">
+      <span id="untagged-badge">-- untagged</span>
+      <button class="bulk-btn" id="toggle-sidebar" title="Tag Cloud">&#x1F3F7; Tags</button>
     </div>
-    <input id="search" placeholder="Search assets..." type="text">
-    <div id="untagged-badge">-- untagged</div>
+  </div>
+  <div id="view-tabs">
+    <div class="view-tab active" data-view="table">Table</div>
+    <div class="view-tab" data-view="by-tag">By Tag</div>
+    <div class="view-tab" data-view="by-collection">By Collection</div>
   </div>
 </div>
 
-<!-- MAIN -->
-<div id="main">
+<!-- FILTER BAR -->
+<div id="filter-bar">
+  <div class="filter-chip active" data-scope="all">All</div>
+  <div class="filter-chip" data-scope="interstitials">Interstitials</div>
+  <div id="collection-chips"></div>
+  <div class="filter-sep"></div>
+  <label class="filter-chip" id="filter-untagged-chip">
+    <input type="checkbox" id="untagged-only" style="display:none">
+    Untagged only
+  </label>
+  <div id="progress-mini">
+    <span id="progress-text">Loading...</span>
+    <div id="progress-mini-bar"><div id="progress-mini-fill" style="width:0%"></div></div>
+  </div>
+</div>
 
-  <!-- LEFT — TAG CLOUD -->
-  <div id="tag-cloud-panel">
-    <div id="cloud-header">
-      <h3>Tag Cloud</h3>
-      <div class="subtitle">Drag tags onto assets to apply</div>
-      <input id="tag-search" placeholder="Filter tags..." type="text">
-    </div>
-    <div id="cloud-body"></div>
-    <div id="cloud-footer">
-      <button id="add-category-btn">+ New Category</button>
-      <input id="new-cat-input" placeholder="Category name..." type="text">
-    </div>
+<!-- MAIN AREA -->
+<div style="display:flex;flex:1;overflow:hidden">
+<div id="content">
+  <!-- TABLE VIEW -->
+  <div id="table-view">
+    <table>
+      <thead>
+        <tr>
+          <th class="cb-cell"><div class="cb" id="select-all"><span class="cb-check">&#x2713;</span></div></th>
+          <th>Name</th>
+          <th>Collection</th>
+          <th>Duration</th>
+          <th style="min-width:200px">Tags</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
   </div>
 
-  <!-- CONTEXT MENU -->
-  <div id="context-menu">
-    <div class="ctx-item" data-action="show-assets"><span class="ctx-icon">&#x1F50D;</span>Show Assets</div>
-    <div class="ctx-sep"></div>
-    <div class="ctx-item" data-action="rename"><span class="ctx-icon">&#x270F;</span>Rename Tag</div>
-    <div class="ctx-item" data-action="merge"><span class="ctx-icon">&#x2B05;</span>Merge Into...</div>
-    <div class="ctx-sep"></div>
-    <div class="ctx-item danger" data-action="delete-all"><span class="ctx-icon">&#x2716;</span>Delete from All Assets</div>
-  </div>
+  <!-- GROUPED VIEW -->
+  <div id="grouped-view"></div>
+</div>
 
-  <!-- CENTER LIST -->
-  <div id="list-wrap">
-    <div id="list-toolbar">
-      <div id="toolbar-main">
-        <div id="scope-selector">
-          <label>Scope:</label>
-          <select id="scope-select">
-            <option value="all">All Assets</option>
-            <option value="interstitials">Interstitials</option>
-          </select>
-        </div>
-        <span id="sel-count">No selection</span>
-        <label id="filter-untagged">
-          <input type="checkbox" id="untagged-only" style="accent-color:var(--blue)">
-          Untagged only
-        </label>
-        <div id="progress-wrap">
-          <span id="progress-text">Loading...</span>
-          <div id="progress-bar-outer"><div id="progress-bar-inner" style="width:0%"></div></div>
-        </div>
-      </div>
-      <div id="bulk-bar">
-        <span style="font-size:13px;color:var(--text3);font-weight:600">Bulk:</span>
-        <button class="bulk-btn" id="bulk-apply-btn">+ Apply Tag</button>
-        <button class="bulk-btn" id="bulk-remove-btn">- Remove Tag</button>
-        <button class="bulk-btn danger" id="bulk-clear-btn">Clear All Tags</button>
-      </div>
-    </div>
-    <div id="list-container">
-      <div id="drop-overlay"><div id="drop-overlay-text">Drop to apply tag</div></div>
-      <div id="asset-table">
-        <table>
-          <thead>
-            <tr>
-              <th style="width:32px"><input type="checkbox" id="select-all" style="accent-color:var(--blue)"></th>
-              <th>Filename</th>
-              <th>Directory</th>
-              <th style="width:70px">Duration</th>
-              <th>Tags</th>
-            </tr>
-          </thead>
-          <tbody id="asset-tbody"></tbody>
-        </table>
-      </div>
-      <div id="grouped-view"></div>
-    </div>
-    <div id="pagination"></div>
+<!-- SIDEBAR (Tag Cloud) -->
+<div id="sidebar">
+  <div id="sidebar-header">
+    <h3>Tags</h3>
+    <span id="sidebar-close">&#x2715;</span>
   </div>
+  <input id="sidebar-search" placeholder="Filter tags..." type="text">
+  <div id="sidebar-body"></div>
+</div>
+</div>
 
-  <!-- BULK TAG DROPDOWN (positioned absolutely) -->
-  <div id="bulk-tag-dropdown">
-    <input id="bulk-tag-search" placeholder="Search tags..." type="text">
-    <div id="bulk-tag-list"></div>
+<!-- BOTTOM BAR -->
+<div id="bottom-bar">
+  <span id="sel-info">No selection</span>
+  <div id="bulk-actions">
+    <button class="bulk-btn" id="bulk-apply-btn">+ Tag</button>
+    <button class="bulk-btn" id="bulk-remove-btn">- Tag</button>
+    <button class="bulk-btn danger" id="bulk-clear-btn">Clear tags</button>
   </div>
+  <div id="page-nav"></div>
+</div>
 
-  <!-- RIGHT PANEL -->
-  <div id="right-panel">
-    <div id="rp-empty">Select an asset<br>to see details<br><br><span style="font-size:12px;color:var(--text3)">or drag a tag from the<br>cloud onto assets</span></div>
-    <div id="rp-detail">
-      <div id="rp-filename"></div>
-      <div id="rp-dir"></div>
-      <div id="rp-meta"></div>
-      <div id="rp-preview"></div>
-      <div class="rp-section-title">Tags</div>
-      <div id="rp-tags"></div>
-      <div id="rp-no-tags" style="display:none">No tags yet</div>
-      <div id="rp-drop-zone">Drop tags here to apply</div>
-    </div>
-    <div id="rp-multi">
-      <div id="rp-multi-title">Multiple Selection</div>
-      <div id="rp-multi-count"></div>
-      <div class="rp-multi-group">
-        <div class="rp-multi-group-title"><span class="indicator" style="color:var(--green)">&#x2713;</span> Common to All</div>
-        <div id="rp-common-tags"></div>
-      </div>
-      <div class="rp-multi-group">
-        <div class="rp-multi-group-title"><span class="indicator" style="color:var(--orange)">&#xBD;</span> On Some</div>
-        <div id="rp-partial-tags"></div>
-      </div>
-      <div id="rp-multi-drop-zone" class="rp-drop-zone-style">Drop tags here to apply to all selected</div>
-    </div>
-  </div>
+<!-- TAG POPOVER (Notion-style inline tag editor) -->
+<div id="tag-popover">
+  <input id="tag-popover-search" placeholder="Search or create tag..." type="text">
+  <div id="tag-popover-list"></div>
+  <div id="tag-popover-create"></div>
+</div>
 
+<!-- CONTEXT MENU -->
+<div id="context-menu">
+  <div class="ctx-item" data-action="show-assets">Show assets with this tag</div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item" data-action="rename">Rename tag...</div>
+  <div class="ctx-item" data-action="merge">Merge into...</div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item danger" data-action="delete-all">Delete from all assets</div>
 </div>
 
 <!-- RENAME MODAL -->
 <div class="modal-backdrop" id="rename-modal">
   <div class="modal">
     <h2>Rename Tag</h2>
-    <div class="modal-sub">Renames this tag across all assets atomically</div>
-    <label>Current Tag</label>
+    <div class="modal-sub">Renames across all assets atomically</div>
+    <label>Current</label>
     <input type="text" id="rename-old" readonly>
-    <label>New Tag Name</label>
+    <label>New name</label>
     <input type="text" id="rename-new" placeholder="e.g. genre.drama">
     <div class="modal-preview" id="rename-preview" style="display:none">
       <div class="preview-row"><span class="preview-label">Affected assets</span><span class="preview-val" id="rename-affected">--</span></div>
       <div class="preview-row"><span class="preview-label">Pool references</span><span class="preview-val" id="rename-pools">--</span></div>
-      <div class="preview-warn" id="rename-pool-warn" style="display:none">&#x26A0; This tag is used in channel pool configs</div>
+      <div class="preview-warn" id="rename-pool-warn" style="display:none"></div>
     </div>
     <div class="modal-actions">
       <button class="modal-btn cancel" onclick="closeModal('rename-modal')">Cancel</button>
@@ -393,10 +323,10 @@ tr.row.selected .cb-check{display:block}
 <div class="modal-backdrop" id="merge-modal">
   <div class="modal">
     <h2>Merge Tag</h2>
-    <div class="modal-sub">Merge source tag into target &mdash; source is deleted</div>
-    <label>Source Tag (will be removed)</label>
+    <div class="modal-sub">Source tag is removed, assets move to target</div>
+    <label>Source (removing)</label>
     <input type="text" id="merge-source" readonly>
-    <label>Target Tag (will receive assets)</label>
+    <label>Target</label>
     <select id="merge-target"></select>
     <div class="modal-preview" id="merge-preview" style="display:none">
       <div class="preview-row"><span class="preview-label">Assets to move</span><span class="preview-val" id="merge-move-count">--</span></div>
@@ -409,18 +339,18 @@ tr.row.selected .cb-check{display:block}
   </div>
 </div>
 
-<!-- DELETE CONFIRM MODAL -->
+<!-- DELETE MODAL -->
 <div class="modal-backdrop" id="delete-modal">
   <div class="modal">
-    <h2>Delete Tag from All Assets</h2>
-    <div class="modal-sub">This removes the tag from every asset that has it</div>
+    <h2>Delete Tag</h2>
+    <div class="modal-sub">Remove from every asset</div>
     <div class="modal-preview">
       <div class="preview-row"><span class="preview-label">Tag</span><span class="preview-val" id="delete-tag-name">--</span></div>
-      <div class="preview-row"><span class="preview-label">Affected assets</span><span class="preview-val" id="delete-count">--</span></div>
+      <div class="preview-row"><span class="preview-label">Affected</span><span class="preview-val" id="delete-count">--</span></div>
     </div>
     <div class="modal-actions">
       <button class="modal-btn cancel" onclick="closeModal('delete-modal')">Cancel</button>
-      <button class="modal-btn danger" id="delete-confirm">Delete from All</button>
+      <button class="modal-btn danger" id="delete-confirm">Delete</button>
     </div>
   </div>
 </div>
@@ -428,57 +358,76 @@ tr.row.selected .cb-check{display:block}
 <div id="toast"></div>
 
 <script>
-// == STATE ================================================================
+// ── STATE ──────────────────────────────────────────────────────────────────
 let assets = [], palette = {}, tagSummary = {namespaces:{}, orphaned:[]};
 let selected = new Set();
 let currentPage = 1, totalPages = 1, totalAssets = 0, untaggedCount = 0;
 let searchTerm = '', untaggedOnly = false, currentScope = 'all';
-let dragTag = null;
-let lastClickedIdx = null;
-let contextTag = null; // {canonical, name, ns, asset_count}
-let allTagsList = []; // flat list for dropdowns
-let collections = [];
-let currentView = 'list'; // 'list' or 'grouped'
+let dragTag = null, lastClickedIdx = null, contextTag = null;
+let allTagsList = [], collections = [], currentView = 'table';
 
-// == API ==================================================================
-async function api(method, path, body) {
-  const opts = { method, headers: {'Content-Type':'application/json'} };
-  if (body) opts.body = JSON.stringify(body);
-  const r = await fetch('/studio' + path, opts);
-  return r.json();
+// ── NOTION TAG COLORS ─────────────────────────────────────────────────────
+const TAG_COLORS = {
+  tag:     {bg:'var(--blue-bg)',   fg:'var(--blue)'},
+  genre:   {bg:'var(--green-bg)',  fg:'var(--green)'},
+  network: {bg:'var(--purple-bg)', fg:'var(--purple)'},
+  rating:  {bg:'var(--orange-bg)', fg:'var(--orange)'},
+  era:     {bg:'var(--accent-bg)', fg:'var(--accent)'},
+  mood:    {bg:'var(--pink-bg)',   fg:'var(--pink)'},
+  default: {bg:'var(--gray-bg)',   fg:'var(--gray)'},
+};
+
+function getTagColor(ns, tagName) {
+  const catTags = palette[ns.toUpperCase()] || palette[ns] || [];
+  const t = catTags.find(x => x.tag === tagName);
+  if (t) return {bg: t.color_bg, fg: t.color_fg};
+  return TAG_COLORS[ns] || TAG_COLORS.default;
 }
 
-// == TOAST ================================================================
+function tagPillHtml(cat, tag, opts={}) {
+  const clr = getTagColor(cat.toLowerCase(), tag);
+  const rm = opts.removable ? `<span class="pill-rm" data-cat="${cat}" data-tag="${tag}">&times;</span>` : '';
+  return `<span class="tag-pill" style="background:${clr.bg};color:${clr.fg}" data-cat="${cat}" data-tag="${tag}">${tag}${rm}</span>`;
+}
+
+// ── API ───────────────────────────────────────────────────────────────────
+async function api(method, path, body) {
+  const opts = {method, headers:{'Content-Type':'application/json'}};
+  if (body) opts.body = JSON.stringify(body);
+  return (await fetch('/studio' + path, opts)).json();
+}
+
+// ── TOAST ─────────────────────────────────────────────────────────────────
 let toastTimer;
 function toast(msg, type='info') {
   const el = document.getElementById('toast');
   el.textContent = msg;
-  el.style.borderColor = type === 'error' ? '#c84040' : type === 'success' ? '#3ab468' : 'var(--border2)';
+  el.style.borderColor = type === 'error' ? 'var(--red)' : type === 'success' ? 'var(--green)' : 'var(--border)';
   el.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove('show'), 2500);
 }
 
-// == MODAL HELPERS ========================================================
+// ── MODALS ────────────────────────────────────────────────────────────────
 function openModal(id) { document.getElementById(id).classList.add('open'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 document.querySelectorAll('.modal-backdrop').forEach(m => {
   m.addEventListener('click', e => { if (e.target === m) closeModal(m.id); });
 });
 
-// == LOAD DATA ============================================================
+// ── LOAD DATA ─────────────────────────────────────────────────────────────
 async function loadAssets() {
-  const params = new URLSearchParams({page: currentPage, per_page: 100, scope: currentScope});
-  if (searchTerm) params.set('search', searchTerm);
-  if (untaggedOnly) params.set('untagged_only', 'true');
-  const data = await api('GET', '/api/assets?' + params);
+  const p = new URLSearchParams({page:currentPage, per_page:100, scope:currentScope});
+  if (searchTerm) p.set('search', searchTerm);
+  if (untaggedOnly) p.set('untagged_only', 'true');
+  const data = await api('GET', '/api/assets?' + p);
   assets = data.assets;
   totalPages = data.pages;
   totalAssets = data.total;
   untaggedCount = data.untagged_count;
-  if (data.collections && collections.length === 0) {
+  if (data.collections && data.collections.length > 0) {
     collections = data.collections;
-    populateScopeSelector();
+    buildCollectionChips();
   }
   renderCurrentView();
   renderPagination();
@@ -486,234 +435,520 @@ async function loadAssets() {
   updateProgress();
 }
 
-async function loadPalette() {
-  palette = await api('GET', '/api/palette');
-}
+async function loadPalette() { palette = await api('GET', '/api/palette'); }
 
 async function loadTagSummary() {
-  const data = await api('GET', '/api/tags/summary');
-  tagSummary = data;
+  tagSummary = await api('GET', '/api/tags/summary');
   buildAllTagsList();
-  renderCloud();
+  renderSidebar();
 }
 
 function buildAllTagsList() {
   allTagsList = [];
   for (const [ns, tags] of Object.entries(tagSummary.namespaces || {})) {
-    for (const t of tags) {
-      allTagsList.push({canonical: t.canonical, name: t.name, ns, asset_count: t.asset_count});
-    }
+    for (const t of tags) allTagsList.push({canonical:t.canonical, name:t.name, ns, asset_count:t.asset_count});
   }
   allTagsList.sort((a,b) => a.canonical.localeCompare(b.canonical));
 }
 
-function populateScopeSelector() {
-  const sel = document.getElementById('scope-select');
-  collections.forEach(c => {
-    if (!sel.querySelector(`option[value="${c}"]`)) {
-      const opt = document.createElement('option');
-      opt.value = c; opt.textContent = c;
-      sel.appendChild(opt);
-    }
+// ── COLLECTION FILTER CHIPS ───────────────────────────────────────────────
+function buildCollectionChips() {
+  const container = document.getElementById('collection-chips');
+  container.innerHTML = '';
+  collections.filter(c => c !== 'interstitials').forEach(c => {
+    const chip = document.createElement('div');
+    chip.className = 'filter-chip';
+    chip.dataset.scope = c;
+    chip.textContent = c;
+    chip.addEventListener('click', () => setScope(c));
+    container.appendChild(chip);
   });
 }
 
-// == RENDER CURRENT VIEW HELPER ============================================
-function renderCurrentView() {
-  if (currentView === 'list') renderTable();
-  else if (currentView === 'grouped') renderGroupedView();
-  else if (currentView === 'by-collection') renderCollectionView();
-}
-
-// == TAG COLORS ===========================================================
-function getTagColor(ns, tagName) {
-  // Try palette first
-  const catTags = palette[ns.toUpperCase()] || palette[ns] || [];
-  const t = catTags.find(x => x.tag === tagName);
-  if (t) return {bg: t.color_bg, fg: t.color_fg};
-  // Namespace-based defaults with more vibrant colors
-  const defaults = {
-    tag: {bg:'#1a2840', fg:'#6496d2'},
-    genre: {bg:'#1a3028', fg:'#64c896'},
-    network: {bg:'#2a1a40', fg:'#a078d2'},
-    rating: {bg:'#402a1a', fg:'#d2a064'},
-    era: {bg:'#1a3040', fg:'#64b8d2'},
-    mood: {bg:'#301a30', fg:'#c864c8'},
-  };
-  return defaults[ns] || {bg:'#1a2840', fg:'#6496d2'};
-}
-
-// == TAG CLOUD ============================================================
-let tagSearchTerm = '';
-
-function renderCloud() {
-  const body = document.getElementById('cloud-body');
-  body.innerHTML = '';
-  const filter = tagSearchTerm.toLowerCase();
-
-  const nsEntries = Object.entries(tagSummary.namespaces || {}).sort((a,b) => a[0].localeCompare(b[0]));
-  for (const [ns, tags] of nsEntries) {
-    let filteredTags = tags;
-    if (filter) {
-      filteredTags = tags.filter(t => t.name.toLowerCase().includes(filter) || t.canonical.toLowerCase().includes(filter));
-      if (filteredTags.length === 0) continue;
-    }
-
-    const sec = document.createElement('div');
-    sec.className = 'tag-cloud-section';
-
-    const hdr = document.createElement('div');
-    hdr.className = 'cloud-ns-header';
-    hdr.innerHTML = `<span class="cloud-ns-chevron">&#x25BC;</span><span class="cloud-ns-name">${ns}</span><span class="cloud-ns-count">${filteredTags.length} tags</span>`;
-    hdr.addEventListener('click', () => hdr.classList.toggle('collapsed'));
-    sec.appendChild(hdr);
-
-    const tagsDiv = document.createElement('div');
-    tagsDiv.className = 'cloud-tags';
-    filteredTags.sort((a,b) => a.name.localeCompare(b.name)).forEach(t => {
-      const tag = document.createElement('div');
-      tag.className = 'cloud-tag';
-      if (t.asset_count === 0) tag.classList.add('empty-tag');
-      const clr = getTagColor(ns, t.name);
-      tag.style.background = clr.bg;
-      tag.style.color = clr.fg;
-      tag.draggable = true;
-      tag.innerHTML = `<span class="tag-name">${t.name}</span><span class="tag-badge">${t.asset_count}</span>`;
-      tag.dataset.canonical = t.canonical;
-      tag.dataset.name = t.name;
-      tag.dataset.ns = ns;
-      tag.dataset.count = t.asset_count;
-
-      tag.addEventListener('dragstart', e => {
-        const cat = ns.toUpperCase();
-        dragTag = {category: cat, tag: t.name, color_bg: clr.bg, color_fg: clr.fg};
-        e.dataTransfer.effectAllowed = 'copy';
-        e.dataTransfer.setData('text/plain', t.canonical);
-      });
-      tag.addEventListener('dragend', () => { dragTag = null; });
-
-      tag.addEventListener('contextmenu', e => {
-        e.preventDefault();
-        contextTag = {canonical: t.canonical, name: t.name, ns, asset_count: t.asset_count};
-        showContextMenu(e.clientX, e.clientY);
-      });
-
-      tag.addEventListener('click', () => {
-        document.getElementById('search').value = t.name;
-        searchTerm = t.name;
-        currentPage = 1; selected.clear();
-        loadAssets();
-      });
-
-      tagsDiv.appendChild(tag);
-    });
-    sec.appendChild(tagsDiv);
-    body.appendChild(sec);
-  }
-
-  // Render orphaned palette tags
-  let orphaned = tagSummary.orphaned || [];
-  if (filter) {
-    orphaned = orphaned.filter(t => t.tag.toLowerCase().includes(filter));
-  }
-  if (orphaned.length > 0) {
-    const sec = document.createElement('div');
-    sec.className = 'tag-cloud-section';
-    const hdr = document.createElement('div');
-    hdr.className = 'cloud-ns-header';
-    hdr.innerHTML = `<span class="cloud-ns-chevron">&#x25BC;</span><span class="cloud-ns-name" style="color:var(--orange)">orphaned</span><span class="cloud-ns-count">${orphaned.length} tags</span>`;
-    hdr.addEventListener('click', () => hdr.classList.toggle('collapsed'));
-    sec.appendChild(hdr);
-
-    const tagsDiv = document.createElement('div');
-    tagsDiv.className = 'cloud-tags';
-    orphaned.forEach(t => {
-      const tag = document.createElement('div');
-      tag.className = 'cloud-tag orphaned';
-      tag.style.background = t.color_bg;
-      tag.style.color = t.color_fg;
-      tag.innerHTML = `<span class="tag-name">${t.tag}</span><span class="tag-badge">0</span>`;
-      tag.draggable = true;
-      tag.addEventListener('dragstart', e => {
-        dragTag = {category: t.category, tag: t.tag, color_bg: t.color_bg, color_fg: t.color_fg};
-        e.dataTransfer.effectAllowed = 'copy';
-        e.dataTransfer.setData('text/plain', t.category + '.' + t.tag);
-      });
-      tag.addEventListener('dragend', () => { dragTag = null; });
-      tagsDiv.appendChild(tag);
-    });
-    sec.appendChild(tagsDiv);
-    body.appendChild(sec);
-  }
-}
-
-// == TAG SEARCH ===========================================================
-document.getElementById('tag-search').addEventListener('input', e => {
-  tagSearchTerm = e.target.value.trim();
-  renderCloud();
-});
-
-// == NEW CATEGORY =========================================================
-document.getElementById('add-category-btn').addEventListener('click', () => {
-  const inp = document.getElementById('new-cat-input');
-  inp.style.display = inp.style.display === 'block' ? 'none' : 'block';
-  if (inp.style.display === 'block') inp.focus();
-});
-document.getElementById('new-cat-input').addEventListener('keydown', async e => {
-  const inp = e.target;
-  if (e.key === 'Enter') {
-    const cat = inp.value.trim().toUpperCase();
-    if (!cat) return;
-    await api('POST', '/api/palette/tag', {category: cat, tag: '...add tags'});
-    inp.value = ''; inp.style.display = 'none';
-    await loadPalette();
-    await loadTagSummary();
-    toast('Category added', 'success');
-  } else if (e.key === 'Escape') {
-    inp.value = ''; inp.style.display = 'none';
-  }
-});
-
-// == CONTEXT MENU =========================================================
-function showContextMenu(x, y) {
-  const menu = document.getElementById('context-menu');
-  menu.style.display = 'block';
-  menu.style.left = Math.min(x, window.innerWidth - 220) + 'px';
-  menu.style.top = Math.min(y, window.innerHeight - 200) + 'px';
-}
-
-function hideContextMenu() {
-  document.getElementById('context-menu').style.display = 'none';
-}
-
-document.addEventListener('click', hideContextMenu);
-document.addEventListener('contextmenu', e => {
-  if (!e.target.closest('.cloud-tag')) hideContextMenu();
-});
-
-document.querySelectorAll('.ctx-item').forEach(item => {
-  item.addEventListener('click', e => {
-    e.stopPropagation();
-    hideContextMenu();
-    if (!contextTag) return;
-    const action = item.dataset.action;
-    if (action === 'show-assets') filterByTag(contextTag);
-    else if (action === 'rename') showRenameDialog(contextTag);
-    else if (action === 'merge') showMergeDialog(contextTag);
-    else if (action === 'delete-all') showDeleteDialog(contextTag);
-  });
-});
-
-function filterByTag(tag) {
-  document.getElementById('search').value = tag.name;
-  searchTerm = tag.name;
+function setScope(scope) {
+  currentScope = scope;
+  document.querySelectorAll('.filter-chip[data-scope]').forEach(c => c.classList.toggle('active', c.dataset.scope === scope));
   currentPage = 1; selected.clear();
   loadAssets();
 }
 
-// == RENAME DIALOG ========================================================
-let renamePreviewTimer;
+document.querySelectorAll('.filter-chip[data-scope]').forEach(c => {
+  c.addEventListener('click', () => setScope(c.dataset.scope));
+});
 
+document.getElementById('filter-untagged-chip').addEventListener('click', () => {
+  const cb = document.getElementById('untagged-only');
+  cb.checked = !cb.checked;
+  untaggedOnly = cb.checked;
+  document.getElementById('filter-untagged-chip').classList.toggle('active', cb.checked);
+  currentPage = 1; selected.clear();
+  loadAssets();
+});
+
+// ── VIEW TABS ─────────────────────────────────────────────────────────────
+document.querySelectorAll('.view-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.view-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    currentView = tab.dataset.view;
+    document.getElementById('table-view').style.display = currentView === 'table' ? 'block' : 'none';
+    document.getElementById('grouped-view').style.display = currentView !== 'table' ? 'block' : 'none';
+    renderCurrentView();
+  });
+});
+
+function renderCurrentView() {
+  if (currentView === 'table') renderTable();
+  else if (currentView === 'by-tag') renderByTag();
+  else if (currentView === 'by-collection') renderByCollection();
+}
+
+// ── RENDER TABLE ──────────────────────────────────────────────────────────
+function fmt(ms) {
+  if (!ms) return '\u2014';
+  const s = Math.round(ms/1000), m = Math.floor(s/60);
+  return m + ':' + String(s%60).padStart(2,'0');
+}
+
+function renderTable() {
+  const tbody = document.getElementById('tbody');
+  tbody.innerHTML = '';
+  assets.forEach((a, idx) => {
+    const tr = document.createElement('tr');
+    tr.className = 'row' + (selected.has(a.id) ? ' selected' : '');
+    tr.dataset.id = a.id;
+
+    const tagsHtml = a.tags.length
+      ? a.tags.map(t => tagPillHtml(t.category, t.tag, {removable:true})).join('')
+      : '<span class="empty-tags">Add tag...</span>';
+
+    tr.innerHTML = `
+      <td class="cb-cell"><div class="cb"><span class="cb-check">&#x2713;</span></div></td>
+      <td class="col-title" title="${a.file_path}">${a.title || a.filename || '\u2014'}</td>
+      <td class="col-collection">${a.directory}</td>
+      <td class="col-dur">${fmt(a.duration_ms)}</td>
+      <td><div class="col-tags" data-asset-idx="${idx}">${tagsHtml}</div></td>
+    `;
+
+    // Selection
+    tr.querySelector('.cb').addEventListener('click', e => {
+      e.stopPropagation();
+      toggleSelect(a.id, idx, e);
+    });
+    tr.addEventListener('click', e => {
+      if (e.target.closest('.col-tags') || e.target.closest('.pill-rm')) return;
+      toggleSelect(a.id, idx, e);
+    });
+
+    // Inline tag editing — click on tags cell opens popover
+    tr.querySelector('.col-tags').addEventListener('click', e => {
+      if (e.target.classList.contains('pill-rm')) {
+        // Remove tag
+        const cat = e.target.dataset.cat, tag = e.target.dataset.tag;
+        removeTagFromAsset(a.id, cat, tag);
+        return;
+      }
+      showTagPopover(e.currentTarget, a);
+    });
+
+    // Drag-drop target
+    tr.addEventListener('dragover', e => {
+      if (!dragTag) return;
+      e.preventDefault();
+      tr.classList.add('drop-highlight');
+    });
+    tr.addEventListener('dragleave', () => tr.classList.remove('drop-highlight'));
+    tr.addEventListener('drop', async e => {
+      e.preventDefault();
+      tr.classList.remove('drop-highlight');
+      if (!dragTag) return;
+      const ids = selected.has(a.id) && selected.size > 1 ? [...selected] : [a.id];
+      await applyTag(ids, dragTag.category, dragTag.tag);
+    });
+
+    tbody.appendChild(tr);
+  });
+  updateSelInfo();
+}
+
+// ── TAG POPOVER (Notion-style inline editor) ──────────────────────────────
+let popoverAsset = null;
+
+function showTagPopover(anchor, asset) {
+  popoverAsset = asset;
+  const pop = document.getElementById('tag-popover');
+  const rect = anchor.getBoundingClientRect();
+  pop.style.display = 'block';
+  pop.style.left = Math.min(rect.left, window.innerWidth - 300) + 'px';
+  pop.style.top = Math.min(rect.bottom + 4, window.innerHeight - 380) + 'px';
+  document.getElementById('tag-popover-search').value = '';
+  renderPopoverList('');
+  document.getElementById('tag-popover-search').focus();
+}
+
+function hideTagPopover() {
+  document.getElementById('tag-popover').style.display = 'none';
+  popoverAsset = null;
+}
+
+function renderPopoverList(filter) {
+  const list = document.getElementById('tag-popover-list');
+  list.innerHTML = '';
+  const assetTagSet = new Set((popoverAsset?.tags || []).map(t => t.category + ':' + t.tag));
+  let tags = allTagsList;
+  if (filter) tags = tags.filter(t => t.canonical.toLowerCase().includes(filter) || t.name.toLowerCase().includes(filter));
+
+  tags.slice(0, 30).forEach(t => {
+    const div = document.createElement('div');
+    div.className = 'popover-tag';
+    const hasIt = assetTagSet.has(t.ns.toUpperCase() + ':' + t.name);
+    const clr = getTagColor(t.ns, t.name);
+    div.innerHTML = `<span class="pop-check">${hasIt ? '&#x2713;' : ''}</span><span class="pop-pill" style="background:${clr.bg};color:${clr.fg}">${t.name}</span><span style="font-size:12px;color:var(--text3);margin-left:auto">${t.ns}</span>`;
+    div.addEventListener('click', async () => {
+      if (hasIt) {
+        await removeTagFromAsset(popoverAsset.id, t.ns.toUpperCase(), t.name);
+      } else {
+        await applyTag([popoverAsset.id], t.ns.toUpperCase(), t.name);
+      }
+      renderPopoverList(document.getElementById('tag-popover-search').value.trim().toLowerCase());
+    });
+    list.appendChild(div);
+  });
+
+  // Show create option if filter doesn't match existing
+  const create = document.getElementById('tag-popover-create');
+  if (filter && !tags.find(t => t.name.toLowerCase() === filter)) {
+    create.style.display = 'block';
+    create.textContent = `Create "${filter}"`;
+    create.onclick = async () => {
+      await api('POST', '/api/palette/tag', {category:'TAG', tag:filter});
+      await applyTag([popoverAsset.id], 'TAG', filter);
+      await loadPalette();
+      await loadTagSummary();
+      renderPopoverList('');
+    };
+  } else {
+    create.style.display = 'none';
+  }
+}
+
+document.getElementById('tag-popover-search').addEventListener('input', e => {
+  renderPopoverList(e.target.value.trim().toLowerCase());
+});
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('#tag-popover') && !e.target.closest('.col-tags')) hideTagPopover();
+});
+
+// ── GROUPED VIEWS ─────────────────────────────────────────────────────────
+function renderByTag() {
+  const container = document.getElementById('grouped-view');
+  container.innerHTML = '';
+  const tagMap = {}, untagged = [];
+  assets.forEach(a => {
+    if (a.tags.length === 0) { untagged.push(a); return; }
+    a.tags.forEach(t => {
+      const key = t.category + ':' + t.tag;
+      if (!tagMap[key]) tagMap[key] = {category:t.category, tag:t.tag, assets:[]};
+      tagMap[key].assets.push(a);
+    });
+  });
+
+  Object.values(tagMap).sort((a,b) => a.tag.localeCompare(b.tag)).forEach(g => {
+    container.appendChild(buildGroupSection(tagPillHtml(g.category, g.tag), g.assets, g));
+  });
+  if (untagged.length > 0) {
+    container.appendChild(buildGroupSection('<span class="tag-pill" style="background:var(--red-bg);color:var(--red)">untagged</span>', untagged));
+  }
+  if (!container.children.length) container.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text3)">No assets</div>';
+}
+
+function renderByCollection() {
+  const container = document.getElementById('grouped-view');
+  container.innerHTML = '';
+  const collMap = {};
+  assets.forEach(a => { const c = a.directory||'unknown'; (collMap[c] = collMap[c]||[]).push(a); });
+
+  Object.keys(collMap).sort().forEach(coll => {
+    container.appendChild(buildGroupSection(`<span class="group-pill" style="background:var(--accent-bg);color:var(--accent)">${coll}</span>`, collMap[coll]));
+  });
+  if (!container.children.length) container.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text3)">No assets</div>';
+}
+
+function buildGroupSection(headerHtml, items, tagInfo) {
+  const sec = document.createElement('div');
+  sec.className = 'group-section';
+  const hdr = document.createElement('div');
+  hdr.className = 'group-header';
+  hdr.innerHTML = `<span class="group-chevron">&#x25BC;</span>${headerHtml}<span class="group-count">${items.length}</span>`;
+  hdr.addEventListener('click', () => hdr.classList.toggle('collapsed'));
+  if (tagInfo) {
+    hdr.addEventListener('contextmenu', e => {
+      e.preventDefault();
+      contextTag = {canonical:tagInfo.category.toLowerCase()+'.'+tagInfo.tag, name:tagInfo.tag, ns:tagInfo.category.toLowerCase(), asset_count:items.length};
+      showContextMenu(e.clientX, e.clientY);
+    });
+  }
+  sec.appendChild(hdr);
+
+  const rows = document.createElement('div');
+  rows.className = 'group-items';
+  items.forEach(a => {
+    const row = document.createElement('div');
+    row.className = 'group-row';
+    const otherTags = tagInfo ? a.tags.filter(t => !(t.category===tagInfo.category && t.tag===tagInfo.tag)) : a.tags;
+    row.innerHTML = `<span class="group-row-name" title="${a.file_path}">${a.title||a.filename||'\u2014'}</span>
+      <span class="group-row-coll">${a.directory}</span>
+      <span class="group-row-dur">${fmt(a.duration_ms)}</span>
+      <span class="group-row-tags">${otherTags.map(t=>tagPillHtml(t.category,t.tag)).join('')}</span>`;
+
+    // Drag-drop
+    row.addEventListener('dragover', e => { if(dragTag){e.preventDefault();row.style.background='var(--accent-bg)';} });
+    row.addEventListener('dragleave', () => { row.style.background=''; });
+    row.addEventListener('drop', async e => { e.preventDefault(); row.style.background=''; if(dragTag) await applyTag([a.id],dragTag.category,dragTag.tag); });
+
+    rows.appendChild(row);
+  });
+  sec.appendChild(rows);
+  return sec;
+}
+
+// ── SELECTION ─────────────────────────────────────────────────────────────
+function toggleSelect(id, idx, e) {
+  if (e.shiftKey && lastClickedIdx !== null) {
+    const lo = Math.min(lastClickedIdx, idx), hi = Math.max(lastClickedIdx, idx);
+    for (let i = lo; i <= hi; i++) selected.add(assets[i].id);
+  } else if (e.ctrlKey || e.metaKey) {
+    selected.has(id) ? selected.delete(id) : selected.add(id);
+  } else {
+    if (selected.size === 1 && selected.has(id)) selected.clear();
+    else { selected.clear(); selected.add(id); }
+  }
+  lastClickedIdx = idx;
+  renderTable();
+}
+
+document.getElementById('select-all').addEventListener('click', () => {
+  if (selected.size === assets.length) selected.clear();
+  else assets.forEach(a => selected.add(a.id));
+  renderTable();
+});
+
+function updateSelInfo() {
+  const n = selected.size;
+  document.getElementById('sel-info').textContent = n === 0 ? `${totalAssets} assets` : `${n} selected`;
+  const ba = document.getElementById('bulk-actions');
+  if (n > 0) ba.classList.add('visible'); else ba.classList.remove('visible');
+}
+
+// ── APPLY / REMOVE TAG ────────────────────────────────────────────────────
+async function applyTag(ids, category, tag) {
+  await api('POST', '/api/assets/tags', {asset_ids:ids, category, tag});
+  ids.forEach(id => {
+    const a = assets.find(x => x.id === id);
+    if (a && !a.tags.find(t => t.category===category && t.tag===tag)) a.tags.push({category, tag});
+  });
+  renderCurrentView();
+  updateProgress();
+  loadTagSummary();
+  toast(`Applied "${tag}" to ${ids.length} item${ids.length>1?'s':''}`, 'success');
+}
+
+async function removeTagFromAsset(id, cat, tag) {
+  await api('DELETE', '/api/assets/tags', {asset_ids:[id], category:cat, tag});
+  const a = assets.find(x => x.id === id);
+  if (a) a.tags = a.tags.filter(t => !(t.category===cat && t.tag===tag));
+  renderCurrentView();
+  updateProgress();
+  loadTagSummary();
+  toast('Tag removed');
+}
+
+// ── BULK ACTIONS ──────────────────────────────────────────────────────────
+document.getElementById('bulk-apply-btn').addEventListener('click', e => {
+  // Open popover positioned near button for bulk apply
+  const fakeAnchor = e.target.getBoundingClientRect();
+  const pop = document.getElementById('tag-popover');
+  popoverAsset = {id:'__bulk__', tags:[]};
+  pop.style.display = 'block';
+  pop.style.left = fakeAnchor.left + 'px';
+  pop.style.top = (fakeAnchor.top - 380) + 'px';
+  document.getElementById('tag-popover-search').value = '';
+  renderBulkPopoverList('');
+  document.getElementById('tag-popover-search').focus();
+});
+
+function renderBulkPopoverList(filter) {
+  const list = document.getElementById('tag-popover-list');
+  list.innerHTML = '';
+  let tags = allTagsList;
+  if (filter) tags = tags.filter(t => t.canonical.toLowerCase().includes(filter) || t.name.toLowerCase().includes(filter));
+  tags.slice(0, 30).forEach(t => {
+    const div = document.createElement('div');
+    div.className = 'popover-tag';
+    const clr = getTagColor(t.ns, t.name);
+    div.innerHTML = `<span class="pop-check"></span><span class="pop-pill" style="background:${clr.bg};color:${clr.fg}">${t.name}</span><span style="font-size:12px;color:var(--text3);margin-left:auto">${t.ns}</span>`;
+    div.addEventListener('click', async () => {
+      hideTagPopover();
+      await applyTag([...selected], t.ns.toUpperCase(), t.name);
+    });
+    list.appendChild(div);
+  });
+  document.getElementById('tag-popover-create').style.display = 'none';
+}
+
+// Override popover search when in bulk mode
+document.getElementById('tag-popover-search').addEventListener('input', e => {
+  const v = e.target.value.trim().toLowerCase();
+  if (popoverAsset && popoverAsset.id === '__bulk__') renderBulkPopoverList(v);
+  else renderPopoverList(v);
+});
+
+document.getElementById('bulk-remove-btn').addEventListener('click', async () => {
+  // Get shared tags
+  const selAssets = assets.filter(a => selected.has(a.id));
+  const tagMap = {};
+  selAssets.forEach(a => a.tags.forEach(t => {
+    const k = t.category+':'+t.tag;
+    tagMap[k] = tagMap[k] || {category:t.category, tag:t.tag, count:0};
+    tagMap[k].count++;
+  }));
+  const sharedTags = Object.values(tagMap);
+  if (sharedTags.length === 0) { toast('No tags to remove'); return; }
+
+  const list = document.getElementById('tag-popover-list');
+  list.innerHTML = '';
+  const pop = document.getElementById('tag-popover');
+  popoverAsset = {id:'__bulk_remove__', tags:[]};
+  const rect = document.getElementById('bulk-remove-btn').getBoundingClientRect();
+  pop.style.display = 'block';
+  pop.style.left = rect.left + 'px';
+  pop.style.top = (rect.top - 340) + 'px';
+  document.getElementById('tag-popover-search').value = '';
+  document.getElementById('tag-popover-create').style.display = 'none';
+
+  sharedTags.forEach(t => {
+    const div = document.createElement('div');
+    div.className = 'popover-tag';
+    const clr = getTagColor(t.category.toLowerCase(), t.tag);
+    div.innerHTML = `<span class="pop-check"></span><span class="pop-pill" style="background:${clr.bg};color:${clr.fg}">${t.tag}</span><span style="font-size:12px;color:var(--text3);margin-left:auto">${t.count}/${selAssets.length}</span>`;
+    div.addEventListener('click', async () => {
+      hideTagPopover();
+      const ids = [...selected];
+      await api('DELETE', '/api/assets/tags', {asset_ids:ids, category:t.category, tag:t.tag});
+      ids.forEach(id => { const a = assets.find(x=>x.id===id); if(a) a.tags = a.tags.filter(x=>!(x.category===t.category&&x.tag===t.tag)); });
+      renderCurrentView();
+      updateProgress();
+      loadTagSummary();
+      toast(`Removed "${t.tag}" from ${ids.length} items`, 'success');
+    });
+    list.appendChild(div);
+  });
+  document.getElementById('tag-popover-search').focus();
+});
+
+document.getElementById('bulk-clear-btn').addEventListener('click', async () => {
+  const ids = [...selected];
+  if (!confirm(`Clear ALL tags from ${ids.length} assets?`)) return;
+  const selAssets = assets.filter(a => selected.has(a.id));
+  for (const a of selAssets) {
+    for (const t of [...a.tags]) await api('DELETE', '/api/assets/tags', {asset_ids:[a.id], category:t.category, tag:t.tag});
+    a.tags = [];
+  }
+  renderCurrentView();
+  updateProgress();
+  loadTagSummary();
+  toast(`Cleared tags from ${ids.length} assets`, 'success');
+});
+
+// ── SIDEBAR (Tag Cloud) ──────────────────────────────────────────────────
+let sidebarFilter = '';
+
+document.getElementById('toggle-sidebar').addEventListener('click', () => {
+  document.getElementById('sidebar').classList.toggle('open');
+});
+document.getElementById('sidebar-close').addEventListener('click', () => {
+  document.getElementById('sidebar').classList.remove('open');
+});
+document.getElementById('sidebar-search').addEventListener('input', e => {
+  sidebarFilter = e.target.value.trim().toLowerCase();
+  renderSidebar();
+});
+
+function renderSidebar() {
+  const body = document.getElementById('sidebar-body');
+  body.innerHTML = '';
+  const nsEntries = Object.entries(tagSummary.namespaces || {}).sort((a,b) => a[0].localeCompare(b[0]));
+  for (const [ns, tags] of nsEntries) {
+    let filtered = tags;
+    if (sidebarFilter) filtered = tags.filter(t => t.name.toLowerCase().includes(sidebarFilter) || t.canonical.toLowerCase().includes(sidebarFilter));
+    if (filtered.length === 0) continue;
+
+    const sec = document.createElement('div');
+    sec.className = 'sb-section';
+    const hdr = document.createElement('div');
+    hdr.className = 'sb-ns-header';
+    hdr.innerHTML = `<span class="sb-ns-chevron">&#x25BC;</span>${ns}<span class="sb-ns-count">${filtered.length}</span>`;
+    hdr.addEventListener('click', () => hdr.classList.toggle('collapsed'));
+    sec.appendChild(hdr);
+
+    const tagsDiv = document.createElement('div');
+    tagsDiv.className = 'sb-tags';
+    filtered.sort((a,b) => a.name.localeCompare(b.name)).forEach(t => {
+      const pill = document.createElement('span');
+      pill.className = 'sb-tag';
+      const clr = getTagColor(ns, t.name);
+      pill.style.background = clr.bg;
+      pill.style.color = clr.fg;
+      pill.textContent = t.name;
+      pill.draggable = true;
+      pill.addEventListener('dragstart', e => {
+        dragTag = {category:ns.toUpperCase(), tag:t.name};
+        e.dataTransfer.effectAllowed = 'copy';
+      });
+      pill.addEventListener('dragend', () => { dragTag = null; });
+      pill.addEventListener('click', () => {
+        document.getElementById('search-box').value = t.name;
+        searchTerm = t.name;
+        currentPage = 1; selected.clear();
+        loadAssets();
+      });
+      pill.addEventListener('contextmenu', e => {
+        e.preventDefault();
+        contextTag = {canonical:t.canonical, name:t.name, ns, asset_count:t.asset_count};
+        showContextMenu(e.clientX, e.clientY);
+      });
+      tagsDiv.appendChild(pill);
+    });
+    sec.appendChild(tagsDiv);
+    body.appendChild(sec);
+  }
+}
+
+// ── CONTEXT MENU ──────────────────────────────────────────────────────────
+function showContextMenu(x, y) {
+  const m = document.getElementById('context-menu');
+  m.style.display = 'block';
+  m.style.left = Math.min(x, window.innerWidth - 220) + 'px';
+  m.style.top = Math.min(y, window.innerHeight - 200) + 'px';
+}
+document.addEventListener('click', () => { document.getElementById('context-menu').style.display = 'none'; });
+
+document.querySelectorAll('.ctx-item').forEach(item => {
+  item.addEventListener('click', e => {
+    e.stopPropagation();
+    document.getElementById('context-menu').style.display = 'none';
+    if (!contextTag) return;
+    const a = item.dataset.action;
+    if (a === 'show-assets') { document.getElementById('search-box').value = contextTag.name; searchTerm = contextTag.name; currentPage=1; selected.clear(); loadAssets(); }
+    else if (a === 'rename') showRenameDialog(contextTag);
+    else if (a === 'merge') showMergeDialog(contextTag);
+    else if (a === 'delete-all') showDeleteDialog(contextTag);
+  });
+});
+
+// ── RENAME ────────────────────────────────────────────────────────────────
+let renameTimer;
 function showRenameDialog(tag) {
   document.getElementById('rename-old').value = tag.canonical;
   document.getElementById('rename-new').value = '';
@@ -724,53 +959,40 @@ function showRenameDialog(tag) {
 }
 
 document.getElementById('rename-new').addEventListener('input', e => {
-  clearTimeout(renamePreviewTimer);
-  const newVal = e.target.value.trim();
-  const btn = document.getElementById('rename-confirm');
-  if (!newVal) { btn.disabled = true; document.getElementById('rename-preview').style.display = 'none'; return; }
-  renamePreviewTimer = setTimeout(async () => {
-    const old = document.getElementById('rename-old').value;
-    const data = await api('POST', '/api/tags/rename/preview', {old_tag: old, new_tag: newVal});
-    document.getElementById('rename-affected').textContent = data.affected_assets;
-    document.getElementById('rename-pools').textContent = data.pool_references.length;
-    const warn = document.getElementById('rename-pool-warn');
-    if (data.pool_references.length > 0) {
-      warn.style.display = 'flex';
-      warn.textContent = '\u26A0 Used in: ' + data.pool_references.map(r => r.channel + '/' + r.pool_name).join(', ');
-    } else {
-      warn.style.display = 'none';
-    }
+  clearTimeout(renameTimer);
+  const v = e.target.value.trim();
+  if (!v) { document.getElementById('rename-confirm').disabled = true; document.getElementById('rename-preview').style.display = 'none'; return; }
+  renameTimer = setTimeout(async () => {
+    const d = await api('POST', '/api/tags/rename/preview', {old_tag:document.getElementById('rename-old').value, new_tag:v});
+    document.getElementById('rename-affected').textContent = d.affected_assets;
+    document.getElementById('rename-pools').textContent = d.pool_references.length;
+    const w = document.getElementById('rename-pool-warn');
+    w.style.display = d.pool_references.length > 0 ? 'block' : 'none';
+    if (d.pool_references.length > 0) w.textContent = '\u26A0 Used in: ' + d.pool_references.map(r => r.channel+'/'+r.pool_name).join(', ');
     document.getElementById('rename-preview').style.display = 'block';
-    btn.disabled = false;
+    document.getElementById('rename-confirm').disabled = false;
   }, 400);
 });
 
 document.getElementById('rename-confirm').addEventListener('click', async () => {
-  const old = document.getElementById('rename-old').value;
-  const newTag = document.getElementById('rename-new').value.trim();
-  if (!newTag) return;
+  const old = document.getElementById('rename-old').value, nw = document.getElementById('rename-new').value.trim();
+  if (!nw) return;
   const btn = document.getElementById('rename-confirm');
   btn.disabled = true; btn.textContent = 'Renaming...';
-  const result = await api('POST', '/api/tags/rename', {old_tag: old, new_tag: newTag});
-  btn.textContent = 'Rename';
-  closeModal('rename-modal');
-  if (result.ok) {
-    toast(`Renamed: ${result.affected_assets} assets updated`, 'success');
-    await Promise.all([loadTagSummary(), loadAssets(), loadPalette()]);
-  } else {
-    toast('Rename failed', 'error');
-  }
+  const r = await api('POST', '/api/tags/rename', {old_tag:old, new_tag:nw});
+  btn.textContent = 'Rename'; closeModal('rename-modal');
+  if (r.ok) { toast(`Renamed: ${r.affected_assets} assets`, 'success'); await Promise.all([loadTagSummary(), loadAssets(), loadPalette()]); }
+  else toast('Rename failed', 'error');
 });
 
-// == MERGE DIALOG =========================================================
+// ── MERGE ─────────────────────────────────────────────────────────────────
 function showMergeDialog(tag) {
   document.getElementById('merge-source').value = tag.canonical;
   const sel = document.getElementById('merge-target');
-  sel.innerHTML = '<option value="">-- select target --</option>';
+  sel.innerHTML = '<option value="">Select target...</option>';
   allTagsList.filter(t => t.canonical !== tag.canonical).forEach(t => {
     const opt = document.createElement('option');
-    opt.value = t.canonical;
-    opt.textContent = t.canonical + ' (' + t.asset_count + ')';
+    opt.value = t.canonical; opt.textContent = t.canonical + ' (' + t.asset_count + ')';
     sel.appendChild(opt);
   });
   document.getElementById('merge-preview').style.display = 'none';
@@ -778,37 +1000,28 @@ function showMergeDialog(tag) {
   openModal('merge-modal');
 }
 
-document.getElementById('merge-target').addEventListener('change', async e => {
-  const target = e.target.value;
+document.getElementById('merge-target').addEventListener('change', e => {
   const btn = document.getElementById('merge-confirm');
-  if (!target) { btn.disabled = true; document.getElementById('merge-preview').style.display = 'none'; return; }
-  const source = document.getElementById('merge-source').value;
-  const srcTag = allTagsList.find(t => t.canonical === source);
-  const tgtTag = allTagsList.find(t => t.canonical === target);
-  document.getElementById('merge-move-count').textContent = srcTag ? srcTag.asset_count : '?';
-  document.getElementById('merge-overlap-count').textContent = '(calculated on merge)';
+  if (!e.target.value) { btn.disabled = true; document.getElementById('merge-preview').style.display = 'none'; return; }
+  const src = allTagsList.find(t => t.canonical === document.getElementById('merge-source').value);
+  document.getElementById('merge-move-count').textContent = src ? src.asset_count : '?';
+  document.getElementById('merge-overlap-count').textContent = '(on merge)';
   document.getElementById('merge-preview').style.display = 'block';
   btn.disabled = false;
 });
 
 document.getElementById('merge-confirm').addEventListener('click', async () => {
-  const source = document.getElementById('merge-source').value;
-  const target = document.getElementById('merge-target').value;
-  if (!target) return;
+  const src = document.getElementById('merge-source').value, tgt = document.getElementById('merge-target').value;
+  if (!tgt) return;
   const btn = document.getElementById('merge-confirm');
   btn.disabled = true; btn.textContent = 'Merging...';
-  const result = await api('POST', '/api/tags/merge', {source_tag: source, target_tag: target});
-  btn.textContent = 'Merge';
-  closeModal('merge-modal');
-  if (result.ok) {
-    toast(`Merged: ${result.affected_assets} assets updated, ${result.already_had_target} deduped`, 'success');
-    await Promise.all([loadTagSummary(), loadAssets(), loadPalette()]);
-  } else {
-    toast('Merge failed', 'error');
-  }
+  const r = await api('POST', '/api/tags/merge', {source_tag:src, target_tag:tgt});
+  btn.textContent = 'Merge'; closeModal('merge-modal');
+  if (r.ok) { toast(`Merged: ${r.affected_assets} assets, ${r.already_had_target} deduped`, 'success'); await Promise.all([loadTagSummary(), loadAssets(), loadPalette()]); }
+  else toast('Merge failed', 'error');
 });
 
-// == DELETE DIALOG ========================================================
+// ── DELETE ─────────────────────────────────────────────────────────────────
 function showDeleteDialog(tag) {
   document.getElementById('delete-tag-name').textContent = tag.canonical;
   document.getElementById('delete-count').textContent = tag.asset_count;
@@ -816,684 +1029,49 @@ function showDeleteDialog(tag) {
   document.getElementById('delete-confirm').onclick = async () => {
     const btn = document.getElementById('delete-confirm');
     btn.disabled = true; btn.textContent = 'Deleting...';
-    const result = await api('POST', '/api/tags/bulk-remove', {tag: tag.canonical});
-    btn.disabled = false; btn.textContent = 'Delete from All';
-    closeModal('delete-modal');
-    if (result.ok) {
-      toast(`Deleted from ${result.affected_assets} assets`, 'success');
-      await Promise.all([loadTagSummary(), loadAssets()]);
-    } else {
-      toast('Delete failed', 'error');
-    }
+    const r = await api('POST', '/api/tags/bulk-remove', {tag:tag.canonical});
+    btn.disabled = false; btn.textContent = 'Delete'; closeModal('delete-modal');
+    if (r.ok) { toast(`Deleted from ${r.affected_assets} assets`, 'success'); await Promise.all([loadTagSummary(), loadAssets()]); }
+    else toast('Delete failed', 'error');
   };
 }
 
-// == VIEW TOGGLE ==========================================================
-document.querySelectorAll('.view-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    currentView = btn.dataset.view;
-    const tableEl = document.getElementById('asset-table');
-    const groupedEl = document.getElementById('grouped-view');
-    if (currentView === 'list') {
-      tableEl.style.display = 'block';
-      groupedEl.style.display = 'none';
-      renderTable();
-    } else if (currentView === 'grouped') {
-      tableEl.style.display = 'none';
-      groupedEl.style.display = 'block';
-      renderGroupedView();
-    } else if (currentView === 'by-collection') {
-      tableEl.style.display = 'none';
-      groupedEl.style.display = 'block';
-      renderCollectionView();
-    }
-  });
-});
-
-// == SCOPE SELECTOR =======================================================
-document.getElementById('scope-select').addEventListener('change', e => {
-  currentScope = e.target.value;
-  currentPage = 1; selected.clear();
-  loadAssets();
-});
-
-// == RENDER TABLE =========================================================
-function formatDuration(ms) {
-  if (!ms) return '\u2014';
-  const s = Math.round(ms / 1000);
-  const m = Math.floor(s / 60), ss = s % 60;
-  return m + ':' + String(ss).padStart(2,'0');
-}
-
-function renderTable() {
-  const tbody = document.getElementById('asset-tbody');
-  tbody.innerHTML = '';
-  assets.forEach((asset, idx) => {
-    const tr = document.createElement('tr');
-    tr.className = 'row' + (selected.has(asset.id) ? ' selected' : '');
-    tr.dataset.id = asset.id;
-    tr.dataset.idx = idx;
-
-    const tagsHtml = asset.tags.length
-      ? asset.tags.map(t => {
-          const clr = getTagColor(t.category.toLowerCase(), t.tag);
-          return `<span class="inline-tag" style="background:${clr.bg};color:${clr.fg}" data-cat="${t.category}" data-tag="${t.tag}">
-            ${t.tag}<span class="rm" data-assetid="${asset.id}" data-cat="${t.category}" data-tag="${t.tag}">\u00D7</span>
-          </span>`;
-        }).join('')
-      : '<span class="untagged-hint">untagged</span>';
-
-    tr.innerHTML = `
-      <td><div class="cb"><span class="cb-check">\u2713</span></div></td>
-      <td class="col-filename" title="${asset.file_path}">${asset.filename || asset.title || '\u2014'}</td>
-      <td class="col-dir" title="${asset.directory_full}">${asset.directory}</td>
-      <td class="col-dur">${formatDuration(asset.duration_ms)}</td>
-      <td class="col-tags">${tagsHtml}</td>
-    `;
-
-    tr.addEventListener('click', e => {
-      if (e.target.classList.contains('rm')) return;
-      handleRowClick(e, asset, idx);
-    });
-
-    // Drag-drop target
-    tr.addEventListener('dragover', e => {
-      if (!dragTag) return;
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'copy';
-      if (selected.has(asset.id)) {
-        document.querySelectorAll('tr.row.selected').forEach(r => r.classList.add('drop-target'));
-      } else {
-        tr.classList.add('drop-target');
-      }
-    });
-    tr.addEventListener('dragleave', () => {
-      tr.classList.remove('drop-target');
-      document.querySelectorAll('tr.row.selected').forEach(r => r.classList.remove('drop-target'));
-    });
-    tr.addEventListener('drop', async e => {
-      e.preventDefault();
-      tr.classList.remove('drop-target');
-      document.querySelectorAll('tr.row.selected').forEach(r => r.classList.remove('drop-target'));
-      if (!dragTag) return;
-      const ids = selected.has(asset.id) ? [...selected] : [asset.id];
-      await applyTag(ids, dragTag.category, dragTag.tag);
-    });
-
-    tbody.appendChild(tr);
-  });
-
-  // Wire inline remove buttons
-  tbody.querySelectorAll('.rm').forEach(btn => {
-    btn.addEventListener('click', async e => {
-      e.stopPropagation();
-      const aid = btn.dataset.assetid;
-      const cat = btn.dataset.cat, tag = btn.dataset.tag;
-      await api('DELETE', '/api/assets/tags', {asset_ids: [aid], category: cat, tag});
-      const a = assets.find(x => x.id === aid);
-      if (a) a.tags = a.tags.filter(t => !(t.category===cat && t.tag===tag));
-      renderTable();
-      updateRightPanel();
-      updateProgress();
-      toast('Tag removed');
-    });
-  });
-
-  updateSelCount();
-  updateBulkBar();
-}
-
-// == GROUPED VIEW =========================================================
-function renderGroupedView() {
-  const container = document.getElementById('grouped-view');
-  container.innerHTML = '';
-
-  // Build tag -> assets map
-  const tagMap = {};
-  const untaggedAssets = [];
-  assets.forEach(a => {
-    if (a.tags.length === 0) {
-      untaggedAssets.push(a);
-      return;
-    }
-    a.tags.forEach(t => {
-      const key = t.category + ':' + t.tag;
-      if (!tagMap[key]) tagMap[key] = {category: t.category, tag: t.tag, assets: []};
-      tagMap[key].assets.push(a);
-    });
-  });
-
-  // Sort by tag name
-  const sortedTags = Object.values(tagMap).sort((a,b) => (a.category+a.tag).localeCompare(b.category+b.tag));
-
-  sortedTags.forEach(group => {
-    const sec = document.createElement('div');
-    sec.className = 'group-section';
-
-    const clr = getTagColor(group.category.toLowerCase(), group.tag);
-    const hdr = document.createElement('div');
-    hdr.className = 'group-header';
-    hdr.innerHTML = `<span class="group-tag-pill" style="background:${clr.bg};color:${clr.fg}">${group.tag}</span>
-      <span class="group-count">${group.assets.length} asset${group.assets.length !== 1 ? 's' : ''}</span>
-      <span class="group-chevron">&#x25BC;</span>`;
-    hdr.addEventListener('click', () => hdr.classList.toggle('collapsed'));
-    sec.appendChild(hdr);
-
-    const assetsDiv = document.createElement('div');
-    assetsDiv.className = 'group-assets';
-    group.assets.forEach(a => {
-      const row = document.createElement('div');
-      row.className = 'group-asset-row';
-      const otherTags = a.tags.filter(t => !(t.category === group.category && t.tag === group.tag));
-      const otherHtml = otherTags.map(t => {
-        const c = getTagColor(t.category.toLowerCase(), t.tag);
-        return `<span class="group-inline-tag" style="background:${c.bg};color:${c.fg}">${t.tag}</span>`;
-      }).join('');
-      row.innerHTML = `<span class="group-asset-name" title="${a.file_path}">${a.filename || a.title || '\u2014'}</span>
-        <span class="group-asset-dir">${a.directory}</span>
-        <span class="group-asset-dur">${formatDuration(a.duration_ms)}</span>
-        <span class="group-asset-tags">${otherHtml}</span>`;
-      row.addEventListener('click', () => {
-        selected.clear();
-        selected.add(a.id);
-        updateRightPanel();
-      });
-      assetsDiv.appendChild(row);
-    });
-    sec.appendChild(assetsDiv);
-    container.appendChild(sec);
-  });
-
-  // Untagged section
-  if (untaggedAssets.length > 0) {
-    const sec = document.createElement('div');
-    sec.className = 'group-section';
-    const hdr = document.createElement('div');
-    hdr.className = 'group-header';
-    hdr.innerHTML = `<span class="group-tag-pill" style="background:#3a1a1a;color:#f08080">untagged</span>
-      <span class="group-count">${untaggedAssets.length} asset${untaggedAssets.length !== 1 ? 's' : ''}</span>
-      <span class="group-chevron">&#x25BC;</span>`;
-    hdr.addEventListener('click', () => hdr.classList.toggle('collapsed'));
-    sec.appendChild(hdr);
-
-    const assetsDiv = document.createElement('div');
-    assetsDiv.className = 'group-assets';
-    untaggedAssets.forEach(a => {
-      const row = document.createElement('div');
-      row.className = 'group-asset-row';
-      row.innerHTML = `<span class="group-asset-name" title="${a.file_path}">${a.filename || a.title || '\u2014'}</span>
-        <span class="group-asset-dir">${a.directory}</span>
-        <span class="group-asset-dur">${formatDuration(a.duration_ms)}</span>`;
-      row.addEventListener('click', () => {
-        selected.clear();
-        selected.add(a.id);
-        updateRightPanel();
-      });
-      assetsDiv.appendChild(row);
-    });
-    sec.appendChild(assetsDiv);
-    container.appendChild(sec);
-  }
-
-  if (sortedTags.length === 0 && untaggedAssets.length === 0) {
-    container.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text3);font-size:15px">No assets loaded</div>';
-  }
-}
-
-// == COLLECTION GROUPED VIEW ==============================================
-function renderCollectionView() {
-  const container = document.getElementById('grouped-view');
-  container.innerHTML = '';
-
-  // Build collection -> assets map
-  const collMap = {};
-  assets.forEach(a => {
-    const coll = a.directory || 'unknown';
-    if (!collMap[coll]) collMap[coll] = [];
-    collMap[coll].push(a);
-  });
-
-  const sortedColls = Object.keys(collMap).sort();
-
-  sortedColls.forEach(coll => {
-    const group = collMap[coll];
-    const sec = document.createElement('div');
-    sec.className = 'group-section';
-
-    const hdr = document.createElement('div');
-    hdr.className = 'group-header';
-    hdr.innerHTML = `<span class="group-tag-pill" style="background:var(--bg4);color:var(--gold);font-size:15px">${coll}</span>
-      <span class="group-count">${group.length} asset${group.length !== 1 ? 's' : ''}</span>
-      <span class="group-chevron">&#x25BC;</span>`;
-    hdr.addEventListener('click', () => hdr.classList.toggle('collapsed'));
-    sec.appendChild(hdr);
-
-    const assetsDiv = document.createElement('div');
-    assetsDiv.className = 'group-assets';
-    group.forEach(a => {
-      const row = document.createElement('div');
-      row.className = 'group-asset-row';
-      const tagsHtml = a.tags.map(t => {
-        const c = getTagColor(t.category.toLowerCase(), t.tag);
-        return `<span class="group-inline-tag" style="background:${c.bg};color:${c.fg}">${t.tag}</span>`;
-      }).join('') || '<span style="font-size:12px;color:#804040;font-style:italic">untagged</span>';
-      row.innerHTML = `<span class="group-asset-name" title="${a.file_path}">${a.filename || a.title || '\u2014'}</span>
-        <span class="group-asset-dur">${formatDuration(a.duration_ms)}</span>
-        <span class="group-asset-tags">${tagsHtml}</span>`;
-
-      // Drag-drop target
-      row.addEventListener('dragover', e => {
-        if (!dragTag) return;
-        e.preventDefault();
-        row.style.background = 'var(--bg3)';
-        row.style.outline = '1px solid var(--blue)';
-      });
-      row.addEventListener('dragleave', () => {
-        row.style.background = '';
-        row.style.outline = '';
-      });
-      row.addEventListener('drop', async e => {
-        e.preventDefault();
-        row.style.background = '';
-        row.style.outline = '';
-        if (!dragTag) return;
-        await applyTag([a.id], dragTag.category, dragTag.tag);
-      });
-
-      row.addEventListener('click', () => {
-        selected.clear();
-        selected.add(a.id);
-        updateRightPanel();
-      });
-      assetsDiv.appendChild(row);
-    });
-    sec.appendChild(assetsDiv);
-    container.appendChild(sec);
-  });
-
-  if (sortedColls.length === 0) {
-    container.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text3);font-size:15px">No assets loaded</div>';
-  }
-}
-
-// == SELECTION ============================================================
-function handleRowClick(e, asset, idx) {
-  if (e.shiftKey && lastClickedIdx !== null) {
-    const lo = Math.min(lastClickedIdx, idx), hi = Math.max(lastClickedIdx, idx);
-    for (let i = lo; i <= hi; i++) selected.add(assets[i].id);
-  } else if (e.ctrlKey || e.metaKey) {
-    if (selected.has(asset.id)) selected.delete(asset.id);
-    else selected.add(asset.id);
-  } else {
-    selected.clear();
-    selected.add(asset.id);
-  }
-  lastClickedIdx = idx;
-  renderTable();
-  updateRightPanel();
-}
-
-document.getElementById('select-all').addEventListener('change', e => {
-  if (e.target.checked) assets.forEach(a => selected.add(a.id));
-  else selected.clear();
-  renderTable();
-  updateRightPanel();
-});
-
-function updateSelCount() {
-  const n = selected.size;
-  document.getElementById('sel-count').textContent = n === 0 ? 'No selection' : `${n} selected`;
-}
-
-function updateBulkBar() {
-  const bar = document.getElementById('bulk-bar');
-  if (selected.size > 1) bar.classList.add('visible');
-  else bar.classList.remove('visible');
-}
-
-// == APPLY TAG ============================================================
-async function applyTag(ids, category, tag) {
-  await api('POST', '/api/assets/tags', {asset_ids: ids, category, tag});
-  ids.forEach(id => {
-    const a = assets.find(x => x.id === id);
-    if (a && !a.tags.find(t => t.category===category && t.tag===tag)) {
-      a.tags.push({category, tag});
-    }
-  });
-  renderCurrentView();
-  updateRightPanel();
-  updateProgress();
-  loadTagSummary(); // refresh counts
-  toast(`Applied "${tag}" to ${ids.length} item${ids.length>1?'s':''}`, 'success');
-}
-
-// == BULK ACTIONS =========================================================
-let bulkDropdownMode = null;
-
-function showBulkDropdown(anchorEl, mode) {
-  bulkDropdownMode = mode;
-  const dd = document.getElementById('bulk-tag-dropdown');
-  const rect = anchorEl.getBoundingClientRect();
-  dd.style.display = 'block';
-  dd.style.left = rect.left + 'px';
-  dd.style.top = (rect.bottom + 4) + 'px';
-  document.getElementById('bulk-tag-search').value = '';
-  renderBulkTagList('');
-  document.getElementById('bulk-tag-search').focus();
-}
-
-function hideBulkDropdown() {
-  document.getElementById('bulk-tag-dropdown').style.display = 'none';
-  bulkDropdownMode = null;
-}
-
-function renderBulkTagList(filter) {
-  const list = document.getElementById('bulk-tag-list');
-  list.innerHTML = '';
-  let tags;
-  if (bulkDropdownMode === 'remove') {
-    tags = getSharedTags();
-  } else {
-    tags = allTagsList;
-  }
-  if (filter) {
-    tags = tags.filter(t => t.canonical.toLowerCase().includes(filter.toLowerCase()) || t.name.toLowerCase().includes(filter.toLowerCase()));
-  }
-  tags.slice(0, 50).forEach(t => {
-    const div = document.createElement('div');
-    div.className = 'bulk-tag-option';
-    const clr = getTagColor(t.ns, t.name);
-    div.innerHTML = `<span class="tag-pill" style="background:${clr.bg};color:${clr.fg}">${t.name}</span><span style="font-size:12px;color:var(--text3)">${t.canonical}</span>`;
-    div.addEventListener('click', async () => {
-      hideBulkDropdown();
-      const ids = [...selected];
-      if (bulkDropdownMode === 'apply') {
-        await applyTag(ids, t.ns.toUpperCase(), t.name);
-      } else if (bulkDropdownMode === 'remove') {
-        await api('DELETE', '/api/assets/tags', {asset_ids: ids, category: t.ns.toUpperCase(), tag: t.name});
-        ids.forEach(id => {
-          const a = assets.find(x => x.id === id);
-          if (a) a.tags = a.tags.filter(x => !(x.category.toUpperCase()===t.ns.toUpperCase() && x.tag===t.name));
-        });
-        renderCurrentView();
-        updateRightPanel();
-        updateProgress();
-        loadTagSummary();
-        toast(`Removed "${t.name}" from ${ids.length} items`, 'success');
-      }
-    });
-    list.appendChild(div);
-  });
-  if (tags.length === 0) {
-    list.innerHTML = '<div style="padding:10px;color:var(--text3);font-size:13px;text-align:center">No tags found</div>';
-  }
-}
-
-function getSharedTags() {
-  const selAssets = assets.filter(a => selected.has(a.id));
-  if (selAssets.length === 0) return [];
-  const tagMap = {};
-  selAssets.forEach(a => a.tags.forEach(t => {
-    const key = t.category + ':' + t.tag;
-    if (!tagMap[key]) tagMap[key] = {canonical: key, name: t.tag, ns: t.category.toLowerCase(), count: 0};
-    tagMap[key].count++;
-  }));
-  return Object.values(tagMap);
-}
-
-document.getElementById('bulk-apply-btn').addEventListener('click', e => showBulkDropdown(e.target, 'apply'));
-document.getElementById('bulk-remove-btn').addEventListener('click', e => showBulkDropdown(e.target, 'remove'));
-document.getElementById('bulk-tag-search').addEventListener('input', e => renderBulkTagList(e.target.value));
-document.addEventListener('click', e => {
-  if (!e.target.closest('#bulk-tag-dropdown') && !e.target.closest('.bulk-btn')) hideBulkDropdown();
-});
-
-document.getElementById('bulk-clear-btn').addEventListener('click', async () => {
-  const ids = [...selected];
-  const count = ids.length;
-  if (!confirm(`Remove ALL tags from ${count} selected assets?`)) return;
-  const selAssets = assets.filter(a => selected.has(a.id));
-  for (const a of selAssets) {
-    for (const t of [...a.tags]) {
-      await api('DELETE', '/api/assets/tags', {asset_ids: [a.id], category: t.category, tag: t.tag});
-    }
-    a.tags = [];
-  }
-  renderCurrentView();
-  updateRightPanel();
-  updateProgress();
-  loadTagSummary();
-  toast(`Cleared tags from ${count} assets`, 'success');
-});
-
-// == DROP ON LIST CONTAINER ===============================================
-const listContainer = document.getElementById('list-container');
-const dropOverlay = document.getElementById('drop-overlay');
-
-listContainer.addEventListener('dragover', e => {
-  if (!dragTag || selected.size === 0) return;
-  e.preventDefault();
-  dropOverlay.style.display = 'block';
-});
-listContainer.addEventListener('dragleave', e => {
-  if (!listContainer.contains(e.relatedTarget)) dropOverlay.style.display = 'none';
-});
-listContainer.addEventListener('drop', async e => {
-  e.preventDefault();
-  dropOverlay.style.display = 'none';
-  if (!dragTag || selected.size === 0) return;
-  await applyTag([...selected], dragTag.category, dragTag.tag);
-});
-
-// == RIGHT PANEL DROP ZONES ===============================================
-function setupDropZone(zoneId, getIds) {
-  const zone = document.getElementById(zoneId);
-  if (!zone) return;
-  zone.addEventListener('dragover', e => {
-    if (!dragTag) return;
-    e.preventDefault();
-    zone.classList.add('drag-over');
-  });
-  zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
-  zone.addEventListener('drop', async e => {
-    e.preventDefault();
-    zone.classList.remove('drag-over');
-    if (!dragTag) return;
-    const ids = getIds();
-    if (ids.length > 0) await applyTag(ids, dragTag.category, dragTag.tag);
-  });
-}
-
-setupDropZone('rp-drop-zone', () => [...selected]);
-setupDropZone('rp-multi-drop-zone', () => [...selected]);
-
-// == RIGHT PANEL ==========================================================
-function updateRightPanel() {
-  const empty = document.getElementById('rp-empty');
-  const detail = document.getElementById('rp-detail');
-  const multi = document.getElementById('rp-multi');
-
-  if (selected.size === 0) {
-    empty.style.display = 'flex'; detail.style.display = 'none'; multi.style.display = 'none';
-    return;
-  }
-  if (selected.size === 1) {
-    empty.style.display = 'none'; detail.style.display = 'block'; multi.style.display = 'none';
-    renderSingleDetail();
-    return;
-  }
-  empty.style.display = 'none'; detail.style.display = 'none'; multi.style.display = 'block';
-  renderMultiDetail();
-}
-
-function renderSingleDetail() {
-  const id = [...selected][0];
-  const a = assets.find(x => x.id === id);
-  if (!a) return;
-  document.getElementById('rp-filename').textContent = a.filename || a.title;
-  document.getElementById('rp-dir').textContent = a.directory_full;
-  document.getElementById('rp-meta').textContent = formatDuration(a.duration_ms) + '  \u2022  ' + (a.kind || '');
-  document.getElementById('rp-preview').innerHTML = `<a href="${a.file_path}" target="_blank">Open file path</a>`;
-
-  const tagsEl = document.getElementById('rp-tags');
-  const noTags = document.getElementById('rp-no-tags');
-  tagsEl.innerHTML = '';
-  if (a.tags.length === 0) {
-    noTags.style.display = 'block';
-  } else {
-    noTags.style.display = 'none';
-    a.tags.forEach(t => {
-      const clr = getTagColor(t.category.toLowerCase(), t.tag);
-      const span = document.createElement('span');
-      span.className = 'rp-tag';
-      span.style.background = clr.bg;
-      span.style.color = clr.fg;
-      span.innerHTML = `${t.tag} <span class="rm">\u00D7</span>`;
-      span.querySelector('.rm').addEventListener('click', async () => {
-        await api('DELETE', '/api/assets/tags', {asset_ids: [id], category: t.category, tag: t.tag});
-        a.tags = a.tags.filter(x => !(x.category===t.category && x.tag===t.tag));
-        renderCurrentView();
-        updateRightPanel();
-        updateProgress();
-        loadTagSummary();
-        toast('Tag removed');
-      });
-      tagsEl.appendChild(span);
-    });
-  }
-}
-
-function renderMultiDetail() {
-  const selAssets = assets.filter(a => selected.has(a.id));
-  document.getElementById('rp-multi-count').textContent = selAssets.length + ' assets selected';
-
-  const tagCounts = {};
-  selAssets.forEach(a => a.tags.forEach(t => {
-    const key = t.category + ':' + t.tag;
-    if (!tagCounts[key]) tagCounts[key] = {category: t.category, tag: t.tag, count: 0};
-    tagCounts[key].count++;
-  }));
-
-  const total = selAssets.length;
-  const common = [], partial = [];
-  for (const tc of Object.values(tagCounts)) {
-    if (tc.count === total) common.push(tc);
-    else partial.push(tc);
-  }
-
-  const commonEl = document.getElementById('rp-common-tags');
-  commonEl.innerHTML = '';
-  if (common.length === 0) {
-    commonEl.innerHTML = '<span style="font-size:13px;color:var(--text3);font-style:italic">None</span>';
-  }
-  common.forEach(tc => {
-    const clr = getTagColor(tc.category.toLowerCase(), tc.tag);
-    const span = document.createElement('span');
-    span.className = 'rp-multi-tag';
-    span.style.background = clr.bg;
-    span.style.color = clr.fg;
-    span.innerHTML = `<span class="state-icon">\u2713</span>${tc.tag}<span class="rm">\u00D7</span>`;
-    span.querySelector('.rm').addEventListener('click', async () => {
-      const ids = [...selected];
-      await api('DELETE', '/api/assets/tags', {asset_ids: ids, category: tc.category, tag: tc.tag});
-      ids.forEach(id => {
-        const a = assets.find(x => x.id === id);
-        if (a) a.tags = a.tags.filter(t => !(t.category===tc.category && t.tag===tc.tag));
-      });
-      renderCurrentView();
-      updateRightPanel();
-      updateProgress();
-      loadTagSummary();
-      toast(`Removed "${tc.tag}" from ${ids.length} items`);
-    });
-    commonEl.appendChild(span);
-  });
-
-  const partialEl = document.getElementById('rp-partial-tags');
-  partialEl.innerHTML = '';
-  if (partial.length === 0) {
-    partialEl.innerHTML = '<span style="font-size:13px;color:var(--text3);font-style:italic">None</span>';
-  }
-  partial.forEach(tc => {
-    const clr = getTagColor(tc.category.toLowerCase(), tc.tag);
-    const span = document.createElement('span');
-    span.className = 'rp-multi-tag';
-    span.style.background = clr.bg;
-    span.style.color = clr.fg;
-    span.innerHTML = `<span class="state-icon">${tc.count}/${total}</span>${tc.tag}<span class="add" title="Apply to all">+</span><span class="rm" title="Remove from all">\u00D7</span>`;
-    span.querySelector('.add').addEventListener('click', async () => {
-      const ids = [...selected];
-      await applyTag(ids, tc.category, tc.tag);
-    });
-    span.querySelector('.rm').addEventListener('click', async () => {
-      const ids = [...selected];
-      await api('DELETE', '/api/assets/tags', {asset_ids: ids, category: tc.category, tag: tc.tag});
-      ids.forEach(id => {
-        const a = assets.find(x => x.id === id);
-        if (a) a.tags = a.tags.filter(t => !(t.category===tc.category && t.tag===tc.tag));
-      });
-      renderCurrentView();
-      updateRightPanel();
-      updateProgress();
-      loadTagSummary();
-      toast(`Removed "${tc.tag}" from ${ids.length} items`);
-    });
-    partialEl.appendChild(span);
-  });
-}
-
-// == PAGINATION ===========================================================
+// ── PAGINATION ────────────────────────────────────────────────────────────
 function renderPagination() {
-  const el = document.getElementById('pagination');
-  el.innerHTML = '';
+  const nav = document.getElementById('page-nav');
+  nav.innerHTML = '';
+  if (totalPages <= 1) { nav.innerHTML = `<span id="page-info">${totalAssets} assets</span>`; return; }
   const prev = document.createElement('button');
-  prev.className = 'page-btn'; prev.textContent = '\u2190 Prev';
-  prev.disabled = currentPage <= 1;
-  prev.addEventListener('click', () => { currentPage--; selected.clear(); loadAssets(); });
-  el.appendChild(prev);
-
+  prev.className = 'page-btn'; prev.textContent = '\u2190'; prev.disabled = currentPage <= 1;
+  prev.onclick = () => { currentPage--; selected.clear(); loadAssets(); };
+  nav.appendChild(prev);
   const info = document.createElement('span');
   info.id = 'page-info';
-  info.textContent = `Page ${currentPage} of ${totalPages}  (${totalAssets} assets)`;
-  el.appendChild(info);
-
+  info.textContent = `${currentPage} / ${totalPages}`;
+  nav.appendChild(info);
   const next = document.createElement('button');
-  next.className = 'page-btn'; next.textContent = 'Next \u2192';
-  next.disabled = currentPage >= totalPages;
-  next.addEventListener('click', () => { currentPage++; selected.clear(); loadAssets(); });
-  el.appendChild(next);
+  next.className = 'page-btn'; next.textContent = '\u2192'; next.disabled = currentPage >= totalPages;
+  next.onclick = () => { currentPage++; selected.clear(); loadAssets(); };
+  nav.appendChild(next);
 }
 
-// == BADGE + PROGRESS =====================================================
-function updateBadge() {
-  document.getElementById('untagged-badge').textContent = untaggedCount + ' untagged';
-}
+// ── HELPERS ───────────────────────────────────────────────────────────────
+function updateBadge() { document.getElementById('untagged-badge').textContent = untaggedCount + ' untagged'; }
 function updateProgress() {
   const tagged = totalAssets - untaggedCount;
   const pct = totalAssets > 0 ? Math.round(tagged / totalAssets * 100) : 0;
-  document.getElementById('progress-bar-inner').style.width = pct + '%';
-  document.getElementById('progress-text').textContent = `${tagged} / ${totalAssets} tagged (${pct}%)`;
+  document.getElementById('progress-mini-fill').style.width = pct + '%';
+  document.getElementById('progress-text').textContent = `${tagged}/${totalAssets} tagged`;
 }
 
-// == SEARCH + FILTER ======================================================
+// ── SEARCH ────────────────────────────────────────────────────────────────
 let searchTimer;
-document.getElementById('search').addEventListener('input', e => {
+document.getElementById('search-box').addEventListener('input', e => {
   clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => {
-    searchTerm = e.target.value.trim();
-    currentPage = 1; selected.clear();
-    loadAssets();
-  }, 300);
-});
-document.getElementById('untagged-only').addEventListener('change', e => {
-  untaggedOnly = e.target.checked;
-  currentPage = 1; selected.clear();
-  loadAssets();
+  searchTimer = setTimeout(() => { searchTerm = e.target.value.trim(); currentPage = 1; selected.clear(); loadAssets(); }, 300);
 });
 
-// == INIT =================================================================
+// ── INIT ──────────────────────────────────────────────────────────────────
 async function init() {
   await loadPalette();
   await Promise.all([loadAssets(), loadTagSummary()]);
