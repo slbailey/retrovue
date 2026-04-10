@@ -10,6 +10,7 @@ Rules covered:
 from __future__ import annotations
 
 import uuid
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -25,6 +26,7 @@ def _fake_collection() -> Any:
         name = "Test Container"
         sync_enabled = True
         ingestible = True
+        source = SimpleNamespace()
 
     return _C()
 

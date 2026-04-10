@@ -53,7 +53,8 @@ class TestCatalogReconciliationContract:
         db = MagicMock()
         db.scalar.return_value = None  # duplicate check: no existing asset
         collection = SimpleNamespace(
-            uuid="c1", source_id="s1", name="Test", config={}, sync_enabled=True, ingestible=True
+            uuid="c1", source_id="s1", name="Test", config={}, sync_enabled=True, ingestible=True,
+            source=SimpleNamespace(),
         )
         item = SimpleNamespace(
             path_uri="/media/a.mp4",
@@ -136,7 +137,8 @@ class TestCatalogReconciliationContract:
 
         db = MagicMock()
         collection = SimpleNamespace(
-            uuid="c1", source_id="s1", name="Test", config={}, sync_enabled=True, ingestible=True
+            uuid="c1", source_id="s1", name="Test", config={}, sync_enabled=True, ingestible=True,
+            source=SimpleNamespace(),
         )
         item = SimpleNamespace(
             path_uri="/media/a.mp4", provider_key=None, size=1000,

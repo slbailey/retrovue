@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
+import pytest
 from typer.testing import CliRunner
 
 from retrovue.cli.main import app
@@ -50,6 +51,7 @@ def _make_collection(source_id: str):
         source_id=source_id,
         config={},
         external_id=str(uuid.uuid4()),
+        source=SimpleNamespace(),
     )
     return coll
 
@@ -63,6 +65,7 @@ def _make_db(existing_assets=None):
     return db
 
 
+@pytest.mark.usefixtures("suppress_structlog_stdout")
 class TestCollectionIngestVerboseAssets:
     def setup_method(self):
         self.runner = CliRunner()

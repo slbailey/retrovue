@@ -3,6 +3,8 @@ import uuid
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from typer.testing import CliRunner
 
 from retrovue.cli.main import app
@@ -25,6 +27,7 @@ class _FakeImporter:
         return list(self._items)
 
 
+@pytest.mark.usefixtures("suppress_structlog_stdout")
 class TestCollectionIngestSafetyContract:
     def setup_method(self):
         self.runner = CliRunner()
@@ -39,6 +42,7 @@ class TestCollectionIngestSafetyContract:
             source_id=str(uuid.uuid4()),
             config={},
             external_id=str(uuid.uuid4()),
+            source=SimpleNamespace(),
         )
         return coll
 

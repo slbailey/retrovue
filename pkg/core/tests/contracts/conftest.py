@@ -22,6 +22,7 @@ tests against a test database, e.g.:
 
 from __future__ import annotations
 
+import logging
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -30,6 +31,7 @@ from typing import Callable
 from unittest.mock import MagicMock
 
 import pytest
+import structlog
 
 
 # -----------------------------------------------------------------------------
@@ -135,8 +137,32 @@ def db_session():
 def cli_runner():
     """
     CLI runner fixture for contract tests.
-    
+
     Provides a Typer CliRunner instance for testing CLI commands.
     """
     from typer.testing import CliRunner
     return CliRunner()
+
+
+@pytest.fixture
+def suppress_structlog_stdout():
+    """Suppress structlog debug output that contaminates CLI stdout capture.
+
+    structlog's default PrintLogger writes to stdout, which corrupts JSON
+    output captured by typer's CliRunner.  Re-configure structlog to route
+    through stdlib logging (with level=WARNING) so debug/info lines do not
+    leak into captured stdout.
+    """
+    logging.basicConfig(level=logging.WARNING, force=True)
+    structlog.configure(
+        processors=[
+            structlog.stdlib.filter_by_level,
+            structlog.stdlib.add_log_level,
+            structlog.dev.ConsoleRenderer(),
+        ],
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        cache_logger_on_first_use=False,
+    )
+    yield
+    structlog.reset_defaults()
