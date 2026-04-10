@@ -179,6 +179,9 @@ def _expand_to_compiled_segments(
     start_utc_ms: int,
     channel_type: str,
     dsl_midroll: list[dict[str, Any]] | None = None,
+    target_segment_minutes: int | None = None,
+    template_preroll: list[dict[str, Any]] | None = None,
+    break_strategy: str | None = None,
 ) -> list[dict[str, Any]]:
     """Expand an AssemblyResult into break-aware compiled_segments.
 
@@ -245,6 +248,39 @@ def _expand_to_compiled_segments(
     )
 
     bbl_preroll = []
+
+    # INV-CONTINUITY-DURATION-FILTER-001: Resolve template continuity.presentation
+    # into preroll StructuralEntry objects. max_duration_sec filters the pool.
+    if template_preroll:
+        for elem in template_preroll:
+            pool_name = elem.get("pool")
+            max_dur = elem.get("max_duration_sec")
+            fixed_dur = elem.get("duration_sec")
+            if pool_name and hasattr(resolver, "query"):
+                match = {"type": elem.get("type", "bumper")}
+                candidates = resolver.query(match)
+                # Filter by max_duration_sec (pool selection, not truncation)
+                if max_dur is not None:
+                    candidates = [
+                        c for c in candidates
+                        if resolver.lookup(c).duration_sec <= max_dur
+                    ]
+                if candidates:
+                    chosen = candidates[0]
+                    meta = resolver.lookup(chosen)
+                    bbl_preroll.append(StructuralEntry(
+                        asset_id=chosen,
+                        duration_ms=meta.duration_sec * 1000,
+                        segment_type="presentation",
+                    ))
+                elif fixed_dur is not None:
+                    # No matching asset — use fixed duration placeholder
+                    bbl_preroll.append(StructuralEntry(
+                        asset_id="",
+                        duration_ms=fixed_dur * 1000,
+                        segment_type="presentation",
+                    ))
+
     for s in preroll_segs:
         # Resolve gain_db for structural assets
         seg_gain = 0.0
@@ -283,6 +319,8 @@ def _expand_to_compiled_segments(
         chapter_markers_ms=chapter_ms,
         preroll=bbl_preroll,
         postroll=bbl_postroll,
+        target_segment_minutes=target_segment_minutes,
+        break_strategy=break_strategy,
     )
 
     # --- Expand layout into segment dicts ---
@@ -362,6 +400,102 @@ def _expand_to_compiled_segments(
         })
 
     return compiled
+
+
+
+# ---------------------------------------------------------------------------
+# Template resolution (timeline_compilation_templates.md)
+# ---------------------------------------------------------------------------
+
+# Fields forbidden in template break config per INV-TEMPLATE-BEHAVIOR-NOT-DURATION-001
+_FORBIDDEN_TEMPLATE_BREAK_FIELDS = frozenset({"break_count", "break_duration_sec", "grid_slots"})
+
+
+def _validate_templates(templates: dict[str, Any]) -> list[str]:
+    """Validate the templates: section of a channel DSL.
+
+    Returns a list of error strings (empty = valid).
+    """
+    errors: list[str] = []
+    for name, tpl in templates.items():
+        if not isinstance(tpl, dict):
+            errors.append(f"Template '{name}' must be a mapping")
+            continue
+        breaks = tpl.get("breaks")
+        if isinstance(breaks, dict):
+            for forbidden in _FORBIDDEN_TEMPLATE_BREAK_FIELDS:
+                if forbidden in breaks:
+                    errors.append(
+                        f"INV-TEMPLATE-BEHAVIOR-NOT-DURATION-001: "
+                        f"template '{name}' contains forbidden field "
+                        f"'breaks.{forbidden}'"
+                    )
+    return errors
+
+
+def _resolve_template(
+    name: str,
+    templates: dict[str, Any],
+    _chain: frozenset[str] | None = None,
+) -> dict[str, Any]:
+    """Resolve a template by name, following extends chains depth-first.
+
+    Raises ValueError on circular references or missing templates.
+    """
+    if _chain is None:
+        _chain = frozenset()
+
+    if name in _chain:
+        raise ValueError(
+            f"Circular template extends reference: "
+            f"{' -> '.join(_chain)} -> {name}"
+        )
+
+    if name not in templates:
+        raise ValueError(f"Template '{name}' not found in templates section")
+
+    tpl = dict(templates[name])
+    extends = tpl.pop("extends", None)
+
+    if extends is not None:
+        parent = _resolve_template(extends, templates, _chain | {name})
+        merged = dict(parent)
+        for key, value in tpl.items():
+            if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                merged[key] = {**merged[key], **value}
+            else:
+                merged[key] = value
+        return merged
+
+    return tpl
+
+
+def _resolve_template_for_program(
+    prog_def: dict[str, Any],
+    templates: dict[str, Any] | None,
+    presentation_defs: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Resolve template reference on a program definition.
+
+    If prog_def has 'template' key and templates section exists:
+    - Resolve the template (with extends)
+    - Template wins over 'presentation' (backward compat)
+
+    Returns modified prog_def with '_resolved_template' attached.
+    """
+    template_name = prog_def.get("template")
+    if template_name is None or templates is None:
+        return prog_def
+
+    resolved = _resolve_template(template_name, templates)
+    prog_def = dict(prog_def)
+    prog_def["_resolved_template"] = resolved
+
+    # Template wins over presentation: strip presentation ref
+    if "presentation" in prog_def:
+        prog_def.pop("presentation", None)
+
+    return prog_def
 
 
 def _resolve_presentation_ref(
@@ -659,6 +793,7 @@ def _compile_program_block(
     broadcast_day_start_hour: int = 6,
     channel_type: str = "network",
     presentation_defs: dict[str, Any] | None = None,
+    templates_defs: dict[str, Any] | None = None,
 ) -> list[ProgramBlockOutput]:
     """Compile a V2 schedule block into program blocks.
 
@@ -757,7 +892,8 @@ def _compile_program_block(
 
         while remaining_slots > 0:
             chosen_ref = rng.choice(program_refs) if len(program_refs) > 1 else program_refs[0]
-            prog_def = _resolve_presentation_ref(programs[chosen_ref], presentation_defs)
+            prog_def = _resolve_template_for_program(programs[chosen_ref], templates_defs, presentation_defs)
+            prog_def = _resolve_presentation_ref(prog_def, presentation_defs)
             pool = prog_def.get("pool", chosen_ref)
 
             assembly_results = assemble_schedule_block(
@@ -820,6 +956,21 @@ def _compile_program_block(
                         start_utc_ms=int(current_time.timestamp() * 1000),
                         channel_type=channel_type,
                         dsl_midroll=prog_def.get("presentation_midroll"),
+                        target_segment_minutes=(
+                            prog_def.get("_resolved_template", {})
+                            .get("breaks", {})
+                            .get("target_segment_minutes")
+                        ),
+                        template_preroll=(
+                            prog_def.get("_resolved_template", {})
+                            .get("continuity", {})
+                            .get("presentation")
+                        ),
+                        break_strategy=(
+                            prog_def.get("_resolved_template", {})
+                            .get("breaks", {})
+                            .get("strategy")
+                        ),
                     ),
                     traffic_profile=block_def.get("traffic_profile"),
                 )
@@ -835,7 +986,8 @@ def _compile_program_block(
 
         for exec_idx in range(executions):
             chosen_ref = rng.choice(program_refs) if len(program_refs) > 1 else program_refs[0]
-            prog_def = _resolve_presentation_ref(programs[chosen_ref], presentation_defs)
+            prog_def = _resolve_template_for_program(programs[chosen_ref], templates_defs, presentation_defs)
+            prog_def = _resolve_presentation_ref(prog_def, presentation_defs)
             pool = prog_def.get("pool", chosen_ref)
 
             assembly_results = assemble_schedule_block(
@@ -894,6 +1046,21 @@ def _compile_program_block(
                         start_utc_ms=int(current_time.timestamp() * 1000),
                         channel_type=channel_type,
                         dsl_midroll=prog_def.get("presentation_midroll"),
+                        target_segment_minutes=(
+                            prog_def.get("_resolved_template", {})
+                            .get("breaks", {})
+                            .get("target_segment_minutes")
+                        ),
+                        template_preroll=(
+                            prog_def.get("_resolved_template", {})
+                            .get("continuity", {})
+                            .get("presentation")
+                        ),
+                        break_strategy=(
+                            prog_def.get("_resolved_template", {})
+                            .get("breaks", {})
+                            .get("strategy")
+                        ),
                     ),
                     traffic_profile=block_def.get("traffic_profile"),
                 )
@@ -971,6 +1138,11 @@ def validate_dsl(dsl: dict[str, Any], resolver: AssetResolver) -> list[str]:
                         f"INV-SBLOCK-PROGRAM-002: program '{ref}' in "
                         f"schedule.{day_key} not found in program definitions"
                     )
+
+    # Validate templates section if present
+    raw_templates = dsl.get("templates")
+    if raw_templates and isinstance(raw_templates, dict):
+        errors.extend(_validate_templates(raw_templates))
 
     return errors
 
@@ -1245,6 +1417,7 @@ def compile_schedule(
                 broadcast_day_start_hour=_bd_start_hour,
                 channel_type=dsl.get("channel_type", "network"),
                 presentation_defs=dsl.get("presentation"),
+                templates_defs=dsl.get("templates"),
             )
             all_blocks.extend(blocks)
 

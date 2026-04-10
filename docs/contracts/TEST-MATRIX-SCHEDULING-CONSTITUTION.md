@@ -1808,6 +1808,56 @@ The following domain tables group tests by functional area. Each test is classif
 | BREAKSTRUCTURE-017 | INV-BREAKSTRUCTURE-ORDERED-001 | LAW-CONTENT-AUTHORITY | Without station_id: bumpers + interstitial only |
 | BREAKSTRUCTURE-018 | INV-BREAKSTRUCTURE-ORDERED-001 | LAW-CONTENT-AUTHORITY | Bare config: single interstitial slot |
 
+#### Template Compilation (Tier 2)
+
+**Contract:** `docs/contracts/timeline_compilation_templates.md`
+**Test file:** `pkg/core/tests/contracts/test_timeline_compilation_templates.py` — **NOT YET CREATED.** TEMPLATE-001..023 are aspirational.
+
+| Test ID | Invariant(s) | Law(s) | Scenario |
+|---------|-------------|--------|----------|
+| TEMPLATE-001 | INV-TEMPLATE-BEHAVIOR-NOT-DURATION-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Template YAML with `break_count` field rejected |
+| TEMPLATE-002 | INV-TEMPLATE-BEHAVIOR-NOT-DURATION-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Template YAML with `break_duration_sec` field rejected |
+| TEMPLATE-003 | INV-TEMPLATE-BEHAVIOR-NOT-DURATION-001 | LAW-CONTENT-AUTHORITY | Template YAML with `grid_slots` field rejected |
+| TEMPLATE-004 | INV-TEMPLATE-BEHAVIOR-NOT-DURATION-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Same template produces valid plans for 22-min, 44-min, 60-min content |
+| TEMPLATE-005 | INV-BREAK-BUDGET-DERIVED-001 | LAW-GRID, LAW-DERIVATION | `break_budget == scheduled_duration - content_duration - presentation_duration` |
+| TEMPLATE-006 | INV-BREAK-BUDGET-DERIVED-001 | LAW-GRID, LAW-DERIVATION | Presentation element durations reduce break budget |
+| TEMPLATE-007 | INV-BREAK-COUNT-DURATION-SEPARATED-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Changing break budget does not change break count; changing `target_segment_minutes` does not change individual break duration |
+| TEMPLATE-008 | INV-BREAK-DENSITY-SCALES-001 | LAW-CONTENT-AUTHORITY, LAW-GRID | `target_segment_minutes=11` with 22-min content produces ~2 breaks |
+| TEMPLATE-009 | INV-BREAK-DENSITY-SCALES-001 | LAW-CONTENT-AUTHORITY, LAW-GRID | `target_segment_minutes=11` with 44-min content produces ~4 breaks |
+| TEMPLATE-010 | INV-BREAK-DENSITY-SCALES-001 | LAW-CONTENT-AUTHORITY, LAW-GRID | `target_segment_minutes=20` with 85-min content produces 4-5 breaks |
+| TEMPLATE-011 | INV-BREAK-EXPAND-TO-FILL-001 | LAW-GRID, LAW-CONTENT-AUTHORITY | Sum of break durations equals break budget |
+| TEMPLATE-012 | INV-BREAK-EXPAND-TO-FILL-001 | LAW-GRID | Different break budgets produce different break durations for same break count |
+| TEMPLATE-013 | INV-CONFORMANCE-MANDATORY-001 | LAW-GRID, LAW-CONTENT-AUTHORITY | `sum(segments) == scheduled_duration ± 40ms` for compiled block |
+| TEMPLATE-014 | INV-CONFORMANCE-MANDATORY-001 | LAW-GRID | Block with > 40ms drift from scheduled duration rejected |
+| TEMPLATE-015 | INV-CONTINUITY-DURATION-FILTER-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Asset with duration > `max_duration_sec` excluded from candidates |
+| TEMPLATE-016 | INV-CONTINUITY-DURATION-FILTER-001 | LAW-CONTENT-AUTHORITY | Selected asset plays at full native duration, not truncated |
+| TEMPLATE-017 | Template composition | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Child template inherits parent break strategy and bumper config |
+| TEMPLATE-018 | Template composition | LAW-CONTENT-AUTHORITY | Child field overrides parent at same key path |
+| TEMPLATE-019 | Template composition | LAW-CONTENT-AUTHORITY | Circular `extends` reference rejected at validation |
+| TEMPLATE-020 | Backward compatibility | LAW-CONTENT-AUTHORITY | When both `presentation:` and `template:` present, template continuity used |
+| TEMPLATE-021 | Backward compatibility | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Channel without `templates:` compiles identically to current behavior |
+| TEMPLATE-022 | Overconstrained policy | LAW-GRID, LAW-CONTENT-AUTHORITY | Overconstrained block with `bleed` extends into adjacent slots |
+| TEMPLATE-023 | Overconstrained policy | LAW-GRID | Overconstrained block with `reject` fails compilation with error |
+
+#### Chapter Marker Break Placement (Tier 2)
+
+**Contract:** `docs/contracts/chapter_marker_break_placement.md`
+**Test file:** `pkg/core/tests/contracts/test_chapter_marker_break_placement.py` — **All 9 tests implemented and passing.**
+
+| Test ID | Invariant(s) | Law(s) | Scenario |
+|---------|-------------|--------|----------|
+| CHBREAK-001 | INV-BREAK-PLACEMENT-PRIORITY-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Asset with chapter markers produces only `source: "chapter"` opportunities, no algorithmic |
+| CHBREAK-002 | INV-BREAK-PLACEMENT-PRIORITY-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Accumulate program: chapter breaks within segments + boundary breaks between segments |
+| CHBREAK-003 | INV-BREAK-PLACEMENT-PRIORITY-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Asset without chapter markers with `chapter_markers_preferred` falls to synthetic |
+| CHBREAK-004 | INV-BREAK-PLACEMENT-PRIORITY-001 | LAW-CONTENT-AUTHORITY | Template `strategy: chapter_markers_preferred` with markers uses chapter positions |
+| CHBREAK-005 | INV-BREAK-PLACEMENT-PRIORITY-001 | LAW-CONTENT-AUTHORITY | Template `strategy: synthetic` ignores chapter markers even when present |
+| CHBREAK-006 | INV-BREAK-PLACEMENT-PRIORITY-001, INV-BREAK-DENSITY-SCALES-001 | LAW-CONTENT-AUTHORITY, LAW-GRID | Fallback from `chapter_markers_preferred` to synthetic uses `target_segment_minutes` |
+| CHBREAK-007 | INV-BREAK-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Break detection receives markers via `chapter_markers_ms`, not raw catalog |
+| CHBREAK-008 | INV-BREAK-PLACEMENT-PRIORITY-001 | LAW-CONTENT-AUTHORITY | Markers at position 0 and at segment boundary are excluded |
+| CHBREAK-009 | INV-BREAK-PLACEMENT-PRIORITY-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Channel without `templates:` uses existing priority model unchanged |
+
+---
+
 #### Traffic Manager (Tier 2)
 
 **Contract:** `docs/contracts/traffic_manager.md`
@@ -2185,6 +2235,15 @@ The following domain tables group tests by functional area. Each test is classif
 | TIER-DISP-003 | INV-TIER-DISPLACEMENT-001 | LAW-CONTENT-AUTHORITY | T0–T3 segments all present after compilation, never dropped for fill budget |
 | TIER2-YAML-001 | INV-TIER2-OBLIGATION-YAML-ONLY-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Same config + block boundaries produce identical obligations across compilations |
 | TIER2-YAML-002 | INV-TIER2-OBLIGATION-YAML-ONLY-001 | LAW-DERIVATION | Obligation evaluation does not query database |
+| CLOCK-OBL-001 | INV-CLOCK-OBLIGATIONS-OVERRIDE-001 | LAW-CONTENT-AUTHORITY, LAW-GRID, LAW-CLOCK | Obligation trigger within a break inserts into break and reduces fill budget |
+| CLOCK-OBL-002 | INV-CLOCK-OBLIGATIONS-OVERRIDE-001 | LAW-CONTENT-AUTHORITY, LAW-CLOCK | Obligation trigger within primary content inserts micro-break at nearest safe point |
+| CLOCK-OBL-003 | INV-CLOCK-OBLIGATIONS-OVERRIDE-001 | LAW-CONTENT-AUTHORITY | Obligation trigger within intro/outro defers to nearest safe point per INV-BREAK-009 |
+| CLOCK-OBL-004 | INV-CLOCK-OBLIGATIONS-OVERRIDE-001 | LAW-CONTENT-AUTHORITY | Obligation trigger within protected zone defers to nearest safe point per INV-BREAK-003 |
+| CLOCK-OBL-005 | INV-CLOCK-OBLIGATIONS-OVERRIDE-001 | LAW-CONTENT-AUTHORITY, LAW-GRID | Obligation trigger at block boundary prepends before Tier 1 presentation |
+| CLOCK-OBL-006 | INV-CLOCK-OBLIGATIONS-OVERRIDE-001 | LAW-CONTENT-AUTHORITY | Mandatory obligation cannot be suppressed by template configuration |
+| CLOCK-OBL-007 | INV-CLOCK-OBLIGATIONS-OVERRIDE-001 | LAW-CONTENT-AUTHORITY, LAW-CLOCK | Multiple obligations at same trigger time stack in YAML declaration order |
+| CLOCK-OBL-008 | INV-CLOCK-OBLIGATIONS-OVERRIDE-001 | LAW-CONTENT-AUTHORITY | Obligation insertion never cuts, truncates, or shifts primary content |
+| CLOCK-OBL-009 | INV-CLOCK-OBLIGATIONS-OVERRIDE-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Same config + block boundaries produce identical obligation placements across compilations |
 | MIDROLL-INT-001 | INV-MIDROLL-INTERLEAVE-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Network channel compiled_segments has filler between content acts (chapter markers) |
 | MIDROLL-INT-002 | INV-MIDROLL-INTERLEAVE-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Network channel compiled_segments has filler between content acts (algorithmic breaks) |
 | MIDROLL-INT-003 | INV-MIDROLL-INTERLEAVE-001 | LAW-CONTENT-AUTHORITY, LAW-DERIVATION | Content-filler-content alternation pattern preserved in compiled_segments |

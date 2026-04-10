@@ -109,11 +109,17 @@ def build_break_layout(
     preroll: list[StructuralEntry],
     postroll: list[PostrollEntry],
     min_segment_ms: int = 0,
+    target_segment_minutes: int | None = None,
+    break_strategy: str | None = None,
 ) -> BlockBreakLayout:
     """Build a complete break layout from resolved inputs.
 
     INV-BBL-BUILDER-001: Pure function of inputs. No external state.
     INV-BBL-BUDGET-009: available_filler_ms computed once here.
+
+    target_segment_minutes: when provided (from template config),
+    overrides the algorithmic break count formula per
+    INV-BREAK-DENSITY-SCALES-001.
     """
     # --- Input validation ---
     # INV-BBL-STRUCT-007
@@ -180,6 +186,8 @@ def build_break_layout(
             chapter_markers_ms=chapter_markers_ms,
             content_duration_ms=content_duration_ms,
             min_segment_ms=min_segment_ms,
+            target_segment_minutes=target_segment_minutes,
+            break_strategy=break_strategy,
         )
         suppressed.extend(src_suppressed)
 
@@ -235,6 +243,8 @@ def _resolve_midroll_source(
     chapter_markers_ms: tuple[int, ...] | None,
     content_duration_ms: int,
     min_segment_ms: int,
+    target_segment_minutes: int | None = None,
+    break_strategy: str | None = None,
 ) -> tuple[list[MidrollOpportunity], str, list[SuppressedSource]]:
     """Resolve midroll opportunities from exactly one source.
 
@@ -245,8 +255,20 @@ def _resolve_midroll_source(
     """
     suppressed: list[SuppressedSource] = []
 
-    # Priority 1: Chapter markers
-    if chapter_markers_ms:
+    # INV-BREAK-PLACEMENT-PRIORITY-001: strategy-driven source selection
+    # "synthetic" → skip chapter markers entirely, even if present
+    # "chapter_markers_preferred" or None → existing priority model
+    use_chapters = break_strategy != "synthetic"
+
+    if not use_chapters and chapter_markers_ms:
+        valid_ch = [m for m in chapter_markers_ms if 0 < m < content_duration_ms]
+        if valid_ch:
+            suppressed.append(
+                SuppressedSource(source="chapter", reason="strategy_synthetic")
+            )
+
+    # Priority 1: Chapter markers (skipped when strategy=synthetic)
+    if use_chapters and chapter_markers_ms:
         chapter_opps = _extract_chapter_opportunities(
             chapter_markers_ms, content_duration_ms, min_segment_ms,
         )
@@ -277,6 +299,7 @@ def _resolve_midroll_source(
     # Priority 3: Algorithmic
     algo_opps = _compute_algorithmic_opportunities(
         content_duration_ms, min_segment_ms,
+        target_segment_minutes=target_segment_minutes,
     )
     if algo_opps:
         return algo_opps, "algorithmic", suppressed
@@ -389,13 +412,17 @@ def _extract_chapter_opportunities(
 def _compute_algorithmic_opportunities(
     content_duration_ms: int,
     min_segment_ms: int,
+    *,
+    target_segment_minutes: int | None = None,
 ) -> list[MidrollOpportunity]:
     """Compute algorithmic break positions.
 
     Replicates the logic from break_detection._compute_algorithmic_breaks
     for a single-content-segment program:
     - Protected zone: first 20%
-    - Break count: max(2, content_runtime // 480_000)
+    - Break count: max(2, content_runtime // 480_000) (legacy)
+      OR floor(content_minutes / target_segment_minutes) when template
+      provides target_segment_minutes (INV-BREAK-DENSITY-SCALES-001)
     - Non-uniform harmonic spacing
 
     INV-BBL-TRANS-003: Algorithmic breaks get transition_style="fade".
@@ -410,7 +437,16 @@ def _compute_algorithmic_opportunities(
     if algo_start >= algo_end:
         return []
 
-    num_breaks = max(2, content_duration_ms // 480_000)
+    # INV-BREAK-DENSITY-SCALES-001: template-driven break count
+    if target_segment_minutes is not None and target_segment_minutes > 0:
+        content_minutes = content_duration_ms / 60_000
+        num_breaks = math.floor(content_minutes / target_segment_minutes)
+        if num_breaks <= 0:
+            return []
+    else:
+        # Legacy algorithmic formula
+        num_breaks = max(2, content_duration_ms // 480_000)
+
     positions = _place_non_uniform(algo_start, algo_end, num_breaks)
 
     # Filter to within content bounds
