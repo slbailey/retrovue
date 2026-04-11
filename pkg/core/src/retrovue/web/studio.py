@@ -29,11 +29,12 @@ class _Enc(json.JSONEncoder):
         return super().default(o)
 
 def jr(data, status=200):
-    return Response(json.dumps(data, cls=_Enc), media_type="application/json", status_code=status)
+    return Response(json.dumps(data, cls=_Enc), media_type="application/json", status_code=status,
+                    headers={"Deprecated": "true"})
 
 @router.get("/", response_class=HTMLResponse)
 def studio_index():
-    return HTMLResponse(Path(TPL).read_text())
+    return HTMLResponse(Path(TPL).read_text(), headers={"Deprecated": "true"})
 
 def _build_assets_query(
     scope: Optional[str] = None,

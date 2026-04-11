@@ -9,6 +9,7 @@ This project is a monorepo containing the following components:
 ```
 /
 ├── assets/         # Test media and other shared assets
+├── console/        # Operator Console — React SPA (Vite + React 19)
 ├── docs/           # All project documentation
 │   ├── air/        # C++ playback engine docs
 │   ├── core/       # Python coordinator docs
@@ -28,6 +29,38 @@ This project is a monorepo containing the following components:
 - **System component map**: `docs/ComponentMap.md` (what the key parts are, what they do, and where their interfaces live)
 - **Core (Python) docs index**: `docs/core/README.md`
 - **Air (C++) docs index**: `pkg/air/docs/README.md`
+
+## Server / Console Architecture
+
+RetroVue has two runtime surfaces for operators:
+
+| Component | Role | Technology |
+|-----------|------|------------|
+| **Server** (pkg/core) | Control plane — scheduling, orchestration, persistence, playout supervision | Python · FastAPI · Postgres |
+| **Console** (console/) | Operator UI — asset tagging, browsing, workflow management | React 19 · Vite · AG Grid · TanStack Query |
+
+The Console is a standalone React SPA that communicates with the Server exclusively via HTTP endpoints under `/api/console/*`. In development, the Vite dev server proxies `/api` requests to the Server on `localhost:8000`.
+
+### Running the Server
+
+```bash
+cd pkg/core && source .venv/bin/activate
+pip install -r requirements.txt
+retrovue start                    # Starts ProgramDirector on port 8000
+```
+
+### Running the Console
+
+```bash
+cd console && npm install && npm run dev
+```
+
+The dev server starts on `http://localhost:5173` and proxies all `/api` calls to `http://localhost:8000`.
+
+### API Boundary
+
+- **`/api/console/*`** — Console endpoints (asset listing, tagging, pagination). Mounted on the ProgramDirector FastAPI app.
+- **`/studio/*`** — Legacy server-rendered UI. Still mounted but deprecated; the Console is the supported operator interface.
 
 ## Getting Started
 

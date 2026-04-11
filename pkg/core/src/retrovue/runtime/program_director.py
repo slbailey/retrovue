@@ -352,9 +352,10 @@ class ProgramDirector:
         self.port = port
         self.fastapi_app = FastAPI(title="RetroVue ProgramDirector")
         from fastapi.middleware.cors import CORSMiddleware
+        cors_origins = os.environ.get("RETROVUE_CORS_ORIGINS", "http://localhost:5173")
         self.fastapi_app.add_middleware(
             CORSMiddleware,
-            allow_origins=["http://localhost:5173"],
+            allow_origins=[o.strip() for o in cors_origins.split(",")],
             allow_methods=["*"],
             allow_headers=["*"],
         )
@@ -1565,7 +1566,7 @@ class ProgramDirector:
 
     def _register_endpoints(self) -> None:
         """Register Phase 0 HTTP endpoints."""
-        # Studio tagging UI
+        # Studio tagging UI — DEPRECATED: use Console (RETA-205) instead
         from retrovue.web.studio import router as studio_router
         self.fastapi_app.include_router(studio_router)
 
