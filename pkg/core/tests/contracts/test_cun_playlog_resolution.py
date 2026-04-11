@@ -385,3 +385,59 @@ class TestCunContentHash:
         h1 = _content_hash("default", "Cheers S01E02")
         h2 = _content_hash("seasonal_winter", "Cheers S01E02")
         assert h1 != h2
+
+
+# ---------------------------------------------------------------------------
+# INV-BLOCK-SEGMENT-CONSERVATION-001: CUN skip must preserve block duration
+# ---------------------------------------------------------------------------
+
+CONSERVATION_TOLERANCE_MS = 40  # 1 frame at 29.97fps
+
+
+class TestCunSkipConservation:
+    """INV-BLOCK-SEGMENT-CONSERVATION-001: When a CUN segment is skipped
+    because its render is not ready, the resulting block MUST still satisfy
+    sum(segment_durations) == (end_utc_ms - start_utc_ms) within tolerance.
+
+    Skipping a CUN segment without replacing it with an equivalent-duration
+    pad segment creates a gap: the block envelope stays the same but the
+    segment durations shrink, violating conservation.
+    """
+
+    def test_cun_skip_preserves_block_duration_conservation(self):
+        """After _ensure_cun_ready skips a CUN segment, the block's segment
+        durations must still sum to the block envelope duration."""
+        daemon = _make_daemon()
+        cun_dur = 10_000
+        block = _make_block_with_cun(cun_duration_ms=cun_dur)
+        sb_dict = _make_sb_dict_with_cun()
+
+        result = daemon._ensure_cun_ready(block, sb_dict, db=_mock_db_no_render())
+
+        block_duration = result.end_utc_ms - result.start_utc_ms
+        segment_sum = sum(s.segment_duration_ms for s in result.segments)
+        drift = abs(block_duration - segment_sum)
+        assert drift <= CONSERVATION_TOLERANCE_MS, (
+            f"INV-BLOCK-SEGMENT-CONSERVATION-001: CUN skip broke conservation. "
+            f"block_duration={block_duration}ms, segment_sum={segment_sum}ms, "
+            f"drift={drift}ms (tolerance={CONSERVATION_TOLERANCE_MS}ms)"
+        )
+
+    def test_cun_skip_replaces_with_pad_segment(self):
+        """Skipped CUN must be replaced by a pad segment of the same duration,
+        not silently dropped."""
+        daemon = _make_daemon()
+        cun_dur = 10_000
+        block = _make_block_with_cun(cun_duration_ms=cun_dur)
+        sb_dict = _make_sb_dict_with_cun()
+
+        result = daemon._ensure_cun_ready(block, sb_dict, db=_mock_db_no_render())
+
+        pad_segs = [s for s in result.segments if s.segment_type == "pad"]
+        assert len(pad_segs) == 1, (
+            "Skipped CUN must be replaced with exactly one pad segment"
+        )
+        assert pad_segs[0].segment_duration_ms == cun_dur, (
+            f"Pad segment duration ({pad_segs[0].segment_duration_ms}ms) "
+            f"must equal original CUN duration ({cun_dur}ms)"
+        )

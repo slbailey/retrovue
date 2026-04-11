@@ -2331,3 +2331,16 @@ The following domain tables group tests by functional area. Each test is classif
 | SPLIT-REEXPORT-001 | INV-SCHEDULE-COMPILER-MODULE-SPLIT-001 | LAW-SIMPLICITY | All public symbols importable from `schedule_compiler` via re-exports |
 | SPLIT-BOUNDARY-001 | INV-SCHEDULE-COMPILER-MODULE-SPLIT-001 | LAW-SIMPLICITY | `template_resolution` contains no compilation or validation logic |
 | SPLIT-BOUNDARY-002 | INV-SCHEDULE-COMPILER-MODULE-SPLIT-001 | LAW-SIMPLICITY | `schedule_validation` contains no compilation or resolution logic |
+
+---
+
+### Daemon Frontier Tracking — Actual DB State
+
+**Contract:** `docs/contracts/invariants/core/playout/INV-DAEMON-FRONTIER-ACTUAL-001.md`
+
+**Test file:** `pkg/core/tests/contracts/runtime/test_inv_daemon_frontier_actual.py`
+
+| Test ID | Invariant(s) | Law(s) | Scenario |
+|---------|-------------|--------|----------|
+| FRONTIER-ACTUAL-001 | INV-DAEMON-FRONTIER-ACTUAL-001 | LAW-TIMELINE | After PlaylistEvent deletion, evaluate_once() detects reduced frontier and triggers extension |
+| FRONTIER-ACTUAL-002 | INV-DAEMON-FRONTIER-ACTUAL-001 | LAW-TIMELINE | evaluate_once() assigns frontier_ms directly, not via monotonic max |

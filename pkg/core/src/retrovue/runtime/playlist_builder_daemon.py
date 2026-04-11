@@ -238,9 +238,11 @@ class PlaylistBuilderDaemon:
             backfill_count = self._ensure_playlog_plan_covers_now(now_ms, db=db)
 
             # Discover current playlog plan frontier
+            # INV-DAEMON-FRONTIER-ACTUAL-001: track actual DB state, not
+            # monotonic max.  Deleted rows must regress the frontier so the
+            # daemon detects gaps and re-fills on the next tick.
             frontier_ms = self._get_frontier_utc_ms(db=db)
-            if frontier_ms > self._farthest_end_utc_ms:
-                self._farthest_end_utc_ms = frontier_ms
+            self._farthest_end_utc_ms = frontier_ms
 
             depth_ms = max(0, self._farthest_end_utc_ms - now_ms)
             target_ms = self._min_hours * 3_600_000
@@ -678,12 +680,19 @@ class PlaylistBuilderDaemon:
                     priority=int(segment_start_utc.timestamp()),
                     db=db,
                 )
+                # INV-BLOCK-SEGMENT-CONSERVATION-001: Replace skipped CUN
+                # with equivalent-duration pad to preserve block envelope.
+                new_segments.append(ScheduledSegment(
+                    segment_type="pad",
+                    asset_uri="",
+                    asset_start_offset_ms=0,
+                    segment_duration_ms=seg.segment_duration_ms,
+                ))
                 logger.debug(
                     "PlaylistBuilder[%s]: CUN skipped for '%s' (not rendered), "
-                    "enqueued render request",
-                    self._channel_id, title,
+                    "replaced with %dms pad, enqueued render request",
+                    self._channel_id, title, seg.segment_duration_ms,
                 )
-                # Do NOT append — segment is skipped.
 
         return ScheduledBlock(
             block_id=block.block_id,

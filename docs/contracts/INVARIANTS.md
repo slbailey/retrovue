@@ -627,6 +627,7 @@ Canonical contract: [delivery_hls.md](delivery_hls.md)
 | INV-PLAYLIST-CONTENT-OFFSET-003 | [invariants/core/playout/INV-PLAYLIST-CONTENT-OFFSET-003.md](invariants/core/playout/INV-PLAYLIST-CONTENT-OFFSET-003.md) | LAW-TIMELINE |
 | INV-PLAYLIST-EVENT-TIMELINE-001 | [invariants/core/playout/INV-PLAYLIST-EVENT-TIMELINE-001.md](invariants/core/playout/INV-PLAYLIST-EVENT-TIMELINE-001.md) | LAW-TIMELINE |
 | INV-BLOCK-SEGMENT-CONSERVATION-001 | [invariants/core/playout/INV-BLOCK-SEGMENT-CONSERVATION-001.md](invariants/core/playout/INV-BLOCK-SEGMENT-CONSERVATION-001.md) | LAW-GRID, LAW-TIMELINE |
+| INV-DAEMON-FRONTIER-ACTUAL-001 | [invariants/core/playout/INV-DAEMON-FRONTIER-ACTUAL-001.md](invariants/core/playout/INV-DAEMON-FRONTIER-ACTUAL-001.md) | LAW-TIMELINE |
 
 ---
 

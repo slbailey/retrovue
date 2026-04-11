@@ -351,6 +351,13 @@ class ProgramDirector:
         self.host = host
         self.port = port
         self.fastapi_app = FastAPI(title="RetroVue ProgramDirector")
+        from fastapi.middleware.cors import CORSMiddleware
+        self.fastapi_app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["http://localhost:5173"],
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
         self._server: Optional[Server] = None
         self._server_thread: Optional[Thread] = None
 
@@ -1563,10 +1570,11 @@ class ProgramDirector:
         self.fastapi_app.include_router(studio_router)
 
         # REST API routers (Phase 2 — RETA-69)
-        from retrovue.web.api import catalog_router, ingest_router, scheduling_router
+        from retrovue.web.api import catalog_router, console_router, ingest_router, scheduling_router
         self.fastapi_app.include_router(ingest_router)
         self.fastapi_app.include_router(catalog_router)
         self.fastapi_app.include_router(scheduling_router)
+        self.fastapi_app.include_router(console_router)
         
         @self.fastapi_app.get("/channels", response_model=None)
         async def get_channels():
