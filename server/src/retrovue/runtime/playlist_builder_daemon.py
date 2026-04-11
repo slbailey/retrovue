@@ -173,8 +173,10 @@ class PlaylistBuilderDaemon:
                 from retrovue.runtime.traffic_dsl import (
                     resolve_break_config,
                     resolve_traffic_policy,
+                    validate_traffic_dsl,
                 )
                 dsl = parse_dsl(Path(dsl_path).read_text())
+                validate_traffic_dsl(dsl)
                 if "traffic" in dsl:
                     self._traffic_policy = resolve_traffic_policy(dsl, {})
                     self._break_config = resolve_break_config(dsl)

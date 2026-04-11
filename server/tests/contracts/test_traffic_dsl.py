@@ -682,3 +682,67 @@ class TestBreakConfigWiring:
         assert len(bumpers) == 0
         total = sum(s.segment_duration_ms for s in result.segments)
         assert total == 60_000
+
+
+# ===========================================================================
+# INV-TRAFFIC-DSL-DEFAULT-REQUIRED-001 — Wrong key name must fail validation
+# ===========================================================================
+
+
+@_not_implemented
+class TestDefaultKeyMismatch:
+    """INV-TRAFFIC-DSL-DEFAULT-REQUIRED-001: A config using `default` instead
+    of `default_profile` must be rejected by validate_traffic_dsl().
+
+    This catches the YAML key mismatch that caused repeating commercials
+    (RETA-212): the config had `default: sitcom` but the validator and
+    resolver expect `default_profile: sitcom`."""
+
+    def test_wrong_key_default_rejected(self):
+        """Config with `default` (wrong key) instead of `default_profile` fails."""
+        dsl = {
+            "channel": "test-channel",
+            "name": "Test Channel",
+            "channel_type": "network",
+            "format": {"grid_minutes": 30},
+            "pools": {"shows": {"match": {"type": "episode"}}},
+            "programs": {
+                "show_30": {"pool": "shows", "grid_blocks": 1, "fill_mode": "single"},
+            },
+            "schedule": {
+                "all_day": [{"start": "06:00", "slots": 48, "program": "show_30"}],
+            },
+            "traffic": {
+                "profiles": {"sitcom": {"allowed_types": ["promo"], "default_cooldown_seconds": 3600}},
+                "default": "sitcom",  # WRONG — should be default_profile
+            },
+        }
+        with pytest.raises(ValueError, match="default_profile"):
+            validate_traffic_dsl(dsl)
+
+
+# ===========================================================================
+# INV-TRAFFIC-DSL-DEFAULT-REQUIRED-001 — Production configs must pass
+# ===========================================================================
+
+
+@_not_implemented
+class TestProductionConfigsValid:
+    """INV-TRAFFIC-DSL-DEFAULT-REQUIRED-001: All shipped channel configs with
+    a traffic section must pass validate_traffic_dsl()."""
+
+    @pytest.fixture(params=["cheers-24-7", "hbo"])
+    def channel_dsl_from_file(self, request):
+        """Load a production channel YAML for validation."""
+        from pathlib import Path
+        from retrovue.runtime.schedule_compiler import parse_dsl
+
+        config_dir = Path(__file__).resolve().parents[3] / "config" / "channels"
+        yaml_path = config_dir / f"{request.param}.yaml"
+        assert yaml_path.exists(), f"Config not found: {yaml_path}"
+        return parse_dsl(yaml_path.read_text())
+
+    def test_production_config_passes_validation(self, channel_dsl_from_file):
+        """Production channel config must pass validate_traffic_dsl()."""
+        if "traffic" in channel_dsl_from_file:
+            validate_traffic_dsl(channel_dsl_from_file)

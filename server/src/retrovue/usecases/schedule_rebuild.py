@@ -157,7 +157,9 @@ def rebuild_playlog_plan(
             from retrovue.runtime.traffic_dsl import (
                 resolve_break_config,
                 resolve_traffic_policy,
+                validate_traffic_dsl,
             )
+            validate_traffic_dsl(channel_dsl)
             break_config = resolve_break_config(channel_dsl)
             if "traffic" in channel_dsl:
                 traffic_policy = resolve_traffic_policy(channel_dsl, {})

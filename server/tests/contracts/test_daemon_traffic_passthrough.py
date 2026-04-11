@@ -55,6 +55,8 @@ class TestTrafficPolicyPassthrough:
             "retrovue.runtime.dsl_schedule_service.parse_dsl",
             return_value={"traffic": {"breaks_per_hour": 2}},
         ), patch(
+            "retrovue.runtime.traffic_dsl.validate_traffic_dsl",
+        ), patch(
             "retrovue.runtime.traffic_dsl.resolve_traffic_policy",
             return_value=sentinel_policy,
         ), patch(

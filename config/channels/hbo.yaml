@@ -195,7 +195,7 @@ traffic:
       default_cooldown_seconds: 3600
       max_plays_per_day: 0
 
-  default: hbo_premium
+  default_profile: hbo_premium
 
 
 # -----------------------------

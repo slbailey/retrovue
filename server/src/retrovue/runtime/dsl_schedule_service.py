@@ -560,7 +560,9 @@ class DslScheduleService:
                 from retrovue.runtime.traffic_dsl import (
                     resolve_break_config,
                     resolve_traffic_policy,
+                    validate_traffic_dsl,
                 )
+                validate_traffic_dsl(self._channel_dsl)
                 block_dict = {}
                 if block.traffic_profile:
                     block_dict = {"traffic_profile": block.traffic_profile}
