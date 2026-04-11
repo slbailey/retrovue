@@ -1,1 +1,25 @@
 @import "tailwindcss";
+
+/*
+ * AG Grid dark theme overrides for readability.
+ * Consistent dark background, larger font, better row spacing.
+ */
+.ag-theme-alpine-dark {
+  --ag-font-size: 14px;
+  --ag-row-height: 42px;
+  --ag-header-height: 40px;
+  --ag-background-color: #0a0a0f;
+  --ag-header-background-color: #111118;
+  --ag-odd-row-background-color: #0d0d14;
+  --ag-row-hover-color: #1a1a2e;
+  --ag-selected-row-background-color: #1e1b4b40;
+  --ag-range-selection-background-color: #1e1b4b30;
+  --ag-border-color: #1f1f30;
+  --ag-header-foreground-color: #9ca3af;
+  --ag-foreground-color: #e5e7eb;
+}
+
+/* Custom bg utility for the tag editor bar */
+.bg-gray-850 {
+  background-color: #141420;
+}
