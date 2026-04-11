@@ -27,7 +27,7 @@ The config loader (`config_loader.py`) and resolver (`resolver.py`) own validati
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_config_validation_authority.py`
+- `server/tests/contracts/test_config_validation_authority.py`
 
 ## Enforcement Evidence
 TODO

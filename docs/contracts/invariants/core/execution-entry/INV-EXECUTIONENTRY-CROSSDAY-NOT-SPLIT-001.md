@@ -37,7 +37,7 @@ Invalid scenario: system produces two ExecutionEntrys covering [05:00, 06:00] an
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_playlog_crossday_not_split.py`
+- `server/tests/contracts/test_inv_playlog_crossday_not_split.py`
 
 ## Enforcement Evidence
 

@@ -38,7 +38,7 @@ For each CLI command, verify that the command module imports only from `workflow
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_interaction_boundary_contract.py` (not yet implemented)
+- `server/tests/contracts/test_interaction_boundary_contract.py` (not yet implemented)
 
 ## Enforcement Evidence
 TODO

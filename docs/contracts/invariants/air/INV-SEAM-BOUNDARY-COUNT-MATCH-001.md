@@ -26,7 +26,7 @@ A multi-segment block activates with incomplete discovered seam/transition state
 
 ## Required Tests
 
-- `pkg/air/tests/contracts/BlockPlan/SeamContinuityGuaranteedTests.cpp`
+- `runtime/tests/contracts/BlockPlan/SeamContinuityGuaranteedTests.cpp`
 
 ## Enforcement Evidence
 

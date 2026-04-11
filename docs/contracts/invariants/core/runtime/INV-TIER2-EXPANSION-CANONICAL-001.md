@@ -22,7 +22,7 @@ A playlog plan writer that calls `expand_editorial_block()` without `break_confi
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_tier2_expansion_canonical.py`
+- `server/tests/contracts/runtime/test_inv_tier2_expansion_canonical.py`
 
 ## Enforcement Evidence
 

@@ -33,7 +33,7 @@ For each pool CLI command, verify that the command module imports only from `wor
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_pool_management.py`
+- `server/tests/contracts/test_pool_management.py`
 
 ## Enforcement Evidence
 

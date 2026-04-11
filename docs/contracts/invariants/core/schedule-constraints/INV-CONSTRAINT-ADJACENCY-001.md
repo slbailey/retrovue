@@ -32,9 +32,9 @@ Compile a schedule with Block A (classification "horror") followed by Block B (c
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/scheduling/test_schedule_constraints.py::TestInvConstraintAdjacency001`
+- `server/tests/contracts/scheduling/test_schedule_constraints.py::TestInvConstraintAdjacency001`
 
 ## Enforcement Evidence
 
-- `pkg/core/src/retrovue/scheduling/schedule_constraints.py` — `check_adjacency_constraints()`
+- `server/src/retrovue/scheduling/schedule_constraints.py` — `check_adjacency_constraints()`
 - Error tag: `INV-CONSTRAINT-ADJACENCY-001-VIOLATED`

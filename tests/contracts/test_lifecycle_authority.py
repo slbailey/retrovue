@@ -26,8 +26,8 @@ import pytest
 _THIS_FILE = Path(__file__).resolve()
 REPO_ROOT = _THIS_FILE.parents[2]   # tests/contracts -> tests -> retrovue
 
-CM_PATH = REPO_ROOT / "pkg/core/src/retrovue/runtime/channel_manager.py"
-PD_PATH = REPO_ROOT / "pkg/core/src/retrovue/runtime/program_director.py"
+CM_PATH = REPO_ROOT / "server/src/retrovue/runtime/channel_manager.py"
+PD_PATH = REPO_ROOT / "server/src/retrovue/runtime/program_director.py"
 
 
 def _channel_manager_source() -> str:

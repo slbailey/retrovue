@@ -26,7 +26,7 @@ Expired session persisting beyond `timeout + reap_interval`; reap interval excee
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_viewer_count.py`
+- `server/tests/contracts/runtime/test_inv_hls_viewer_count.py`
 
 ## Enforcement Evidence
 

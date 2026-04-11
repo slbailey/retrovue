@@ -47,7 +47,7 @@ No tags may be silently dropped, truncated, or overwritten, regardless of path d
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_asset_tags_persisted_correctly.py`
+- `server/tests/contracts/test_inv_asset_tags_persisted_correctly.py`
 
 ## Enforcement Evidence
 

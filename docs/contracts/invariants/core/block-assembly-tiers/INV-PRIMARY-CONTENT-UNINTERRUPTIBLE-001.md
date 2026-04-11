@@ -33,7 +33,7 @@ Given a block with a single primary content segment of known duration, run all c
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_block_assembly_tiers.py`
+- `server/tests/contracts/test_block_assembly_tiers.py`
 
 ## Enforcement Evidence
 

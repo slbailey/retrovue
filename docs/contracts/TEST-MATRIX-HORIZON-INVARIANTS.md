@@ -2,7 +2,7 @@
 
 **Scope:** Deterministic-clock validation of all invariants created from ScheduleHorizonManagementContract_v0.1.
 
-**Test file:** `pkg/core/tests/contracts/runtime/test_horizon_invariants.py`
+**Test file:** `server/tests/contracts/runtime/test_horizon_invariants.py`
 
 **Clock:** `FakeAdvancingClock` via `contract_clock` fixture. No `time.sleep`. All time progression via `contract_clock.advance_ms()`. Current time read via `contract_clock.now_utc_ms()`.
 
@@ -182,7 +182,7 @@ The `snapshot` parameter is a `WindowSnapshot` as returned by `execution_store.r
 | **Actions** | 1. `horizon_manager.evaluate_once()`. |
 | **Assertions** | `execution_store.get_window_end_utc_ms() - contract_clock.now_utc_ms() >= MIN_EXEC_HORIZON_MS`. `horizon_manager.health_report().execution_compliant == True`. `horizon_manager.extension_success_count >= 1`. `horizon_manager.extension_attempt_log[-1].reason_code == "REASON_TIME_THRESHOLD"`. `horizon_manager.extension_attempt_log[-1].success == True`. |
 | **Failure mode** | Depth after initialization is less than `MIN_EXEC_HORIZON_MS`; or `health_report().execution_compliant == False`. |
-| **Test file** | `pkg/core/tests/contracts/test_inv_horizon_execution_min.py` |
+| **Test file** | `server/tests/contracts/test_inv_horizon_execution_min.py` |
 | **Status** | **PASS** |
 
 ### THEM-002: Horizon depth maintained across 24-hour progression
@@ -195,7 +195,7 @@ The `snapshot` parameter is a `WindowSnapshot` as returned by `execution_store.r
 | **Actions** | For each of 48 steps `i` in `0..47`: 1. `contract_clock.advance_ms(BLOCK_DUR_MS)`. 2. `horizon_manager.evaluate_once()`. 3. `depth = execution_store.get_window_end_utc_ms() - contract_clock.now_utc_ms()`. 4. `report = horizon_manager.health_report()`. |
 | **Assertions** | At every step: `depth >= MIN_EXEC_HORIZON_MS`. At every step: `report.execution_compliant == True`. `horizon_manager.extension_forbidden_trigger_count == 0` at end of walk. Every entry in `horizon_manager.extension_attempt_log` has `triggered_by == "SCHED_MGR_POLICY"`. |
 | **Failure mode** | `depth < MIN_EXEC_HORIZON_MS` at any step; or `execution_compliant == False` at any step. |
-| **Test file** | `pkg/core/tests/contracts/test_inv_horizon_execution_min.py` |
+| **Test file** | `server/tests/contracts/test_inv_horizon_execution_min.py` |
 | **Status** | **PASS** |
 
 ### THEM-003: Violation detected when pipeline fails
@@ -208,7 +208,7 @@ The `snapshot` parameter is a `WindowSnapshot` as returned by `execution_store.r
 | **Actions** | 1. Configure `StubPlanningPipeline` to return `error_code="PIPELINE_EXHAUSTED"` on next call. 2. `contract_clock.advance_ms(2 * BLOCK_DUR_MS)`. 3. `horizon_manager.evaluate_once()`. |
 | **Assertions** | `horizon_manager.health_report().execution_compliant == False`. `execution_store.get_window_end_utc_ms() - contract_clock.now_utc_ms() < MIN_EXEC_HORIZON_MS`. `horizon_manager.extension_attempt_log[-1].success == False`. `horizon_manager.extension_attempt_log[-1].error_code == "PIPELINE_EXHAUSTED"`. `horizon_manager.extension_success_count` unchanged from before the failed attempt. |
 | **Failure mode** | `execution_compliant` remains `True` despite deficit; or failed attempt not logged with `error_code`. |
-| **Test file** | `pkg/core/tests/contracts/test_inv_horizon_execution_min.py` |
+| **Test file** | `server/tests/contracts/test_inv_horizon_execution_min.py` |
 | **Status** | **PASS** |
 
 ### THEM-004: Horizon survives programming day boundary
@@ -221,7 +221,7 @@ The `snapshot` parameter is a `WindowSnapshot` as returned by `execution_store.r
 | **Actions** | For 4 steps across boundary: 1. `contract_clock.advance_ms(BLOCK_DUR_MS)`. 2. `horizon_manager.evaluate_once()`. 3. `depth = execution_store.get_window_end_utc_ms() - contract_clock.now_utc_ms()`. |
 | **Assertions** | `depth >= MIN_EXEC_HORIZON_MS` at every step including the step that crosses 06:00. `horizon_manager.health_report().execution_compliant == True` at every step. Every entry in `horizon_manager.extension_attempt_log` has `triggered_by == "SCHED_MGR_POLICY"` and `reason_code` in `{"REASON_TIME_THRESHOLD", "DAILY_ROLL"}`. |
 | **Failure mode** | Depth drops below `MIN_EXEC_HORIZON_MS` at the programming day boundary crossing. |
-| **Test file** | `pkg/core/tests/contracts/test_inv_horizon_execution_min.py` |
+| **Test file** | `server/tests/contracts/test_inv_horizon_execution_min.py` |
 | **Status** | **PASS** |
 
 ---
@@ -290,7 +290,7 @@ The `snapshot` parameter is a `WindowSnapshot` as returned by `execution_store.r
 | **Actions** | 1. `snap = execution_store.read_window_snapshot(EPOCH_MS, execution_store.get_window_end_utc_ms())`. 2. For each adjacent pair `(snap.entries[i], snap.entries[i+1])`: compare `end_utc_ms` to `start_utc_ms`. |
 | **Assertions** | For every pair: `snap.entries[i].end_utc_ms == snap.entries[i+1].start_utc_ms`. Every entry satisfies `entry.end_utc_ms > entry.start_utc_ms` (positive duration). No two entries share the same `start_utc_ms`. `len(snap.entries) == 12`. |
 | **Failure mode** | Any adjacent pair where `end_utc_ms != start_utc_ms`; or any entry with non-positive duration. |
-| **Test file** | `pkg/core/tests/contracts/test_inv_horizon_continuous_coverage.py` |
+| **Test file** | `server/tests/contracts/test_inv_horizon_continuous_coverage.py` |
 | **Status** | **PASS** |
 
 ### THCC-002: Gap detected and reported as violation
@@ -303,7 +303,7 @@ The `snapshot` parameter is a `WindowSnapshot` as returned by `execution_store.r
 | **Actions** | 1. Populate block A: `start_utc_ms=EPOCH_MS`, `end_utc_ms=EPOCH_MS + BLOCK_DUR_MS`, `block_index=0`. 2. Populate block B: `start_utc_ms=EPOCH_MS + BLOCK_DUR_MS + 1`, `end_utc_ms=EPOCH_MS + 2 * BLOCK_DUR_MS + 1`, `block_index=1`. 3. `snap = execution_store.read_window_snapshot(EPOCH_MS, EPOCH_MS + 2 * BLOCK_DUR_MS + 1)`. 4. Run seam validation on `snap.entries`. |
 | **Assertions** | Validation fails. `delta_ms = snap.entries[1].start_utc_ms - snap.entries[0].end_utc_ms == 1`. Error identifies `left_block_id=A.block_id`, `right_block_id=B.block_id`, `delta_ms=1`. Classified as planning fault. |
 | **Failure mode** | Gap not detected; or `delta_ms` not reported. |
-| **Test file** | `pkg/core/tests/contracts/test_inv_horizon_continuous_coverage.py` |
+| **Test file** | `server/tests/contracts/test_inv_horizon_continuous_coverage.py` |
 | **Status** | **PASS** |
 
 ### THCC-003: Overlap detected and reported as violation
@@ -316,7 +316,7 @@ The `snapshot` parameter is a `WindowSnapshot` as returned by `execution_store.r
 | **Actions** | 1. Populate block A: `start_utc_ms=EPOCH_MS`, `end_utc_ms=EPOCH_MS + BLOCK_DUR_MS`, `block_index=0`. 2. Populate block B: `start_utc_ms=EPOCH_MS + BLOCK_DUR_MS - 1`, `end_utc_ms=EPOCH_MS + 2 * BLOCK_DUR_MS - 1`, `block_index=1`. 3. `snap = execution_store.read_window_snapshot(EPOCH_MS, EPOCH_MS + 2 * BLOCK_DUR_MS)`. 4. Run seam validation on `snap.entries`. |
 | **Assertions** | Validation fails. `delta_ms = snap.entries[1].start_utc_ms - snap.entries[0].end_utc_ms == -1`. Error identifies `left_block_id`, `right_block_id`, `delta_ms=-1`. |
 | **Failure mode** | Overlap not detected; or `delta_ms` not reported. |
-| **Test file** | `pkg/core/tests/contracts/test_inv_horizon_continuous_coverage.py` |
+| **Test file** | `server/tests/contracts/test_inv_horizon_continuous_coverage.py` |
 | **Status** | **PASS** |
 
 ### THCC-004: Coverage maintained after horizon extension
@@ -329,7 +329,7 @@ The `snapshot` parameter is a `WindowSnapshot` as returned by `execution_store.r
 | **Actions** | 1. Record `W1 = execution_store.get_window_end_utc_ms()`. 2. `contract_clock.advance_ms(MIN_EXEC_HORIZON_MS - EXTEND_WATERMARK_MS)` — cross watermark. 3. `horizon_manager.evaluate_once()` — triggers extension. 4. Record `W2 = execution_store.get_window_end_utc_ms()`. 5. `snap = execution_store.read_window_snapshot(EPOCH_MS, W2)`. 6. Validate all seams in `snap.entries`. |
 | **Assertions** | `W2 > W1`. All seams pass: `entries[i].end_utc_ms == entries[i+1].start_utc_ms` for every pair. The seam at the extension join (entry with `end_utc_ms == W1` adjacent to entry with `start_utc_ms == W1`) is included and passes. |
 | **Failure mode** | Gap or overlap at the extension join. |
-| **Test file** | `pkg/core/tests/contracts/test_inv_horizon_continuous_coverage.py` |
+| **Test file** | `server/tests/contracts/test_inv_horizon_continuous_coverage.py` |
 | **Status** | **PASS** |
 
 ### THCC-005: Coverage across 24-hour progression
@@ -342,7 +342,7 @@ The `snapshot` parameter is a `WindowSnapshot` as returned by `execution_store.r
 | **Actions** | For each of 48 steps: 1. `contract_clock.advance_ms(BLOCK_DUR_MS)`. 2. `horizon_manager.evaluate_once()`. 3. `snap = execution_store.read_window_snapshot(contract_clock.now_utc_ms(), execution_store.get_window_end_utc_ms())`. 4. Validate all seams in `snap.entries`. |
 | **Assertions** | Zero seam violations across all 48 cycles. Every snapshot satisfies integer equality at every seam. |
 | **Failure mode** | Seam violation at any step during 24-hour walk. |
-| **Test file** | `pkg/core/tests/contracts/test_inv_horizon_continuous_coverage.py` |
+| **Test file** | `server/tests/contracts/test_inv_horizon_continuous_coverage.py` |
 | **Status** | **PASS** |
 
 ### THCC-006: No duplicate `entry_id` or time-slot within rolling window
@@ -373,7 +373,7 @@ The `snapshot` parameter is a `WindowSnapshot` as returned by `execution_store.r
 | **Actions** | 1. Populate store with 6 blocks covering `[EPOCH_MS, EPOCH_MS + 6 * BLOCK_DUR_MS)` with `generation_id=1`. 2. `snap_before = execution_store.read_window_snapshot(EPOCH_MS, EPOCH_MS + 6 * BLOCK_DUR_MS)`. 3. `result = execution_store.publish_atomic_replace(range_start_ms=EPOCH_MS, range_end_ms=EPOCH_MS + 6 * BLOCK_DUR_MS, new_entries=<6 replacement entries>, generation_id=2, reason_code="OPERATOR_OVERRIDE", operator_override=True)`. 4. `snap_after = execution_store.read_window_snapshot(EPOCH_MS, EPOCH_MS + 6 * BLOCK_DUR_MS)`. |
 | **Assertions** | `result.ok == True`. `result.published_generation_id == 2`. `snap_before.generation_id == 1`. `snap_after.generation_id == 2`. `snap_after.generation_id > snap_before.generation_id`. Every `entry.generation_id == 2` in `snap_after.entries`. `len(snap_after.entries) == 6`. No entry with `generation_id == 1` in `snap_after`. |
 | **Failure mode** | Any entry in `snap_after` has `generation_id != 2`; or `snap_after.generation_id <= snap_before.generation_id`; or `result.published_generation_id != 2`. |
-| **Test file** | `pkg/core/tests/contracts/test_inv_horizon_atomic_publish.py` |
+| **Test file** | `server/tests/contracts/test_inv_horizon_atomic_publish.py` |
 | **Status** | **PASS** |
 
 ### THAP-002: Non-overlapping range unaffected by publish
@@ -386,7 +386,7 @@ The `snapshot` parameter is a `WindowSnapshot` as returned by `execution_store.r
 | **Actions** | 1. Populate 12 blocks covering `[EPOCH_MS, EPOCH_MS + 12 * BLOCK_DUR_MS)` with `generation_id=1`. Let R1 = `[EPOCH_MS, EPOCH_MS + 6 * BLOCK_DUR_MS)`, R2 = `[EPOCH_MS + 6 * BLOCK_DUR_MS, EPOCH_MS + 12 * BLOCK_DUR_MS)`. 2. `result = execution_store.publish_atomic_replace(range_start_ms=EPOCH_MS, range_end_ms=EPOCH_MS + 6 * BLOCK_DUR_MS, new_entries=<6 replacement entries>, generation_id=2, reason_code="OPERATOR_OVERRIDE", operator_override=True)`. 3. `snap_r1 = execution_store.read_window_snapshot(EPOCH_MS, EPOCH_MS + 6 * BLOCK_DUR_MS)`. 4. `snap_r2 = execution_store.read_window_snapshot(EPOCH_MS + 6 * BLOCK_DUR_MS, EPOCH_MS + 12 * BLOCK_DUR_MS)`. |
 | **Assertions** | `result.published_generation_id == 2`. `snap_r1.generation_id == 2`. Every entry in `snap_r1.entries` has `generation_id == 2`. `snap_r2.generation_id == 1`. Every entry in `snap_r2.entries` has `generation_id == 1`. |
 | **Failure mode** | R2 entries have `generation_id == 2`; publish bled into adjacent range. |
-| **Test file** | `pkg/core/tests/contracts/test_inv_horizon_atomic_publish.py` |
+| **Test file** | `server/tests/contracts/test_inv_horizon_atomic_publish.py` |
 | **Status** | **PASS** |
 
 ### THAP-003: Snapshot read returns single generation; monotonicity holds
@@ -399,7 +399,7 @@ The `snapshot` parameter is a `WindowSnapshot` as returned by `execution_store.r
 | **Actions** | 1. Populate 6 blocks with `generation_id=1`. 2. `snap_before = execution_store.read_window_snapshot(EPOCH_MS, EPOCH_MS + 6 * BLOCK_DUR_MS)`. 3. `result = execution_store.publish_atomic_replace(range_start_ms=EPOCH_MS, range_end_ms=EPOCH_MS + 6 * BLOCK_DUR_MS, new_entries=<6 replacement entries>, generation_id=2, reason_code="REASON_TIME_THRESHOLD", operator_override=False)`. 4. `snap_after = execution_store.read_window_snapshot(EPOCH_MS, EPOCH_MS + 6 * BLOCK_DUR_MS)`. |
 | **Assertions** | `len(set(e.generation_id for e in snap_before.entries)) == 1`. `snap_before.generation_id == 1`. `len(set(e.generation_id for e in snap_after.entries)) == 1`. `snap_after.generation_id == 2`. `snap_after.generation_id > snap_before.generation_id`. `result.published_generation_id == 2`. |
 | **Failure mode** | `len(set(e.generation_id for e in snap.entries)) > 1` for any snapshot; or `snap_after.generation_id <= snap_before.generation_id`. |
-| **Test file** | `pkg/core/tests/contracts/test_inv_horizon_atomic_publish.py` |
+| **Test file** | `server/tests/contracts/test_inv_horizon_atomic_publish.py` |
 | **Status** | **PASS** |
 
 ### THAP-004: Operator override produces new generation for partial range
@@ -412,7 +412,7 @@ The `snapshot` parameter is a `WindowSnapshot` as returned by `execution_store.r
 | **Actions** | 1. Populate 12 blocks with `generation_id=1`. Let override range = `[EPOCH_MS + 3 * BLOCK_DUR_MS, EPOCH_MS + 5 * BLOCK_DUR_MS)` (blocks 3-4). 2. `result = execution_store.publish_atomic_replace(range_start_ms=EPOCH_MS + 3 * BLOCK_DUR_MS, range_end_ms=EPOCH_MS + 5 * BLOCK_DUR_MS, new_entries=<2 replacement entries>, generation_id=2, reason_code="OPERATOR_OVERRIDE", operator_override=True)`. 3. `snap_override = execution_store.read_window_snapshot(EPOCH_MS + 3 * BLOCK_DUR_MS, EPOCH_MS + 5 * BLOCK_DUR_MS)`. 4. `snap_before = execution_store.read_window_snapshot(EPOCH_MS, EPOCH_MS + 3 * BLOCK_DUR_MS)`. 5. `snap_after = execution_store.read_window_snapshot(EPOCH_MS + 5 * BLOCK_DUR_MS, EPOCH_MS + 12 * BLOCK_DUR_MS)`. |
 | **Assertions** | `result.ok == True`. `result.published_generation_id == 2`. `snap_override.generation_id == 2`. All entries in `snap_override.entries` have `generation_id == 2`. `snap_before.generation_id == 1`. All entries in `snap_before.entries` have `generation_id == 1`. `snap_after.generation_id == 1`. All entries in `snap_after.entries` have `generation_id == 1`. |
 | **Failure mode** | Override range contains mixed generations; or non-override ranges affected; or `result.published_generation_id != 2`. |
-| **Test file** | `pkg/core/tests/contracts/test_inv_horizon_atomic_publish.py` |
+| **Test file** | `server/tests/contracts/test_inv_horizon_atomic_publish.py` |
 | **Status** | **PASS** |
 
 ---
@@ -431,7 +431,7 @@ The `snapshot` parameter is a `WindowSnapshot` as returned by `execution_store.r
 | **Actions** | 1. `result = store.publish_atomic_replace(range_start_ms=EPOCH_MS, range_end_ms=EPOCH_MS + BLOCK_DUR_MS, new_entries=[block-0], generation_id=2, reason_code="REASON_TIME_THRESHOLD", operator_override=False)`. 2. `snap = store.read_window_snapshot(EPOCH_MS, EPOCH_MS + BLOCK_DUR_MS)`. |
 | **Assertions** | `result.ok == False`. `"INV-HORIZON-LOCKED-IMMUTABLE-001-VIOLATED" in result.error_code`. `snap.generation_id == 1` (original generation preserved). All entries have `generation_id == 1`. |
 | **Failure mode** | `result.ok == True`; publish succeeded without operator override inside locked window. |
-| **Test file** | `pkg/core/tests/contracts/test_inv_horizon_locked_immutable.py` |
+| **Test file** | `server/tests/contracts/test_inv_horizon_locked_immutable.py` |
 | **Status** | **PASS** |
 
 ### THLI-002: Automated multi-block publish in locked window rejected
@@ -444,7 +444,7 @@ The `snapshot` parameter is a `WindowSnapshot` as returned by `execution_store.r
 | **Actions** | 1. `result = store.publish_atomic_replace(range_start_ms=EPOCH_MS, range_end_ms=EPOCH_MS + 4 * BLOCK_DUR_MS, new_entries=[blocks 0-3], generation_id=2, reason_code="AUTOMATED_REGEN", operator_override=False)`. 2. `snap = store.read_window_snapshot(EPOCH_MS, EPOCH_MS + 4 * BLOCK_DUR_MS)`. |
 | **Assertions** | `result.ok == False`. `"INV-HORIZON-LOCKED-IMMUTABLE-001-VIOLATED" in result.error_code`. `snap.generation_id == 1`. |
 | **Failure mode** | `result.ok == True`; automated multi-block replace succeeded inside locked window. |
-| **Test file** | `pkg/core/tests/contracts/test_inv_horizon_locked_immutable.py` |
+| **Test file** | `server/tests/contracts/test_inv_horizon_locked_immutable.py` |
 | **Status** | **PASS** |
 
 ### THLI-003: Operator override replaces locked block with new generation
@@ -457,7 +457,7 @@ The `snapshot` parameter is a `WindowSnapshot` as returned by `execution_store.r
 | **Actions** | 1. `result = store.publish_atomic_replace(range_start_ms=EPOCH_MS, range_end_ms=EPOCH_MS + 2 * BLOCK_DUR_MS, new_entries=[blocks 0-1], generation_id=2, reason_code="OPERATOR_OVERRIDE", operator_override=True)`. 2. `snap_replaced = store.read_window_snapshot(EPOCH_MS, EPOCH_MS + 2 * BLOCK_DUR_MS)`. 3. `snap_rest = store.read_window_snapshot(EPOCH_MS + 2 * BLOCK_DUR_MS, EPOCH_MS + 12 * BLOCK_DUR_MS)`. |
 | **Assertions** | `result.ok == True`. `result.published_generation_id == 2`. `snap_replaced.generation_id == 2`. All entries in `snap_replaced` have `generation_id == 2`. `snap_rest.generation_id == 1`. All entries in `snap_rest` have `generation_id == 1`. |
 | **Failure mode** | `result.ok == False`; or non-overridden blocks affected; or `result.published_generation_id != 2`. |
-| **Test file** | `pkg/core/tests/contracts/test_inv_horizon_locked_immutable.py` |
+| **Test file** | `server/tests/contracts/test_inv_horizon_locked_immutable.py` |
 | **Status** | **PASS** |
 
 ### THLI-004: Publish beyond locked window accepted without override
@@ -470,7 +470,7 @@ The `snapshot` parameter is a `WindowSnapshot` as returned by `execution_store.r
 | **Actions** | 1. `result = store.publish_atomic_replace(range_start_ms=flexible_start, range_end_ms=flexible_start + 2 * BLOCK_DUR_MS, new_entries=[blocks 4-5], generation_id=2, reason_code="REASON_TIME_THRESHOLD", operator_override=False)`. 2. `snap = store.read_window_snapshot(flexible_start, flexible_start + 2 * BLOCK_DUR_MS)`. |
 | **Assertions** | `result.ok == True`. `result.published_generation_id == 2`. `snap.generation_id == 2`. All entries have `generation_id == 2`. |
 | **Failure mode** | `result.ok == False`; locked-window enforcement extends beyond `LOCKED_WINDOW_MS`. |
-| **Test file** | `pkg/core/tests/contracts/test_inv_horizon_locked_immutable.py` |
+| **Test file** | `server/tests/contracts/test_inv_horizon_locked_immutable.py` |
 | **Status** | **PASS** |
 
 ### THLI-005: Clock advance moves lock boundary; previously-flexible becomes locked
@@ -483,7 +483,7 @@ The `snapshot` parameter is a `WindowSnapshot` as returned by `execution_store.r
 | **Actions** | 1. `flexible_start = EPOCH_MS + 4 * BLOCK_DUR_MS`. 2. `result_1 = store.publish_atomic_replace(range_start_ms=flexible_start, range_end_ms=flexible_start + 2 * BLOCK_DUR_MS, ..., generation_id=2, operator_override=False)` — succeeds. 3. `clock.advance_ms(2 * BLOCK_DUR_MS)`. 4. `locked_end_2 = _locked_window_end_ms(clock.now_utc_ms(), LOCKED_WINDOW_MS)`. Assert `flexible_start < locked_end_2`. 5. `result_2 = store.publish_atomic_replace(range_start_ms=flexible_start, ..., generation_id=3, operator_override=False)`. |
 | **Assertions** | `result_1.ok == True`. `result_2.ok == False`. `"INV-HORIZON-LOCKED-IMMUTABLE-001-VIOLATED" in result_2.error_code`. `locked_end_2 > EPOCH_MS + LOCKED_WINDOW_MS` (boundary moved). |
 | **Failure mode** | `result_2.ok == True`; block remains mutable after entering the locked window. |
-| **Test file** | `pkg/core/tests/contracts/test_inv_horizon_locked_immutable.py` |
+| **Test file** | `server/tests/contracts/test_inv_horizon_locked_immutable.py` |
 | **Status** | **PASS** |
 
 ---

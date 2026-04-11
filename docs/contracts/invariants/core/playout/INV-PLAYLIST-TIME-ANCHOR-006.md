@@ -35,4 +35,4 @@ Generate PlaylistEvents from a ScheduleItem with a known start time. Assert the 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/playout/test_playlist_timeline_continuity.py::test_first_event_anchored_to_schedule_item_start`
+- `server/tests/contracts/playout/test_playlist_timeline_continuity.py::test_first_event_anchored_to_schedule_item_start`

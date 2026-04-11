@@ -16,7 +16,7 @@ This document defines the **feature flags** used during migration from the curre
 
 ## Flag Definitions
 
-Flags are boolean settings. They MAY be read from environment variables or from application settings (e.g. `pkg/core/src/retrovue/infra/settings.py`). Defaults are chosen so that **before** the corresponding phase is enabled, behavior matches the pre-migration pipeline.
+Flags are boolean settings. They MAY be read from environment variables or from application settings (e.g. `server/src/retrovue/infra/settings.py`). Defaults are chosen so that **before** the corresponding phase is enabled, behavior matches the pre-migration pipeline.
 
 | Flag | Default | When introduced | Meaning when `True` |
 |------|---------|------------------|---------------------|
@@ -49,7 +49,7 @@ The task plan and code MUST enforce: **never run both inline enrichment and work
 
 ## Where Flags Are Read
 
-- **Settings module:** `pkg/core/src/retrovue/infra/settings.py` (or equivalent). Add three optional boolean fields with the defaults above and env aliases `ENABLE_FINGERPRINT_UPDATES`, `ENABLE_PROCESSOR_QUEUE`, `ENABLE_RUNTIME_EXECUTION`.
+- **Settings module:** `server/src/retrovue/infra/settings.py` (or equivalent). Add three optional boolean fields with the defaults above and env aliases `ENABLE_FINGERPRINT_UPDATES`, `ENABLE_PROCESSOR_QUEUE`, `ENABLE_RUNTIME_EXECUTION`.
 - **Reconciliation / ingest:** When determining whether to apply “update” (fingerprint differs), read `ENABLE_FINGERPRINT_UPDATES`. When calling the enqueue API, if `ENABLE_PROCESSOR_QUEUE` is `false`, call stub/no-op enqueue; if `true`, call real enqueue.
 - **Create path (inline enrichment):** When `ENABLE_PROCESSOR_QUEUE` is `true` and `ENABLE_RUNTIME_EXECUTION` is `true`, the create path MUST NOT run the inline enricher pipeline (so that only workers do enrichment). When either is `false`, the create path MAY run inline enrichment (current behavior).
 - **Worker:** When claiming and executing jobs, if `ENABLE_RUNTIME_EXECUTION` is `true`, use only the formal processor runtime (Phase 4). If `false`, workers may use the minimal runtime (Phase 3) or not run at all, depending on phase.

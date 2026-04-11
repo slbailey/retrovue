@@ -34,7 +34,7 @@ An enricher that executes outside its declared mode is a violation. Detection oc
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/ingest/test_inv_enricher_execution_mode.py`
+- `server/tests/contracts/ingest/test_inv_enricher_execution_mode.py`
 
 ## Enforcement Evidence
 

@@ -37,7 +37,7 @@ Create a weekday-only run (mask=31) anchored on Monday at E0. Resolve Friday: as
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_episode_progression.py`
+- `server/tests/contracts/test_episode_progression.py`
 
 ## Enforcement Evidence
 

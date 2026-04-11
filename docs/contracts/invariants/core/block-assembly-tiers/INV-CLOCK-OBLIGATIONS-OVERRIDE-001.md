@@ -38,7 +38,7 @@ Given a channel config with `obligations: [{ type: station_id, interval_minutes:
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_block_assembly_tiers.py`
+- `server/tests/contracts/test_block_assembly_tiers.py`
 
 ## Enforcement Evidence
 

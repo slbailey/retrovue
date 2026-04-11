@@ -25,7 +25,7 @@ Fill loop decoding frames with no active consumer; buffer depth growing without 
 
 ## Required Tests
 
-- `pkg/air/tests/contracts/BlockPlan/DemandDrivenProducerTests.cpp`
+- `runtime/tests/contracts/BlockPlan/DemandDrivenProducerTests.cpp`
 
 ## Enforcement Evidence
 

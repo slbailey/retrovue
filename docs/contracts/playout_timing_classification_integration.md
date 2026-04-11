@@ -161,7 +161,7 @@ If the classification function itself raises an exception, the caller MUST catch
 
 ## Required Tests
 
-- `pkg/air/tests/contracts/BlockPlan/TimingClassificationIntegrationTests.cpp`
+- `runtime/tests/contracts/BlockPlan/TimingClassificationIntegrationTests.cpp`
 
 | Test | Invariant | Scenario |
 |------|-----------|----------|

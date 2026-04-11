@@ -31,7 +31,7 @@ Assemble a program block with a PG-rated movie and a presentation pool entry wit
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_presentation_contextual_select.py`
+- `server/tests/contracts/test_inv_presentation_contextual_select.py`
 
 ## Enforcement Evidence
 

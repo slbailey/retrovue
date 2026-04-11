@@ -34,7 +34,7 @@ Idempotency violations are detectable by running the same enricher twice on the 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/ingest/test_inv_enricher_idempotent.py`
+- `server/tests/contracts/ingest/test_inv_enricher_idempotent.py`
 
 ## Enforcement Evidence
 

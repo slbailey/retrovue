@@ -25,7 +25,7 @@ Index reuse; index gap within a continuous session; index decrease; counter muta
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_segment_timeline.py`
+- `server/tests/contracts/runtime/test_inv_hls_segment_timeline.py`
 
 ## Enforcement Evidence
 

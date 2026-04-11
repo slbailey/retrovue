@@ -54,7 +54,7 @@ pattern replaces the broken `db.merge()` with fresh UUID approach.
 
 ## Verification
 
-- Contract test: `pkg/core/tests/contracts/scheduling/test_inv_schedule_retention_001.py`
+- Contract test: `server/tests/contracts/scheduling/test_inv_schedule_retention_001.py`
 - Program schedule purge: deletes rows with `broadcast_day < cutoff`, keeps current/future.
 - Playlog Plan purge: deletes rows with `end_utc_ms <= cutoff`, keeps recent.
 - Upsert: updates existing row on conflict, does not silently fail.

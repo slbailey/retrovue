@@ -44,7 +44,7 @@ AST-scan `ProgramDirector._get_or_create_manager()` source and verify no calls t
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/scheduling/test_inv_schedule_prewarm_001.py`
+- `server/tests/contracts/scheduling/test_inv_schedule_prewarm_001.py`
 
 ## Enforcement Evidence
 

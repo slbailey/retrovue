@@ -232,7 +232,7 @@ The interface change (Phase 1) and consumer update (Phase 3) MUST be deployed at
 
 ## Required Tests
 
-- `pkg/air/tests/contracts/BlockPlan/EofPadTransitionContractTests.cpp` (update mocks to use DecodeResult)
+- `runtime/tests/contracts/BlockPlan/EofPadTransitionContractTests.cpp` (update mocks to use DecodeResult)
 
 | Test | Invariant | Scenario |
 |------|-----------|----------|

@@ -36,7 +36,7 @@ When the FFprobe enricher extracts chapter markers from source media, the result
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/ingest/test_inv_chapter_marker_shape.py`
+- `server/tests/contracts/ingest/test_inv_chapter_marker_shape.py`
 
 ## Enforcement Evidence
 

@@ -1,0 +1,827 @@
+"""
+Repository: Retrovue-playout
+Component: PlayoutSession - BlockPlan-based playout orchestration
+Purpose: Wraps AIR subprocess for BlockPlan 2-block window execution
+
+This module provides the PlayoutSession class that orchestrates BlockPlan-based
+playout without ChannelManager needing to reason about segments, preload timing,
+or switching. All that logic is delegated to the AIR executor.
+
+Usage:
+    session = PlayoutSession(channel_id, channel_id_int, ts_socket_path, program_format, clock)
+    session.start(join_utc_ms)
+    session.seed(block_a, block_b)
+    session.feed(block_c)  # Call when slot available
+    session.stop("last_viewer_left")
+
+Copyright (c) 2025 RetroVue
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import logging
+import os
+import socket
+import subprocess
+import sys
+import threading
+import time
+import types
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from pathlib import Path
+from typing import Any, Callable, Optional
+
+import grpc
+from grpc_health.v1 import health_pb2, health_pb2_grpc
+
+from retrovue.runtime.clock import MasterClock
+
+# INV-GRPC-HEALTH-CHECK-001: Default readiness timeout (seconds).
+# Overridden by playout.grpc.readiness_timeout_seconds config key.
+DEFAULT_READINESS_TIMEOUT_SECONDS = 10.0
+
+
+class FeedResult(Enum):
+    """Result of a feed() attempt to AIR.
+
+    Distinguishes QUEUE_FULL (capacity, not an error) from ERROR
+    (gRPC/transport failure). Enables credit-based flow control
+    in BlockPlanProducer.
+    """
+    ACCEPTED = "accepted"
+    QUEUE_FULL = "queue_full"
+    ERROR = "error"
+
+
+def _get_playout_stubs() -> tuple[types.ModuleType, types.ModuleType]:
+    """Load playout_pb2 and playout_pb2_grpc from server/core/proto/retrovue."""
+    # Try multiple paths for flexibility
+    candidates = [
+        Path(__file__).resolve().parents[3] / "core" / "proto" / "retrovue",
+        Path(__file__).resolve().parents[4] / "core" / "proto" / "retrovue",
+        Path("/opt/retrovue/server/core/proto/retrovue"),
+    ]
+    _proto_dir = None
+    for p in candidates:
+        if p.is_dir() and (p / "playout_pb2.py").exists():
+            _proto_dir = p
+            break
+
+    if _proto_dir is None:
+        raise RuntimeError(
+            "Proto stubs not found. Run scripts/air/generate_proto.sh to generate playout_pb2(_grpc).py."
+        )
+
+    _spec_pb2 = importlib.util.spec_from_file_location(
+        "playout_pb2", _proto_dir / "playout_pb2.py"
+    )
+    _spec_grpc = importlib.util.spec_from_file_location(
+        "playout_pb2_grpc", _proto_dir / "playout_pb2_grpc.py"
+    )
+    if _spec_pb2 is None or _spec_grpc is None:
+        raise RuntimeError("Failed to create spec for proto stubs")
+
+    playout_pb2 = importlib.util.module_from_spec(_spec_pb2)
+    playout_pb2_grpc = importlib.util.module_from_spec(_spec_grpc)
+
+    # Temporarily inject retrovue.playout_pb2 so grpc stub can import it
+    _retrovue_saved = sys.modules.get("retrovue")
+    _playout_pb2_saved = sys.modules.get("playout_pb2")
+    _proto_retrovue = types.ModuleType("retrovue")
+    _proto_retrovue.playout_pb2 = playout_pb2
+    sys.modules["retrovue"] = _proto_retrovue
+    try:
+        _spec_pb2.loader.exec_module(playout_pb2)
+        sys.modules["playout_pb2"] = playout_pb2
+        _spec_grpc.loader.exec_module(playout_pb2_grpc)
+        return (playout_pb2, playout_pb2_grpc)
+    finally:
+        if _retrovue_saved is not None:
+            sys.modules["retrovue"] = _retrovue_saved
+        else:
+            sys.modules.pop("retrovue", None)
+        if _playout_pb2_saved is not None:
+            sys.modules["playout_pb2"] = _playout_pb2_saved
+        else:
+            sys.modules.pop("playout_pb2", None)
+
+
+# Load proto stubs
+playout_pb2, playout_pb2_grpc = _get_playout_stubs()
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class BlockPlan:
+    """Python representation of a BlockPlan for the executor.
+
+    INV-TIME-TYPE-001: All ms fields enforced as int at construction.
+    """
+    block_id: str
+    channel_id: int
+    start_utc_ms: int
+    end_utc_ms: int
+    segments: list[dict[str, Any]] = field(default_factory=list)
+
+    def __post_init__(self):
+        if not isinstance(self.start_utc_ms, int):
+            raise TypeError(
+                f"INV-TIME-TYPE-001: BlockPlan.start_utc_ms must be int, "
+                f"got {type(self.start_utc_ms).__name__}: {self.start_utc_ms!r}"
+            )
+        if not isinstance(self.end_utc_ms, int):
+            raise TypeError(
+                f"INV-TIME-TYPE-001: BlockPlan.end_utc_ms must be int, "
+                f"got {type(self.end_utc_ms).__name__}: {self.end_utc_ms!r}"
+            )
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "BlockPlan":
+        """Create BlockPlan from dictionary (e.g., loaded from JSON)."""
+        return cls(
+            block_id=d["block_id"],
+            channel_id=d["channel_id"],
+            start_utc_ms=int(d["start_utc_ms"]),
+            end_utc_ms=int(d["end_utc_ms"]),
+            segments=d.get("segments", []),
+        )
+
+    def to_proto(self) -> playout_pb2.BlockPlan:
+        """Convert to protobuf message."""
+        pb = playout_pb2.BlockPlan(
+            block_id=self.block_id,
+            channel_id=self.channel_id,
+            start_utc_ms=self.start_utc_ms,
+            end_utc_ms=self.end_utc_ms,
+        )
+        for seg in self.segments:
+            seg_type = seg.get("segment_type", "content")
+            # INV-BLOCKPLAN-PROTO-INT-001: Coerce ms fields to int.
+            # Schedule compilation may produce floats (duration_sec * 1000)
+            # and JSON deserialization preserves them. Protobuf int64 rejects floats.
+            kwargs = dict(
+                segment_index=int(seg["segment_index"]),
+                segment_duration_ms=int(seg["segment_duration_ms"]),
+            )
+            if seg_type == "pad":
+                kwargs["segment_type"] = playout_pb2.SEGMENT_TYPE_PAD
+                # PAD segments have no asset_uri or asset_start_offset_ms
+            else:
+                kwargs["asset_uri"] = seg["asset_uri"]
+                kwargs["asset_start_offset_ms"] = int(seg.get("asset_start_offset_ms", 0))
+                if seg_type == "filler":
+                    kwargs["segment_type"] = playout_pb2.SEGMENT_TYPE_FILLER
+                # else: CONTENT (proto default 0)
+            if "event_id" in seg:
+                kwargs["event_id"] = seg["event_id"]
+            # Transition fields (INV-TRANSITION-001: SegmentTransitionContract.md)
+            t_in = seg.get("transition_in", "TRANSITION_NONE")
+            t_out = seg.get("transition_out", "TRANSITION_NONE")
+            if t_in == "TRANSITION_FADE":
+                kwargs["transition_in"] = playout_pb2.TRANSITION_FADE
+                kwargs["transition_in_duration_ms"] = int(seg.get("transition_in_duration_ms", 0))
+            if t_out == "TRANSITION_FADE":
+                kwargs["transition_out"] = playout_pb2.TRANSITION_FADE
+                kwargs["transition_out_duration_ms"] = int(seg.get("transition_out_duration_ms", 0))
+            # INV-LOUDNESS-NORMALIZED-001: per-asset loudness normalization gain
+            gain_db = seg.get("gain_db", 0.0)
+            if gain_db != 0.0:
+                kwargs["gain_db"] = gain_db
+            # INV-ASRUN-SEMANTIC-FIDELITY-001: Pass original editorial
+            # segment_type and title through to AIR so evidence preserves
+            # the full vocabulary (commercial, presentation, bumper, etc.)
+            # instead of collapsing to the 3-value SegmentType enum.
+            # Always lowercase, never empty.
+            kwargs["segment_type_name"] = (seg_type or "content").lower()
+            seg_title = seg.get("title", "")
+            if not seg_title and seg.get("asset_uri"):
+                import os as _os
+                seg_title = _os.path.splitext(
+                    _os.path.basename(seg["asset_uri"])
+                )[0]
+            if not seg_title and seg_type == "pad":
+                seg_title = "BLACK"
+            if seg_title:
+                kwargs["segment_title"] = seg_title
+            pb.segments.append(playout_pb2.BlockSegment(**kwargs))
+        return pb
+
+    @property
+    def duration_ms(self) -> int:
+        return self.end_utc_ms - self.start_utc_ms
+
+
+@dataclass
+class SessionState:
+    """Internal state tracking for PlayoutSession."""
+    is_running: bool = False
+    blocks_seeded: int = 0
+    blocks_fed: int = 0
+    blocks_executed: int = 0
+    last_error: Optional[str] = None
+    grpc_addr: Optional[str] = None
+    air_process: Optional[subprocess.Popen] = None
+    # INV-FEED-NO-FEED-AFTER-END: Track session termination
+    session_ended: bool = False
+    session_end_reason: Optional[str] = None
+
+
+class PlayoutSession:
+    """
+    Orchestrates BlockPlan-based playout through AIR.
+
+    PlayoutSession manages the lifecycle of a BlockPlan execution session:
+    - Launches AIR subprocess
+    - Seeds the 2-block queue
+    - Feeds blocks just-in-time when slots become available
+    - Stops execution when viewer count hits 0
+
+    ChannelManager uses this instead of directly managing segments/switches.
+    """
+
+    def __init__(
+        self,
+        channel_id: str,
+        channel_id_int: int,
+        ts_socket_path: Path,
+        program_format: dict[str, Any],
+        clock: MasterClock,
+        air_binary_path: Optional[Path] = None,
+        on_block_complete: Optional[Callable[[str], None]] = None,
+        on_session_end: Optional[Callable[[str], None]] = None,
+        on_block_started: Optional[Callable[[str], None]] = None,
+        evidence_endpoint: str = "",
+        readiness_timeout_seconds: float = DEFAULT_READINESS_TIMEOUT_SECONDS,
+    ):
+        """
+        Initialize PlayoutSession.
+
+        Args:
+            channel_id: String channel identifier (e.g., "cheers-24-7")
+            channel_id_int: Integer channel ID for AIR
+            ts_socket_path: UDS socket path where AIR writes TS bytes
+            program_format: Video/audio format config (width, height, fps, etc.)
+            clock: MasterClock for authoritative time (e.g. block-completed logging)
+            air_binary_path: Path to retrovue_air binary (auto-detected if None)
+            on_block_complete: Callback when a block completes (receives block_id)
+            on_session_end: Callback when session ends (receives reason)
+            on_block_started: Callback when a block starts (receives block_id)
+            evidence_endpoint: host:port for evidence gRPC, empty = disabled
+            readiness_timeout_seconds: playout.grpc.readiness_timeout_seconds
+        """
+        self.channel_id = channel_id
+        self.channel_id_int = channel_id_int
+        self.ts_socket_path = ts_socket_path
+        self.program_format = program_format
+        self.clock = clock
+        assert self.clock is not None, "PlayoutSession requires a MasterClock"
+        self.air_binary_path = air_binary_path or self._find_air_binary()
+        self.on_block_complete = on_block_complete
+        self.on_session_end = on_session_end
+        self.on_block_started = on_block_started
+        self._evidence_endpoint = evidence_endpoint
+        self._readiness_timeout_seconds = readiness_timeout_seconds
+
+        self._state = SessionState()
+        self._lock = threading.Lock()
+        self._grpc_channel: Optional[grpc.Channel] = None
+        self._stub: Optional[playout_pb2_grpc.PlayoutControlStub] = None
+        self._event_thread: Optional[threading.Thread] = None
+        self._event_stop = threading.Event()
+
+        logger.debug(f"[PlayoutSession:{channel_id}] Initialized, ts_socket={ts_socket_path}")
+
+    def _find_air_binary(self) -> Path:
+        """Find the AIR binary path."""
+        # Try common locations
+        candidates = [
+            Path("runtime/build/retrovue_air"),
+            Path("/opt/retrovue/runtime/build/retrovue_air"),
+            Path.home() / "retrovue/runtime/build/retrovue_air",
+        ]
+        for p in candidates:
+            if p.exists():
+                return p
+        raise FileNotFoundError("Could not find retrovue_air binary")
+
+    def _allocate_grpc_port(self) -> int:
+        """Allocate an ephemeral port for gRPC."""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(('127.0.0.1', 0))
+            return s.getsockname()[1]
+
+    def start(self, join_utc_ms: int = 0) -> bool:
+        """
+        Start the AIR subprocess and prepare for BlockPlan execution.
+
+        Args:
+            join_utc_ms: Join time for mid-block join (0 = block start)
+
+        Returns:
+            True if AIR started successfully
+        """
+        with self._lock:
+            if self._state.is_running:
+                logger.warning(f"[PlayoutSession:{self.channel_id}] Already running")
+                return False
+
+            try:
+                grpc_port = self._allocate_grpc_port()
+                self._state.grpc_addr = f"127.0.0.1:{grpc_port}"
+
+                # Launch AIR subprocess
+                cmd = [
+                    str(self.air_binary_path),
+                    "--port", str(grpc_port),
+                ]
+
+                # AIR_MEM: Wrap AIR in heaptrack when env var set.
+                import os as _os
+                if _os.environ.get("AIR_MEM_HEAPTRACK"):
+                    log_dir = Path("/opt/retrovue/runtime/logs")
+                    log_dir.mkdir(parents=True, exist_ok=True)
+                    ht_out = str(log_dir / f"{self.channel_id}-heaptrack")
+                    cmd = ["heaptrack", "--record-only", "-o", ht_out, "--"] + cmd
+                    logger.info("[PlayoutSession:%s] AIR_MEM: heaptrack wrapping → %s", self.channel_id, ht_out)
+
+                # Create log directory; capture both stdout and stderr to channel log
+                log_dir = Path("/opt/retrovue/runtime/logs")
+                log_dir.mkdir(parents=True, exist_ok=True)
+                log_path = log_dir / f"{self.channel_id}-air.log"
+
+                # Preserve previous log so crash reasons survive reconnect
+                if log_path.exists() and log_path.stat().st_size > 0:
+                    log_path.rename(log_path.with_suffix(".log.prev"))
+
+                logger.debug(f"[PlayoutSession:{self.channel_id}] Starting AIR: {' '.join(cmd)}")
+
+                with open(
+                    log_path, "w", buffering=1, encoding="utf-8", errors="replace"
+                ) as log_file:
+                    # AIR_MEM: Inject jemalloc via LD_PRELOAD when env var set.
+                    popen_env = None
+                    _jemalloc_path = _os.environ.get("AIR_MEM_JEMALLOC")
+                    if _jemalloc_path:
+                        popen_env = _os.environ.copy()
+                        popen_env["LD_PRELOAD"] = _jemalloc_path
+                        logger.info(
+                            "[PlayoutSession:%s] AIR_MEM: jemalloc enabled → %s",
+                            self.channel_id, _jemalloc_path,
+                        )
+                    self._state.air_process = subprocess.Popen(
+                        cmd,
+                        stdout=log_file,
+                        stderr=log_file,
+                        cwd=str(Path.cwd()),
+                        env=popen_env,
+                    )
+
+                # INV-GRPC-HEALTH-CHECK-001: Configurable readiness timeout.
+                # playout.grpc.readiness_timeout_seconds (default 10.0s),
+                # extended under heaptrack profiling.
+                _readiness_timeout = self._readiness_timeout_seconds
+                if _os.environ.get("AIR_MEM_HEAPTRACK"):
+                    _readiness_timeout = max(_readiness_timeout, 30.0)
+                if not self._wait_for_grpc(timeout_s=_readiness_timeout):
+                    raise RuntimeError("AIR gRPC did not become ready")
+
+                # Attach stream (UDS socket)
+                if not self._attach_stream():
+                    raise RuntimeError("Failed to attach stream")
+
+                self._state.is_running = True
+                logger.debug(f"[PlayoutSession:{self.channel_id}] Started, grpc={self._state.grpc_addr}")
+                return True
+
+            except Exception as e:
+                logger.error(f"[PlayoutSession:{self.channel_id}] Start failed: {e}")
+                self._state.last_error = str(e)
+                self._cleanup()
+                return False
+
+    def _wait_for_grpc(self, timeout_s: float) -> bool:
+        """Wait for AIR gRPC to become ready using health check probing.
+
+        INV-GRPC-HEALTH-CHECK-001: Uses grpc.health.v1.Health/Check with
+        service name 'retrovue.playout.v1.PlayoutControl' instead of
+        GetVersion for readiness detection.
+
+        The readiness_timeout is configurable via
+        playout.grpc.readiness_timeout_seconds (default 10.0s).
+        """
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            try:
+                self._grpc_channel = grpc.insecure_channel(self._state.grpc_addr)
+                self._stub = playout_pb2_grpc.PlayoutControlStub(self._grpc_channel)
+
+                # INV-GRPC-HEALTH-CHECK-001: Probe health service for readiness
+                health_stub = health_pb2_grpc.HealthStub(self._grpc_channel)
+                request = health_pb2.HealthCheckRequest(
+                    service="retrovue.playout.v1.PlayoutControl",
+                )
+                response = health_stub.Check(request, timeout=2.0)
+                if response.status == health_pb2.HealthCheckResponse.SERVING:
+                    logger.debug(
+                        "[PlayoutSession:%s] AIR health check: SERVING",
+                        self.channel_id,
+                    )
+                    return True
+                logger.debug(
+                    "[PlayoutSession:%s] AIR health check: status=%s, retrying",
+                    self.channel_id, response.status,
+                )
+                time.sleep(0.2)
+            except grpc.RpcError:
+                time.sleep(0.2)
+        return False
+
+    def _attach_stream(self) -> bool:
+        """Attach the TS output stream to the UDS socket."""
+        try:
+            # Ensure socket directory exists
+            self.ts_socket_path.parent.mkdir(parents=True, exist_ok=True)
+
+            request = playout_pb2.AttachStreamRequest(
+                channel_id=self.channel_id_int,
+                transport=playout_pb2.STREAM_TRANSPORT_UNIX_DOMAIN_SOCKET,
+                endpoint=str(self.ts_socket_path),
+                replace_existing=True,
+            )
+            response = self._stub.AttachStream(request, timeout=5.0)
+
+            if response.success:
+                logger.debug(f"[PlayoutSession:{self.channel_id}] Stream attached: {self.ts_socket_path}")
+                return True
+            else:
+                logger.error(f"[PlayoutSession:{self.channel_id}] AttachStream failed: {response.message}")
+                return False
+        except grpc.RpcError as e:
+            logger.error(f"[PlayoutSession:{self.channel_id}] AttachStream RPC error: {e}")
+            return False
+
+    def _subscribe_to_events(self) -> None:
+        """Start background thread to receive block events from AIR."""
+        def event_loop():
+            try:
+                request = playout_pb2.SubscribeBlockEventsRequest(
+                    channel_id=self.channel_id_int,
+                )
+                # Use a streaming call that will block until events arrive or connection ends
+                for event in self._stub.SubscribeBlockEvents(request):
+                    if self._event_stop.is_set():
+                        break
+
+                    if event.HasField("block_completed"):
+                        completed = event.block_completed
+                        now_ms = int(self.clock.now_utc().timestamp() * 1000)
+                        delta_ms = now_ms - completed.block_end_utc_ms
+                        logger.info(
+                            f"[PlayoutSession:{self.channel_id}] BlockCompleted: "
+                            f"block_id={completed.block_id}, "
+                            f"scheduled_end_ms={completed.block_end_utc_ms}, "
+                            f"actual_wall_ms={now_ms}, "
+                            f"delta_ms={delta_ms}, "
+                            f"final_ct_ms={completed.final_ct_ms}, "
+                            f"blocks_total={completed.blocks_executed_total}"
+                        )
+                        with self._lock:
+                            self._state.blocks_executed = completed.blocks_executed_total
+                        if self.on_block_complete:
+                            try:
+                                self.on_block_complete(completed.block_id)
+                            except Exception as e:
+                                logger.error(
+                                    f"[PlayoutSession:{self.channel_id}] "
+                                    f"on_block_complete callback error: {e}"
+                                )
+
+                    elif event.HasField("block_started"):
+                        started = event.block_started
+                        logger.info(
+                            f"[PlayoutSession:{self.channel_id}] BlockStarted: "
+                            f"block_id={started.block_id}"
+                        )
+                        if self.on_block_started:
+                            try:
+                                self.on_block_started(started.block_id)
+                            except Exception as e:
+                                logger.error(
+                                    f"[PlayoutSession:{self.channel_id}] "
+                                    f"on_block_started callback error: {e}"
+                                )
+
+                    elif event.HasField("session_ended"):
+                        ended = event.session_ended
+                        logger.debug(
+                            f"[PlayoutSession:{self.channel_id}] SessionEnded: "
+                            f"reason={ended.reason}, "
+                            f"final_ct_ms={ended.final_ct_ms}, "
+                            f"blocks_total={ended.blocks_executed_total}"
+                        )
+                        with self._lock:
+                            self._state.blocks_executed = ended.blocks_executed_total
+                            self._state.is_running = False
+                            # INV-FEED-NO-FEED-AFTER-END: Mark session as ended
+                            self._state.session_ended = True
+                            self._state.session_end_reason = ended.reason
+                        # Terminate AIR subprocess BEFORE firing the callback,
+                        # so recovery doesn't orphan the old process.
+                        self._terminate_air_process()
+                        if self.on_session_end:
+                            try:
+                                self.on_session_end(ended.reason)
+                            except Exception as e:
+                                logger.error(
+                                    f"[PlayoutSession:{self.channel_id}] "
+                                    f"on_session_end callback error: {e}"
+                                )
+                        break  # Session ended, exit the event loop
+
+            except grpc.RpcError as e:
+                if not self._event_stop.is_set():
+                    # UNAVAILABLE is expected when AIR exits during shutdown; avoid warning.
+                    if e.code() == grpc.StatusCode.UNAVAILABLE:
+                        logger.debug(
+                            "[PlayoutSession:%s] Event stream closed (AIR exited): %s",
+                            self.channel_id, e.code(),
+                        )
+                    else:
+                        logger.warning(
+                            f"[PlayoutSession:{self.channel_id}] Event stream error: {e.code()}"
+                        )
+
+        self._event_stop.clear()
+        self._event_thread = threading.Thread(target=event_loop, daemon=True)
+        self._event_thread.start()
+        logger.debug(f"[PlayoutSession:{self.channel_id}] Event subscription started")
+
+    def seed(self, block_a: BlockPlan, block_b: BlockPlan, *,
+             join_utc_ms: int = 0, max_queue_depth: int = 0) -> bool:
+        """
+        Seed the executor with 2 initial blocks.
+
+        Must be called after start() and before any feed() calls.
+        Blocks must be contiguous (block_a.end_utc_ms == block_b.start_utc_ms).
+
+        Args:
+            block_a: First block (will start executing immediately)
+            block_b: Second block (pending)
+            join_utc_ms: True tune-in instant (ms since Unix epoch).
+                         INV-JIP-ANCHOR-001: AIR uses this as session epoch so
+                         fence math is anchored to the viewer's join time, not
+                         AIR's process start time.  0 = legacy (AIR falls back
+                         to system_clock::now()).
+
+        Returns:
+            True if seeding succeeded
+        """
+        with self._lock:
+            if not self._state.is_running:
+                logger.error(f"[PlayoutSession:{self.channel_id}] Cannot seed - not running")
+                return False
+
+            if self._state.blocks_seeded > 0:
+                logger.error(f"[PlayoutSession:{self.channel_id}] Already seeded")
+                return False
+
+            # Validate contiguity
+            if block_a.end_utc_ms != block_b.start_utc_ms:
+                logger.error(
+                    f"[PlayoutSession:{self.channel_id}] Blocks not contiguous: "
+                    f"{block_a.block_id} ends at {block_a.end_utc_ms}, "
+                    f"{block_b.block_id} starts at {block_b.start_utc_ms}"
+                )
+                return False
+
+            try:
+                # INV-JIP-ANCHOR-001: Send Core-authoritative tune-in instant.
+                # join_utc_ms is the wall-clock snapshot captured at the 0→1
+                # viewer transition — semantically "when the viewer joined",
+                # distinct from block_a.start_utc_ms ("where the timeline
+                # boundary is").  AIR uses this as session_epoch_utc_ms_.
+                logger.info(
+                    f"[PlayoutSession:{self.channel_id}] INV-JIP-ANCHOR-001: "
+                    f"join_utc_ms={join_utc_ms} "
+                    f"block_a.start={block_a.start_utc_ms} "
+                    f"block_a.end={block_a.end_utc_ms} "
+                    f"block_a.asset_offset={block_a.segments[0].get('asset_start_offset_ms', 0) if block_a.segments else 'N/A'}"
+                )
+                request = playout_pb2.StartBlockPlanSessionRequest(
+                    channel_id=self.channel_id_int,
+                    block_a=block_a.to_proto(),
+                    block_b=block_b.to_proto(),
+                    join_utc_ms=join_utc_ms,
+                    program_format_json=json.dumps(self.program_format),
+                    max_queue_depth=max_queue_depth,
+                    evidence_endpoint=self._evidence_endpoint,
+                    channel_id_str=self.channel_id,
+                )
+
+                response = self._stub.StartBlockPlanSession(request, timeout=10.0)
+
+                if response.success:
+                    self._state.blocks_seeded = 2
+                    logger.debug(
+                        f"[PlayoutSession:{self.channel_id}] Seeded: "
+                        f"{block_a.block_id}, {block_b.block_id}"
+                    )
+                    # Start event subscription for boundary-driven feeding
+                    self._subscribe_to_events()
+                    return True
+                else:
+                    logger.error(
+                        f"[PlayoutSession:{self.channel_id}] Seed failed: "
+                        f"{response.message} (code={response.result_code})"
+                    )
+                    return False
+
+            except grpc.RpcError as e:
+                logger.error(f"[PlayoutSession:{self.channel_id}] Seed RPC error: {e}")
+                return False
+
+    def feed(self, block: BlockPlan) -> FeedResult:
+        """
+        Feed the next block to the executor queue.
+
+        Call this when a block completes to maintain the 2-block window.
+        Block must be contiguous with the current pending block.
+
+        INV-FEED-NO-FEED-AFTER-END: Returns ERROR if session has ended.
+
+        Args:
+            block: Next block to feed
+
+        Returns:
+            FeedResult.ACCEPTED if feeding succeeded,
+            FeedResult.QUEUE_FULL if AIR's queue is full (capacity, not error),
+            FeedResult.ERROR on gRPC/transport failure or invalid state.
+        """
+        with self._lock:
+            # INV-FEED-NO-FEED-AFTER-END: Defense-in-depth guard
+            if self._state.session_ended:
+                logger.warning(
+                    f"[PlayoutSession:{self.channel_id}] INV-FEED-NO-FEED-AFTER-END: "
+                    f"Cannot feed after session ended (reason={self._state.session_end_reason})"
+                )
+                return FeedResult.ERROR
+
+            if not self._state.is_running:
+                logger.error(f"[PlayoutSession:{self.channel_id}] Cannot feed - not running")
+                return FeedResult.ERROR
+
+            try:
+                request = playout_pb2.FeedBlockPlanRequest(
+                    channel_id=self.channel_id_int,
+                    block=block.to_proto(),
+                )
+
+                response = self._stub.FeedBlockPlan(request, timeout=5.0)
+
+                if response.success:
+                    self._state.blocks_fed += 1
+                    logger.debug(f"[PlayoutSession:{self.channel_id}] Fed: {block.block_id}")
+                    return FeedResult.ACCEPTED
+                else:
+                    if response.queue_full:
+                        logger.warning(
+                            f"[PlayoutSession:{self.channel_id}] Feed skipped - queue full"
+                        )
+                        return FeedResult.QUEUE_FULL
+                    else:
+                        logger.error(
+                            f"[PlayoutSession:{self.channel_id}] Feed failed: "
+                            f"{response.message} (code={response.result_code})"
+                        )
+                        return FeedResult.ERROR
+
+            except grpc.RpcError as e:
+                logger.error(f"[PlayoutSession:{self.channel_id}] Feed RPC error: {e}")
+                return FeedResult.ERROR
+
+    def stop(self, reason: str = "requested") -> bool:
+        """
+        Stop the BlockPlan session and terminate AIR.
+
+        Args:
+            reason: Reason for stopping (for logging)
+
+        Returns:
+            True if stopped successfully
+        """
+        with self._lock:
+            if not self._state.is_running:
+                logger.debug(f"[PlayoutSession:{self.channel_id}] Already stopped")
+                return True
+
+            logger.debug(f"[PlayoutSession:{self.channel_id}] Stopping: {reason}")
+
+            # Signal event thread immediately so it does not warn on stream errors during shutdown.
+            self._event_stop.set()
+
+            try:
+                if self._stub:
+                    request = playout_pb2.StopBlockPlanSessionRequest(
+                        channel_id=self.channel_id_int,
+                        reason=reason,
+                    )
+                    response = self._stub.StopBlockPlanSession(request, timeout=5.0)
+
+                    if response.success:
+                        self._state.blocks_executed = response.blocks_executed
+                        logger.debug(
+                            f"[PlayoutSession:{self.channel_id}] Stopped: "
+                            f"final_ct={response.final_ct_ms}ms, "
+                            f"blocks_executed={response.blocks_executed}"
+                        )
+            except grpc.RpcError as e:
+                # UNAVAILABLE / connection refused expected when AIR already exited during shutdown.
+                if e.code() == grpc.StatusCode.UNAVAILABLE:
+                    logger.debug(
+                        "[PlayoutSession:%s] Stop RPC unreachable (AIR likely already exited): %s",
+                        self.channel_id, e,
+                    )
+                else:
+                    logger.warning(f"[PlayoutSession:{self.channel_id}] Stop RPC error: {e}")
+
+            self._cleanup()
+
+            if self.on_session_end:
+                self.on_session_end(reason)
+
+            return True
+
+    def _terminate_air_process(self):
+        """Terminate the AIR subprocess only (no gRPC/thread cleanup).
+
+        Called from the event thread when SessionEnded is received, to
+        ensure the old AIR process is dead before recovery spawns a new one.
+        """
+        proc = self._state.air_process
+        if proc is None:
+            return
+        try:
+            logger.debug(
+                "[PlayoutSession:%s] Terminating AIR subprocess (pid=%d) on SessionEnded",
+                self.channel_id, proc.pid,
+            )
+            proc.terminate()
+            proc.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "[PlayoutSession:%s] AIR did not exit gracefully, killing (pid=%d)",
+                self.channel_id, proc.pid,
+            )
+            proc.kill()
+        except Exception as e:
+            logger.warning(
+                "[PlayoutSession:%s] AIR termination error: %s", self.channel_id, e,
+            )
+        self._state.air_process = None
+
+    def _cleanup(self):
+        """Clean up resources."""
+        self._state.is_running = False
+
+        # Signal event thread to stop
+        self._event_stop.set()
+        if self._event_thread and self._event_thread.is_alive():
+            self._event_thread.join(timeout=2.0)
+        self._event_thread = None
+
+        if self._grpc_channel:
+            try:
+                self._grpc_channel.close()
+            except Exception:
+                pass
+            self._grpc_channel = None
+            self._stub = None
+
+        if self._state.air_process:
+            try:
+                logger.debug(f"[PlayoutSession:{self.channel_id}] Terminating AIR subprocess (pid={self._state.air_process.pid})")
+                self._state.air_process.terminate()
+                self._state.air_process.wait(timeout=5.0)
+                logger.debug(f"[PlayoutSession:{self.channel_id}] FIRST-ON-AIR: AIR terminated cleanly")
+            except subprocess.TimeoutExpired:
+                logger.warning(f"[PlayoutSession:{self.channel_id}] AIR did not exit gracefully, killing")
+                self._state.air_process.kill()
+            except Exception as e:
+                logger.warning(f"[PlayoutSession:{self.channel_id}] AIR termination error: {e}")
+            self._state.air_process = None
+
+    @property
+    def is_running(self) -> bool:
+        with self._lock:
+            return self._state.is_running
+
+    @property
+    def blocks_executed(self) -> int:
+        with self._lock:
+            return self._state.blocks_executed
+

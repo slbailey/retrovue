@@ -16,10 +16,10 @@ Duplicate epoch set accepted within a session; PREVIEW role sets epoch; local CT
 `LAW-CLOCK`
 
 ## Required Tests
-- `pkg/air/tests/contracts/BlockPlan/SharedInvTimeAuthorityContractTests.cpp` (`Compliant_EpochSetOnce_SecondSetRejected`) — first TrySetEpochOnce succeeds, second rejected, epoch value unchanged
-- `pkg/air/tests/contracts/BlockPlan/SharedInvTimeAuthorityContractTests.cpp` (`Compliant_PreviewRoleAlwaysRejected`) — PREVIEW role always rejected, epoch not locked
-- `pkg/air/tests/contracts/BlockPlan/SharedInvTimeAuthorityContractTests.cpp` (`Compliant_PtsDerivedFromEpochPlusOffset`) — PTS=0 maps to epoch, PTS=1s maps to epoch+1s
-- `pkg/air/tests/contracts/BlockPlan/SharedInvTimeAuthorityContractTests.cpp` (`Compliant_SessionResetAllowsNewEpoch`) — reset unlocks, new epoch allowed, value updated
+- `runtime/tests/contracts/BlockPlan/SharedInvTimeAuthorityContractTests.cpp` (`Compliant_EpochSetOnce_SecondSetRejected`) — first TrySetEpochOnce succeeds, second rejected, epoch value unchanged
+- `runtime/tests/contracts/BlockPlan/SharedInvTimeAuthorityContractTests.cpp` (`Compliant_PreviewRoleAlwaysRejected`) — PREVIEW role always rejected, epoch not locked
+- `runtime/tests/contracts/BlockPlan/SharedInvTimeAuthorityContractTests.cpp` (`Compliant_PtsDerivedFromEpochPlusOffset`) — PTS=0 maps to epoch, PTS=1s maps to epoch+1s
+- `runtime/tests/contracts/BlockPlan/SharedInvTimeAuthorityContractTests.cpp` (`Compliant_SessionResetAllowsNewEpoch`) — reset unlocks, new epoch allowed, value updated
 
 ## Enforcement Evidence
 TODO

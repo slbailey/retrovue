@@ -12,5 +12,5 @@ override scheduling policies outside of DSL compilation.
 
 ## Enforcement
 
-- **Contract tests:** `pkg/core/tests/contracts/test_scheduling_policies.py`
+- **Contract tests:** `server/tests/contracts/test_scheduling_policies.py`
 - **Canonical source:** `docs/contracts/invariants/core/scheduling-policy/INV-POLICY-DSL-DECLARED-001.md`

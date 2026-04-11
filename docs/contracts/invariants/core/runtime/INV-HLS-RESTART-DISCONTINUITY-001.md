@@ -25,7 +25,7 @@ First segment after restart missing discontinuity flag; PTS tracker not reset; s
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_hls_channel_runtime.py`
+- `server/tests/contracts/test_inv_hls_channel_runtime.py`
 
 ## Enforcement Evidence
 

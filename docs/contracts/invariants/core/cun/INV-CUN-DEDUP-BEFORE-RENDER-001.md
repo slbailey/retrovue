@@ -30,7 +30,7 @@ Runtime fault — wasted CPU on redundant render.
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_cun_synthesis.py`
+- `server/tests/contracts/test_cun_synthesis.py`
 
 ## Enforcement Evidence
 

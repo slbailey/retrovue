@@ -30,7 +30,7 @@ Inject a deterministic clock set to a known time T. Generate an ExecutionEntry. 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/scheduling/test_inv_playlog_masterclock_aligned.py`
+- `server/tests/contracts/scheduling/test_inv_playlog_masterclock_aligned.py`
 
 ## Enforcement Evidence
 

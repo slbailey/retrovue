@@ -31,7 +31,7 @@ Create a run with explicit `run_id="cheers_strip"` anchored on Monday at E0. Com
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_episode_progression.py`
+- `server/tests/contracts/test_episode_progression.py`
 
 ## Enforcement Evidence
 

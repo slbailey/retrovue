@@ -32,7 +32,7 @@ Compile a broadcast day with multiple blocks. Inspect the "coming up next" segme
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_block_assembly_tiers.py`
+- `server/tests/contracts/test_block_assembly_tiers.py`
 
 ## Enforcement Evidence
 

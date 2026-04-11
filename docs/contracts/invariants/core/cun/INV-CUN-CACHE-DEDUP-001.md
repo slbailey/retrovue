@@ -30,7 +30,7 @@ Planning fault — duplicate renders waste storage and CPU.
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_cun_synthesis.py`
+- `server/tests/contracts/test_cun_synthesis.py`
 
 ## Enforcement Evidence
 

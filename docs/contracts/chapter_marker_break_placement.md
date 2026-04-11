@@ -159,7 +159,7 @@ Derived From: `LAW-CONTENT-AUTHORITY`, `LAW-DERIVATION`
 All tests live under:
 
 ```
-pkg/core/tests/contracts/test_chapter_marker_break_placement.py
+server/tests/contracts/test_chapter_marker_break_placement.py
 ```
 
 | Test | Invariant | Scenario |

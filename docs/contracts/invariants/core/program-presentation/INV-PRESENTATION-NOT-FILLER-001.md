@@ -30,7 +30,7 @@ Construct a block with 2 presentation segments (asset-backed) followed by a prim
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_program_presentation.py`
+- `server/tests/contracts/test_program_presentation.py`
 
 ## Enforcement Evidence
 

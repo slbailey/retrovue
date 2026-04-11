@@ -24,7 +24,7 @@ Any mutation of a completed segment's fields; byte-level divergence between two 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_segment_production.py`
+- `server/tests/contracts/runtime/test_inv_hls_segment_production.py`
 
 ## Enforcement Evidence
 

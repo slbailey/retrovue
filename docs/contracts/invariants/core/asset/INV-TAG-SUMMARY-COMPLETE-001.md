@@ -34,7 +34,7 @@ The sum of all `asset_count` values across namespaces MUST equal `SELECT COUNT(*
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_tag_management_api.py`
+- `server/tests/contracts/test_tag_management_api.py`
 
 ## Enforcement Evidence
 

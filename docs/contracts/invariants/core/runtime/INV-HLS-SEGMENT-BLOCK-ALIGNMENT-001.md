@@ -30,7 +30,7 @@ Runtime fault. An audit that fires because a seam-straddling segment was validat
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_segment_timebase_snapshot.py`
+- `server/tests/contracts/runtime/test_inv_hls_segment_timebase_snapshot.py`
 
 ## Enforcement Evidence
 

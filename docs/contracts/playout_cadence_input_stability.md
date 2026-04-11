@@ -144,7 +144,7 @@ A/V drift in the playout output propagates through MPEG-TS muxing, HLS segmentat
 
 ## Required Tests
 
-- `pkg/air/tests/contracts/BlockPlan/CadenceInputStabilityTests.cpp`
+- `runtime/tests/contracts/BlockPlan/CadenceInputStabilityTests.cpp`
 
 | Test | Invariant | Scenario |
 |------|-----------|----------|

@@ -26,7 +26,7 @@ On day D, schedule a program ending at time Tₑ where Tₑ is past day D+1's br
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_timeline_authority.py`
+- `server/tests/contracts/test_inv_timeline_authority.py`
 
 ## Enforcement Evidence
 

@@ -31,9 +31,9 @@ Any component that writes to a concern it does not own. Any change that introduc
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_evidence_server_clock_authority.py` — V6: DurableAckStore and AsRunWriter use injected MasterClock, not `datetime.now()`
-- `pkg/core/tests/contracts/runtime/test_pd_staleness_clock_authority.py` — V7: ProgramDirector staleness check uses MasterClock, not `time.time()`
-- Authority boundary enforcement is partially covered by import-graph tests in `pkg/core/tests/contracts/test_scheduling_constitution.py`.
+- `server/tests/contracts/runtime/test_evidence_server_clock_authority.py` — V6: DurableAckStore and AsRunWriter use injected MasterClock, not `datetime.now()`
+- `server/tests/contracts/runtime/test_pd_staleness_clock_authority.py` — V7: ProgramDirector staleness check uses MasterClock, not `time.time()`
+- Authority boundary enforcement is partially covered by import-graph tests in `server/tests/contracts/test_scheduling_constitution.py`.
 
 ## Enforcement Evidence
 

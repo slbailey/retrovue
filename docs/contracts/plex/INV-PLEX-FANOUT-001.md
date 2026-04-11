@@ -25,7 +25,7 @@ Multiple AIR processes running for the same channel. Plex viewer receives a diff
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/plex/test_plex_streaming.py` (TestPlexStreaming)
+- `server/tests/contracts/plex/test_plex_streaming.py` (TestPlexStreaming)
 
 ## Enforcement Evidence
 

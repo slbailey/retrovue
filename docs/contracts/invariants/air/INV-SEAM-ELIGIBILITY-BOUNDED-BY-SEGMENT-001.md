@@ -25,7 +25,7 @@ Swap eligibility gate requires more frames than the segment can produce; transit
 
 ## Required Tests
 
-- `pkg/air/tests/contracts/BlockPlan/SeamContinuityGuaranteedTests.cpp`
+- `runtime/tests/contracts/BlockPlan/SeamContinuityGuaranteedTests.cpp`
 
 ## Enforcement Evidence
 

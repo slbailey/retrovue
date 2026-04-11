@@ -33,7 +33,7 @@ Compile a schedule with Tier 1 (presentation), Tier 2 (obligation), and Tier 3 (
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_block_assembly_tiers.py`
+- `server/tests/contracts/test_block_assembly_tiers.py`
 
 ## Enforcement Evidence
 

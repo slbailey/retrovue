@@ -80,7 +80,7 @@ In broadcast television, the transmission chain never emits dead air. Routing sw
 
 ## Required Tests
 
-- `pkg/air/tests/contracts/BlockPlan/FrameAuthorityVacuumContractTests.cpp` (FrameAuthorityVacuumTest: NoViolationWhenActiveHasFrames, ViolationWhenActiveEmptyNoIncoming, ViolationWhenActiveEmptySuccessorNotSeamReady, ViolationWhenActiveEmptySwapDeferredDespiteSeamReady)
+- `runtime/tests/contracts/BlockPlan/FrameAuthorityVacuumContractTests.cpp` (FrameAuthorityVacuumTest: NoViolationWhenActiveHasFrames, ViolationWhenActiveEmptyNoIncoming, ViolationWhenActiveEmptySuccessorNotSeamReady, ViolationWhenActiveEmptySwapDeferredDespiteSeamReady)
 
 ## Architectural Model
 

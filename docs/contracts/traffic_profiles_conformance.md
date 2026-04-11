@@ -227,7 +227,7 @@ When `content_duration < 0.5 * scheduled_duration`, the compiler MUST emit a str
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_traffic_profiles_conformance.py`
+- `server/tests/contracts/test_traffic_profiles_conformance.py`
 
 | Test | Invariant | Scenario |
 |------|-----------|----------|

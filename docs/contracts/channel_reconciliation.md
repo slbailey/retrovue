@@ -30,7 +30,7 @@ Create channels in the database. Provide a YAML slug set that adds one channel a
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_channel_reconciliation.py`
+- `server/tests/contracts/test_channel_reconciliation.py`
 
 ## Enforcement Evidence
 
@@ -72,7 +72,7 @@ Create two channels with full derived state including non-FK table rows. Provide
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_channel_reconciliation.py`
+- `server/tests/contracts/test_channel_reconciliation.py`
 
 ## Enforcement Evidence
 
@@ -108,7 +108,7 @@ Run reconciliation twice with the same YAML set. Assert no errors. Assert channe
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_channel_reconciliation.py`
+- `server/tests/contracts/test_channel_reconciliation.py`
 
 ## Enforcement Evidence
 
@@ -148,7 +148,7 @@ Create one or more channels in the database. Call `reconcile_channels(db, set())
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_channel_reconciliation.py`
+- `server/tests/contracts/test_channel_reconciliation.py`
 
 ## Enforcement Evidence
 

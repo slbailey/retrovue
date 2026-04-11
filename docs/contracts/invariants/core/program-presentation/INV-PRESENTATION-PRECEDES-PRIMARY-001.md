@@ -30,7 +30,7 @@ Assemble a program with presentation stack [rating_card, feature_bumper, studio_
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_program_presentation.py`
+- `server/tests/contracts/test_program_presentation.py`
 
 ## Enforcement Evidence
 

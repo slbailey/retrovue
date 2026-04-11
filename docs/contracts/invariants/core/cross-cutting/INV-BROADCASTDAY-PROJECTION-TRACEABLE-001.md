@@ -38,7 +38,7 @@ Invalid scenario: the Tuesday 06:00–07:00 report row is created with no source
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_broadcastday_projection_traceable.py`
+- `server/tests/contracts/test_inv_broadcastday_projection_traceable.py`
 
 ## Enforcement Evidence
 

@@ -33,7 +33,7 @@ Static analysis of the `source watch` CLI command module: no `watchdog` imports,
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/ingest/test_inv_watch_delegates.py`
+- `server/tests/contracts/ingest/test_inv_watch_delegates.py`
 
 ## Enforcement Evidence
 

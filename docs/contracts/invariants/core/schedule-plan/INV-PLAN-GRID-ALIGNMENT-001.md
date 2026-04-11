@@ -31,12 +31,12 @@ Given a channel with `grid_block_minutes=30`, construct a zone with `end_time=17
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_constitution.py::TestInvPlanGridAlignment001`
+- `server/tests/contracts/test_scheduling_constitution.py::TestInvPlanGridAlignment001`
 
 ## Enforcement Evidence
 
-- `pkg/core/src/retrovue/usecases/zone_coverage_check.py` — `check_grid_alignment()`, `validate_zone_plan_integrity()`
-- `pkg/core/src/retrovue/usecases/zone_add.py` — called before `db.commit()`
-- `pkg/core/src/retrovue/usecases/zone_update.py` — called before `db.commit()`
-- `pkg/core/src/retrovue/core/scheduling/contracts.py` — `validate_block_assignment()` checks block-level grid alignment
+- `server/src/retrovue/usecases/zone_coverage_check.py` — `check_grid_alignment()`, `validate_zone_plan_integrity()`
+- `server/src/retrovue/usecases/zone_add.py` — called before `db.commit()`
+- `server/src/retrovue/usecases/zone_update.py` — called before `db.commit()`
+- `server/src/retrovue/core/scheduling/contracts.py` — `validate_block_assignment()` checks block-level grid alignment
 - Error tag: `INV-PLAN-GRID-ALIGNMENT-001-VIOLATED`

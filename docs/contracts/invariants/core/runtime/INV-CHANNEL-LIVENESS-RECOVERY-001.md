@@ -27,7 +27,7 @@ Emission ceases while `viewer_count > 0` and no recovery is attempted after a tr
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_channel_liveness_recovery.py`
+- `server/tests/contracts/runtime/test_inv_channel_liveness_recovery.py`
 
 ## Enforcement Evidence
 

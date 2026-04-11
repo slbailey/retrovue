@@ -30,8 +30,8 @@ Compile the full derivation chain (SchedulePlan -> ResolvedScheduleDay -> Transm
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/scheduling/test_vertical_slice_derivation_chain.py`
-- `pkg/core/tests/contracts/scheduling/test_multichannel_isolation.py`
+- `server/tests/contracts/scheduling/test_vertical_slice_derivation_chain.py`
+- `server/tests/contracts/scheduling/test_multichannel_isolation.py`
 
 ## Enforcement Evidence
 

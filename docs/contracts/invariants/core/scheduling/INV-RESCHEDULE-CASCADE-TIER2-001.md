@@ -33,7 +33,7 @@ Insert a `ProgramLogDay` with `range_start = now + 1h`. Insert 5 `PlaylistEvent`
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/scheduling/test_inv_reschedule_cascade_tier2.py`
+- `server/tests/contracts/scheduling/test_inv_reschedule_cascade_tier2.py`
 
 ## Enforcement Evidence
 

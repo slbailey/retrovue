@@ -42,7 +42,7 @@ worker may claim and misprocess them, or CUN workers may claim ingest jobs.
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_cun_render_requests_schema.py`
+- `server/tests/contracts/test_cun_render_requests_schema.py`
 
 ## Enforcement Evidence
 

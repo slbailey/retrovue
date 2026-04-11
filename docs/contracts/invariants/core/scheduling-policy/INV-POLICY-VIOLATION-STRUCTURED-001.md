@@ -30,7 +30,7 @@ Planning fault. Unstructured violations are untraceable — operators cannot det
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_policies.py`
+- `server/tests/contracts/test_scheduling_policies.py`
 
 ## Enforcement Evidence
 

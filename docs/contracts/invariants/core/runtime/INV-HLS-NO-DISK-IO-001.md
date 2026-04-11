@@ -26,7 +26,7 @@ Any filesystem write (`write_bytes`, `write_text`, `mkdir`) or read (`read_text`
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_no_disk_io.py`
+- `server/tests/contracts/runtime/test_inv_hls_no_disk_io.py`
 
 ## Enforcement Evidence
 

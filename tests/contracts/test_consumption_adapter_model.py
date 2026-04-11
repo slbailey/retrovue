@@ -28,8 +28,8 @@ import pytest
 _THIS_FILE = Path(__file__).resolve()
 REPO_ROOT = _THIS_FILE.parents[2]  # tests/contracts -> tests -> retrovue
 
-PD_PATH = REPO_ROOT / "pkg/core/src/retrovue/runtime/program_director.py"
-RUNTIME_DIR = REPO_ROOT / "pkg/core/src/retrovue/runtime"
+PD_PATH = REPO_ROOT / "server/src/retrovue/runtime/program_director.py"
+RUNTIME_DIR = REPO_ROOT / "server/src/retrovue/runtime"
 
 
 def _pd_source() -> str:

@@ -26,7 +26,7 @@ PTS gap between consecutive segments not detected; discontinuity flag missing on
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_segment_timeline.py`
+- `server/tests/contracts/runtime/test_inv_hls_segment_timeline.py`
 
 ## Enforcement Evidence
 

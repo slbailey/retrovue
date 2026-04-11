@@ -16,7 +16,7 @@ DROP mode selected on a VFR or mislabeled file; video decoder exhausted before s
 `INV-FPS-RESAMPLE`, `LAW-LIVENESS`
 
 ## Required Tests
-- `pkg/air/tests/contracts/BlockPlan/MediaTimeContractTests.cpp` (VfrFile_MustNotEnterDropMode)
+- `runtime/tests/contracts/BlockPlan/MediaTimeContractTests.cpp` (VfrFile_MustNotEnterDropMode)
 
 ## Enforcement Evidence
 TODO

@@ -39,7 +39,7 @@ For each API route module, verify that the route handler body contains only: res
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_interaction_boundary_contract.py` (not yet implemented)
+- `server/tests/contracts/test_interaction_boundary_contract.py` (not yet implemented)
 
 ## Enforcement Evidence
 TODO

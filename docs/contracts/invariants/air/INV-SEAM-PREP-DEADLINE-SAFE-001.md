@@ -24,7 +24,7 @@ Seam frame reached with `seam_preparer_has_result=0` because async prep was arme
 
 ## Required Tests
 
-- `pkg/air/tests/contracts/BlockPlan/SeamContinuityGuaranteedTests.cpp`
+- `runtime/tests/contracts/BlockPlan/SeamContinuityGuaranteedTests.cpp`
 
 ## Enforcement Evidence
 

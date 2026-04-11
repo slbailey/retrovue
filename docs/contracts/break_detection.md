@@ -408,7 +408,7 @@ Derived From: `LAW-CONTENT-AUTHORITY`, `LAW-GRID`
 All tests live under:
 
 ```
-pkg/core/tests/contracts/test_break_detection.py
+server/tests/contracts/test_break_detection.py
 ```
 
 | Test | Invariant | Scenario |

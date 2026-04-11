@@ -188,7 +188,7 @@ Sort surviving candidates deterministically by least-recent play:
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_traffic_policy.py`
+- `server/tests/contracts/test_traffic_policy.py`
 
 ---
 

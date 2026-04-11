@@ -31,11 +31,11 @@ ChannelStream owns per-client queue management and backpressure policy enforceme
 
 ## Required Tests
 
-- pkg/core/tests/contracts/runtime/test_slow_consumer_disconnect.py
+- server/tests/contracts/runtime/test_slow_consumer_disconnect.py
 
 ## Enforcement Evidence
 
 - `_fanout_loop()` in `channel_stream.py`: when `backpressure_policy == "disconnect"` and `put_nowait` reports eviction, the client is removed from subscribers, sent an EOF sentinel, and a structured `SLOW_CONSUMER_DISCONNECT` event is logged with `client_id`, `channel_id`, and `reason=backpressure_disconnect`.
 - Per-client throttle state (`_backpressure_log_last`) is cleaned up on disconnect to prevent memory leaks.
 - `generate_ts_stream_async()`: write timeout (default 10s) detects dead clients when `yield` (TCP write) stalls beyond the threshold, logging `WRITE_TIMEOUT` and closing the connection.
-- Contract tests at `pkg/core/tests/contracts/runtime/test_slow_consumer_disconnect.py` prove all six guarantees (disconnect + EOF, backpressure log, drop_oldest regression guard, state cleanup, reason field, write timeout).
+- Contract tests at `server/tests/contracts/runtime/test_slow_consumer_disconnect.py` prove all six guarantees (disconnect + EOF, backpressure log, drop_oldest regression guard, state cleanup, reason field, write timeout).

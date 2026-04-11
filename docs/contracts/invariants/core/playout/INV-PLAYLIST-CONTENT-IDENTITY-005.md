@@ -35,4 +35,4 @@ Generate PlaylistEvents from a ScheduleItem with a known asset. Assert every con
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/playout/test_playlist_identity.py::test_content_event_asset_matches_schedule_item`
+- `server/tests/contracts/playout/test_playlist_identity.py::test_content_event_asset_matches_schedule_item`

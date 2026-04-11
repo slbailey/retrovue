@@ -31,7 +31,7 @@ Enumerate all modules in `workflows/`. For each, extract the set of imported wor
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_interaction_boundary_contract.py` (not yet implemented)
+- `server/tests/contracts/test_interaction_boundary_contract.py` (not yet implemented)
 
 ## Enforcement Evidence
 TODO

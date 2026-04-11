@@ -40,7 +40,7 @@ Compare the active revision's first block start time against the prior day's las
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_carry_in_survives_restart.py`
+- `server/tests/contracts/test_inv_carry_in_survives_restart.py`
 
 ## Enforcement Evidence
 

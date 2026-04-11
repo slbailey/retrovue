@@ -25,7 +25,7 @@ Artwork URL is not persisted at ingest time. Serving path makes live API calls t
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/plex/test_plex_artwork.py`
+- `server/tests/contracts/plex/test_plex_artwork.py`
 
 ## Enforcement Evidence
 

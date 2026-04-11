@@ -49,7 +49,7 @@ Each layer has exclusive ownership of specific concerns.
 COMPONENT RESPONSIBILITIES
 ────────────────────────
 
-Core (pkg/core):
+Core (server):
 - Persistent domain truth (Postgres)
 - Ingest pipelines (Importer → Asset)
 - Scheduling and grid logic
@@ -61,7 +61,7 @@ Core (pkg/core):
 - HTTP serving of channel MPEG-TS streams
 - Supervises and spawns AIR
 
-AIR (pkg/air):
+AIR (runtime):
 - Real-time execution correctness
 - Frame timing and pacing
 - Producer switching (preview ↔ live)
@@ -134,7 +134,7 @@ AIR → Viewers:
 ────────────────────────
 REPOSITORY DISCIPLINE
 ────────────────────────
-- pkg/core and pkg/air are separate subsystems.
+- server and runtime are separate subsystems.
 - Changes must respect subsystem boundaries.
 - Cross-cutting changes must be reasoned about at the system level first.
 
@@ -182,8 +182,8 @@ If X does not clearly belong to either Core or AIR, stop and propose a new syste
 ────────────────────────
 AUTHORITATIVE DOCUMENTS
 ────────────────────────
-- pkg/core/CLAUDE.md → Core ontology and rules
-- pkg/air/CLAUDE.md  → AIR ontology and rules
+- server/CLAUDE.md   → Core ontology and rules
+- runtime/CLAUDE.md  → AIR ontology and rules
 - docs/contracts/    → Canonical behavioral contracts (system-wide)
 - docs/contracts/INVARIANTS.md → Single authoritative invariant index
 - **docs/KNOWLEDGE_GRAPH.md** → How AI agents must use **`.graph/`** (start at **`.graph/INDEX.md`**) for architecture, boundaries, and graph-first workflow before code
@@ -287,8 +287,8 @@ Rules:
 - No class named Mock*, Fake*, Stub*, or Test* may live in a production module.
 
 Forbidden patterns:
-- class MockXxx in pkg/core/src/retrovue/runtime/*.py
-- class MockXxx in pkg/core/src/retrovue/scheduling/*.py
+- class MockXxx in server/src/retrovue/runtime/*.py
+- class MockXxx in server/src/retrovue/scheduling/*.py
 - Any test harness or fixture in a non-test directory
 
 If you need a mock or fake for testing: place it in tests/fixtures/<domain>_fixtures.py.

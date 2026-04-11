@@ -112,7 +112,7 @@ The final block segment ordering:
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_program_presentation.py`
+- `server/tests/contracts/test_program_presentation.py`
 
 ### Test Scenarios
 

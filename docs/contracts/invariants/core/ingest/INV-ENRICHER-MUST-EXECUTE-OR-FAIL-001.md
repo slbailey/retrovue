@@ -36,7 +36,7 @@ If a processor_id is resolved for a job's target_type, the corresponding enriche
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_enricher_must_execute_or_fail.py`
+- `server/tests/contracts/test_inv_enricher_must_execute_or_fail.py`
 
 ## Enforcement Evidence
 

@@ -30,7 +30,7 @@ Enumerate all git-tracked files matching source extensions (`.py`, `.yaml`, `.ym
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_no_hardcoded_secrets.py`
+- `server/tests/contracts/test_inv_no_hardcoded_secrets.py`
 
 ## Enforcement Evidence
 

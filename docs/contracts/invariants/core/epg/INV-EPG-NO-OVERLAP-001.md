@@ -31,7 +31,7 @@ Build a `ResolvedScheduleDay` with multiple ScheduleItem entries on grid boundar
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_epg_invariants.py::TestInvEpgNoOverlap001`
+- `server/tests/contracts/test_epg_invariants.py::TestInvEpgNoOverlap001`
 
 ## Enforcement Evidence
 

@@ -160,7 +160,7 @@ When `alignment` is `"end"`, the traffic manager MUST use the stateless end-alig
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_filler_alignment.py`
+- `server/tests/contracts/test_filler_alignment.py`
 
 ---
 

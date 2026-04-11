@@ -30,7 +30,7 @@ Planning fault. Non-deterministic seeds produce different schedules on restart.
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_schedule_seed_deterministic.py`
+- `server/tests/contracts/runtime/test_inv_schedule_seed_deterministic.py`
 
 ## Enforcement Evidence
 

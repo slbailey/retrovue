@@ -36,7 +36,7 @@ MUST be logged as a planning fault with fields: `block_id`, `block_duration_ms`,
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/playout/test_playlist_event_segments.py::test_segments_cover_block` — sum of segment durations equals block duration.
+- `server/tests/contracts/playout/test_playlist_event_segments.py::test_segments_cover_block` — sum of segment durations equals block duration.
 
 ## Enforcement Evidence
 

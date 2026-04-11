@@ -31,7 +31,7 @@ Compile a channel for broadcast day D. Record episode index E for a sequential b
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_episode_progression.py`
+- `server/tests/contracts/test_episode_progression.py`
 
 ## Enforcement Evidence
 

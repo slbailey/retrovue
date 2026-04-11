@@ -31,7 +31,7 @@ Simulate a channel with a schedule spanning multiple blocks. Advance wall clock 
 
 ## Required Tests
 
-- TODO: `pkg/core/tests/contracts/cross-cutting/test_inv_playlog_no_retroactive_fill_001.py`
+- TODO: `server/tests/contracts/cross-cutting/test_inv_playlog_no_retroactive_fill_001.py`
 
 ## Enforcement Evidence
 

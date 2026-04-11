@@ -30,9 +30,9 @@ Construct asset stubs with all four combinations of `(is_deleted, deleted_at)`. 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_asset_invariants.py::TestInvAssetSoftdeleteSync001`
+- `server/tests/contracts/test_asset_invariants.py::TestInvAssetSoftdeleteSync001`
 
 ## Enforcement Evidence
 
-- `pkg/core/src/retrovue/domain/entities.py` — CHECK constraint `chk_deleted_at_sync`: `(is_deleted = TRUE AND deleted_at IS NOT NULL) OR (is_deleted = FALSE AND deleted_at IS NULL)`
+- `server/src/retrovue/domain/entities.py` — CHECK constraint `chk_deleted_at_sync`: `(is_deleted = TRUE AND deleted_at IS NOT NULL) OR (is_deleted = FALSE AND deleted_at IS NULL)`
 - Error tag: `INV-ASSET-SOFTDELETE-SYNC-001-VIOLATED`

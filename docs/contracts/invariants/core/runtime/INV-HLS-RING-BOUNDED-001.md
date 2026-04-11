@@ -26,7 +26,7 @@ Ring exceeding declared capacity; non-contiguous index range; out-of-order evict
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_segment_ring.py`
+- `server/tests/contracts/runtime/test_inv_hls_segment_ring.py`
 
 ## Enforcement Evidence
 

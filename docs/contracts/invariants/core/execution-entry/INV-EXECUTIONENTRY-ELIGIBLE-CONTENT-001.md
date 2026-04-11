@@ -30,7 +30,7 @@ Create an ExecutionEntry referencing an asset. Downgrade the asset to `state=enr
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_playlog_eligible_content.py`
+- `server/tests/contracts/test_inv_playlog_eligible_content.py`
 
 ## Enforcement Evidence
 

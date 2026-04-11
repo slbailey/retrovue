@@ -34,13 +34,13 @@ A `ResolvedScheduleDay` with no downstream execution artifacts MAY be deleted fr
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_constitution.py` (TestInvDerivationAnchorProtected001)
+- `server/tests/contracts/test_scheduling_constitution.py` (TestInvDerivationAnchorProtected001)
 
 ## Enforcement Evidence
 
 **Enforcement location:**
-- `InMemoryResolvedStore.delete()` in `pkg/core/src/retrovue/runtime/schedule_manager_service.py` (line 467) — Checks `ExecutionWindowStore.has_entries_for(channel_id, programming_day_date)` before removal. Raises `ValueError` with tag `INV-DERIVATION-ANCHOR-PROTECTED-001-VIOLATED` if downstream entries exist.
-- `ExecutionWindowStore.has_entries_for()` in `pkg/core/src/retrovue/runtime/execution_window_store.py` (line 214) — Scans entries matching `(channel_id, programming_day_date)`.
+- `InMemoryResolvedStore.delete()` in `server/src/retrovue/runtime/schedule_manager_service.py` (line 467) — Checks `ExecutionWindowStore.has_entries_for(channel_id, programming_day_date)` before removal. Raises `ValueError` with tag `INV-DERIVATION-ANCHOR-PROTECTED-001-VIOLATED` if downstream entries exist.
+- `ExecutionWindowStore.has_entries_for()` in `server/src/retrovue/runtime/execution_window_store.py` (line 214) — Scans entries matching `(channel_id, programming_day_date)`.
 
 **Tests:**
 - `test_inv_derivation_anchor_protected_001_reject_delete_with_downstream`: Populates execution store with 4 entries. Asserts deletion raises `ValueError`. Asserts anchor survives.

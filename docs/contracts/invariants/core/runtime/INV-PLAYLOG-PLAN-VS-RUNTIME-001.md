@@ -38,7 +38,7 @@ With a fixed `PlaylistEvent`-shaped segment list and `jip_offset_ms > 0`, assert
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_playlog_plan_vs_runtime_001.py`
+- `server/tests/contracts/runtime/test_inv_playlog_plan_vs_runtime_001.py`
 
 ## Enforcement Evidence
 

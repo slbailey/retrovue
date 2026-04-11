@@ -26,7 +26,7 @@ Load a template with `target_segment_minutes: 11`. Compile against 22-minute con
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_timeline_compilation_templates.py`
+- `server/tests/contracts/test_timeline_compilation_templates.py`
 
 ## Enforcement Evidence
 

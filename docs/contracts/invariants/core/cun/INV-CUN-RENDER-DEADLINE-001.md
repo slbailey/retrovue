@@ -30,7 +30,7 @@ Runtime fault — wasted CPU on late render; potential playout of stale content.
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_cun_synthesis.py`
+- `server/tests/contracts/test_cun_synthesis.py`
 
 ## Enforcement Evidence
 

@@ -30,7 +30,7 @@ Planning fault — CUN segments placed without feature authorization.
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_cun_feature_flag.py`
+- `server/tests/contracts/test_cun_feature_flag.py`
 
 ## Enforcement Evidence
 

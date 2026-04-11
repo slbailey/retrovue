@@ -26,7 +26,7 @@ Build a `ResolvedScheduleDay` with known ScheduleItem entries. Derive EPG events
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_epg_invariants.py::TestInvEpgDerivationTraceable001`
+- `server/tests/contracts/test_epg_invariants.py::TestInvEpgDerivationTraceable001`
 
 ## Enforcement Evidence
 

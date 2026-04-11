@@ -237,9 +237,9 @@ This ordering guarantees that an ACK is never sent for evidence that has not bee
 
 ## 14. Required Tests
 
-- `pkg/core/tests/test_grpc_evidence_basic.py` — HELLO + event ACK ordering
-- `pkg/core/tests/test_grpc_failure_scenarios.py` — Core crash recovery, AIR crash replay, duplicate dedup
-- `pkg/core/tests/test_grpc_replay_resume.py` — Replay after restart, durable ack persistence, write-before-ACK
+- `server/tests/test_grpc_evidence_basic.py` — HELLO + event ACK ordering
+- `server/tests/test_grpc_failure_scenarios.py` — Core crash recovery, AIR crash replay, duplicate dedup
+- `server/tests/test_grpc_replay_resume.py` — Replay after restart, durable ack persistence, write-before-ACK
 
 ---
 

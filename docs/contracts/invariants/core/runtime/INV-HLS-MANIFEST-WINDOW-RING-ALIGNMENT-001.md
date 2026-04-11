@@ -25,7 +25,7 @@ Manifest listing a segment not in the ring snapshot; manifest assembled from mul
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_manifest_consistency.py`
+- `server/tests/contracts/runtime/test_inv_hls_manifest_consistency.py`
 
 ## Enforcement Evidence
 

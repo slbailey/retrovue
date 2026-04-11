@@ -78,7 +78,7 @@ The segment swap eligibility evaluation. The video depth check MUST be applied a
 
 These tests remain mandatory coverage for the parent invariant `INV-CONTINUOUS-FRAME-AUTHORITY-001`. They validate the swap eligibility gate that prevents frame-authority vacuum at segment transitions.
 
-- `pkg/air/tests/contracts/BlockPlan/NoFrameAuthorityVacuumContractTests.cpp` (SwapCommitVideoPreCondition: PadEligibleWithZeroVideoFramesBecauseOnDemand, PadWithSufficientVideoFramesEligible, ContentAndPadBothEligibleWhenDepthsSufficient, ContentWithZeroVideoFramesNotEligible, PadWithVideoButInsufficientAudioNotEligible)
+- `runtime/tests/contracts/BlockPlan/NoFrameAuthorityVacuumContractTests.cpp` (SwapCommitVideoPreCondition: PadEligibleWithZeroVideoFramesBecauseOnDemand, PadWithSufficientVideoFramesEligible, ContentAndPadBothEligibleWhenDepthsSufficient, ContentWithZeroVideoFramesNotEligible, PadWithVideoButInsufficientAudioNotEligible)
 
 ## Enforcement Evidence
 

@@ -34,7 +34,7 @@ Construct a catalog with assets of known ratings. Evaluate the same pool using a
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_pool_rating_normalize.py`
+- `server/tests/contracts/test_pool_rating_normalize.py`
 
 ## Enforcement Evidence
 

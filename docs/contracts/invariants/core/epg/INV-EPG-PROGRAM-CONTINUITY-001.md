@@ -26,7 +26,7 @@ Build a `ResolvedScheduleDay` with a ScheduleItem spanning 3 blocks (90 minutes 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_epg_invariants.py::TestInvEpgProgramContinuity001`
+- `server/tests/contracts/test_epg_invariants.py::TestInvEpgProgramContinuity001`
 
 ## Enforcement Evidence
 

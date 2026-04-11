@@ -10,8 +10,8 @@ abstract protocol definitions that exist solely for test use.
 - Test harnesses: `tests/` directory only
 
 ## Forbidden Patterns
-- `class MockXxx` in `pkg/core/src/retrovue/runtime/*.py`
-- `class MockXxx` in `pkg/core/src/retrovue/scheduling/*.py`
+- `class MockXxx` in `server/src/retrovue/runtime/*.py`
+- `class MockXxx` in `server/src/retrovue/scheduling/*.py`
 - Any class named `Mock*`, `Fake*`, `Stub*`, or `Test*` in a production module
 - A class that is only instantiated in tests, living in a production module
 

@@ -24,7 +24,7 @@ ManifestGenerator owns playlist content. Liveness status is derived from produce
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_manifest.py`
+- `server/tests/contracts/runtime/test_inv_hls_manifest.py`
 
 ## Enforcement Evidence
 

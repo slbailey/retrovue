@@ -34,4 +34,4 @@ Before **writing code**, **changing architecture**, or **redefining boundaries**
 2. **Confirm invariants** (graph stubs and **`docs/contracts/`** as source of truth for IDs).
 3. **Confirm ownership and relationships** (`owns`, `depends_on`, `consumes`, `forbids`, etc.) match the intended authority model.
 
-**Then** follow the mandatory **Contracts → Invariants → Tests → Code** order defined in **`CLAUDE.md`** (and `pkg/core/CLAUDE.md` where applicable). Narrow edits with **no** graph impact may be exempt when that is obvious; when in doubt, run graph-first.
+**Then** follow the mandatory **Contracts → Invariants → Tests → Code** order defined in **`CLAUDE.md`** (and `server/CLAUDE.md` where applicable). Narrow edits with **no** graph impact may be exempt when that is obvious; when in doubt, run graph-first.

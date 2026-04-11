@@ -5,7 +5,7 @@
 **Status:** Updated (Feb 2025)  
 **Scope:** Core Runtime • Horizon • Execution Integration  
 **Intent:** Accurately reflect present architectural maturity and remaining milestones  
-**Note:** Checked against main branch, including pkg/core and integration with AIR
+**Note:** Checked against main branch, including server and integration with AIR
 
 **Verification (Feb 2025):** Claims aligned with codebase. See "Verification notes" at end.
 
@@ -39,7 +39,7 @@
 - Optional integration (reconciler invoked on execution path or AsRunLogger exporting AsRunLog) not yet wired.
 
 ### 🚧 Known Gaps (AS OF FEB 2025)
-- **Core seam contract:** `docs/contracts/core/PlaylistEventSeamContract_v0.1.md` exists; INV-TL-SEAM-001..004 enforced in `lock_for_execution`. AIR frame-level INV-SEAM-* invariants live in `pkg/air/docs/contracts/`.
+- **Core seam contract:** `docs/contracts/core/PlaylistEventSeamContract_v0.1.md` exists; INV-TL-SEAM-001..004 enforced in `lock_for_execution`. AIR frame-level INV-SEAM-* invariants live in `runtime/docs/contracts/`.
 - **Horizon extension:** Day-based (`extend_epg_day`, `extend_execution_day`). Block-based API not implemented.
 - **Deterministic filler policy:** Deterministic on identical inputs; pool partitioning (bumper/promo/ad) is planned but not yet shipped.
 - **As-run logging:** `AsRunLogger` exists. **As-run reconciliation:** `docs/contracts/core/AsRunReconciliationContract_v0.1.md` and reconciler (`asrun_reconciler.py`, `asrun_types.py`) implemented; contract tests in `test_asrun_reconciliation_contract.py`. Optional integration (e.g. post-execution reconciliation run or AsRunLogger exporting AsRunLog) not yet wired.
@@ -58,7 +58,7 @@ _This baseline reflects all foundational contracts implemented. Remaining gaps t
 
 ### 1.1 **Seam Invariants** _(DELIVERED)_
 - **`docs/contracts/core/PlaylistEventSeamContract_v0.1.md`** exists; wall-clock seam invariants INV-TL-SEAM-001..004 enforced in `transmission_log_validator.py` and `lock_for_execution`. Contract tests in `test_transmission_log_seam_contract.py`.
-- AIR frame-level INV-SEAM-* invariants live in `pkg/air/docs/contracts/`.
+- AIR frame-level INV-SEAM-* invariants live in `runtime/docs/contracts/`.
 - Seam contract tests run via pytest; burn-in runs manually via `tools/burn_in.py`.
 
 ### 1.2 **Rolling Horizon Enforcement** _(DELIVERED)_
@@ -87,7 +87,7 @@ _This baseline reflects all foundational contracts implemented. Remaining gaps t
 - Missing schedule/execution data raises `HorizonNoScheduleDataError`; no consumer-triggered auto-resolve. (`ScheduleManagerBackedScheduleService`, `PlaylistBackedScheduleService`.)
 
 ### 2.2 **As-Run Log Integration** _(RECONCILIATION DELIVERED)_
-- `AsRunLogger` exists (`pkg/core/src/retrovue/runtime/asrun_logger.py`); logs actual block/segment times and transitions.
+- `AsRunLogger` exists (`server/src/retrovue/runtime/asrun_logger.py`); logs actual block/segment times and transitions.
 - **As-run reconciliation (DELIVERED):** `docs/contracts/core/AsRunReconciliationContract_v0.1.md`; INV-ASRUN-001..005; `asrun_types.py`, `asrun_reconciler.py`; contract tests in `test_asrun_reconciliation_contract.py`. Deterministic plan-vs-actual comparison with structured report (no auto-correct).
 - **Optional follow-up:** Wire reconciler into execution path (e.g. post-playout reconciliation run or AsRunLogger exporting AsRunLog) — not required for contract closure.
 
@@ -138,13 +138,13 @@ _This baseline reflects all foundational contracts implemented. Remaining gaps t
 ---
 
 **Summary:**  
-_The baseline (Phase 1), seam/horizon authority, and burn-in validation are all live and tested. As-Run reconciliation (2.2) is delivered (contract + reconciler + contract tests). Optional integration of the reconciler into the execution path remains. Phase 3 (multi-zone, traffic, HLS) is not started. This document is maintained in sync with main pkg/core and integration requirements for AIR._
+_The baseline (Phase 1), seam/horizon authority, and burn-in validation are all live and tested. As-Run reconciliation (2.2) is delivered (contract + reconciler + contract tests). Optional integration of the reconciler into the execution path remains. Phase 3 (multi-zone, traffic, HLS) is not started. This document is maintained in sync with main server and integration requirements for AIR._
 
 ---
 
 ## Verification notes (Feb 2025)
 
-Spot-check against the repo (main, pkg/core and tools):
+Spot-check against the repo (main, server and tools):
 
 | Claim | Status |
 |-------|--------|

@@ -42,10 +42,10 @@ Using FakeAdvancingClock: inject `min_schedule_day_lead_days = N` (test with N=3
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_constitution.py::TestInvScheduledayLeadTime001`
+- `server/tests/contracts/test_scheduling_constitution.py::TestInvScheduledayLeadTime001`
 
 ## Enforcement Evidence
 
-- `pkg/core/src/retrovue/runtime/schedule_manager_service.py` — `check_scheduleday_lead_time()` standalone function accepts `resolved_store`, `channel_id`, `target_date`, `now_utc`, `min_lead_days`, `programming_day_start_hour`; computes deadline as `target_date - min_lead_days` at broadcast start; raises `ValueError` with `INV-SCHEDULEDAY-LEAD-TIME-001-VIOLATED` tag if deadline passed and no ScheduleDay exists
+- `server/src/retrovue/runtime/schedule_manager_service.py` — `check_scheduleday_lead_time()` standalone function accepts `resolved_store`, `channel_id`, `target_date`, `now_utc`, `min_lead_days`, `programming_day_start_hour`; computes deadline as `target_date - min_lead_days` at broadcast start; raises `ValueError` with `INV-SCHEDULEDAY-LEAD-TIME-001-VIOLATED` tag if deadline passed and no ScheduleDay exists
 - Error message includes the configured `min_schedule_day_lead_days` value (never hardcoded)
 - Error tag: `INV-SCHEDULEDAY-LEAD-TIME-001-VIOLATED`

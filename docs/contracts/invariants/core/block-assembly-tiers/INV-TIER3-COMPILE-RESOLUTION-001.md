@@ -32,7 +32,7 @@ Compile a schedule with a template declaring `continuity.optional` entries. Insp
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_block_assembly_tiers.py`
+- `server/tests/contracts/test_block_assembly_tiers.py`
 
 ## Enforcement Evidence
 

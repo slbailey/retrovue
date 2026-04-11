@@ -33,7 +33,7 @@ A tick where `SEGMENT_TAKE_COMMIT` fires with `segment_b_video_depth_frames` bel
 
 ## Required Tests
 
-- `pkg/air/tests/contracts/BlockPlan/SegmentPrefillContractTests.cpp`
+- `runtime/tests/contracts/BlockPlan/SegmentPrefillContractTests.cpp`
 
 ## Enforcement Evidence
 

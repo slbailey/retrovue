@@ -38,10 +38,10 @@ block that contains `window_uuid`, the daemon MUST set the
 
 ## Enforcement
 
-Contract test: `pkg/core/tests/contracts/test_tier2_window_uuid_propagation.py`
+Contract test: `server/tests/contracts/test_tier2_window_uuid_propagation.py`
 
 ## Related
 
 - `INV-WINDOW-UUID-EMBEDDED-001` — Tier 1 emission
 - `INV-TIER2-SOURCE-WINDOW-UUID-001` — future staleness detection (planned)
-- `pkg/core/src/retrovue/runtime/playlist_builder_daemon.py` — `_write_to_txlog()`
+- `server/src/retrovue/runtime/playlist_builder_daemon.py` — `_write_to_txlog()`

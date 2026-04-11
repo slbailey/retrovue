@@ -26,7 +26,7 @@ Hold content and grid slot constant. Change `target_segment_minutes` — break c
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_timeline_compilation_templates.py`
+- `server/tests/contracts/test_timeline_compilation_templates.py`
 
 ## Enforcement Evidence
 

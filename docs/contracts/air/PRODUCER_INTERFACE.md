@@ -37,7 +37,7 @@ A `static_cast<TickProducer*>` on a factory-produced `IProducer` pointer. Access
 
 #### Required Tests
 
-- `pkg/air/tests/contracts/BlockPlan/ContinuousOutputContractTests.cpp` — `BlockCompletedCallbackFires` + `StopDuringBlockExecution` sequence (regression: segfault from unsafe cast)
+- `runtime/tests/contracts/BlockPlan/ContinuousOutputContractTests.cpp` — `BlockCompletedCallbackFires` + `StopDuringBlockExecution` sequence (regression: segfault from unsafe cast)
 
 #### Enforcement Evidence
 
@@ -68,7 +68,7 @@ A `PrimeFirstTick()` call that requires the caller to know the concrete producer
 
 #### Required Tests
 
-- `pkg/air/tests/contracts/BlockPlan/ContinuousOutputContractTests.cpp` — `BlockCompletedCallbackFires` (uses TestProducerFactory; PrimeFirstTick must not crash)
+- `runtime/tests/contracts/BlockPlan/ContinuousOutputContractTests.cpp` — `BlockCompletedCallbackFires` (uses TestProducerFactory; PrimeFirstTick must not crash)
 
 #### Enforcement Evidence
 
@@ -98,7 +98,7 @@ A `static_cast<TickProducer*>` used to call `SetAspectPolicy()` on a factory-pro
 
 #### Required Tests
 
-- `pkg/air/tests/contracts/BlockPlan/ContinuousOutputContractTests.cpp` — any test using `TestProducerFactory` exercises this path
+- `runtime/tests/contracts/BlockPlan/ContinuousOutputContractTests.cpp` — any test using `TestProducerFactory` exercises this path
 
 #### Enforcement Evidence
 

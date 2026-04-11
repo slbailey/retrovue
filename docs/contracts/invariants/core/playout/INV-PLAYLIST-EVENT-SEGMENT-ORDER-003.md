@@ -45,8 +45,8 @@ MUST be logged as a planning fault with fields: `block_id`, `segment_index`, `ex
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/playout/test_playlist_event_segments.py::test_segments_contiguous` — no gaps between adjacent segments.
-- `pkg/core/tests/contracts/playout/test_playlist_event_segments.py::test_segments_ordered` — segments tile from block start to block end.
+- `server/tests/contracts/playout/test_playlist_event_segments.py::test_segments_contiguous` — no gaps between adjacent segments.
+- `server/tests/contracts/playout/test_playlist_event_segments.py::test_segments_ordered` — segments tile from block start to block end.
 
 ## Enforcement Evidence
 

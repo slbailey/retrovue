@@ -32,7 +32,7 @@ Planning fault. The Tier-2 block is generated without mid-content breaks, causin
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_break_v2_single_chapter.py`
+- `server/tests/contracts/runtime/test_inv_break_v2_single_chapter.py`
 
 ## Enforcement Evidence
 

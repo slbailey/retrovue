@@ -86,7 +86,7 @@ while true; do
     BP_COUNT=0
     for i in $(seq 0 $((N - 1))); do
         CH="${CHANNEL_LIST[$i]}"
-        LOG="/opt/retrovue/pkg/air/logs/${CH}-air.log"
+        LOG="/opt/retrovue/runtime/logs/${CH}-air.log"
         if [ -f "$LOG" ]; then
             # Count lines with BACKPRESSURE in last modified log
             C=$(grep -c "BACKPRESSURE" "$LOG" 2>/dev/null || true)
@@ -118,7 +118,7 @@ echo "Channels tested: $N"
 # Final backpressure tally per channel
 for i in $(seq 0 $((N - 1))); do
     CH="${CHANNEL_LIST[$i]}"
-    LOG="/opt/retrovue/pkg/air/logs/${CH}-air.log"
+    LOG="/opt/retrovue/runtime/logs/${CH}-air.log"
     if [ -f "$LOG" ]; then
         C=$(grep -c "BACKPRESSURE" "$LOG" 2>/dev/null || true)
         printf "  %-25s backpressure_drops=%d\n" "$CH" "$C"

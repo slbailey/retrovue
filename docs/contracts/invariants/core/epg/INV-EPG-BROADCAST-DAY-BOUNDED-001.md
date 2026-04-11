@@ -31,7 +31,7 @@ Build `ResolvedScheduleDay` entries with slots at various times including late-n
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_epg_invariants.py::TestInvEpgBroadcastDayBounded001`
+- `server/tests/contracts/test_epg_invariants.py::TestInvEpgBroadcastDayBounded001`
 
 ## Enforcement Evidence
 

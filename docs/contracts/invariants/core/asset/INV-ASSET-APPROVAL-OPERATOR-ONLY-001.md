@@ -30,12 +30,12 @@ Simulate a full enrichment cycle with valid probe data. Assert that the resultin
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_asset_invariants.py::TestInvAssetApprovalOperatorOnly001`
+- `server/tests/contracts/test_asset_invariants.py::TestInvAssetApprovalOperatorOnly001`
 
 ## Enforcement Evidence
 
-- `pkg/core/src/retrovue/usecases/asset_enrich.py` — `enrich_asset()` resets `approved_for_broadcast = False` (canonical enforcement point)
-- `pkg/core/src/retrovue/cli/commands/_ops/collection_ingest_service.py` — `ingest_collection()` creates assets with `approved_for_broadcast = False`
-- `pkg/core/src/retrovue/cli/commands/_ops/source_ingest_service.py` — `ingest_source()` delegates to `CollectionIngestService`; no direct approval
-- `pkg/core/src/retrovue/usecases/asset_update.py` — `update_asset_review_status()` is the sole approval path
+- `server/src/retrovue/usecases/asset_enrich.py` — `enrich_asset()` resets `approved_for_broadcast = False` (canonical enforcement point)
+- `server/src/retrovue/cli/commands/_ops/collection_ingest_service.py` — `ingest_collection()` creates assets with `approved_for_broadcast = False`
+- `server/src/retrovue/cli/commands/_ops/source_ingest_service.py` — `ingest_source()` delegates to `CollectionIngestService`; no direct approval
+- `server/src/retrovue/usecases/asset_update.py` — `update_asset_review_status()` is the sole approval path
 - Error tag: `INV-ASSET-APPROVAL-OPERATOR-ONLY-001-VIOLATED`

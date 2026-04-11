@@ -203,7 +203,7 @@ Derived From: `LAW-CONTENT-AUTHORITY`
 All tests live under:
 
 ```
-pkg/core/tests/contracts/test_schedule_block_program_reference.py
+server/tests/contracts/test_schedule_block_program_reference.py
 ```
 
 | Test | Invariant | Scenario |

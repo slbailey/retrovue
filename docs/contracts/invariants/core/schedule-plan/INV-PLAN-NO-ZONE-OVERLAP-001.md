@@ -32,11 +32,11 @@ Construct a plan with two zones whose windows intersect (e.g., Zone A: 06:00–1
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_constitution.py::TestInvPlanNoZoneOverlap001`
+- `server/tests/contracts/test_scheduling_constitution.py::TestInvPlanNoZoneOverlap001`
 
 ## Enforcement Evidence
 
-- `pkg/core/src/retrovue/usecases/zone_coverage_check.py` — `check_overlap()`, `validate_zone_plan_integrity()`
-- `pkg/core/src/retrovue/usecases/zone_add.py` — called before `db.commit()`
-- `pkg/core/src/retrovue/usecases/zone_update.py` — called before `db.commit()`
+- `server/src/retrovue/usecases/zone_coverage_check.py` — `check_overlap()`, `validate_zone_plan_integrity()`
+- `server/src/retrovue/usecases/zone_add.py` — called before `db.commit()`
+- `server/src/retrovue/usecases/zone_update.py` — called before `db.commit()`
 - Error tag: `INV-PLAN-NO-ZONE-OVERLAP-001-VIOLATED`

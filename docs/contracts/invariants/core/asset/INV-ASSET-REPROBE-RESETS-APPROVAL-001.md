@@ -36,10 +36,10 @@ Create an asset stub with `state='ready'`, `approved_for_broadcast=True`, popula
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_asset_invariants.py::TestInvAssetReprobeResetsApproval001`
+- `server/tests/contracts/test_asset_invariants.py::TestInvAssetReprobeResetsApproval001`
 
 ## Enforcement Evidence
 
-- `pkg/core/src/retrovue/usecases/asset_enrich.py` — `enrich_asset()` implements the unified clearing lifecycle (steps 1-5)
-- `pkg/core/src/retrovue/usecases/asset_reprobe.py` — `reprobe_asset()` delegates to `enrich_asset()`
+- `server/src/retrovue/usecases/asset_enrich.py` — `enrich_asset()` implements the unified clearing lifecycle (steps 1-5)
+- `server/src/retrovue/usecases/asset_reprobe.py` — `reprobe_asset()` delegates to `enrich_asset()`
 - Error tag: `INV-ASSET-REPROBE-RESETS-APPROVAL-001-VIOLATED`

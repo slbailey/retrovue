@@ -26,7 +26,7 @@ LAW-TIMELINE
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_daemon_frontier_actual.py`
+- `server/tests/contracts/runtime/test_inv_daemon_frontier_actual.py`
 
 ## Enforcement Evidence
 

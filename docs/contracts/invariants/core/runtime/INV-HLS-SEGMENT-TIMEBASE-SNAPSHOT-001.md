@@ -30,7 +30,7 @@ Runtime fault. A segment whose PROGRAM-DATE-TIME was derived from a timebase tha
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_segment_timebase_snapshot.py`
+- `server/tests/contracts/runtime/test_inv_hls_segment_timebase_snapshot.py`
 
 ## Enforcement Evidence
 

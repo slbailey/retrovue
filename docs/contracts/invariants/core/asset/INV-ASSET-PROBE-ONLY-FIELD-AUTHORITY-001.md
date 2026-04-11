@@ -30,9 +30,9 @@ Construct a sidecar dict with `meta.authoritative_fields` containing a probe-onl
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_asset_invariants.py::TestInvAssetProbeOnlyFieldAuthority001`
+- `server/tests/contracts/test_asset_invariants.py::TestInvAssetProbeOnlyFieldAuthority001`
 
 ## Enforcement Evidence
 
-- `pkg/core/src/retrovue/domain/metadata_schema.py` — `PROBE_ONLY_FIELDS` tuple and `BaseRetroVueSidecar.model_validate()` intersection check
+- `server/src/retrovue/domain/metadata_schema.py` — `PROBE_ONLY_FIELDS` tuple and `BaseRetroVueSidecar.model_validate()` intersection check
 - Error tag: `INV-ASSET-PROBE-ONLY-FIELD-AUTHORITY-001-VIOLATED`

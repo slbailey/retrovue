@@ -19,7 +19,7 @@ The ingest and catalog pipeline is defined as **Source → Container → Locator
 ## Where “Collection” may still appear
 
 1. **Historical Alembic migrations**  
-   Files under `pkg/core/alembic/versions/` that reference `collections`, `collection_uuid`, or `collection_id` must **not** be edited. They record schema history; the live schema is `containers` / `container_id`.
+   Files under `server/alembic/versions/` that reference `collections`, `collection_uuid`, or `collection_id` must **not** be edited. They record schema history; the live schema is `containers` / `container_id`.
 
 2. **Historical migration notes**  
    [MIGRATION_NOTES_COLLECTION_TO_CONTAINER.md](MIGRATION_NOTES_COLLECTION_TO_CONTAINER.md) and the refactor inventory may use “Collection” when describing the rename.

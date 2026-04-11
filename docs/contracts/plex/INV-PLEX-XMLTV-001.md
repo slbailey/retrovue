@@ -25,7 +25,7 @@ XMLTV channel IDs do not match lineup `GuideNumber` values. Guide data diverges 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/plex/test_plex_epg.py`
+- `server/tests/contracts/plex/test_plex_epg.py`
 
 ## Enforcement Evidence
 

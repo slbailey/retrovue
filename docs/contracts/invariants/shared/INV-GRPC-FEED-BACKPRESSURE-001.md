@@ -25,7 +25,7 @@ Core treats `QUEUE_FULL` as an error. Core retries `FeedBlockPlan` without waiti
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/grpc/test_grpc_feed_backpressure.py`
+- `server/tests/contracts/grpc/test_grpc_feed_backpressure.py`
 
 ## Enforcement Evidence
 TODO

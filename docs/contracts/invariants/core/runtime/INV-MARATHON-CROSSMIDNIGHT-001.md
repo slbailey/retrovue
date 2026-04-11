@@ -24,7 +24,7 @@ A marathon block that produces zero program blocks despite having a valid time r
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_marathon_crossmidnight.py`
+- `server/tests/contracts/runtime/test_inv_marathon_crossmidnight.py`
 
 ## Enforcement Evidence
 

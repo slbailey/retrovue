@@ -25,7 +25,7 @@ Segmenter stall while upstream bytes are flowing; no warning emitted after `2 * 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_channel_runtime.py`
+- `server/tests/contracts/runtime/test_inv_hls_channel_runtime.py`
 
 ## Enforcement Evidence
 

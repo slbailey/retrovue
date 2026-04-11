@@ -35,8 +35,8 @@ After bulk_remove(tag): `SELECT COUNT(*) FROM asset_tags WHERE tag = <tag>` MUST
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_tag_management_api.py`
-- `pkg/core/tests/contracts/test_tag_management_operations.py`
+- `server/tests/contracts/test_tag_management_api.py`
+- `server/tests/contracts/test_tag_management_operations.py`
 
 ## Enforcement Evidence
 

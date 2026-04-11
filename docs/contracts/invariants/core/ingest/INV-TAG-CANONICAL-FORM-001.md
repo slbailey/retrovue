@@ -35,11 +35,11 @@ Every tag persisted in `asset_tags.tag` MUST conform to the canonical form `name
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_tag_canonical_form.py`
+- `server/tests/contracts/test_inv_tag_canonical_form.py`
 
 ## Enforcement Evidence
 
-- `canonicalize_tag()` in `pkg/core/src/retrovue/domain/tag_normalization.py` enforces canonical form
+- `canonicalize_tag()` in `server/src/retrovue/domain/tag_normalization.py` enforces canonical form
 - CLI `asset update --tags` writes via `canonicalize_tag()` (asset.py)
 - Ingest pipeline writes via `canonicalize_tag()` (container_ingest.py)
 - Studio web API writes via `canonicalize_tag()` (studio.py)

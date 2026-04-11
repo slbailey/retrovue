@@ -26,7 +26,7 @@ Build a `ResolvedScheduleDay` with ScheduleItem entries that have content shorte
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_epg_invariants.py::TestInvEpgFillerInvisible001`
+- `server/tests/contracts/test_epg_invariants.py::TestInvEpgFillerInvisible001`
 
 ## Enforcement Evidence
 

@@ -291,7 +291,7 @@ Derived From: `LAW-CONTENT-AUTHORITY`, `LAW-DERIVATION`
 All tests live under:
 
 ```
-pkg/core/tests/contracts/test_program_definition.py
+server/tests/contracts/test_program_definition.py
 ```
 
 | Test | Invariant | Scenario |

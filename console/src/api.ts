@@ -22,7 +22,7 @@ interface TagsResponse {
   tags: string[];
 }
 
-const BASE = import.meta.env.VITE_API_BASE_URL || '/api/console';
+const BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
 export async function fetchAssetsPage(page: number, pageSize: number): Promise<AssetsPage> {
   const res = await fetch(`${BASE}/assets?page=${page}&page_size=${pageSize}`);

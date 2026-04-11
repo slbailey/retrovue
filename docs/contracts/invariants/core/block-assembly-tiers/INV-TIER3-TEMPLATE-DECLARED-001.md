@@ -31,7 +31,7 @@ Compile a block with no template reference. Assert `compiled_segments` contains 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_block_assembly_tiers.py`
+- `server/tests/contracts/test_block_assembly_tiers.py`
 
 ## Enforcement Evidence
 

@@ -184,4 +184,4 @@ Publish a draft revision: transitions to `active`, atomically supersedes any exi
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/scheduling/test_schedule_revision_rest_lifecycle.py`
+- `server/tests/contracts/scheduling/test_schedule_revision_rest_lifecycle.py`

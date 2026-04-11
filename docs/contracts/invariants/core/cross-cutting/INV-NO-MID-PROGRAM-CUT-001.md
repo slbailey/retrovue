@@ -33,7 +33,7 @@ Create a Program with no breakpoints spanning 90 minutes against a 30-minute gri
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/scheduling/test_inv_no_mid_program_cut.py`
+- `server/tests/contracts/scheduling/test_inv_no_mid_program_cut.py`
 
 ## Enforcement Evidence
 

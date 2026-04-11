@@ -30,7 +30,7 @@ Runtime fault — imminent CUN segment misses deadline while far-future segment 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_cun_synthesis.py`
+- `server/tests/contracts/test_cun_synthesis.py`
 
 ## Enforcement Evidence
 

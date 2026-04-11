@@ -26,7 +26,7 @@ Compile day D with no future-day data loaded. Then compile day D again with day 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/integration/test_integration_scheduling_authority.py`
+- `server/tests/contracts/integration/test_integration_scheduling_authority.py`
 
 ## Enforcement Evidence
 

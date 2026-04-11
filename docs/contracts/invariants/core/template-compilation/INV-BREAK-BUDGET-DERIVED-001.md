@@ -30,7 +30,7 @@ Construct a block with known `scheduled_duration`, `content_duration`, and `pres
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_timeline_compilation_templates.py`
+- `server/tests/contracts/test_timeline_compilation_templates.py`
 
 ## Enforcement Evidence
 

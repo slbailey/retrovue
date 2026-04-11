@@ -24,15 +24,15 @@ Ingest is triggered by CLI (`retrovue container ingest <name>`, `retrovue source
 
 | Responsibility | Module / file | Key classes / functions |
 |----------------|---------------|--------------------------|
-| Discover locators | `pkg/core/src/retrovue/catalog/discovery.py` | `discover_locators(container, importer, ...)` (contract term: container), `DiscoveredLocator`, `Fingerprint` |
-| Invoked from ingest | `pkg/core/src/retrovue/cli/commands/_ops/collection_ingest_service.py` | Ingest service → `discover_locators()` (code names still Collection until Phase 2+; contract entity is Container) |
-| Importers | `pkg/core/src/retrovue/adapters/importers/` | `FilesystemImporter`, `PlexImporter` — `discover()`, `discover_scoped()` |
+| Discover locators | `server/src/retrovue/catalog/discovery.py` | `discover_locators(container, importer, ...)` (contract term: container), `DiscoveredLocator`, `Fingerprint` |
+| Invoked from ingest | `server/src/retrovue/cli/commands/_ops/collection_ingest_service.py` | Ingest service → `discover_locators()` (code names still Collection until Phase 2+; contract entity is Container) |
+| Importers | `server/src/retrovue/adapters/importers/` | `FilesystemImporter`, `PlexImporter` — `discover()`, `discover_scoped()` |
 
 ### Catalog reconciliation
 
 | Responsibility | Module / file | Key classes / functions |
 |----------------|---------------|--------------------------|
-| Load catalog state | `pkg/core/src/retrovue/catalog/reconciliation.py` | Load catalog state for container; `determine_reconciliation_outcomes()` |
+| Load catalog state | `server/src/retrovue/catalog/reconciliation.py` | Load catalog state for container; `determine_reconciliation_outcomes()` |
 | Outcomes | Same | `ReconciliationOutcome`: create, update, no_action, mark_unavailable |
 | Apply + enqueue | Ingest service module | Apply loop: create/update/restore/soft-delete; `enqueue_processor_jobs()` |
 
@@ -40,24 +40,24 @@ Ingest is triggered by CLI (`retrovue container ingest <name>`, `retrovue source
 
 | Responsibility | Module / file | Key classes / functions |
 |----------------|---------------|--------------------------|
-| Job table and API | `pkg/core/src/retrovue/catalog/processor_jobs.py` | `enqueue()`, `claim_next_job()`, `complete_job()`, `purge_old_processor_jobs()` |
-| Entity | `pkg/core/src/retrovue/domain/entities.py` | `ProcessorJob` |
-| Worker | `pkg/core/src/retrovue/runtime/processor_worker.py` | `run_once()`, `run_loop()` |
+| Job table and API | `server/src/retrovue/catalog/processor_jobs.py` | `enqueue()`, `claim_next_job()`, `complete_job()`, `purge_old_processor_jobs()` |
+| Entity | `server/src/retrovue/domain/entities.py` | `ProcessorJob` |
+| Worker | `server/src/retrovue/runtime/processor_worker.py` | `run_once()`, `run_loop()` |
 
 ### Processor runtime
 
 | Responsibility | Module / file | Key classes / functions |
 |----------------|---------------|--------------------------|
-| Execute job | `pkg/core/src/retrovue/catalog/processor_runtime.py` | `execute_job(db, job)` |
+| Execute job | `server/src/retrovue/catalog/processor_runtime.py` | `execute_job(db, job)` |
 | Context and apply | Same | `ProcessingContext`, ownership filter (`FIELD_OWNERSHIP`), persist asset + processor_runs + processor_outputs |
-| Capability registry | `pkg/core/src/retrovue/catalog/processor_capability.py` | `get_processors_for_target()`, `get_capability()`, `CAPABILITY_REGISTRY` |
-| Enrichers | `pkg/core/src/retrovue/adapters/registry.py` | `ENRICHERS` (e.g. ffprobe, interstitial-type, loudness) |
+| Capability registry | `server/src/retrovue/catalog/processor_capability.py` | `get_processors_for_target()`, `get_capability()`, `CAPABILITY_REGISTRY` |
+| Enrichers | `server/src/retrovue/adapters/registry.py` | `ENRICHERS` (e.g. ffprobe, interstitial-type, loudness) |
 
 ### Metadata persistence
 
 | Responsibility | Module / file | Key classes / functions |
 |----------------|---------------|--------------------------|
-| Structured persistence | `pkg/core/src/retrovue/infra/metadata/persistence.py` | `persist_asset_metadata()` |
+| Structured persistence | `server/src/retrovue/infra/metadata/persistence.py` | `persist_asset_metadata()` |
 | Run history | `processor_runtime.py` | Writes `ProcessorRun` rows in same transaction as job completion |
 | Flexible output | Same | Upserts `ProcessorOutput` by (processor_id, target_type, target_id) |
 | Entities | `domain/entities.py` | `Asset`, `AssetEditorial`, `AssetProbed`, `ProcessorRun`, `ProcessorOutput` |
@@ -66,7 +66,7 @@ Ingest is triggered by CLI (`retrovue container ingest <name>`, `retrovue source
 
 | Responsibility | Module / file | Key classes / functions |
 |----------------|---------------|--------------------------|
-| Canonical key and hash | `pkg/core/src/retrovue/infra/canonical.py` | `canonical_key_for()`, `canonical_hash()` |
+| Canonical key and hash | `server/src/retrovue/infra/canonical.py` | `canonical_key_for()`, `canonical_hash()` |
 | Duplicate / restore check | Ingest service module | Get by container and canonical hash (contract: container) |
 
 ---

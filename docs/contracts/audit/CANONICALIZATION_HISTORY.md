@@ -6,7 +6,7 @@ Record of the governance audit and canonicalization pass performed on the RetroV
 
 ## Audit Scope
 
-220+ rules inventoried across: root governance docs, `docs/contracts/`, `pkg/air/docs/contracts/`, `pkg/core/docs/contracts/`, individual invariant files, laws, and test matrices.
+220+ rules inventoried across: root governance docs, `docs/contracts/`, `runtime/docs/contracts/`, `server/docs/contracts/`, individual invariant files, laws, and test matrices.
 
 ---
 

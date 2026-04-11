@@ -30,7 +30,7 @@ Planning fault. If policies can relax core eligibility, non-ready or unapproved 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_policies.py`
+- `server/tests/contracts/test_scheduling_policies.py`
 
 ## Enforcement Evidence
 

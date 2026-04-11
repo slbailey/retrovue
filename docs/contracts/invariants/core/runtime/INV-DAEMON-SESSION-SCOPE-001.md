@@ -21,7 +21,7 @@ Multiple `with session()` calls inside a single `evaluate_once()` cycle; helper 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_daemon_session_scope.py`
+- `server/tests/contracts/runtime/test_inv_daemon_session_scope.py`
 
 ## Enforcement Evidence
 

@@ -31,7 +31,7 @@ Runtime fault. No backward timestamp jumps. A violation indicates either a timeb
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_segment_timebase_snapshot.py`
+- `server/tests/contracts/runtime/test_inv_hls_segment_timebase_snapshot.py`
 
 ## Enforcement Evidence
 

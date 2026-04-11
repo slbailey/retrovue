@@ -32,9 +32,9 @@ Construct a plan with a zone at 14:00-16:00 containing an asset classified "matu
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/scheduling/test_schedule_constraints.py::TestInvConstraintContentRestriction001`
+- `server/tests/contracts/scheduling/test_schedule_constraints.py::TestInvConstraintContentRestriction001`
 
 ## Enforcement Evidence
 
-- `pkg/core/src/retrovue/scheduling/schedule_constraints.py` — `check_content_restriction_constraints()`
+- `server/src/retrovue/scheduling/schedule_constraints.py` — `check_content_restriction_constraints()`
 - Error tag: `INV-CONSTRAINT-CONTENT-RESTRICTION-001-VIOLATED`

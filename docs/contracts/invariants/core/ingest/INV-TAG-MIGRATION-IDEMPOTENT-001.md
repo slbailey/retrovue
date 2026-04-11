@@ -37,9 +37,9 @@ Run `canonicalize_tag()` twice on every distinct `asset_tags.tag` value. If `can
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_tag_canonical_form.py` (class `TestMigrationC`)
+- `server/tests/contracts/test_inv_tag_canonical_form.py` (class `TestMigrationC`)
 
 ## Enforcement Evidence
 
-- `canonicalize_tag()` in `pkg/core/src/retrovue/domain/tag_normalization.py` — handles all three input forms and is idempotent by construction
+- `canonicalize_tag()` in `server/src/retrovue/domain/tag_normalization.py` — handles all three input forms and is idempotent by construction
 - Test class `TestMigrationC` in `test_inv_tag_canonical_form.py` — parametric idempotency checks

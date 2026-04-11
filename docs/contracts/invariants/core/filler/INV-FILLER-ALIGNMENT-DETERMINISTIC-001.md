@@ -26,7 +26,7 @@ Call the filler construction function twice with the same parameters. Assert out
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_filler_alignment.py`
+- `server/tests/contracts/test_filler_alignment.py`
 
 ## Enforcement Evidence
 

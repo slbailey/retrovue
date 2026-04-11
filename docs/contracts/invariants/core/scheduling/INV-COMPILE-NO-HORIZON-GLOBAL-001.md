@@ -26,7 +26,7 @@ Compile day D with D-1 loaded and a future day also loaded. Verify that the carr
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/integration/test_integration_scheduling_authority.py`
+- `server/tests/contracts/integration/test_integration_scheduling_authority.py`
 
 ## Enforcement Evidence
 

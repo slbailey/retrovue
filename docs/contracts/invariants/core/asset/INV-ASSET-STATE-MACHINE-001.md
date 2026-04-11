@@ -37,11 +37,11 @@ For each pair `(current, proposed)` in the state space `{new, enriching, ready, 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_asset_invariants.py::TestInvAssetStateMachine001`
+- `server/tests/contracts/test_asset_invariants.py::TestInvAssetStateMachine001`
 
 ## Enforcement Evidence
 
-- `pkg/core/src/retrovue/domain/entities.py` — `validate_state_transition()` function
-- `pkg/core/src/retrovue/usecases/ingest_orchestrator.py` — uses validated transitions
-- `pkg/core/src/retrovue/usecases/asset_reprobe.py` — uses validated transitions
+- `server/src/retrovue/domain/entities.py` — `validate_state_transition()` function
+- `server/src/retrovue/usecases/ingest_orchestrator.py` — uses validated transitions
+- `server/src/retrovue/usecases/asset_reprobe.py` — uses validated transitions
 - Error tag: `INV-ASSET-STATE-MACHINE-001-VIOLATED`

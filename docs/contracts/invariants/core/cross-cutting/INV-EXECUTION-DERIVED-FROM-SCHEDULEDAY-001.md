@@ -55,12 +55,12 @@ A `ResolvedScheduleDay` that has downstream `ExecutionEntry` artifacts MUST NOT 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_constitution.py` (TestInvExecutionDerivedFromScheduleday001)
+- `server/tests/contracts/test_scheduling_constitution.py` (TestInvExecutionDerivedFromScheduleday001)
 
 ## Enforcement Evidence
 
 **Enforcement location:**
-- `ExecutionWindowStore.add_entries()` in `pkg/core/src/retrovue/runtime/execution_window_store.py` (line 121) — Rejects any `ExecutionEntry` where `channel_id` is empty or `programming_day_date` is `None`. Raises `ValueError` with tag `INV-EXECUTION-DERIVED-FROM-SCHEDULEDAY-001-VIOLATED`.
+- `ExecutionWindowStore.add_entries()` in `server/src/retrovue/runtime/execution_window_store.py` (line 121) — Rejects any `ExecutionEntry` where `channel_id` is empty or `programming_day_date` is `None`. Raises `ValueError` with tag `INV-EXECUTION-DERIVED-FROM-SCHEDULEDAY-001-VIOLATED`.
 
 **Tests:**
 - `test_inv_execution_derived_from_scheduleday_001_reject_without_lineage`: Submits entries with `programming_day_date=None` and `channel_id=""`. Asserts both rejected. Store remains empty.

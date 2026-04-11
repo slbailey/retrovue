@@ -28,7 +28,7 @@ Manifest missing required HLS tags; `EXT-X-TARGETDURATION` less than any `EXTINF
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_manifest_consistency.py`
+- `server/tests/contracts/runtime/test_inv_hls_manifest_consistency.py`
 
 ## Enforcement Evidence
 

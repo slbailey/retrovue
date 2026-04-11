@@ -39,10 +39,10 @@ Create an asset stub with `state='ready'`, `approved_for_broadcast=True`, popula
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_asset_invariants.py::TestInvAssetReenrichResetsStale001`
-- `pkg/core/tests/usecases/test_asset_enrich.py`
+- `server/tests/contracts/test_asset_invariants.py::TestInvAssetReenrichResetsStale001`
+- `server/tests/usecases/test_asset_enrich.py`
 
 ## Enforcement Evidence
 
-- `pkg/core/src/retrovue/usecases/asset_enrich.py` — `enrich_asset()` implements the unified lifecycle
+- `server/src/retrovue/usecases/asset_enrich.py` — `enrich_asset()` implements the unified lifecycle
 - Error tag: `INV-ASSET-REENRICH-RESETS-STALE-001-VIOLATED`

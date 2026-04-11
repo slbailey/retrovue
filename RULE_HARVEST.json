@@ -376,7 +376,7 @@
     "confidence": "medium"
   },
   {
-    "source_file": "pkg/core/docs/archive/data/broadcast-schema.md",
+    "source_file": "server/docs/archive/data/broadcast-schema.md",
     "exact_quote": "Runtime code is forbidden from altering core configuration tables",
     "implied_behavior": "Channel, template, etc. are read-only for runtime",
     "affected_subsystem": "core",
@@ -384,7 +384,7 @@
     "confidence": "high"
   },
   {
-    "source_file": "pkg/core/docs/archive/data/broadcast-schema.md",
+    "source_file": "server/docs/archive/data/broadcast-schema.md",
     "exact_quote": "The tables channels, templates, template_blocks, schedule_days, playlog_events have been removed and must not be reintroduced",
     "implied_behavior": "Legacy table names forbidden; use new schema",
     "affected_subsystem": "core",
@@ -392,7 +392,7 @@
     "confidence": "high"
   },
   {
-    "source_file": "pkg/core/docs/archive/data/broadcast-schema.md",
+    "source_file": "server/docs/archive/data/broadcast-schema.md",
     "exact_quote": "Unique constraint on (channel_id, schedule_date) ensures one template per channel per broadcast day",
     "implied_behavior": "One template per channel per day",
     "affected_subsystem": "core",
@@ -400,7 +400,7 @@
     "confidence": "high"
   },
   {
-    "source_file": "pkg/core/docs/archive/data/broadcast-schema.md",
+    "source_file": "server/docs/archive/data/broadcast-schema.md",
     "exact_quote": "ScheduleService is forbidden to schedule any catalog_asset where canonical=false",
     "implied_behavior": "Only canonical assets schedulable",
     "affected_subsystem": "core",
@@ -408,7 +408,7 @@
     "confidence": "high"
   },
   {
-    "source_file": "pkg/core/docs/archive/data/broadcast-schema.md",
+    "source_file": "server/docs/archive/data/broadcast-schema.md",
     "exact_quote": "ChannelManager is forbidden to playout any catalog_asset where canonical=false",
     "implied_behavior": "Runtime must not play non-canonical content",
     "affected_subsystem": "both",
@@ -416,7 +416,7 @@
     "confidence": "high"
   },
   {
-    "source_file": "pkg/core/docs/archive/data/broadcast-schema.md",
+    "source_file": "server/docs/archive/data/broadcast-schema.md",
     "exact_quote": "Promotion into the broadcast catalog is an explicit operator act via retrovue assets promote",
     "implied_behavior": "Only CLI promotion makes content schedulable",
     "affected_subsystem": "core",
@@ -424,7 +424,7 @@
     "confidence": "high"
   },
   {
-    "source_file": "pkg/core/docs/archive/data/broadcast-schema.md",
+    "source_file": "server/docs/archive/data/broadcast-schema.md",
     "exact_quote": "ChannelManager must never invent rows in playlog_event",
     "implied_behavior": "Playlog written only by ScheduleService",
     "affected_subsystem": "core",
@@ -432,7 +432,7 @@
     "confidence": "high"
   },
   {
-    "source_file": "pkg/core/docs/archive/developer/bootstrap.md",
+    "source_file": "server/docs/archive/developer/bootstrap.md",
     "exact_quote": "Broadcast Domain configuration data is read-only for runtime services",
     "implied_behavior": "Only CLI and AdminService may modify config tables",
     "affected_subsystem": "core",
@@ -440,7 +440,7 @@
     "confidence": "high"
   },
   {
-    "source_file": "pkg/core/docs/archive/developer/bootstrap.md",
+    "source_file": "server/docs/archive/developer/bootstrap.md",
     "exact_quote": "ScheduleService, ChannelManager, ProgramDirector are pure consumers",
     "implied_behavior": "Runtime does not mutate infrastructure",
     "affected_subsystem": "core",
@@ -448,7 +448,7 @@
     "confidence": "high"
   },
   {
-    "source_file": "pkg/core/docs/archive/developer/bootstrap.md",
+    "source_file": "server/docs/archive/developer/bootstrap.md",
     "exact_quote": "Only catalog entries with canonical=true are eligible to be scheduled",
     "implied_behavior": "Canonical gating for scheduling",
     "affected_subsystem": "core",
@@ -456,7 +456,7 @@
     "confidence": "high"
   },
   {
-    "source_file": "pkg/core/docs/archive/developer/bootstrap.md",
+    "source_file": "server/docs/archive/developer/bootstrap.md",
     "exact_quote": "ScheduleService is forbidden from scheduling non-canonical content",
     "implied_behavior": "Scheduler must only use canonical assets",
     "affected_subsystem": "core",
@@ -464,7 +464,7 @@
     "confidence": "high"
   },
   {
-    "source_file": "pkg/core/docs/archive/developer/bootstrap.md",
+    "source_file": "server/docs/archive/developer/bootstrap.md",
     "exact_quote": "ChannelManager must not play unapproved media",
     "implied_behavior": "Runtime plays only approved catalog entries",
     "affected_subsystem": "both",
@@ -472,7 +472,7 @@
     "confidence": "high"
   },
   {
-    "source_file": "pkg/core/docs/archive/developer/bootstrap.md",
+    "source_file": "server/docs/archive/developer/bootstrap.md",
     "exact_quote": "ScheduleService is forbidden from mutating infrastructure tables",
     "implied_behavior": "Scheduler is read-only for config",
     "affected_subsystem": "core",
@@ -480,7 +480,7 @@
     "confidence": "high"
   },
   {
-    "source_file": "pkg/core/docs/archive/developer/bootstrap.md",
+    "source_file": "server/docs/archive/developer/bootstrap.md",
     "exact_quote": "ScheduleService.build_playout_horizon() must source candidates only from the broadcast catalog (canonical=true)",
     "implied_behavior": "Never source from Library Domain directly for scheduling",
     "affected_subsystem": "core",
@@ -488,7 +488,7 @@
     "confidence": "high"
   },
   {
-    "source_file": "pkg/core/docs/archive/developer/db_scheduling_domain_tests.md",
+    "source_file": "server/docs/archive/developer/db_scheduling_domain_tests.md",
     "exact_quote": "All scheduling domain tests MUST use Postgres as the database backend. SQLite is not permitted",
     "implied_behavior": "Postgres only for scheduling tests",
     "affected_subsystem": "core",
@@ -496,7 +496,7 @@
     "confidence": "high"
   },
   {
-    "source_file": "pkg/core/docs/archive/developer/db_scheduling_domain_tests.md",
+    "source_file": "server/docs/archive/developer/db_scheduling_domain_tests.md",
     "exact_quote": "Tests MUST run Alembic migrations before execution. Programmatic table creation is forbidden",
     "implied_behavior": "Use migrations for schema; no create_all()",
     "affected_subsystem": "core",
@@ -504,7 +504,7 @@
     "confidence": "high"
   },
   {
-    "source_file": "pkg/core/docs/archive/developer/db_scheduling_domain_tests.md",
+    "source_file": "server/docs/archive/developer/db_scheduling_domain_tests.md",
     "exact_quote": "Tests must not drop entire schemas or databases during cleanup",
     "implied_behavior": "Logical data cleanup only; no schema drops",
     "affected_subsystem": "core",
@@ -512,7 +512,7 @@
     "confidence": "high"
   },
   {
-    "source_file": "pkg/core/docs/archive/architecture/Directories.md",
+    "source_file": "server/docs/archive/architecture/Directories.md",
     "exact_quote": "New code must not depend on src_legacy",
     "implied_behavior": "Legacy code is quarantine; no new dependencies",
     "affected_subsystem": "core",
@@ -520,7 +520,7 @@
     "confidence": "high"
   },
   {
-    "source_file": "pkg/core/docs/archive/architecture/Directories.md",
+    "source_file": "server/docs/archive/architecture/Directories.md",
     "exact_quote": "CLI commands: retrovue runtime masterclock (validation), not retrovue masterclock add",
     "implied_behavior": "Runtime infrastructure gets diagnostic commands under retrovue runtime",
     "affected_subsystem": "core",
@@ -528,7 +528,7 @@
     "confidence": "medium"
   },
   {
-    "source_file": "pkg/core/docs/archive/architecture/Directories.md",
+    "source_file": "server/docs/archive/architecture/Directories.md",
     "exact_quote": "No DB writes originate from adapters",
     "implied_behavior": "Adapters are read-only; usecases perform writes",
     "affected_subsystem": "core",
@@ -536,7 +536,7 @@
     "confidence": "medium"
   },
   {
-    "source_file": "pkg/core/docs/archive/architecture/Directories.md",
+    "source_file": "server/docs/archive/architecture/Directories.md",
     "exact_quote": "Orchestration only—no core logic, query composition, or random SQL in CLI",
     "implied_behavior": "CLI wires to usecases; no business logic in CLI",
     "affected_subsystem": "core",
@@ -544,7 +544,7 @@
     "confidence": "medium"
   },
   {
-    "source_file": "pkg/core/docs/archive/developer/bootstrap.md",
+    "source_file": "server/docs/archive/developer/bootstrap.md",
     "exact_quote": "ScheduleService is forbidden from directly reaching into Library Domain data when selecting something to air",
     "implied_behavior": "Scheduler uses only broadcast catalog, never Library Domain",
     "affected_subsystem": "core",
@@ -552,7 +552,7 @@
     "confidence": "high"
   },
   {
-    "source_file": "pkg/core/docs/archive/developer/bootstrap.md",
+    "source_file": "server/docs/archive/developer/bootstrap.md",
     "exact_quote": "All runtime services must treat infrastructure tables as immutable",
     "implied_behavior": "No runtime mutations of config tables",
     "affected_subsystem": "core",
@@ -560,7 +560,7 @@
     "confidence": "high"
   },
   {
-    "source_file": "pkg/core/docs/archive/developer/bootstrap.md",
+    "source_file": "server/docs/archive/developer/bootstrap.md",
     "exact_quote": "Adding something to the Library Domain does NOT make it schedulable. The operator must still promote it",
     "implied_behavior": "Library and Broadcast Domain are separate; promotion required",
     "affected_subsystem": "core",
@@ -568,7 +568,7 @@
     "confidence": "high"
   },
   {
-    "source_file": "pkg/core/docs/archive/developer/database-schema.md",
+    "source_file": "server/docs/archive/developer/database-schema.md",
     "exact_quote": "All content must have an actual playable media file as its foundation",
     "implied_behavior": "Physical media file required for content",
     "affected_subsystem": "core",
@@ -576,7 +576,7 @@
     "confidence": "medium"
   },
   {
-    "source_file": "pkg/core/docs/archive/developer/database-schema.md",
+    "source_file": "server/docs/archive/developer/database-schema.md",
     "exact_quote": "Exactly one of these must be set (enforced by CHECK constraint)",
     "implied_behavior": "media_files polymorphic FK: exactly one of movie_id or episode_id",
     "affected_subsystem": "core",
@@ -584,7 +584,7 @@
     "confidence": "medium"
   },
   {
-    "source_file": "pkg/core/docs/archive/developer/_AssetImplementationOversightPlan.md",
+    "source_file": "server/docs/archive/developer/_AssetImplementationOversightPlan.md",
     "exact_quote": "All new assets must start at new or enriching",
     "implied_behavior": "Asset state machine: new/enriching initial states",
     "affected_subsystem": "core",
@@ -592,7 +592,7 @@
     "confidence": "medium"
   },
   {
-    "source_file": "pkg/core/docs/archive/developer/_AssetImplementationOversightPlan.md",
+    "source_file": "server/docs/archive/developer/_AssetImplementationOversightPlan.md",
     "exact_quote": "Ingest must never leave an updated asset in ready",
     "implied_behavior": "State leaks forbidden; ready only via explicit path",
     "affected_subsystem": "core",

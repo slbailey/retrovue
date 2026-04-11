@@ -33,12 +33,12 @@ Generate a PlaylistEvent with `start_time=18:15` against a 30-minute grid. Asser
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_constitution.py` (PLAYLIST-GRID-001, PLAYLIST-GRID-002, PLAYLIST-GRID-003)
+- `server/tests/contracts/test_scheduling_constitution.py` (PLAYLIST-GRID-001, PLAYLIST-GRID-002, PLAYLIST-GRID-003)
 
 ## Enforcement Evidence
 
 **Enforcement function:**
-- `validate_transmission_log_grid_alignment(log, grid_block_minutes)` in `pkg/core/src/retrovue/runtime/transmission_log_validator.py` — For each entry, checks `start_utc_ms % (grid_block_minutes * 60_000) == 0` and `end_utc_ms % (grid_block_minutes * 60_000) == 0`. On violation: raises `ValueError` with tag `INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001-VIOLATED`, the misaligned value, and nearest valid grid boundaries (floor and ceil). Empty entry lists pass trivially.
+- `validate_transmission_log_grid_alignment(log, grid_block_minutes)` in `server/src/retrovue/runtime/transmission_log_validator.py` — For each entry, checks `start_utc_ms % (grid_block_minutes * 60_000) == 0` and `end_utc_ms % (grid_block_minutes * 60_000) == 0`. On violation: raises `ValueError` with tag `INV-TRANSMISSIONLOG-GRID-ALIGNMENT-001-VIOLATED`, the misaligned value, and nearest valid grid boundaries (floor and ceil). Empty entry lists pass trivially.
 
 **Tests:**
 - PLAYLIST-GRID-001 (`test_inv_transmissionlog_grid_alignment_001_reject_off_grid`): Entry at 18:15 on 30-min grid rejected; fault identifies misaligned boundary.

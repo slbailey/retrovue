@@ -342,7 +342,7 @@ schedule:
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_traffic_dsl.py`
+- `server/tests/contracts/test_traffic_dsl.py`
 
 | Test | Invariant | Scenario |
 |---|---|---|

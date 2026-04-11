@@ -32,7 +32,7 @@ Construct an AssemblyResult with one content segment carrying chapter markers at
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_chapter_marker_break_placement.py`
+- `server/tests/contracts/test_chapter_marker_break_placement.py`
 
 ## Enforcement Evidence
 

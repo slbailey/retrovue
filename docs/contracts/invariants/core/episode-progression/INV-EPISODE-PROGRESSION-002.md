@@ -31,7 +31,7 @@ Create a Progression Run anchored on Monday. Compile Monday (E0). Skip Tuesday t
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_episode_progression.py`
+- `server/tests/contracts/test_episode_progression.py`
 
 ## Enforcement Evidence
 

@@ -36,10 +36,10 @@ Construct asset stubs for all eight combinations of the three boolean conditions
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_asset_invariants.py::TestInvAssetSchedulableTripleGate001`
+- `server/tests/contracts/test_asset_invariants.py::TestInvAssetSchedulableTripleGate001`
 
 ## Enforcement Evidence
 
-- `pkg/core/src/retrovue/domain/entities.py` — partial index `ix_assets_schedulable`: `state = 'ready' AND approved_for_broadcast = true AND is_deleted = false`
-- `pkg/core/src/retrovue/catalog/db_asset_library.py` — `get_filler_assets()` applies all three filters
+- `server/src/retrovue/domain/entities.py` — partial index `ix_assets_schedulable`: `state = 'ready' AND approved_for_broadcast = true AND is_deleted = false`
+- `server/src/retrovue/catalog/db_asset_library.py` — `get_filler_assets()` applies all three filters
 - Error tag: `INV-ASSET-SCHEDULABLE-TRIPLE-GATE-001-VIOLATED`

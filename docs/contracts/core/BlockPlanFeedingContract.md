@@ -132,4 +132,4 @@ After a stop (or failure), a subsequent start MUST use a clean session state. Pe
 
 ## 4. Required test
 
-**Contract test:** `pkg/core/tests/contracts/test_blockplan_feeding_contracts.py` — existing tests enforce the invariants above (Part 1: feeding policy; Part 2: teardown; Part 3: ChannelManager integration).
+**Contract test:** `server/tests/contracts/test_blockplan_feeding_contracts.py` — existing tests enforce the invariants above (Part 1: feeding policy; Part 2: teardown; Part 3: ChannelManager integration).

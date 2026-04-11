@@ -38,8 +38,8 @@ def find_default_log() -> Path | None:
     """Return path to cheers-24-7-air.log if it exists in common locations."""
     candidates = [
         Path("cheers-24-7-air.log"),
-        Path("pkg/air/logs/cheers-24-7-air.log"),
-        Path(__file__).resolve().parent.parent / "pkg/air/logs/cheers-24-7-air.log",
+        Path("runtime/logs/cheers-24-7-air.log"),
+        Path(__file__).resolve().parent.parent / "runtime/logs/cheers-24-7-air.log",
     ]
     for p in candidates:
         if p.is_file():
@@ -57,7 +57,7 @@ def parse_args() -> argparse.Namespace:
         nargs="?" if default_log else None,
         default=str(default_log) if default_log else None,
         type=Path,
-        help="Log file path (default: cheers-24-7-air.log if present in cwd or pkg/air/logs)",
+        help="Log file path (default: cheers-24-7-air.log if present in cwd or runtime/logs)",
     )
     parser.add_argument(
         "-b", "--before",

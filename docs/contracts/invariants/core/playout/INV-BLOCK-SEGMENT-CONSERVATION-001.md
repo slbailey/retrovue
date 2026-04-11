@@ -69,14 +69,14 @@ Construct a ScheduledBlock with presentation segments (e.g. 74s intro + 5s ratin
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_tier2_conservation_guard.py::TestTier2ConservationGuard::test_deserialize_rejects_overstuffed_block`
-- `pkg/core/tests/contracts/test_tier2_conservation_guard.py::TestTier2ConservationGuard::test_correct_block_round_trips`
-- `pkg/core/tests/contracts/test_tier2_conservation_guard.py::TestTier2ConservationGuard::test_overstuffed_block_has_79s_delta`
-- `pkg/core/tests/contracts/test_tier2_conservation_guard.py::TestTier2ConservationGuard::test_negative_segment_rejected`
-- `pkg/core/tests/contracts/test_tier2_conservation_guard.py::TestTier2ConservationGuard::test_within_frame_tolerance_passes`
-- `pkg/core/tests/contracts/test_presentation_tier1_expansion.py::TestBlockFrameConservation::test_segment_sum_equals_block_duration_with_presentation`
-- `pkg/core/tests/contracts/test_presentation_tier1_expansion.py::TestBlockFrameConservation::test_segment_sum_equals_block_duration_no_presentation`
-- `pkg/core/tests/contracts/test_presentation_tier1_expansion.py::TestBlockFrameConservation::test_presentation_reduces_filler_not_content`
+- `server/tests/contracts/test_tier2_conservation_guard.py::TestTier2ConservationGuard::test_deserialize_rejects_overstuffed_block`
+- `server/tests/contracts/test_tier2_conservation_guard.py::TestTier2ConservationGuard::test_correct_block_round_trips`
+- `server/tests/contracts/test_tier2_conservation_guard.py::TestTier2ConservationGuard::test_overstuffed_block_has_79s_delta`
+- `server/tests/contracts/test_tier2_conservation_guard.py::TestTier2ConservationGuard::test_negative_segment_rejected`
+- `server/tests/contracts/test_tier2_conservation_guard.py::TestTier2ConservationGuard::test_within_frame_tolerance_passes`
+- `server/tests/contracts/test_presentation_tier1_expansion.py::TestBlockFrameConservation::test_segment_sum_equals_block_duration_with_presentation`
+- `server/tests/contracts/test_presentation_tier1_expansion.py::TestBlockFrameConservation::test_segment_sum_equals_block_duration_no_presentation`
+- `server/tests/contracts/test_presentation_tier1_expansion.py::TestBlockFrameConservation::test_presentation_reduces_filler_not_content`
 
 ## Enforcement Evidence
 

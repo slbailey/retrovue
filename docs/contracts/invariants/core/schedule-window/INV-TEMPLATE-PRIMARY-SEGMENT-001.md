@@ -43,11 +43,11 @@ asset_id) for each Tier 1 program block produced by that template.
 
 ## Enforcement
 
-Contract test: `pkg/core/tests/contracts/test_template_graft_contract.py`
+Contract test: `server/tests/contracts/test_template_graft_contract.py`
 (class `TestPrimarySegmentDetection`)
 
 ## Related
 
 - `docs/domains/ProgramTemplateAssembly.md` — segment definition model
 - `INV-TEMPLATE-GRAFT-DUAL-YAML-001` — dual YAML coexistence
-- `pkg/core/src/retrovue/runtime/schedule_compiler.py` — `_compile_template_entry()`
+- `server/src/retrovue/runtime/schedule_compiler.py` — `_compile_template_entry()`

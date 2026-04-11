@@ -30,7 +30,7 @@ Planning fault. Non-deterministic policy evaluation means schedule compilation i
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_policies.py`
+- `server/tests/contracts/test_scheduling_policies.py`
 
 ## Enforcement Evidence
 

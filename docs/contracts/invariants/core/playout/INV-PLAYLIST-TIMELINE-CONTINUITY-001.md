@@ -37,5 +37,5 @@ Generate PlaylistEvents from a known ScheduleItem sequence. Assert that every ad
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/playout/test_playlist_timeline_continuity.py::test_playlist_events_have_no_gaps`
-- `pkg/core/tests/contracts/playout/test_playlist_timeline_continuity.py::test_playlist_events_have_no_overlaps`
+- `server/tests/contracts/playout/test_playlist_timeline_continuity.py::test_playlist_events_have_no_gaps`
+- `server/tests/contracts/playout/test_playlist_timeline_continuity.py::test_playlist_events_have_no_overlaps`

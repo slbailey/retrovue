@@ -33,17 +33,17 @@ MUST be logged as planning fault with fields: `mutated_block_id`, `block_start_u
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_horizon_locked_immutable.py` (THLI-001: write to locked entry without override rejected)
-- `pkg/core/tests/contracts/test_inv_horizon_locked_immutable.py` (THLI-002: automated process write to locked entry rejected)
-- `pkg/core/tests/contracts/test_inv_horizon_locked_immutable.py` (THLI-003: operator override replaces atomically with new generation_id)
-- `pkg/core/tests/contracts/test_inv_horizon_locked_immutable.py` (THLI-004: entry in flexible future accepts write without override)
-- `pkg/core/tests/contracts/test_inv_horizon_locked_immutable.py` (THLI-005: clock advance moves lock boundary; previously-future entry becomes locked and rejects mutation)
+- `server/tests/contracts/test_inv_horizon_locked_immutable.py` (THLI-001: write to locked entry without override rejected)
+- `server/tests/contracts/test_inv_horizon_locked_immutable.py` (THLI-002: automated process write to locked entry rejected)
+- `server/tests/contracts/test_inv_horizon_locked_immutable.py` (THLI-003: operator override replaces atomically with new generation_id)
+- `server/tests/contracts/test_inv_horizon_locked_immutable.py` (THLI-004: entry in flexible future accepts write without override)
+- `server/tests/contracts/test_inv_horizon_locked_immutable.py` (THLI-005: clock advance moves lock boundary; previously-future entry becomes locked and rejects mutation)
 - All tests use `DeterministicClock` via `contract_clock` fixture. No real-time waits. Observable state: write acceptance/rejection, `operator_override` flag, `generation_id` on replaced entries, lock boundary `T` from `TimeAuthority.now()`.
 
 ## Enforcement Evidence
 
-- **Guard location:** `ExecutionWindowStore.publish_atomic_replace()` in `pkg/core/src/retrovue/runtime/execution_window_store.py`. Before the generation-monotonicity check, if `clock_fn` and `locked_window_ms` are configured and `operator_override=False`, the method computes the locked window `[now, now + locked_window_ms)` and checks half-open overlap with `[range_start_ms, range_end_ms)`. On overlap, returns `PublishResult(ok=False, error_code="INV-HORIZON-LOCKED-IMMUTABLE-001-VIOLATED: locked window")`.
+- **Guard location:** `ExecutionWindowStore.publish_atomic_replace()` in `server/src/retrovue/runtime/execution_window_store.py`. Before the generation-monotonicity check, if `clock_fn` and `locked_window_ms` are configured and `operator_override=False`, the method computes the locked window `[now, now + locked_window_ms)` and checks half-open overlap with `[range_start_ms, range_end_ms)`. On overlap, returns `PublishResult(ok=False, error_code="INV-HORIZON-LOCKED-IMMUTABLE-001-VIOLATED: locked window")`.
 - **Helper:** `ExecutionWindowStore._locked_window_end_ms(now_ms, locked_window_ms) -> int` — pure static computation of the locked window upper bound.
 - **Configuration:** `clock_fn: Callable[[], int]` and `locked_window_ms: int` are keyword-only constructor parameters. Deployment-configurable; fixture-injected in tests.
 - **Override path:** `operator_override=True` bypasses the locked-window guard, allowing atomic replacement per `INV-HORIZON-ATOMIC-PUBLISH-001`.
-- **Test file:** `pkg/core/tests/contracts/test_inv_horizon_locked_immutable.py` — THLI-001 through THLI-005.
+- **Test file:** `server/tests/contracts/test_inv_horizon_locked_immutable.py` — THLI-001 through THLI-005.

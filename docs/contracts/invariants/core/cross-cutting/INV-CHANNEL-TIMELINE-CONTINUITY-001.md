@@ -43,12 +43,12 @@ MUST be logged with fields: `channel_id`, `T`, `channel_epoch`, `expected_positi
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_channel_timeline_continuity.py` (THTC-001: position identical before and after AIR restart at same T)
-- `pkg/core/tests/contracts/test_inv_channel_timeline_continuity.py` (THTC-002: position after viewer absence equals f(T2, epoch, schedule) at T2)
-- `pkg/core/tests/contracts/test_inv_channel_timeline_continuity.py` (THTC-003: two independent computations with identical inputs yield identical output)
-- `pkg/core/tests/contracts/test_inv_channel_timeline_continuity.py` (THTC-004: five restart cycles produce zero cumulative drift)
-- `pkg/core/tests/contracts/test_inv_channel_timeline_continuity.py` (THTC-005: restart at programming day boundary yields correct day-2 position)
-- `pkg/core/tests/contracts/test_inv_channel_timeline_continuity.py` (THTC-006: 48-step interrupted path equals 48-step uninterrupted path)
+- `server/tests/contracts/test_inv_channel_timeline_continuity.py` (THTC-001: position identical before and after AIR restart at same T)
+- `server/tests/contracts/test_inv_channel_timeline_continuity.py` (THTC-002: position after viewer absence equals f(T2, epoch, schedule) at T2)
+- `server/tests/contracts/test_inv_channel_timeline_continuity.py` (THTC-003: two independent computations with identical inputs yield identical output)
+- `server/tests/contracts/test_inv_channel_timeline_continuity.py` (THTC-004: five restart cycles produce zero cumulative drift)
+- `server/tests/contracts/test_inv_channel_timeline_continuity.py` (THTC-005: restart at programming day boundary yields correct day-2 position)
+- `server/tests/contracts/test_inv_channel_timeline_continuity.py` (THTC-006: 48-step interrupted path equals 48-step uninterrupted path)
 - All tests use `DeterministicClock` via `contract_clock` fixture. No real-time waits. Position function is called with explicit `(channel_epoch, T, schedule)` tuples. Observable state: returned `(block_id, start_utc_ms, offset_within_block_ms)`.
 
 ## Enforcement Evidence

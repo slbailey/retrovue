@@ -62,7 +62,7 @@ Implement **only the contract layer** (data structures, validation, queue manage
 ## Validation
 
 ```
-$ pkg/air/build/blockplan_contract_tests
+$ runtime/build/blockplan_contract_tests
 [==========] Running 20 tests from 5 test suites.
 [  PASSED  ] 20 tests.
 ```
@@ -70,5 +70,5 @@ $ pkg/air/build/blockplan_contract_tests
 ## References
 
 - `docs/architecture/proposals/BlockLevelPlayoutAutonomy.md` — Full specification
-- `pkg/air/include/retrovue/blockplan/README.md` — Layer constraints
-- `pkg/air/tests/contracts/BlockPlan/BlockPlanContractTests.cpp` — Contract tests
+- `runtime/include/retrovue/blockplan/README.md` — Layer constraints
+- `runtime/tests/contracts/BlockPlan/BlockPlanContractTests.cpp` — Contract tests

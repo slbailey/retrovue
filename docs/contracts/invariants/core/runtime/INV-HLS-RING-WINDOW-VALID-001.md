@@ -25,7 +25,7 @@ SegmentRing owns the consistency check. The check MUST execute inside the same c
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_ring_integrity.py`
+- `server/tests/contracts/runtime/test_inv_hls_ring_integrity.py`
 
 ## Enforcement Evidence
 

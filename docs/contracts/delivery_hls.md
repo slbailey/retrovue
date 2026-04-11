@@ -381,21 +381,21 @@ Each layer in this chain specializes or formats the upstream value. No layer may
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_segment_production.py`
-- `pkg/core/tests/contracts/runtime/test_inv_hls_segment_timeline.py`
-- `pkg/core/tests/contracts/runtime/test_inv_hls_segment_ring.py`
-- `pkg/core/tests/contracts/runtime/test_inv_hls_ring_integrity.py`
-- `pkg/core/tests/contracts/runtime/test_inv_hls_manifest.py`
-- `pkg/core/tests/contracts/runtime/test_inv_hls_manifest_consistency.py`
-- `pkg/core/tests/contracts/runtime/test_inv_hls_viewer_presence.py`
-- `pkg/core/tests/contracts/runtime/test_inv_hls_viewer_count.py`
-- `pkg/core/tests/contracts/runtime/test_inv_hls_lifecycle.py`
-- `pkg/core/tests/contracts/runtime/test_inv_hls_channel_runtime.py`
-- `pkg/core/tests/contracts/runtime/test_inv_hls_endpoint_coexist.py`
-- `pkg/core/tests/contracts/runtime/test_inv_hls_delivery_path.py`
-- `pkg/core/tests/contracts/runtime/test_inv_hls_no_disk_io.py`
-- `pkg/core/tests/contracts/runtime/test_inv_hls_discontinuity_marker.py`
-- `pkg/core/tests/contracts/runtime/test_inv_hls_phantom_cleanup.py`
+- `server/tests/contracts/runtime/test_inv_hls_segment_production.py`
+- `server/tests/contracts/runtime/test_inv_hls_segment_timeline.py`
+- `server/tests/contracts/runtime/test_inv_hls_segment_ring.py`
+- `server/tests/contracts/runtime/test_inv_hls_ring_integrity.py`
+- `server/tests/contracts/runtime/test_inv_hls_manifest.py`
+- `server/tests/contracts/runtime/test_inv_hls_manifest_consistency.py`
+- `server/tests/contracts/runtime/test_inv_hls_viewer_presence.py`
+- `server/tests/contracts/runtime/test_inv_hls_viewer_count.py`
+- `server/tests/contracts/runtime/test_inv_hls_lifecycle.py`
+- `server/tests/contracts/runtime/test_inv_hls_channel_runtime.py`
+- `server/tests/contracts/runtime/test_inv_hls_endpoint_coexist.py`
+- `server/tests/contracts/runtime/test_inv_hls_delivery_path.py`
+- `server/tests/contracts/runtime/test_inv_hls_no_disk_io.py`
+- `server/tests/contracts/runtime/test_inv_hls_discontinuity_marker.py`
+- `server/tests/contracts/runtime/test_inv_hls_phantom_cleanup.py`
 - `tests/contracts/hls_delivery/test_segment_production.py`
 - `tests/contracts/hls_delivery/test_segment_ring.py`
 - `tests/contracts/hls_delivery/test_manifest.py`

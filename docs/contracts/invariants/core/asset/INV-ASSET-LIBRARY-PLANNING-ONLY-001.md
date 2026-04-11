@@ -30,11 +30,11 @@ Grep the runtime/execution codebase for Asset Library imports. Assert no matches
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_asset_invariants.py::TestInvAssetLibraryPlanningOnly001`
+- `server/tests/contracts/test_asset_invariants.py::TestInvAssetLibraryPlanningOnly001`
 
 ## Enforcement Evidence
 
-- `pkg/core/src/retrovue/runtime/channel_manager.py` — no Asset Library imports
-- `pkg/core/src/retrovue/runtime/playout_session.py` — no Asset Library imports
-- `pkg/air/` — no Asset Library references
+- `server/src/retrovue/runtime/channel_manager.py` — no Asset Library imports
+- `server/src/retrovue/runtime/playout_session.py` — no Asset Library imports
+- `runtime/` — no Asset Library references
 - Error tag: `INV-ASSET-LIBRARY-PLANNING-ONLY-001-VIOLATED`

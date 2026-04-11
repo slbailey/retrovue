@@ -31,8 +31,8 @@ Create a daily run anchored at E0. Configure a block with `slots=3, grid_blocks=
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_episode_progression.py`
-- `pkg/core/tests/contracts/test_progression_run_store.py`
+- `server/tests/contracts/test_episode_progression.py`
+- `server/tests/contracts/test_progression_run_store.py`
 
 ## Enforcement Evidence
 

@@ -26,7 +26,7 @@ Build a timeline from ScheduleRevision data. Cache it in `_blocks`. Discard the 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_timeline_authority.py`
+- `server/tests/contracts/test_inv_timeline_authority.py`
 
 ## Enforcement Evidence
 

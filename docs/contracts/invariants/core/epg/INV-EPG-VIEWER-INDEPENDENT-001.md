@@ -26,7 +26,7 @@ Resolve a `ResolvedScheduleDay` for a future date. Without starting any playout 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_epg_invariants.py::TestInvEpgViewerIndependent001`
+- `server/tests/contracts/test_epg_invariants.py::TestInvEpgViewerIndependent001`
 
 ## Enforcement Evidence
 

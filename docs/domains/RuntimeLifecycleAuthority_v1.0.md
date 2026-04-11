@@ -6,7 +6,7 @@
 **Related documents:**
 - `docs/domains/ProgramScheduleAuthority_v1.0.md` — program schedule commitment rules
 - `docs/domains/ProgramTemplateAssembly.md` — template DSL and segment resolution
-- `pkg/core/src/retrovue/runtime/template_runtime.py` — canonical runtime structure definitions
+- `server/src/retrovue/runtime/template_runtime.py` — canonical runtime structure definitions
 
 ---
 
@@ -189,6 +189,6 @@ This document does not define:
 - **TemplateReferenceIndex persistence.** The index is always derived from `ScheduleRegistry` and is never independently stored or checkpointed.
 - **PlaylogWindow or PlaylogEvent persistence.** These are playlog plan resolution outputs and are always rebuilt from the current template and asset state.
 - **DVR, rewind, or catch-up playback.** Restarting mid-program resumes from the current schedule position, not from where playback stopped.
-- **AIR process lifecycle.** AIR is a separate playout subprocess. Its startup and teardown are governed by `pkg/air/CLAUDE.md` and are out of scope here.
+- **AIR process lifecycle.** AIR is a separate playout subprocess. Its startup and teardown are governed by `runtime/CLAUDE.md` and are out of scope here.
 - **Multi-channel coordinator startup ordering.** Whether channels are started sequentially or concurrently is an orchestration concern, not a lifecycle authority concern.
 - **Horizon size on restart.** The lookahead window size after restart follows the same runtime policy as during normal operation.

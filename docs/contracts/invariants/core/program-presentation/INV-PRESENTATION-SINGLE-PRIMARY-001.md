@@ -30,7 +30,7 @@ Assemble a program with 0, 1, and 3 presentation segments. Assert exactly one se
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_program_presentation.py`
+- `server/tests/contracts/test_program_presentation.py`
 
 ## Enforcement Evidence
 

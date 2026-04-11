@@ -26,7 +26,7 @@ Response missing required HDHomeRun fields. `TunerCount` diverges from registere
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/plex/test_plex_discovery.py`
+- `server/tests/contracts/plex/test_plex_discovery.py`
 
 ## Enforcement Evidence
 

@@ -30,10 +30,10 @@ Construct asset stubs with valid 64-char hex hashes, short hashes, long hashes, 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_asset_invariants.py::TestInvAssetCanonicalKeyFormat001`
+- `server/tests/contracts/test_asset_invariants.py::TestInvAssetCanonicalKeyFormat001`
 
 ## Enforcement Evidence
 
-- `pkg/core/src/retrovue/domain/entities.py` — CHECK constraint `chk_canon_hash_len`: `char_length(canonical_key_hash) = 64`
-- `pkg/core/src/retrovue/domain/entities.py` — CHECK constraint `chk_canon_hash_hex`: `canonical_key_hash ~ '^[0-9a-f]{64}$'`
+- `server/src/retrovue/domain/entities.py` — CHECK constraint `chk_canon_hash_len`: `char_length(canonical_key_hash) = 64`
+- `server/src/retrovue/domain/entities.py` — CHECK constraint `chk_canon_hash_hex`: `canonical_key_hash ~ '^[0-9a-f]{64}$'`
 - Error tag: `INV-ASSET-CANONICAL-KEY-FORMAT-001-VIOLATED`

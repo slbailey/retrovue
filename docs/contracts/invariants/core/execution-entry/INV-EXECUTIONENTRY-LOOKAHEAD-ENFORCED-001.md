@@ -35,17 +35,17 @@ Using FakeAdvancingClock: advance the clock without simulating any playout consu
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_horizon_proactive_extend.py` (TPX-001: no extension when remaining > proactive threshold)
-- `pkg/core/tests/contracts/test_inv_horizon_proactive_extend.py` (TPX-002: extension when crossing threshold; depth increased)
-- `pkg/core/tests/contracts/test_inv_horizon_proactive_extend.py` (TPX-005: idempotent per tick; no duplicate at same clock)
-- `pkg/core/tests/contracts/test_inv_horizon_execution_min.py` (THEM-001: depth meets minimum after initialization)
-- `pkg/core/tests/contracts/test_inv_horizon_execution_min.py` (THEM-002: depth maintained across 24h walk)
-- `pkg/core/tests/contracts/scheduling/test_inv_horizon_clock_driven.py` (HORIZON-001: clock-driven extension, HORIZON-002: no redundant extension)
+- `server/tests/contracts/test_inv_horizon_proactive_extend.py` (TPX-001: no extension when remaining > proactive threshold)
+- `server/tests/contracts/test_inv_horizon_proactive_extend.py` (TPX-002: extension when crossing threshold; depth increased)
+- `server/tests/contracts/test_inv_horizon_proactive_extend.py` (TPX-005: idempotent per tick; no duplicate at same clock)
+- `server/tests/contracts/test_inv_horizon_execution_min.py` (THEM-001: depth meets minimum after initialization)
+- `server/tests/contracts/test_inv_horizon_execution_min.py` (THEM-002: depth maintained across 24h walk)
+- `server/tests/contracts/scheduling/test_inv_horizon_clock_driven.py` (HORIZON-001: clock-driven extension, HORIZON-002: no redundant extension)
 
 ## Enforcement Evidence
 
 - **Subsumed by:** `INV-HORIZON-PROACTIVE-EXTEND-001` + `INV-HORIZON-EXECUTION-MIN-001`. No dedicated guard exists for this invariant. The clock-driven extension model is enforced by the combination of these two horizon invariants.
-- **Clock-only trigger:** `HorizonManager.evaluate_once()` in `pkg/core/src/retrovue/runtime/horizon_manager.py`. `_check_proactive_extend()` fires only when `remaining_ms <= proactive_extend_threshold_ms` — a pure clock comparison. No consumer-request code path triggers extension.
+- **Clock-only trigger:** `HorizonManager.evaluate_once()` in `server/src/retrovue/runtime/horizon_manager.py`. `_check_proactive_extend()` fires only when `remaining_ms <= proactive_extend_threshold_ms` — a pure clock comparison. No consumer-request code path triggers extension.
 - **No-redundant-extension:** `_check_proactive_extend()` compares remaining time against the threshold. When depth already satisfies the minimum, no extension attempt is logged. TPX-001 and TPX-005 verify this directly.
 - **Observability:** `HorizonManager.extension_attempt_log` records every attempt with `reason_code`. All successful extensions carry `reason_code="REASON_TIME_THRESHOLD"`, confirming clock-driven trigger. `extension_forbidden_trigger_count` tracks any attempted consumer-driven triggers.
 - **Test files:** `test_inv_horizon_proactive_extend.py` (TPX-001..005) and `test_inv_horizon_execution_min.py` (THEM-001..004).

@@ -30,8 +30,8 @@ MUST be logged as a planning fault with fields: `block_id`, `schedule_item_id`, 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/playout/test_playlist_event_timeline.py::test_event_matches_schedule_item` — PE start/end equal SI start/end.
-- `pkg/core/tests/contracts/playout/test_playlist_event_timeline.py::test_event_duration_equals_slot` — PE duration equals SI slot_duration_sec * 1000.
+- `server/tests/contracts/playout/test_playlist_event_timeline.py::test_event_matches_schedule_item` — PE start/end equal SI start/end.
+- `server/tests/contracts/playout/test_playlist_event_timeline.py::test_event_duration_equals_slot` — PE duration equals SI slot_duration_sec * 1000.
 
 ## Enforcement Evidence
 

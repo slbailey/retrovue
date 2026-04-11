@@ -37,12 +37,12 @@ Invalid scenario: Tuesday schedules new content starting at 06:00 while the Mond
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_constitution.py::TestInvScheduledaySeamNoOverlap001`
+- `server/tests/contracts/test_scheduling_constitution.py::TestInvScheduledaySeamNoOverlap001`
 
 ## Enforcement Evidence
 
-- `pkg/core/src/retrovue/runtime/schedule_manager_service.py` — `validate_scheduleday_seam()` computes preceding day's last slot absolute end, compares against new day's first slot start, raises `ValueError` with `INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001-VIOLATED` tag if overlap detected
-- `pkg/core/src/retrovue/runtime/schedule_manager_service.py` — `InMemoryResolvedStore.store()` calls `validate_scheduleday_seam()` inside lock when `programming_day_start_hour` is configured
-- `pkg/core/src/retrovue/runtime/schedule_manager_service.py` — `InMemoryResolvedStore.force_replace()` calls `validate_scheduleday_seam()` inside lock when `programming_day_start_hour` is configured
-- `pkg/core/src/retrovue/runtime/schedule_manager_service.py` — `_compute_effective_start()` computes carry-in adjusted start for contiguity validation, ensuring `validate_scheduleday_contiguity()` accepts days with carry-in from the preceding day
+- `server/src/retrovue/runtime/schedule_manager_service.py` — `validate_scheduleday_seam()` computes preceding day's last slot absolute end, compares against new day's first slot start, raises `ValueError` with `INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001-VIOLATED` tag if overlap detected
+- `server/src/retrovue/runtime/schedule_manager_service.py` — `InMemoryResolvedStore.store()` calls `validate_scheduleday_seam()` inside lock when `programming_day_start_hour` is configured
+- `server/src/retrovue/runtime/schedule_manager_service.py` — `InMemoryResolvedStore.force_replace()` calls `validate_scheduleday_seam()` inside lock when `programming_day_start_hour` is configured
+- `server/src/retrovue/runtime/schedule_manager_service.py` — `_compute_effective_start()` computes carry-in adjusted start for contiguity validation, ensuring `validate_scheduleday_contiguity()` accepts days with carry-in from the preceding day
 - Error tag: `INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001-VIOLATED`

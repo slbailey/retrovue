@@ -25,7 +25,7 @@ Missing `#EXT-X-DISCONTINUITY` when PCR jumps beyond detection threshold; spurio
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_discontinuity_marker.py`
+- `server/tests/contracts/runtime/test_inv_hls_discontinuity_marker.py`
 
 ## Enforcement Evidence
 

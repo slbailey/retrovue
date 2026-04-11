@@ -24,7 +24,7 @@ Any import of the above classes from either the new dedicated module or the orig
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_playout_module_extraction.py`
+- `server/tests/contracts/runtime/test_inv_playout_module_extraction.py`
 
 ## Enforcement Evidence
 TODO

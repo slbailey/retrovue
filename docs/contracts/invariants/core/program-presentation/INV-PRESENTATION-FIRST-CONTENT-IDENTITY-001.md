@@ -30,7 +30,7 @@ Assemble a program with 2 presentation segments and 1 content segment. Filter se
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_program_presentation.py`
+- `server/tests/contracts/test_program_presentation.py`
 
 ## Enforcement Evidence
 

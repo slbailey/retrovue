@@ -26,7 +26,7 @@ Set up two consecutive missing broadcast days. Compile them. Verify both days re
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/integration/test_integration_scheduling_authority.py`
+- `server/tests/contracts/integration/test_integration_scheduling_authority.py`
 
 ## Enforcement Evidence
 

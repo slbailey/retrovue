@@ -22,7 +22,7 @@ PlaylistBuilderDaemon owns the playlog plan write path. `_extend_to_target()` is
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_blockfill_subprocess_isolation.py`
+- `server/tests/contracts/runtime/test_inv_blockfill_subprocess_isolation.py`
 
 ## Enforcement Evidence
 

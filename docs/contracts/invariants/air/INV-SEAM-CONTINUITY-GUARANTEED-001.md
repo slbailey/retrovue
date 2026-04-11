@@ -25,7 +25,7 @@ Seam frame reached with no prepared next segment; black or corrupted frames at s
 
 ## Required Tests
 
-- `pkg/air/tests/contracts/BlockPlan/SeamContinuityTests.cpp`
+- `runtime/tests/contracts/BlockPlan/SeamContinuityTests.cpp`
 
 ## Enforcement Evidence
 

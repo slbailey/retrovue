@@ -37,7 +37,7 @@ Compile a schedule with all four structural tiers configured. Inspect `compiled_
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_block_assembly_tiers.py`
+- `server/tests/contracts/test_block_assembly_tiers.py`
 
 ## Enforcement Evidence
 

@@ -26,7 +26,7 @@ Session touched on failed response; session not touched on successful response; 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_delivery_path.py`
+- `server/tests/contracts/runtime/test_inv_hls_delivery_path.py`
 
 ## Enforcement Evidence
 

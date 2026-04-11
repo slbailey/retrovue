@@ -36,7 +36,7 @@ Every validator result that gates an asset state transition MUST be persisted. T
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/ingest/test_inv_validator_result_persistence.py`
+- `server/tests/contracts/ingest/test_inv_validator_result_persistence.py`
 
 ## Enforcement Evidence
 

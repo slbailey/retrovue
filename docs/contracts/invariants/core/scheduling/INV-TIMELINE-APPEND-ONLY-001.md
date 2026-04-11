@@ -26,7 +26,7 @@ Compile a timeline covering [T₀, T₁). Trigger a subsequent compilation (hori
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_timeline_authority.py`
+- `server/tests/contracts/test_inv_timeline_authority.py`
 
 ## Enforcement Evidence
 
