@@ -193,6 +193,32 @@ def add_tags(
 
 
 # ---------------------------------------------------------------------------
+# DELETE /api/console/assets/{asset_uuid}/tags/{tag}
+# ---------------------------------------------------------------------------
+
+@router.delete("/assets/{asset_uuid}/tags/{tag}")
+def remove_tag(
+    asset_uuid: str,
+    tag: str,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Remove a single tag from an asset. Idempotent — missing tag is not an error."""
+    asset = _resolve_asset(db, asset_uuid)
+
+    existing = (
+        db.query(AssetTag)
+        .filter(AssetTag.asset_uuid == asset.uuid, AssetTag.tag == tag)
+        .first()
+    )
+    if existing:
+        db.delete(existing)
+        db.flush()
+
+    tags = _get_asset_tags(db, asset.uuid)
+    return {"asset_uuid": str(asset.uuid), "tags": tags}
+
+
+# ---------------------------------------------------------------------------
 # GET /api/console/tags
 # ---------------------------------------------------------------------------
 

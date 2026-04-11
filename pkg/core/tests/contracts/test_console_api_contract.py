@@ -1,4 +1,4 @@
-"""Contract tests for Console REST API (RETA-195).
+"""Contract tests for Console REST API (RETA-195, RETA-204).
 
 Verifies that the Console asset tagging endpoints return correct response
 shapes and enforce domain rules. The API routes are thin wrappers — all
@@ -10,6 +10,7 @@ Covers:
   - GET  /api/console/assets — list assets with tags
   - PATCH /api/console/assets/{id} — update asset metadata
   - POST /api/console/assets/{id}/tags — add tags to asset
+  - DELETE /api/console/assets/{id}/tags/{tag} — remove tag from asset
   - GET  /api/console/tags — list all distinct tags
   - 404 for unknown asset UUIDs
   - Tags are normalized (INV-ASSET-TAG-PERSISTENCE-001)
@@ -237,6 +238,45 @@ class TestAddTags:
         resp = client.post(
             f"/api/console/assets/{sample_asset.uuid}/tags",
             json={"tags": []},
+        )
+        assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/console/assets/{id}/tags/{tag}
+# ---------------------------------------------------------------------------
+
+class TestRemoveTag:
+    """DELETE /api/console/assets/{id}/tags/{tag}"""
+
+    def test_unknown_asset_returns_404(self, client):
+        """Non-existent UUID returns 404."""
+        fake_id = str(uuid_mod.uuid4())
+        resp = client.delete(f"/api/console/assets/{fake_id}/tags/tag.retro")
+        assert resp.status_code == 404
+
+    def test_remove_existing_tag(self, client, sample_asset, db):
+        """Removing an existing tag deletes it and returns updated list."""
+        db.add(AssetTag(
+            asset_uuid=sample_asset.uuid, tag="tag.retro", source="operator"
+        ))
+        db.add(AssetTag(
+            asset_uuid=sample_asset.uuid, tag="tag.classic", source="operator"
+        ))
+        db.flush()
+
+        resp = client.delete(
+            f"/api/console/assets/{sample_asset.uuid}/tags/tag.retro"
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "tag.retro" not in body["tags"]
+        assert "tag.classic" in body["tags"]
+
+    def test_remove_nonexistent_tag_is_noop(self, client, sample_asset):
+        """Removing a tag that doesn't exist returns 200 (idempotent)."""
+        resp = client.delete(
+            f"/api/console/assets/{sample_asset.uuid}/tags/tag.nonexistent"
         )
         assert resp.status_code == 200
 
