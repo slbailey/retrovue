@@ -8,12 +8,36 @@ import {
   type SelectionChangedEvent,
   type ICellRendererParams,
 } from 'ag-grid-community';
-import { fetchAssets, type Asset } from './api';
+import { fetchAssetsPage, type Asset } from './api';
 import { useConsoleStore } from './store';
 import { TagChips } from './TagChips';
 import { TagEditorBar } from './TagEditorBar';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
+
+const PAGE_SIZE = 200;
+
+/**
+ * Fetch all asset pages sequentially. Server-driven pagination ensures
+ * we never hard-cap the dataset. Fetches PAGE_SIZE at a time until all
+ * assets are loaded.
+ */
+async function fetchAllAssets(): Promise<Asset[]> {
+  const all: Asset[] = [];
+  let page = 1;
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const result = await fetchAssetsPage(page, PAGE_SIZE);
+    all.push(...result.assets);
+    if (all.length >= result.total || result.assets.length < PAGE_SIZE) {
+      break;
+    }
+    page++;
+  }
+
+  return all;
+}
 
 function TagCellRenderer(params: ICellRendererParams<Asset>) {
   return <TagChips tags={params.value ?? []} />;
@@ -31,8 +55,8 @@ export function AssetsPage() {
 
   const { data: assets, isLoading, error } = useQuery({
     queryKey: ['assets'],
-    queryFn: fetchAssets,
-    refetchInterval: 10_000,
+    queryFn: fetchAllAssets,
+    refetchInterval: 30_000,
   });
 
   const filteredAssets = useMemo(() => {
@@ -105,15 +129,20 @@ export function AssetsPage() {
     );
   }
 
+  const totalLoaded = assets?.length ?? 0;
+  const displayCount = filteredAssets.length;
+
   return (
     <div className="flex h-full flex-col gap-3 p-5">
       {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold text-gray-100">Assets</h1>
         <span className="text-sm text-gray-500">
-          {assets
-            ? `${filteredAssets.length} asset${filteredAssets.length !== 1 ? 's' : ''}`
-            : ''}
+          {isLoading
+            ? 'Loading...'
+            : tagFilter
+              ? `${displayCount} of ${totalLoaded} assets`
+              : `${totalLoaded} assets`}
         </span>
       </div>
 
@@ -141,7 +170,7 @@ export function AssetsPage() {
       </div>
 
       {/* Grid */}
-      <div className="ag-theme-alpine-dark flex-1" style={{ minHeight: 400 }}>
+      <div className="ag-theme-alpine-dark flex-1" style={{ minHeight: 500 }}>
         <AgGridReact<Asset>
           ref={gridRef}
           rowData={filteredAssets}
@@ -150,7 +179,7 @@ export function AssetsPage() {
           rowSelection="multiple"
           onSelectionChanged={onSelectionChanged}
           loading={isLoading}
-          domLayout="autoHeight"
+          domLayout="normal"
           rowHeight={42}
           headerHeight={40}
         />

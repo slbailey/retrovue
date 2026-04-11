@@ -9,9 +9,12 @@ export interface Asset {
   tags: string[];
 }
 
-interface AssetsResponse {
+export interface AssetsPage {
   assets: Asset[];
   count: number;
+  total: number;
+  page: number;
+  page_size: number;
 }
 
 interface TagsResponse {
@@ -21,11 +24,10 @@ interface TagsResponse {
 
 const BASE = '/api/console';
 
-export async function fetchAssets(): Promise<Asset[]> {
-  const res = await fetch(`${BASE}/assets`);
+export async function fetchAssetsPage(page: number, pageSize: number): Promise<AssetsPage> {
+  const res = await fetch(`${BASE}/assets?page=${page}&page_size=${pageSize}`);
   if (!res.ok) throw new Error(`Failed to fetch assets: ${res.status}`);
-  const data: AssetsResponse = await res.json();
-  return data.assets;
+  return res.json();
 }
 
 export async function fetchAllTags(): Promise<string[]> {

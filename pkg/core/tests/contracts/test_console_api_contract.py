@@ -137,6 +137,51 @@ class TestListAssets:
         body = resp.json()
         assert body["count"] == len(body["assets"])
 
+    def test_pagination_returns_total_and_page_fields(self, client, sample_asset):
+        """Paginated response includes total, page, page_size fields."""
+        resp = client.get("/api/console/assets?page=1&page_size=50")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "total" in body
+        assert "page" in body
+        assert "page_size" in body
+        assert body["page"] == 1
+        assert body["page_size"] == 50
+        assert body["total"] >= 1
+
+    def test_pagination_offset(self, client, sample_asset, db):
+        """Page 2 returns different results than page 1 when page_size < total."""
+        # Create a second asset so we have >1
+        import uuid as _uuid
+        from datetime import datetime, timezone
+        asset2 = Asset(
+            uuid=_uuid.uuid4(),
+            container_id=sample_asset.container_id,
+            source_id=sample_asset.source_id,
+            canonical_key="test/console/asset2.mp4",
+            canonical_key_hash="def456",
+            uri="/media/test/console/asset2.mp4",
+            size=2048000,
+            state="ready",
+            approved_for_broadcast=True,
+            duration_ms=120000,
+            discovered_at=datetime.now(timezone.utc),
+        )
+        db.add(asset2)
+        db.flush()
+
+        resp1 = client.get("/api/console/assets?page=1&page_size=1")
+        resp2 = client.get("/api/console/assets?page=2&page_size=1")
+        assert resp1.status_code == 200
+        assert resp2.status_code == 200
+        body1 = resp1.json()
+        body2 = resp2.json()
+        assert len(body1["assets"]) == 1
+        assert len(body2["assets"]) == 1
+        assert body1["assets"][0]["uuid"] != body2["assets"][0]["uuid"]
+        assert body1["total"] == body2["total"]
+        assert body1["total"] >= 2
+
 
 # ---------------------------------------------------------------------------
 # PATCH /api/console/assets/{id}

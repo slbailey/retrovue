@@ -102,15 +102,21 @@ def _resolve_asset(db: Session, asset_uuid: str) -> Asset:
 
 @router.get("/assets")
 def list_assets(
-    limit: int = Query(100, ge=1, le=500),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=500),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """List assets with their tags for the Console UI."""
+    """List assets with their tags for the Console UI (paginated)."""
+    base_query = db.query(Asset).filter(Asset.is_deleted.is_(False))
+
+    total = base_query.count()
+
+    offset = (page - 1) * page_size
     assets = (
-        db.query(Asset)
-        .filter(Asset.is_deleted.is_(False))
+        base_query
         .order_by(Asset.updated_at.desc())
-        .limit(limit)
+        .offset(offset)
+        .limit(page_size)
         .all()
     )
 
@@ -130,7 +136,13 @@ def list_assets(
         _serialize_asset(a, sorted(tags_by_uuid.get(str(a.uuid), [])))
         for a in assets
     ]
-    return {"assets": result, "count": len(result)}
+    return {
+        "assets": result,
+        "count": len(result),
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
 
 
 # ---------------------------------------------------------------------------
