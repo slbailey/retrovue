@@ -77,7 +77,7 @@ playout_pb2, playout_pb2_grpc = _get_playout_stubs()
 # =============================================================================
 
 REPO_ROOT = Path("/opt/retrovue")
-AIR_BINARY = REPO_ROOT / "pkg" / "air" / "build" / "retrovue_air"
+AIR_BINARY = REPO_ROOT / "runtime" / "build" / "retrovue_air"
 TEST_ASSET = REPO_ROOT / "assets" / "SampleA.mp4"
 TMP_DIR = Path("/tmp/retrovue/boundary_test")
 

@@ -54,7 +54,7 @@ logger = logging.getLogger(__name__)
 
 # Paths
 REPO_ROOT = Path(__file__).parent.parent.parent.parent.parent.parent
-AIR_BUILD = REPO_ROOT / "pkg" / "air" / "build"
+AIR_BUILD = REPO_ROOT / "runtime" / "build"
 AIR_BINARY = AIR_BUILD / "retrovue_air"
 STANDALONE_BINARY = AIR_BUILD / "retrovue_air_standalone"
 TEST_ASSETS = REPO_ROOT / "assets"
@@ -348,7 +348,7 @@ def run_grpc_execution(
     channel_id = "verify-test"
     channel_id_int = 99
     socket_path = TMP_DIR / "verify_test.sock"
-    log_path = REPO_ROOT / "pkg" / "air" / "logs" / "verify-test-air.log"
+    log_path = REPO_ROOT / "runtime" / "logs" / "verify-test-air.log"
 
     # Ensure log directory exists
     log_path.parent.mkdir(parents=True, exist_ok=True)

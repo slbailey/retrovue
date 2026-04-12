@@ -71,8 +71,8 @@ _DEFAULT_PROGRAM_FORMAT_JSON = '{"video":{"width":1920,"height":1080,"frame_rate
 def _find_retrovue_air() -> Path | None:
     repo_root = Path(__file__).resolve().parents[4]
     candidates = [
-        repo_root / "pkg" / "air" / "out" / "build" / "linux-debug" / "retrovue_air",
-        repo_root / "pkg" / "air" / "build" / "retrovue_air",
+        repo_root / "runtime" / "out" / "build" / "linux-debug" / "retrovue_air",
+        repo_root / "runtime" / "build" / "retrovue_air",
         Path(os.environ.get("RETROVUE_AIR_EXE", "")),
     ]
     for p in candidates:

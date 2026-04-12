@@ -33,7 +33,7 @@ from typing import Any
 ProcessHandle = subprocess.Popen[bytes]
 
 # Air stdout/stderr go here: runtime/logs/<channel_id>-air.log
-_AIR_LOG_DIR = Path(__file__).resolve().parents[5] / "pkg" / "air" / "logs"
+_AIR_LOG_DIR = Path(__file__).resolve().parents[5] / "runtime" / "logs"
 
 
 def _air_log_path(channel_id: str) -> Path:
@@ -65,8 +65,8 @@ def _find_air_binary() -> Path | None:
     repo_root = Path(__file__).resolve().parents[5]
     candidates = [
         Path(os.environ.get("RETROVUE_AIR_EXE", "")),
-        repo_root / "pkg" / "air" / "build" / "retrovue_air",
-        repo_root / "pkg" / "air" / "out" / "build" / "linux-debug" / "retrovue_air",
+        repo_root / "runtime" / "build" / "retrovue_air",
+        repo_root / "runtime" / "out" / "build" / "linux-debug" / "retrovue_air",
     ]
     for p in candidates:
         if p and p.is_file() and os.access(p, os.X_OK):
