@@ -64,6 +64,9 @@ def _get_playout_stubs() -> tuple[types.ModuleType, types.ModuleType]:
         Path(__file__).resolve().parents[3] / "core" / "proto" / "retrovue",
         Path(__file__).resolve().parents[4] / "core" / "proto" / "retrovue",
         Path("/opt/retrovue/server/core/proto/retrovue"),
+        # Legacy location — proto stubs before the restructure/reta-209 move
+        Path(__file__).resolve().parents[4] / "legacy" / "core-proto" / "proto" / "retrovue",
+        Path("/opt/retrovue/legacy/core-proto/proto/retrovue"),
     ]
     _proto_dir = None
     for p in candidates:
