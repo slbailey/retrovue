@@ -30,10 +30,10 @@ Construct an asset stub with `duration_ms=1320000`. Create markers with `(start=
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_asset_invariants.py::TestInvAssetMarkerBounds001`
+- `server/tests/contracts/test_asset_invariants.py::TestInvAssetMarkerBounds001`
 
 ## Enforcement Evidence
 
-- `pkg/core/src/retrovue/domain/entities.py` — `validate_marker_bounds()` function
-- `pkg/core/src/retrovue/usecases/ingest_orchestrator.py` — calls `validate_marker_bounds()` during chapter marker creation
+- `server/src/retrovue/domain/entities.py` — `validate_marker_bounds()` function
+- `server/src/retrovue/usecases/ingest_orchestrator.py` — calls `validate_marker_bounds()` during chapter marker creation
 - Error tag: `INV-ASSET-MARKER-BOUNDS-001-VIOLATED`

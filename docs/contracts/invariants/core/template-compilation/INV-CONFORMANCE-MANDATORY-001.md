@@ -36,7 +36,7 @@ Construct a compiled block. Verify `sum(all_segment_durations)` equals `schedule
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_timeline_compilation_templates.py`
+- `server/tests/contracts/test_timeline_compilation_templates.py`
 
 ## Enforcement Evidence
 

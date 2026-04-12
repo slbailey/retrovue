@@ -4,7 +4,7 @@ One-off patch: remove all containers named "Test Collection" from the database.
 
 Run once to clean up rows created before the rename to "Test Container".
 Usage:
-    cd /opt/retrovue/pkg/core
+    cd /opt/retrovue/server
     source .venv/bin/activate
     python /opt/retrovue/scripts/remove_test_collection_containers.py [--dry-run]
 """
@@ -12,7 +12,7 @@ Usage:
 import sys
 from pathlib import Path
 
-# Allow importing retrovue from pkg/core/src
+# Allow importing retrovue from server/src
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _CORE_SRC = _REPO_ROOT / "pkg" / "core" / "src"
 if _CORE_SRC.exists() and str(_CORE_SRC) not in sys.path:
@@ -27,8 +27,8 @@ def main():
         from retrovue.domain.entities import Asset, Container, PathMapping, ReviewQueue, ScheduleItem
         from retrovue.infra.uow import session
     except ImportError as e:
-        print("ERROR: Could not import retrovue. Run from pkg/core with venv activated.", file=sys.stderr)
-        print("  cd /opt/retrovue/pkg/core && source .venv/bin/activate", file=sys.stderr)
+        print("ERROR: Could not import retrovue. Run from server with venv activated.", file=sys.stderr)
+        print("  cd /opt/retrovue/server && source .venv/bin/activate", file=sys.stderr)
         sys.exit(1)
 
     with session() as db:

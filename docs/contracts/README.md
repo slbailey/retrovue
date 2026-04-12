@@ -28,9 +28,9 @@ This directory is the **only canonical source of runtime guarantees** for playou
 - **contract** — Default in CI. All contract tests have this label; long-running tests are excluded by also being marked **soak**.
 - **soak** — Long-running tests (real media, long timeouts). Run nightly only; excluded from CI. Every soak test MUST have a **fast deterministic counterpart** that validates the same invariant(s) via simulated time (fake clock, tick/fence advancement, no wall-clock sleep).
 
-**Core (pytest):** Tests under `pkg/core/tests/contracts/` are auto-marked `contract`. Mark long-running tests with `@pytest.mark.soak`. CI runs: `pytest tests/contracts -m "contract and not soak"`.
+**Core (pytest):** Tests under `server/tests/contracts/` are auto-marked `contract`. Mark long-running tests with `@pytest.mark.soak`. CI runs: `pytest tests/contracts -m "contract and not soak"`.
 
-**AIR (ctest):** Tests have CTest label `contract`; soak tests have label `soak` only. CI runs: `ctest --test-dir pkg/air/build -L contract`. Soak tests (when built with `-DRETROVUE_SOAK_TESTS=1`) run nightly: `ctest -L soak`.
+**AIR (ctest):** Tests have CTest label `contract`; soak tests have label `soak` only. CI runs: `ctest --test-dir runtime/build -L contract`. Soak tests (when built with `-DRETROVUE_SOAK_TESTS=1`) run nightly: `ctest -L soak`.
 
 ## Rules of the road
 1) A contract is **outcomes, not procedures**.  
@@ -52,9 +52,9 @@ The following status labels appear in contracts and the ledger following the 202
 ### Key Changes from the 2025-07-14 Pass
 
 - **LAW-003** marked RETIRED — superseded by Phase 8 BlockPlan model (Phase8DecommissionContract).
-- **AIR-012, AIR-015** migrated from legacy → `pkg/air/docs/contracts/coordination/OutputBusAndOutputSinkContract.md` §11–12.
-- **AIR-016** migrated from legacy → `pkg/air/docs/contracts/coordination/OrchestrationLoopContract.md`.
-- **CORE-002, CORE-003** migrated from archive → `pkg/core/docs/contracts/resources/ChannelManagerContract.md`.
+- **AIR-012, AIR-015** migrated from legacy → `runtime/docs/contracts/coordination/OutputBusAndOutputSinkContract.md` §11–12.
+- **AIR-016** migrated from legacy → `runtime/docs/contracts/coordination/OrchestrationLoopContract.md`.
+- **CORE-002, CORE-003** migrated from archive → `server/docs/contracts/resources/ChannelManagerContract.md`.
 - **CANONICAL_RULE_LEDGER.md** created at canonical location `docs/contracts/`; root-level file is now a redirect stub.
 - **Test anchor backlog** created at `docs/contracts/audit/TEST_ANCHOR_BACKLOG.md`.
 

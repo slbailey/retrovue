@@ -1,7 +1,7 @@
 """
 Frame Selection Cadence Contract Tests
 
-Contract: pkg/air/docs/contracts/frame_selection_cadence.md
+Contract: runtime/docs/contracts/frame_selection_cadence.md
 
 These tests verify the observable correctness properties of frame cadence
 conversion when the source frame rate differs from the output frame rate.

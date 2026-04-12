@@ -5,7 +5,7 @@
 **Last revised:** 2026-03-02
 **Related documents:**
 - `docs/domains/ProgramTemplateAssembly.md` — template DSL and segment resolution
-- `pkg/core/src/retrovue/runtime/template_runtime.py` — canonical runtime structure definitions
+- `server/src/retrovue/runtime/template_runtime.py` — canonical runtime structure definitions
 - `docs/contracts/invariants/` — machine-checked invariant registry
 
 ---
@@ -368,7 +368,7 @@ This document does not define and the Scheduler does not own:
 
 The following test files are expected to exist and cover the behavioral contracts defined in this document. These files may not yet exist; their absence is a coverage gap.
 
-### `pkg/core/tests/contracts/runtime/test_inv_sched_index_atomicity.py`
+### `server/tests/contracts/runtime/test_inv_sched_index_atomicity.py`
 
 Verifies SCHED-INDEX-001: `TemplateReferenceIndex` is always consistent with `ScheduleRegistry` across all program schedule mutations.
 
@@ -379,7 +379,7 @@ Expected cases:
 - `BLOCKED` entries remain in the index after `ProgramDirector` sets `state == BLOCKED`.
 - Concurrent `build_schedule_horizon` and `rebuild_window` calls leave the index consistent.
 
-### `pkg/core/tests/contracts/runtime/test_inv_tier1_immutability.py`
+### `server/tests/contracts/runtime/test_inv_tier1_immutability.py`
 
 Verifies that committed `ScheduledEntry` field values are not mutated after commit except through an explicit rebuild that replaces the entry.
 
@@ -389,7 +389,7 @@ Expected cases:
 - `COMMITTED → BLOCKED` transition (simulated via `_mark_blocked`) changes only `state`, `blocked_reason_code`, `blocked_at_ms`, and `blocked_details`; all other fields are unchanged.
 - No field mutation path exists on `ScheduledEntry` other than the four `blocked_*` fields.
 
-### `pkg/core/tests/contracts/test_program_schedule_scheduler_contract.py`
+### `server/tests/contracts/test_program_schedule_scheduler_contract.py`
 
 Integration-level contract tests covering the full program schedule authority surface.
 

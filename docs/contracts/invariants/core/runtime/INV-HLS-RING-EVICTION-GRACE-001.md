@@ -24,7 +24,7 @@ Ring capacity <= manifest window size + 1; segment evicted before a client that 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_ring_integrity.py`
+- `server/tests/contracts/runtime/test_inv_hls_ring_integrity.py`
 
 ## Enforcement Evidence
 

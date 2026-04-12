@@ -35,7 +35,7 @@ Validator results conform to the canonical shape at construction time. A result 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/ingest/test_inv_validator_output_shape.py`
+- `server/tests/contracts/ingest/test_inv_validator_output_shape.py`
 
 ## Enforcement Evidence
 

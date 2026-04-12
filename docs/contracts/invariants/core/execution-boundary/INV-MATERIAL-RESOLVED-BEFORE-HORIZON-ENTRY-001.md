@@ -47,7 +47,7 @@ Using InMemoryAssetLibrary: register an asset as `state=enriching`. Attempt to b
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_constitution.py` (MATERIAL-RESOLVED-001, MATERIAL-RESOLVED-002)
+- `server/tests/contracts/test_scheduling_constitution.py` (MATERIAL-RESOLVED-001, MATERIAL-RESOLVED-002)
 
 ## Enforcement Evidence
 

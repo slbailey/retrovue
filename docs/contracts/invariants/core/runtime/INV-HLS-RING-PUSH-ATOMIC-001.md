@@ -25,7 +25,7 @@ Reader observes `len > capacity`; reader observes index gap during push; reader 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_ring_integrity.py`
+- `server/tests/contracts/runtime/test_inv_hls_ring_integrity.py`
 
 ## Enforcement Evidence
 

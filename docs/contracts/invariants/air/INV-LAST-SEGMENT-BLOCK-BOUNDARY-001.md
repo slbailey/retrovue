@@ -78,7 +78,7 @@ equals the planned seam — which is less than the fence.
 
 ## Required Tests
 
-- `pkg/air/tests/contracts/BlockPlan/LastSegmentBlockBoundaryContractTests.cpp`
+- `runtime/tests/contracts/BlockPlan/LastSegmentBlockBoundaryContractTests.cpp`
 
 ## Test
 

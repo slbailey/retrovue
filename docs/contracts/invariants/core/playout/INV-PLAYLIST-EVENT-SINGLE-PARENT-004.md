@@ -27,7 +27,7 @@ MUST be logged as a planning fault with fields: `block_id`, `schedule_item_id` (
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/playout/test_playlist_event_parent.py::test_playlist_event_has_schedule_item` — every PE has a non-null schedule_item_id.
+- `server/tests/contracts/playout/test_playlist_event_parent.py::test_playlist_event_has_schedule_item` — every PE has a non-null schedule_item_id.
 
 ## Enforcement Evidence
 

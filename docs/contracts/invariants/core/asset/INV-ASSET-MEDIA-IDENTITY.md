@@ -30,7 +30,7 @@ Given a ScheduleDay or ExecutionEntry, assert that every program slot references
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_asset_invariants.py::TestInvAssetMediaIdentity`
+- `server/tests/contracts/test_asset_invariants.py::TestInvAssetMediaIdentity`
 
 ## Enforcement Evidence
 

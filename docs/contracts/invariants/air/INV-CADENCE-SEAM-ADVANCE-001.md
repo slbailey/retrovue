@@ -34,7 +34,7 @@ A tick where `SEAM_TICK_EMISSION_AUDIT` logs `cadence_repeat=1` AND `SEAM_VSRC_G
 
 ## Required Tests
 
-- `pkg/air/tests/contracts/BlockPlan/CadenceSeamAdvanceContractTests.cpp`
+- `runtime/tests/contracts/BlockPlan/CadenceSeamAdvanceContractTests.cpp`
 
 ## Enforcement Evidence
 

@@ -30,9 +30,9 @@ Construct an asset stub with `state='new'` and `approved_for_broadcast=True`. As
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_asset_invariants.py::TestInvAssetApprovedImpliesReady001`
+- `server/tests/contracts/test_asset_invariants.py::TestInvAssetApprovedImpliesReady001`
 
 ## Enforcement Evidence
 
-- `pkg/core/src/retrovue/domain/entities.py` — CHECK constraint `chk_approved_implies_ready`: `(NOT approved_for_broadcast) OR (state = 'ready')`
+- `server/src/retrovue/domain/entities.py` — CHECK constraint `chk_approved_implies_ready`: `(NOT approved_for_broadcast) OR (state = 'ready')`
 - Error tag: `INV-ASSET-APPROVED-IMPLIES-READY-001-VIOLATED`

@@ -32,7 +32,7 @@ No fault. Warning only. The block compiles and the budget absorption cascade run
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_traffic_profiles_conformance.py`
+- `server/tests/contracts/test_traffic_profiles_conformance.py`
 
 ## Enforcement Evidence
 

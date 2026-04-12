@@ -18,7 +18,7 @@ Usage:
     python tools/preview_playlist.py --json tools/static_schedule.json
 
 Requires the Core venv (unless using --json):
-    source pkg/core/.venv/bin/activate
+    source server/.venv/bin/activate
 """
 from __future__ import annotations
 
@@ -421,7 +421,7 @@ def main() -> None:
     # -------------------------------------------------------------------
     # Dynamic playlist path — requires Core venv.
     # -------------------------------------------------------------------
-    # Ensure pkg/core/src is importable when run from repo root.
+    # Ensure server/src is importable when run from repo root.
     _CORE_SRC = Path(__file__).resolve().parent.parent / "pkg" / "core" / "src"
     if str(_CORE_SRC) not in sys.path:
         sys.path.insert(0, str(_CORE_SRC))

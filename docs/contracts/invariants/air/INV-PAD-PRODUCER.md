@@ -15,8 +15,8 @@ Pad MUST be available and format-conforming. Pad MUST NOT be selected until at l
 Selecting pad before first real frame committed; pad output not conforming to session format.
 
 ## Required Tests
-- `pkg/air/tests/contracts/BlockPlan/PadProducerContractTests.cpp`
-- `pkg/air/tests/contracts/BlockPlan/PipelineManagerPadFenceAudioContractTests.cpp`
+- `runtime/tests/contracts/BlockPlan/PadProducerContractTests.cpp`
+- `runtime/tests/contracts/BlockPlan/PipelineManagerPadFenceAudioContractTests.cpp`
 
 ## Enforcement Evidence
 

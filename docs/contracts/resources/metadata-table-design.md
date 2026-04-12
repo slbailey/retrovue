@@ -48,5 +48,5 @@ Despite the original task description, AssetSidecar does not serve as a merged v
 ## Reference
 
 - `docs/contracts/metadata_consolidation.md` -- Column extraction contract for AssetEditorial (explicitly scopes out the other four tables).
-- `pkg/core/src/retrovue/domain/entities.py` lines 436-533 -- Table definitions.
-- `pkg/core/src/retrovue/infra/metadata/persistence.py` -- Unified write path (`persist_asset_metadata`).
+- `server/src/retrovue/domain/entities.py` lines 436-533 -- Table definitions.
+- `server/src/retrovue/infra/metadata/persistence.py` -- Unified write path (`persist_asset_metadata`).

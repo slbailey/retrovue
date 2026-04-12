@@ -133,7 +133,7 @@ Insert rows into `program_log_days`, `traffic_play_log`, and `playlist_events` f
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_channel_purge.py`
+- `server/tests/contracts/test_channel_purge.py`
 
 ---
 

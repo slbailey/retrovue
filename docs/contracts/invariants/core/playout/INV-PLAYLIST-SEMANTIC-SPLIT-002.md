@@ -43,6 +43,6 @@ Generate PlaylistEvents from a ScheduleItem that spans multiple grid blocks with
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/playout/test_playlist_semantic_splitting.py::test_grid_boundaries_do_not_split_content`
-- `pkg/core/tests/contracts/playout/test_playlist_semantic_splitting.py::test_ad_break_creates_split`
-- `pkg/core/tests/contracts/playout/test_playlist_semantic_splitting.py::test_content_transition_creates_split`
+- `server/tests/contracts/playout/test_playlist_semantic_splitting.py::test_grid_boundaries_do_not_split_content`
+- `server/tests/contracts/playout/test_playlist_semantic_splitting.py::test_ad_break_creates_split`
+- `server/tests/contracts/playout/test_playlist_semantic_splitting.py::test_content_transition_creates_split`

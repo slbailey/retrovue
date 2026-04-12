@@ -46,7 +46,7 @@ Using FakeAdvancingClock and an ExecutionWindowStore pre-populated with a finite
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_constitution.py` (EXEC-BOUNDARY-001, EXEC-BOUNDARY-002)
+- `server/tests/contracts/test_scheduling_constitution.py` (EXEC-BOUNDARY-001, EXEC-BOUNDARY-002)
 
 ## Enforcement Evidence
 

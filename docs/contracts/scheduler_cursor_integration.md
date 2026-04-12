@@ -206,7 +206,7 @@ Derived From: `LAW-IMMUTABILITY`, `LAW-DERIVATION`
 All tests live under:
 
 ```
-pkg/core/tests/contracts/test_scheduler_cursor_integration.py
+server/tests/contracts/test_scheduler_cursor_integration.py
 ```
 
 | Test | Invariant | Scenario |

@@ -55,6 +55,6 @@ With queue_depth >= 3, any PADDED_GAP must be attributable solely to ScheduleSer
 ## 5. Relationship to Other Contracts
 
 - **Program Block Authority Contract (OUT-BLOCK-005):** AIR's behavior (PADDED_GAP when no next block) is unchanged. This contract restricts when that outcome is acceptable at the system level.
-- **INV-FENCE-FALLBACK-SYNC-001:** AIR-side enforcement that makes this system-level promise hold.  When preload misses the fence and queue is non-empty, PipelineManager unconditionally pops and sync-loads the block.  See `pkg/air/docs/contracts/INV-FENCE-FALLBACK-SYNC-001.md`.
+- **INV-FENCE-FALLBACK-SYNC-001:** AIR-side enforcement that makes this system-level promise hold.  When preload misses the fence and queue is non-empty, PipelineManager unconditionally pops and sync-loads the block.  See `runtime/docs/contracts/INV-FENCE-FALLBACK-SYNC-001.md`.
 - **RunwayReadinessContract:** Addresses duration-based runway (PRELOAD_BUDGET, READY). INV-RUNWAY-MIN-001 is a simpler, queue-depth-based promise: sufficient depth implies no starvation-induced PADDED_GAP except true planning gap.
 - **INV-FEED-QUEUE-DISCIPLINE:** Governs credit and sequencing; INV-RUNWAY-MIN-001 is the operational promise that results when that discipline is applied with queue_depth >= 3.

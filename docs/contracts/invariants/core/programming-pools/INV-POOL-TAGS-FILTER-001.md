@@ -31,7 +31,7 @@ Construct a catalog with assets carrying known tag sets. Evaluate a pool with a 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_pool_tags_filter.py`
+- `server/tests/contracts/test_pool_tags_filter.py`
 
 ## Enforcement Evidence
 

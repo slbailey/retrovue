@@ -34,9 +34,9 @@ In all three cases, feed ordering MUST be preserved. No miss or late feed may ca
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_blockplan_feeding_contracts.py` — INV-FEED-EXACTLY-ONCE, INV-FEED-NO-MID-BLOCK, INV-FEED-TWO-BLOCK-WINDOW
-- `pkg/core/tests/contracts/runtime/test_inv_exec_no_structure.py::TestMissingScheduleDataPolicy` — horizon miss returns None, no crash
-- `pkg/core/tests/contracts/runtime/test_feed_ahead_clock_authority.py` — miss/due decisions driven by injected clock only
+- `server/tests/contracts/test_blockplan_feeding_contracts.py` — INV-FEED-EXACTLY-ONCE, INV-FEED-NO-MID-BLOCK, INV-FEED-TWO-BLOCK-WINDOW
+- `server/tests/contracts/runtime/test_inv_exec_no_structure.py::TestMissingScheduleDataPolicy` — horizon miss returns None, no crash
+- `server/tests/contracts/runtime/test_feed_ahead_clock_authority.py` — miss/due decisions driven by injected clock only
 
 ## Enforcement Evidence
 

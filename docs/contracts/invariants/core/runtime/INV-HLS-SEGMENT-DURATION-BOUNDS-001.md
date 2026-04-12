@@ -25,7 +25,7 @@ Segment duration outside tolerance band without warning; zero-duration segment e
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_segment_timeline.py`
+- `server/tests/contracts/runtime/test_inv_hls_segment_timeline.py`
 
 ## Enforcement Evidence
 

@@ -25,7 +25,7 @@ Post-swap eligibility re-evaluation causes the engine to defer, revert, or stall
 
 ## Required Tests
 
-- `pkg/air/tests/contracts/BlockPlan/SeamContinuityGuaranteedTests.cpp`
+- `runtime/tests/contracts/BlockPlan/SeamContinuityGuaranteedTests.cpp`
 
 ## Enforcement Evidence
 

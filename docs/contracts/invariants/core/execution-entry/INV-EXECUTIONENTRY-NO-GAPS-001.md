@@ -33,9 +33,9 @@ Construct an ExecutionEntry sequence with a deliberate 10-minute gap at a known 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_constitution.py::TestInvExecutionentryNoGaps001`
-- `pkg/core/tests/contracts/scheduling/test_inv_execution_entry_no_gaps_runtime.py` (PLAYLOG-006: gap detected, PLAYLOG-007: upstream traceability)
+- `server/tests/contracts/test_scheduling_constitution.py::TestInvExecutionentryNoGaps001`
+- `server/tests/contracts/scheduling/test_inv_execution_entry_no_gaps_runtime.py` (PLAYLOG-006: gap detected, PLAYLOG-007: upstream traceability)
 
 ## Enforcement Evidence
 
-`validate_execution_entry_contiguity()` in `pkg/core/src/retrovue/runtime/execution_window_store.py` — standalone validation function. Sorts entries by `start_utc_ms`, checks each consecutive pair for `entries[i].end_utc_ms == entries[i+1].start_utc_ms`. Raises `ValueError` with tag `INV-EXECUTIONENTRY-NO-GAPS-001-VIOLATED` on gap detection, including gap boundaries and channel ID.
+`validate_execution_entry_contiguity()` in `server/src/retrovue/runtime/execution_window_store.py` — standalone validation function. Sorts entries by `start_utc_ms`, checks each consecutive pair for `entries[i].end_utc_ms == entries[i+1].start_utc_ms`. Raises `ValueError` with tag `INV-EXECUTIONENTRY-NO-GAPS-001-VIOLATED` on gap detection, including gap boundaries and channel ID.

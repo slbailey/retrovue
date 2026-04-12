@@ -180,7 +180,7 @@ All DSL contracts, channel YAML files, and DSL-facing interfaces MUST use the vo
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_dsl_vocabulary.py`
+- `server/tests/contracts/test_dsl_vocabulary.py`
 
 | Test | Invariant | Scenario |
 |---|---|---|

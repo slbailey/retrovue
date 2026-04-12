@@ -30,7 +30,7 @@ Runtime fault — playout stall or unauthorized content substitution.
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_cun_synthesis.py`
+- `server/tests/contracts/test_cun_synthesis.py`
 
 ## Enforcement Evidence
 

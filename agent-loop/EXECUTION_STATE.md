@@ -48,27 +48,27 @@ authority documents. No authoritative state/contract/invariant documents were re
 | Path | Classification | Rationale |
 |------|---------------|-----------|
 | /opt/retrovue/diagnostics/20260220_022609/ | REMOVE | Raw system capture from Feb 2026 debugging session; stale operational data |
-| /opt/retrovue/pkg/air/diagnostics/ full tree | REMOVE | Raw system snapshots from overnight Feb 2026 monitoring session; ~700+ files |
+| /opt/retrovue/runtime/diagnostics/ full tree | REMOVE | Raw system snapshots from overnight Feb 2026 monitoring session; ~700+ files |
 
-### pkg/air
-
-| File | Classification | Rationale |
-|------|---------------|-----------|
-| pkg/air/docs/contracts/semantics/TEARDOWN_EVIDENCE_cheers-24-7.md | REMOVE | One-session diagnostic evidence capture; not a reusable contract |
-| pkg/air/docs/DELETED_FILES_INVESTIGATION.md | KEEP | Post-mortem investigation; closure status unclear; conservative keep |
-| pkg/air/docs/ProducerBus-Retirement-Checklist.md | KEEP | Status still pre-retirement with legacy sessions still active |
-| pkg/air/docs/contracts/PROPOSED-INVARIANTS-FROM-HARVEST.md | KEEP | Status Draft Pending Review; still active work item |
-| pkg/air/docs/investigations/SEAM_CONTINUITY_ENGINE_DEADLOCK.md | KEEP | Status Open Pre-existing tracked issue |
-| pkg/air/docs/RATIONAL_FPS_LOSSY_BOUNDARIES.md | KEEP | Authoritative timing reference document |
-| pkg/air/docs/ROADMAP_AUDIO_VIDEO_DECOUPLING.md | KEEP | Active roadmap document |
-| pkg/air/docs/design/BROADCAST_AUDIO_PROCESSING_IMPL_PLAN.md | KEEP | Active implementation plan |
-
-### pkg/core
+### runtime
 
 | File | Classification | Rationale |
 |------|---------------|-----------|
-| pkg/core/CONTRACT_FULFILLMENT_ANALYSIS.md | KEEP | Dec 2024 analysis tracking contract fulfillment progress |
-| pkg/core/src/retrovue/cli/commands/_ops/ContainerIngestImplementationPlan.md | KEEP | In production source path; ambiguous if still active; conservative keep |
+| runtime/docs/contracts/semantics/TEARDOWN_EVIDENCE_cheers-24-7.md | REMOVE | One-session diagnostic evidence capture; not a reusable contract |
+| runtime/docs/DELETED_FILES_INVESTIGATION.md | KEEP | Post-mortem investigation; closure status unclear; conservative keep |
+| runtime/docs/ProducerBus-Retirement-Checklist.md | KEEP | Status still pre-retirement with legacy sessions still active |
+| runtime/docs/contracts/PROPOSED-INVARIANTS-FROM-HARVEST.md | KEEP | Status Draft Pending Review; still active work item |
+| runtime/docs/investigations/SEAM_CONTINUITY_ENGINE_DEADLOCK.md | KEEP | Status Open Pre-existing tracked issue |
+| runtime/docs/RATIONAL_FPS_LOSSY_BOUNDARIES.md | KEEP | Authoritative timing reference document |
+| runtime/docs/ROADMAP_AUDIO_VIDEO_DECOUPLING.md | KEEP | Active roadmap document |
+| runtime/docs/design/BROADCAST_AUDIO_PROCESSING_IMPL_PLAN.md | KEEP | Active implementation plan |
+
+### server
+
+| File | Classification | Rationale |
+|------|---------------|-----------|
+| server/CONTRACT_FULFILLMENT_ANALYSIS.md | KEEP | Dec 2024 analysis tracking contract fulfillment progress |
+| server/src/retrovue/cli/commands/_ops/ContainerIngestImplementationPlan.md | KEEP | In production source path; ambiguous if still active; conservative keep |
 
 ### docs/analysis/
 
@@ -104,9 +104,9 @@ authority documents. No authoritative state/contract/invariant documents were re
 10. /opt/retrovue/LOGGING_DELTA_SPEC.md
 11. /opt/retrovue/INGEST_ORCHESTRATOR_REBUILD.md
 12. /opt/retrovue/retrovue-gap-analysis-report.md
-13. /opt/retrovue/pkg/air/docs/contracts/semantics/TEARDOWN_EVIDENCE_cheers-24-7.md
+13. /opt/retrovue/runtime/docs/contracts/semantics/TEARDOWN_EVIDENCE_cheers-24-7.md
 14. /opt/retrovue/diagnostics/ entire tree (9 raw diagnostic capture files from 2026-02-20)
-15. /opt/retrovue/pkg/air/diagnostics/ entire tree (172 events x 4 files each, approx 700 raw system snapshot files from 2026-02-20 overnight monitoring)
+15. /opt/retrovue/runtime/diagnostics/ entire tree (172 events x 4 files each, approx 700 raw system snapshot files from 2026-02-20 overnight monitoring)
 
 ---
 

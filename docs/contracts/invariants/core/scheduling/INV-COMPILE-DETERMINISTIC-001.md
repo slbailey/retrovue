@@ -26,7 +26,7 @@ Record the output of a compilation run. Reset state. Compile the same snapshot a
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_timeline_authority.py`
+- `server/tests/contracts/test_inv_timeline_authority.py`
 
 ## Enforcement Evidence
 

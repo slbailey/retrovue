@@ -36,11 +36,11 @@ Each persisted enricher result MUST include the version of the enricher that pro
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/ingest/test_inv_enricher_result_versioned.py`
+- `server/tests/contracts/ingest/test_inv_enricher_result_versioned.py`
 
 ## Enforcement Evidence
 
-- `EnricherRun.enricher_version` column: `pkg/core/src/retrovue/domain/entities.py`
-- Runtime wiring: `pkg/core/src/retrovue/catalog/processor_runtime.py` (version stored on every EnricherRun)
-- Stale version query: `pkg/core/src/retrovue/catalog/enrichment_progress.py` (get_stale_enricher_assets)
-- Migration: `pkg/core/alembic/versions/20260409_create_enricher_runs.py`
+- `EnricherRun.enricher_version` column: `server/src/retrovue/domain/entities.py`
+- Runtime wiring: `server/src/retrovue/catalog/processor_runtime.py` (version stored on every EnricherRun)
+- Stale version query: `server/src/retrovue/catalog/enrichment_progress.py` (get_stale_enricher_assets)
+- Migration: `server/alembic/versions/20260409_create_enricher_runs.py`

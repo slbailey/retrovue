@@ -62,7 +62,7 @@ use cases.
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_lifecycle_observability_session_manager.py`
+- `server/tests/contracts/runtime/test_inv_lifecycle_observability_session_manager.py`
   - V8a: `first_viewer` emits structured DEBUG
   - V8b: `last_viewer` emits structured DEBUG
   - V8c: `reap_expiration` emits structured DEBUG
@@ -81,7 +81,7 @@ use cases.
   - `first_segment` does not require `trigger_session_id`
   - All channel-scoped events include `event_scope=channel`
   - All session-scoped events include `event_scope=session`
-- `pkg/core/tests/contracts/runtime/test_channel_stream_metrics.py`
+- `server/tests/contracts/runtime/test_channel_stream_metrics.py`
   - Backpressure disconnect includes `queue_bytes_at_detach`
   - Write timeout includes `client_id`
   - CLIENT_CONNECTED includes `stream_state=existing|fresh`

@@ -31,7 +31,7 @@ Create a 30-minute grid block. Add a 5-minute presentation segment. Assert that 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_program_presentation.py`
+- `server/tests/contracts/test_program_presentation.py`
 
 ## Enforcement Evidence
 

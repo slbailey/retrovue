@@ -12,7 +12,7 @@ BACKUP_NAME="retrovue_${TIMESTAMP}"
 BACKUP_PATH="${BACKUP_DIR}/${BACKUP_NAME}"
 KEEP_DAYS=7
 
-# PostgreSQL connection (matches pkg/core settings)
+# PostgreSQL connection (matches server settings)
 PG_HOST="${PG_HOST:-192.168.1.50}"
 PG_PORT="${PG_PORT:-5432}"
 PG_DB="${PG_DB:-retrovue}"

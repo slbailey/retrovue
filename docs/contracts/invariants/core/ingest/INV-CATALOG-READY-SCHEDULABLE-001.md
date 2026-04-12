@@ -33,7 +33,7 @@ A `ready` asset that fails playout is a violation. Detection occurs when playout
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/ingest/test_inv_catalog_ready_schedulable.py`
+- `server/tests/contracts/ingest/test_inv_catalog_ready_schedulable.py`
 
 ## Enforcement Evidence
 

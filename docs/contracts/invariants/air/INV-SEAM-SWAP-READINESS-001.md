@@ -35,7 +35,7 @@ A segment swap that commits with `incoming_video_frames` below the buffer's `Tar
 
 ## Required Tests
 
-- `pkg/air/tests/contracts/BlockPlan/SegmentSwapReadinessContractTests.cpp`
+- `runtime/tests/contracts/BlockPlan/SegmentSwapReadinessContractTests.cpp`
 
 ## Enforcement Evidence
 

@@ -30,7 +30,7 @@ Planning fault. Policies from non-DSL sources violate `LAW-CONTENT-AUTHORITY` â€
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_policies.py`
+- `server/tests/contracts/test_scheduling_policies.py`
 
 ## Enforcement Evidence
 

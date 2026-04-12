@@ -37,7 +37,7 @@ Create a run with 5 episodes. Resolve day 6 (raw_index=5). Under `wrap`, assert 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_episode_progression.py`
+- `server/tests/contracts/test_episode_progression.py`
 
 ## Enforcement Evidence
 

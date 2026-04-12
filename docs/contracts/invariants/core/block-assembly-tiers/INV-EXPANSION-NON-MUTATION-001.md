@@ -44,7 +44,7 @@ Compile a block with known `compiled_segments` (Tier 1 presentation + Tier 2 obl
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_block_assembly_tiers.py`
+- `server/tests/contracts/test_block_assembly_tiers.py`
 
 ## Enforcement Evidence
 

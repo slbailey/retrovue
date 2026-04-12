@@ -196,7 +196,7 @@ Sequential cursor initialization is retired. Sequential episode selection is a p
 All tests live under:
 
 ```
-pkg/core/tests/contracts/test_progression_cursor.py
+server/tests/contracts/test_progression_cursor.py
 ```
 
 | Test | Invariant | Scenario |

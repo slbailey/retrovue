@@ -10,7 +10,7 @@ Core scheduling domain owns this invariant. LAW-CONTENT-AUTHORITY establishes DS
 
 ## Boundary / Constraint
 
-- No production module under `pkg/core/src/` MUST import `SchedulePlan`, `Zone` (scheduling entity), `Program` (scheduling entity), or `SchedulePlanLabel` from `domain.entities`.
+- No production module under `server/src/` MUST import `SchedulePlan`, `Zone` (scheduling entity), `Program` (scheduling entity), or `SchedulePlanLabel` from `domain.entities`.
 - No CLI command MUST reference plan CRUD or zone CRUD use cases.
 - No API route MUST expose Plan or Zone CRUD endpoints.
 - The database tables `schedule_plans`, `zones`, `programs`, `schedule_plan_labels` MUST NOT exist after migration.
@@ -27,7 +27,7 @@ LAW-CONTENT-AUTHORITY
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/scheduling/test_crud_island_retired_contract.py`
+- `server/tests/contracts/scheduling/test_crud_island_retired_contract.py`
 
 ## Enforcement Evidence
 

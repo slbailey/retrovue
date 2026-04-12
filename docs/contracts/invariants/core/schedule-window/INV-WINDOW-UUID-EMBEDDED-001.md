@@ -43,9 +43,9 @@ embedded in the JSON, NOT a column on `ProgramLogDay`.
 
 ## Enforcement
 
-Contract test: `pkg/core/tests/contracts/test_template_graft_contract.py`
+Contract test: `server/tests/contracts/test_template_graft_contract.py`
 
 ## Related
 
 - `docs/domains/ProgramScheduleAuthority_v1.0.md` §7 — window_uuid semantics
-- `pkg/core/src/retrovue/runtime/dsl_schedule_service.py` — serialization
+- `server/src/retrovue/runtime/dsl_schedule_service.py` — serialization

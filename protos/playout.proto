@@ -245,7 +245,7 @@ message DetachStreamResponse {
 // ==========================================================================
 
 // BlockPlan represents a single block of scheduled content.
-// Maps to the BlockPlan struct in pkg/air/include/retrovue/blockplan/BlockPlanTypes.hpp
+// Maps to the BlockPlan struct in runtime/include/retrovue/blockplan/BlockPlanTypes.hpp
 message BlockPlan {
   string block_id = 1;           // Unique identifier (e.g., "BLOCK-2025-01-15-14:30")
   int32 channel_id = 2;          // Channel this block belongs to

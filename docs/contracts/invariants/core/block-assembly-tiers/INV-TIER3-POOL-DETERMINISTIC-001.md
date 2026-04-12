@@ -30,7 +30,7 @@ Compile the same broadcast day twice with identical inputs. Assert every Tier 3 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_block_assembly_tiers.py`
+- `server/tests/contracts/test_block_assembly_tiers.py`
 
 ## Enforcement Evidence
 

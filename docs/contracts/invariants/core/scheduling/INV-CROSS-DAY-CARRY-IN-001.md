@@ -49,7 +49,7 @@ Construct a two-day scenario where day N's last program extends 30 minutes past 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/scheduling/test_inv_cross_day_carry_in.py`
+- `server/tests/contracts/scheduling/test_inv_cross_day_carry_in.py`
 
 ## Enforcement Evidence
 

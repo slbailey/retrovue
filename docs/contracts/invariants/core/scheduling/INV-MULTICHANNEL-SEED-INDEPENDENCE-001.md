@@ -30,8 +30,8 @@ Call `compilation_seed(channel_a, day)` and `compilation_seed(channel_b, day)` w
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/scheduling/test_vertical_slice_derivation_chain.py`
-- `pkg/core/tests/contracts/scheduling/test_multichannel_isolation.py`
+- `server/tests/contracts/scheduling/test_vertical_slice_derivation_chain.py`
+- `server/tests/contracts/scheduling/test_multichannel_isolation.py`
 
 ## Enforcement Evidence
 

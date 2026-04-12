@@ -34,7 +34,7 @@ Attempt to create a run with anchor on Saturday (weekday=5) and `placement_days=
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_episode_progression.py`
+- `server/tests/contracts/test_episode_progression.py`
 
 ## Enforcement Evidence
 

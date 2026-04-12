@@ -13,5 +13,5 @@ random sources, or wall-clock time not passed via `context`.
 
 ## Enforcement
 
-- **Contract tests:** `pkg/core/tests/contracts/test_scheduling_policies.py`
+- **Contract tests:** `server/tests/contracts/test_scheduling_policies.py`
 - **Canonical source:** `docs/contracts/invariants/core/scheduling-policy/INV-POLICY-IDEMPOTENT-001.md`

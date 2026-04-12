@@ -29,4 +29,4 @@ Structured log events: `watch_started`, `file_change_detected`, `reingest_trigge
 
 ## Source location
 
-`pkg/core/src/retrovue/workflows/source_watch.py`
+`server/src/retrovue/workflows/source_watch.py`

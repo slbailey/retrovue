@@ -31,11 +31,11 @@ Construct a plan with zones that leave a known gap (e.g., zones covering [00:00,
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_constitution.py::TestInvPlanFullCoverage001`
+- `server/tests/contracts/test_scheduling_constitution.py::TestInvPlanFullCoverage001`
 
 ## Enforcement Evidence
 
-- `pkg/core/src/retrovue/usecases/zone_coverage_check.py` — `check_coverage()`, `validate_zone_plan_integrity()`
-- `pkg/core/src/retrovue/usecases/zone_add.py` — called before `db.commit()`
-- `pkg/core/src/retrovue/usecases/zone_update.py` — called before `db.commit()`
+- `server/src/retrovue/usecases/zone_coverage_check.py` — `check_coverage()`, `validate_zone_plan_integrity()`
+- `server/src/retrovue/usecases/zone_add.py` — called before `db.commit()`
+- `server/src/retrovue/usecases/zone_update.py` — called before `db.commit()`
 - Error tag: `INV-PLAN-FULL-COVERAGE-001-VIOLATED`

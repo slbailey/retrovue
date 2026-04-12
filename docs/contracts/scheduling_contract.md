@@ -432,19 +432,19 @@ Every canonical invariant traces to one or more constitutional laws.
 
 | Invariant ID | Test location |
 |---|---|
-| INV-PLAN-FULL-COVERAGE-001 | `pkg/core/tests/contracts/test_scheduling_constitution.py` |
-| INV-PLAN-NO-ZONE-OVERLAP-001 | `pkg/core/tests/contracts/test_scheduling_constitution.py` |
-| INV-PLAN-GRID-ALIGNMENT-001 | `pkg/core/tests/contracts/test_scheduling_constitution.py` |
-| INV-PLAN-ELIGIBLE-ASSETS-ONLY-001 | `pkg/core/tests/contracts/test_inv_plan_eligible_assets_only.py` |
-| INV-SCHEDULEDAY-ONE-PER-DATE-001 | `pkg/core/tests/contracts/test_scheduling_constitution.py` |
-| INV-SCHEDULEDAY-IMMUTABLE-001 | `pkg/core/tests/contracts/test_scheduling_constitution.py` |
-| INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 | `pkg/core/tests/contracts/test_scheduling_constitution.py` |
-| INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 | `pkg/core/tests/contracts/test_scheduling_constitution.py` |
-| INV-SCHED-WINDOW-ITERATION-001 | `pkg/core/tests/contracts/test_inv_sched_window_iteration_001.py` |
-| INV-SCHEDULE-SEED-DETERMINISTIC-001 | `pkg/core/tests/contracts/runtime/test_inv_schedule_seed_deterministic.py` |
-| INV-SCHEDULE-SEED-DAY-VARIANCE-001 | `pkg/core/tests/contracts/runtime/test_inv_schedule_seed_day_variance.py` |
-| INV-P3-001 | `pkg/core/tests/contracts/test_schedule_manager_phase3_contract.py` |
-| INV-RESCHEDULE-FUTURE-GUARD-001 | `pkg/core/tests/contracts/scheduling/test_inv_reschedule_future_guard.py` |
+| INV-PLAN-FULL-COVERAGE-001 | `server/tests/contracts/test_scheduling_constitution.py` |
+| INV-PLAN-NO-ZONE-OVERLAP-001 | `server/tests/contracts/test_scheduling_constitution.py` |
+| INV-PLAN-GRID-ALIGNMENT-001 | `server/tests/contracts/test_scheduling_constitution.py` |
+| INV-PLAN-ELIGIBLE-ASSETS-ONLY-001 | `server/tests/contracts/test_inv_plan_eligible_assets_only.py` |
+| INV-SCHEDULEDAY-ONE-PER-DATE-001 | `server/tests/contracts/test_scheduling_constitution.py` |
+| INV-SCHEDULEDAY-IMMUTABLE-001 | `server/tests/contracts/test_scheduling_constitution.py` |
+| INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001 | `server/tests/contracts/test_scheduling_constitution.py` |
+| INV-SCHEDULEDAY-SEAM-NO-OVERLAP-001 | `server/tests/contracts/test_scheduling_constitution.py` |
+| INV-SCHED-WINDOW-ITERATION-001 | `server/tests/contracts/test_inv_sched_window_iteration_001.py` |
+| INV-SCHEDULE-SEED-DETERMINISTIC-001 | `server/tests/contracts/runtime/test_inv_schedule_seed_deterministic.py` |
+| INV-SCHEDULE-SEED-DAY-VARIANCE-001 | `server/tests/contracts/runtime/test_inv_schedule_seed_day_variance.py` |
+| INV-P3-001 | `server/tests/contracts/test_schedule_manager_phase3_contract.py` |
+| INV-RESCHEDULE-FUTURE-GUARD-001 | `server/tests/contracts/scheduling/test_inv_reschedule_future_guard.py` |
 
 ---
 

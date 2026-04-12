@@ -26,7 +26,7 @@ ChannelManager owns session storage and viewer count. All mutations (create, ref
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_viewer_count.py`
+- `server/tests/contracts/runtime/test_inv_hls_viewer_count.py`
 
 ## Enforcement Evidence
 

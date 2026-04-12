@@ -31,7 +31,7 @@ Build a `ResolvedScheduleDay` with contiguous slots covering the full broadcast 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_epg_invariants.py::TestInvEpgNoGap001`
+- `server/tests/contracts/test_epg_invariants.py::TestInvEpgNoGap001`
 
 ## Enforcement Evidence
 

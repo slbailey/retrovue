@@ -16,10 +16,10 @@ Output stall or TS cadence break due to content gap; overlapping frame authority
 `LAW-LIVENESS`
 
 ## Required Tests
-- `pkg/air/tests/contracts/BlockPlan/SharedInvContentDeficitFillContractTests.cpp` (`Compliant_ZeroContent_AllFrameFilledByPad`) — 100% deficit: all frames pad, `TAKE_PAD_ENTER` logged, `TAKE_PAD_EXIT` absent
-- `pkg/air/tests/contracts/BlockPlan/SharedInvContentDeficitFillContractTests.cpp` (`Compliant_ContentPlusDeficit_NoContinuityGap`) — content active: pad_frames=0, no `TAKE_PAD_ENTER` during content window
-- `pkg/air/tests/contracts/BlockPlan/SharedInvContentDeficitFillContractTests.cpp` (`Compliant_ContentEOFBeforeFence_OutputContinuous`) — mid-block EOF: hold-last bridges deficit, no `TAKE_PAD_ENTER`, pad_frames=0, total > content_frames
-- `pkg/air/tests/contracts/BlockPlan/SharedInvContentDeficitFillContractTests.cpp` (`SingleAuthority_PadContentTransitionsArePaired`) — PADDED_GAP: pad fills deficit, `TAKE_PAD_ENTER`/`EXIT` alternating, pad+content==total
+- `runtime/tests/contracts/BlockPlan/SharedInvContentDeficitFillContractTests.cpp` (`Compliant_ZeroContent_AllFrameFilledByPad`) — 100% deficit: all frames pad, `TAKE_PAD_ENTER` logged, `TAKE_PAD_EXIT` absent
+- `runtime/tests/contracts/BlockPlan/SharedInvContentDeficitFillContractTests.cpp` (`Compliant_ContentPlusDeficit_NoContinuityGap`) — content active: pad_frames=0, no `TAKE_PAD_ENTER` during content window
+- `runtime/tests/contracts/BlockPlan/SharedInvContentDeficitFillContractTests.cpp` (`Compliant_ContentEOFBeforeFence_OutputContinuous`) — mid-block EOF: hold-last bridges deficit, no `TAKE_PAD_ENTER`, pad_frames=0, total > content_frames
+- `runtime/tests/contracts/BlockPlan/SharedInvContentDeficitFillContractTests.cpp` (`SingleAuthority_PadContentTransitionsArePaired`) — PADDED_GAP: pad fills deficit, `TAKE_PAD_ENTER`/`EXIT` alternating, pad+content==total
 
 ## Enforcement Evidence
 TODO

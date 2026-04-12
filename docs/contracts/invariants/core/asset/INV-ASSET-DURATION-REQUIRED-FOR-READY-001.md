@@ -30,10 +30,10 @@ Simulate enrichment completion with `duration_ms=1320000` and assert promotion t
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_asset_invariants.py::TestInvAssetDurationRequiredForReady001`
+- `server/tests/contracts/test_asset_invariants.py::TestInvAssetDurationRequiredForReady001`
 
 ## Enforcement Evidence
 
-- `pkg/core/src/retrovue/usecases/asset_enrich.py` — `enrich_asset()` promotion gate (canonical enforcement point)
-- `pkg/core/src/retrovue/usecases/ingest_orchestrator.py` — promotion guard (legacy path, unchanged in Phase 1)
+- `server/src/retrovue/usecases/asset_enrich.py` — `enrich_asset()` promotion gate (canonical enforcement point)
+- `server/src/retrovue/usecases/ingest_orchestrator.py` — promotion guard (legacy path, unchanged in Phase 1)
 - Error tag: `INV-ASSET-DURATION-REQUIRED-FOR-READY-001-VIOLATED`

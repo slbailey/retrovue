@@ -1,10 +1,10 @@
 # RetroVue monorepo – build and environment
 
-- **Python:** Always activate `pkg/core/.venv` before running python/pytest/pip.
-  From repo root: `source pkg/core/.venv/bin/activate`.
-- **C++ (Air):** Build only in `pkg/air/build`. Use:
-  `cmake -S pkg/air -B pkg/air/build ...` and `cmake --build pkg/air/build ...`.
+- **Python:** Always activate `server/.venv` before running python/pytest/pip.
+  From repo root: `source server/.venv/bin/activate`.
+- **C++ (Air):** Build only in `runtime/build`. Use:
+  `cmake -S runtime -B runtime/build ...` and `cmake --build runtime/build ...`.
 - **Proto:** Single source is `protos/playout.proto`. Generate with `sh scripts/air/generate_proto.sh`.
-  Python stubs: `pkg/core/core/proto/retrovue/`.
+  Python stubs: `server/core/proto/retrovue/`.
 
 See CLAUDE.md for full build and test commands.

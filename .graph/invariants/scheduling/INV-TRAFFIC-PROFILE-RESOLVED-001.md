@@ -10,5 +10,5 @@ Every compiled block that contains break structures MUST have a resolved traffic
 
 ## Enforcement
 
-- **Contract tests:** `pkg/core/tests/contracts/test_traffic_profiles_conformance.py`
+- **Contract tests:** `server/tests/contracts/test_traffic_profiles_conformance.py`
 - **Canonical source:** `docs/contracts/traffic_profiles_conformance.md`

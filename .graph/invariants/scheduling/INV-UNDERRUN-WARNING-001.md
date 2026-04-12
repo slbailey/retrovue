@@ -10,5 +10,5 @@ When `content_duration < 0.5 * scheduled_duration`, the compiler MUST emit a str
 
 ## Enforcement
 
-- **Contract tests:** `pkg/core/tests/contracts/test_traffic_profiles_conformance.py`
+- **Contract tests:** `server/tests/contracts/test_traffic_profiles_conformance.py`
 - **Canonical source:** `docs/contracts/traffic_profiles_conformance.md`

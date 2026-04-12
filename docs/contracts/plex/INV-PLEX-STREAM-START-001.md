@@ -25,7 +25,7 @@ Adapter bypasses `stream_channel()`. Adapter spawns AIR or compiles schedules in
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/plex/test_plex_streaming.py` (TestPlexStreaming)
+- `server/tests/contracts/plex/test_plex_streaming.py` (TestPlexStreaming)
 
 ## Enforcement Evidence
 

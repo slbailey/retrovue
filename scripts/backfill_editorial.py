@@ -3,7 +3,7 @@
 Backfill content_editorial table in SQLite from PostgreSQL asset_editorial data.
 
 Usage:
-    cd /opt/retrovue/pkg/core
+    cd /opt/retrovue/server
     source .venv/bin/activate
     python /opt/retrovue/scripts/backfill_editorial.py
 """
@@ -12,7 +12,7 @@ import json
 import sqlite3
 import sys
 
-sys.path.insert(0, "/opt/retrovue/pkg/core/src")
+sys.path.insert(0, "/opt/retrovue/server/src")
 
 SQLITE_DB = "/opt/retrovue/data/retrovue.db"
 PLEX_SOURCE = "plex"

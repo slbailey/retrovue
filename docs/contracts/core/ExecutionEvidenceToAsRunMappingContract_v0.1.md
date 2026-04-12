@@ -10,7 +10,7 @@
 
 ## Authority
 
-**Core is the sole writer of `.asrun` and `.asrun.jsonl` artifacts. AIR MUST NOT produce any as-run artifact files, including `.air.asrun` variants. AIR emits execution evidence only; durability is provided by evidence spooling (see [AirExecutionEvidenceSpoolContract_v0.1](../../../pkg/air/docs/contracts/AirExecutionEvidenceSpoolContract_v0.1.md)).**
+**Core is the sole writer of `.asrun` and `.asrun.jsonl` artifacts. AIR MUST NOT produce any as-run artifact files, including `.air.asrun` variants. AIR emits execution evidence only; durability is provided by evidence spooling (see [AirExecutionEvidenceSpoolContract_v0.1](../../../runtime/docs/contracts/AirExecutionEvidenceSpoolContract_v0.1.md)).**
 
 ---
 

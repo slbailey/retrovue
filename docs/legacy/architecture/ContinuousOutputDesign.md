@@ -542,7 +542,7 @@ av_dict_set(&muxer_opts, "pat_period", "0.1", 0);  // 100ms
 #### TEST-OUTPUT-001: No Inter-Frame Gap > 40ms
 
 ```cpp
-// File: pkg/air/tests/contracts/BlockPlan/ContinuousOutputContractTests.cpp
+// File: runtime/tests/contracts/BlockPlan/ContinuousOutputContractTests.cpp
 
 TEST(ContinuousOutput, NoGapExceedsFrameDuration) {
     // Setup: Create test harness that captures TS packet timestamps
@@ -638,7 +638,7 @@ TEST(ContinuousOutput, FastTuneIn) {
 #### Step 1: Start Server
 
 ```bash
-source pkg/core/.venv/bin/activate
+source server/.venv/bin/activate
 python -m retrovue.runtime.verify_first_on_air --server
 ```
 
@@ -705,8 +705,8 @@ grep -E "(DTS|corrupt|discontinuity)" ffplay.log
 ### Phase 1: Instrumentation (Diagnose)
 
 **Files**:
-- `pkg/air/src/playout_service.cpp`
-- `pkg/air/src/blockplan/RealTimeExecution.cpp`
+- `runtime/src/playout_service.cpp`
+- `runtime/src/blockplan/RealTimeExecution.cpp`
 
 **Changes**:
 - Add timing metrics at all transition points
@@ -720,8 +720,8 @@ grep -E "(DTS|corrupt|discontinuity)" ffplay.log
 ### Phase 2: Preload Infrastructure (Reduce Gap)
 
 **New Files**:
-- `pkg/air/include/retrovue/blockplan/BlockSource.hpp`
-- `pkg/air/src/blockplan/BlockSource.cpp`
+- `runtime/include/retrovue/blockplan/BlockSource.hpp`
+- `runtime/src/blockplan/BlockSource.cpp`
 
 **Changes**:
 - Create `BlockSource` class with background preload
@@ -731,9 +731,9 @@ grep -E "(DTS|corrupt|discontinuity)" ffplay.log
 ### Phase 3: Continuous Output Loop (Guarantee R2)
 
 **New Files**:
-- `pkg/air/include/retrovue/blockplan/ContinuousOutputController.hpp`
-- `pkg/air/src/blockplan/ContinuousOutputController.cpp`
-- `pkg/air/include/retrovue/blockplan/OutputClock.hpp`
+- `runtime/include/retrovue/blockplan/ContinuousOutputController.hpp`
+- `runtime/src/blockplan/ContinuousOutputController.cpp`
+- `runtime/include/retrovue/blockplan/OutputClock.hpp`
 
 **Changes**:
 - Create `OutputClock` with fixed 33ms tick
@@ -744,7 +744,7 @@ grep -E "(DTS|corrupt|discontinuity)" ffplay.log
 ### Phase 4: Fast Tune-in (R1)
 
 **Files**:
-- `pkg/air/src/playout_sinks/mpegts/EncoderPipeline.cpp`
+- `runtime/src/playout_sinks/mpegts/EncoderPipeline.cpp`
 
 **Changes**:
 - Emit pad frames immediately on encoder open (no wait for content)
@@ -755,7 +755,7 @@ grep -E "(DTS|corrupt|discontinuity)" ffplay.log
 ### Phase 5: Contract Tests
 
 **New Files**:
-- `pkg/air/tests/contracts/BlockPlan/ContinuousOutputContractTests.cpp`
+- `runtime/tests/contracts/BlockPlan/ContinuousOutputContractTests.cpp`
 
 **Changes**:
 - Add TEST-OUTPUT-001, TEST-OUTPUT-002, TEST-TUNEIN-001

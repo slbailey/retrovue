@@ -253,7 +253,7 @@ When no bumpers and no station_id are configured, the entire budget is a single 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_break_structure.py`
+- `server/tests/contracts/test_break_structure.py`
 
 | Test | Invariant | Scenario |
 |------|-----------|----------|

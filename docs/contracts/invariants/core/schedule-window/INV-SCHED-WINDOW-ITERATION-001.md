@@ -63,11 +63,11 @@ No real-time waits required. All assertions operate on Tier 2 resolution output.
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_sched_window_iteration_001.py::TestCapacityGatingBleedFalse` — iteration withheld when minimum duration exceeds remaining capacity
-- `pkg/core/tests/contracts/test_inv_sched_window_iteration_001.py::TestBleedIterationPermitted` — bleed iteration proceeds; next window positioned at bleed end
-- `pkg/core/tests/contracts/test_inv_sched_window_iteration_001.py::TestTimelineContinuity` — no gap between iterations or between windows
-- `pkg/core/tests/contracts/test_inv_sched_window_iteration_001.py::TestIterationIndependence` — asset selection does not carry forward between iterations
-- `pkg/core/tests/contracts/test_inv_sched_window_iteration_001.py::TestOverrunRejectedOnNonBleedWindow` — resolved overrun under allow_bleed: false is a hard failure
+- `server/tests/contracts/test_inv_sched_window_iteration_001.py::TestCapacityGatingBleedFalse` — iteration withheld when minimum duration exceeds remaining capacity
+- `server/tests/contracts/test_inv_sched_window_iteration_001.py::TestBleedIterationPermitted` — bleed iteration proceeds; next window positioned at bleed end
+- `server/tests/contracts/test_inv_sched_window_iteration_001.py::TestTimelineContinuity` — no gap between iterations or between windows
+- `server/tests/contracts/test_inv_sched_window_iteration_001.py::TestIterationIndependence` — asset selection does not carry forward between iterations
+- `server/tests/contracts/test_inv_sched_window_iteration_001.py::TestOverrunRejectedOnNonBleedWindow` — resolved overrun under allow_bleed: false is a hard failure
 
 ## Enforcement Evidence
 

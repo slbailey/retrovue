@@ -31,7 +31,7 @@ Create a `DslScheduleService` with pre-populated `_blocks` and `_compiled_days` 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/epg/test_inv_epg_horizon_coverage_001.py`
+- `server/tests/contracts/epg/test_inv_epg_horizon_coverage_001.py`
 
 ## Enforcement Evidence
 

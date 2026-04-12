@@ -47,7 +47,7 @@ Rules:
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_epg_duration_visibility.py`
+- `server/tests/contracts/test_epg_duration_visibility.py`
 
 ## Enforcement Evidence
 

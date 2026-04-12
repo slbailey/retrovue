@@ -28,8 +28,8 @@ Source content is stretched or compressed to fill the target raster when `aspect
 
 ## Required Tests
 
-- `pkg/air/tests/contracts/BlockPlan/AspectPreserveContractTests.cpp`
-- `pkg/core/tests/contracts/test_aspect_policy.py`
+- `runtime/tests/contracts/BlockPlan/AspectPreserveContractTests.cpp`
+- `server/tests/contracts/test_aspect_policy.py`
 
 ## Enforcement Evidence
 

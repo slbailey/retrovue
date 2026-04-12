@@ -35,7 +35,7 @@ A container that fails path resolution despite its source having valid mappings 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/ingest/test_inv_path_mapping_source_scoped.py`
+- `server/tests/contracts/ingest/test_inv_path_mapping_source_scoped.py`
 
 ## Enforcement Evidence
 

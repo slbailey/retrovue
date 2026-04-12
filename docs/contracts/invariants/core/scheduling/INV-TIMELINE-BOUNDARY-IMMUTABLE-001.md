@@ -26,7 +26,7 @@ Record the timeline for all times < T₍boundary₎ before a scheduling operatio
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_timeline_authority.py`
+- `server/tests/contracts/test_inv_timeline_authority.py`
 
 ## Enforcement Evidence
 

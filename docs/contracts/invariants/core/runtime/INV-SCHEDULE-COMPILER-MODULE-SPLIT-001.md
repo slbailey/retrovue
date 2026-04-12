@@ -20,7 +20,7 @@ All public symbols previously importable from `schedule_compiler` MUST remain im
 
 ## Preconditions
 
-All three modules reside in `pkg/core/src/retrovue/runtime/`.
+All three modules reside in `server/src/retrovue/runtime/`.
 
 ## Observability
 
@@ -35,7 +35,7 @@ Import-verification tests assert that each public symbol resolves from both its 
 Planning fault. A symbol that cannot be imported breaks downstream compilation at import time, not at runtime.
 
 ## Required Tests
-- `pkg/core/tests/contracts/test_schedule_compiler_module_split.py`
+- `server/tests/contracts/test_schedule_compiler_module_split.py`
 
 ## Enforcement Evidence
 TODO

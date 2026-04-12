@@ -75,7 +75,7 @@ The PAD readiness evaluation in `IsIncomingSegmentEligibleForSwap` and `GetIncom
 
 These tests remain mandatory coverage for the parent invariants `INV-CONTINUOUS-FRAME-AUTHORITY-001` and `INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001`. They validate the PAD-specific eligibility gate that prevents vacuum and stale frame bleed at PAD seam boundaries.
 
-- `pkg/air/tests/contracts/BlockPlan/PadVideoReadinessContractTests.cpp` (PadVideoReadiness: PadEligibleWithZeroVideoFramesBecauseOnDemand, PadEligibleWithSufficientVideoAndAudio, PadAudioOnlySufficientBecauseVideoOnDemand, PadWithInsufficientAudioNotEligible, ContentStillRequiresVideoDepth)
+- `runtime/tests/contracts/BlockPlan/PadVideoReadinessContractTests.cpp` (PadVideoReadiness: PadEligibleWithZeroVideoFramesBecauseOnDemand, PadEligibleWithSufficientVideoAndAudio, PadAudioOnlySufficientBecauseVideoOnDemand, PadWithInsufficientAudioNotEligible, ContentStillRequiresVideoDepth)
 
 ## Enforcement Evidence
 

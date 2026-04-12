@@ -26,7 +26,7 @@ Resolve a `ResolvedScheduleDay`, then call `get_epg_events()` twice with the sam
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_epg_invariants.py::TestInvEpgIdentityStable001`
+- `server/tests/contracts/test_epg_invariants.py::TestInvEpgIdentityStable001`
 
 ## Enforcement Evidence
 

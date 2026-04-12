@@ -31,7 +31,7 @@ Planning fault. Midroll breaks are editorially intended; collapsing them into po
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_midroll_interleave.py`
+- `server/tests/contracts/test_inv_midroll_interleave.py`
 
 ## Enforcement Evidence
 

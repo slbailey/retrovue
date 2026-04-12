@@ -83,54 +83,54 @@
 
 | File | References | Classification |
 |------|------------|----------------|
-| `pkg/core/src/retrovue/domain/entities.py` | `Collection`, `__tablename__ = "collections"`, `collection_uuid`, `collection`, `collections` (relationship) | Ingest entity |
-| `pkg/core/src/retrovue/domain/interfaces.py` | `Collection`, `discover_collections`, `ingest_collection`, `validate_ingestible(collection)` | Ingest entity |
-| `pkg/core/src/retrovue/cli/commands/collection.py` | All Collection CLI, `collection_id` arg, `CollectionIngestService`, `resolve_collection_selector`, JSON `collection_id`/`collection_name` | Ingest entity + CLI |
-| `pkg/core/src/retrovue/cli/commands/_ops/collection_ingest_service.py` | `Collection`, `CollectionIngestResult`, `resolve_collection_selector`, `collection_uuid`, `collection_id`/`collection_name` in result | Ingest entity |
-| `pkg/core/src/retrovue/usecases/collection_enrichers.py` | `Collection`, `_resolve_collection`, `collection_id`/`collection_name` in payloads | Ingest entity |
-| `pkg/core/src/retrovue/usecases/source_discover.py` | `discover_collections` | Ingest entity |
-| `pkg/core/src/retrovue/usecases/asset_reprobe.py` | `Collection`, `collection_uuid` param, `collection.name` | Ingest entity |
-| `pkg/core/src/retrovue/usecases/asset_enrich_stale.py` | `Collection`, `--collection` / `--source`, `collection_selector` | Ingest entity |
-| `pkg/core/src/retrovue/infra/validation.py` | `validate_collection_exists`, `Collection`, `collection_id` | Ingest entity |
-| `pkg/core/src/retrovue/catalog/processor_runtime.py` | `Collection`, `asset.collection_uuid`, `collection_name` (derived) | Ingest entity |
-| `pkg/core/src/retrovue/catalog/reconciliation.py` | `collection_uuid` | Ingest entity |
-| `pkg/core/src/retrovue/catalog/discovery.py` | Comment "collection" (container) | Ingest entity (docs) |
-| `pkg/core/src/retrovue/catalog/db_asset_library.py` | `_interstitial_collection_name`, `_get_interstitial_collection_uuid`, `Collection` | Ingest entity |
-| `pkg/core/src/retrovue/adapters/importers/plex_importer.py` | `validate_ingestible(self, collection: Collection)`, Plex `Collection` tag (exclude tag key per §1) | Ingest entity + Plex tag |
-| `pkg/core/src/retrovue/adapters/importers/filesystem_importer.py` | "collections" in comments/list (subdirs as containers) | Ingest entity (docs) |
-| `pkg/core/src/retrovue/cli/commands/asset.py` | `--collection`, `collection_uuid=`, `collection_name` in output | CLI + ingest entity |
-| `pkg/core/src/retrovue/cli/commands/source.py` | `usecase_discover_collections`, "collections table", `discover_collections` | Ingest entity |
-| `pkg/core/src/retrovue/cli/commands/_ops/source_ingest_service.py` | `collection_uuid`, `coll` (variable) | Ingest entity |
-| `pkg/core/src/retrovue/cli/commands/_ops/backfill_plex_artwork.py` | `Collection`, `collections`, `collection_uuids` | Ingest entity |
+| `server/src/retrovue/domain/entities.py` | `Collection`, `__tablename__ = "collections"`, `collection_uuid`, `collection`, `collections` (relationship) | Ingest entity |
+| `server/src/retrovue/domain/interfaces.py` | `Collection`, `discover_collections`, `ingest_collection`, `validate_ingestible(collection)` | Ingest entity |
+| `server/src/retrovue/cli/commands/collection.py` | All Collection CLI, `collection_id` arg, `CollectionIngestService`, `resolve_collection_selector`, JSON `collection_id`/`collection_name` | Ingest entity + CLI |
+| `server/src/retrovue/cli/commands/_ops/collection_ingest_service.py` | `Collection`, `CollectionIngestResult`, `resolve_collection_selector`, `collection_uuid`, `collection_id`/`collection_name` in result | Ingest entity |
+| `server/src/retrovue/usecases/collection_enrichers.py` | `Collection`, `_resolve_collection`, `collection_id`/`collection_name` in payloads | Ingest entity |
+| `server/src/retrovue/usecases/source_discover.py` | `discover_collections` | Ingest entity |
+| `server/src/retrovue/usecases/asset_reprobe.py` | `Collection`, `collection_uuid` param, `collection.name` | Ingest entity |
+| `server/src/retrovue/usecases/asset_enrich_stale.py` | `Collection`, `--collection` / `--source`, `collection_selector` | Ingest entity |
+| `server/src/retrovue/infra/validation.py` | `validate_collection_exists`, `Collection`, `collection_id` | Ingest entity |
+| `server/src/retrovue/catalog/processor_runtime.py` | `Collection`, `asset.collection_uuid`, `collection_name` (derived) | Ingest entity |
+| `server/src/retrovue/catalog/reconciliation.py` | `collection_uuid` | Ingest entity |
+| `server/src/retrovue/catalog/discovery.py` | Comment "collection" (container) | Ingest entity (docs) |
+| `server/src/retrovue/catalog/db_asset_library.py` | `_interstitial_collection_name`, `_get_interstitial_collection_uuid`, `Collection` | Ingest entity |
+| `server/src/retrovue/adapters/importers/plex_importer.py` | `validate_ingestible(self, collection: Collection)`, Plex `Collection` tag (exclude tag key per §1) | Ingest entity + Plex tag |
+| `server/src/retrovue/adapters/importers/filesystem_importer.py` | "collections" in comments/list (subdirs as containers) | Ingest entity (docs) |
+| `server/src/retrovue/cli/commands/asset.py` | `--collection`, `collection_uuid=`, `collection_name` in output | CLI + ingest entity |
+| `server/src/retrovue/cli/commands/source.py` | `usecase_discover_collections`, "collections table", `discover_collections` | Ingest entity |
+| `server/src/retrovue/cli/commands/_ops/source_ingest_service.py` | `collection_uuid`, `coll` (variable) | Ingest entity |
+| `server/src/retrovue/cli/commands/_ops/backfill_plex_artwork.py` | `Collection`, `collections`, `collection_uuids` | Ingest entity |
 
 ### 3.2 Scheduler / DSL / runtime
 
 | File | References | Classification |
 |------|------------|----------------|
-| `pkg/core/src/retrovue/runtime/source_resolver.py` | `_SUPPORTED_TYPES = {"asset", "collection", "pool", "program"}`, "collection" resolution by name | Scheduler DSL |
-| `pkg/core/src/retrovue/runtime/asset_resolver.py` | `register_collection`, `_collections`, `match.get("collection")`, `type not in ("collection", "pool")` | Scheduler DSL |
-| `pkg/core/src/retrovue/runtime/catalog_resolver.py` | `collection` filter, `col_name_map` (collection_uuid→name), `collection_name` on result type | Scheduler DSL + ingest |
-| `pkg/core/src/retrovue/runtime/dsl_schedule_service.py` | `Collection`, `PathMapping.collection_uuid`, `block "collection"`, `it.collection_id` | Scheduler DSL + ingest |
-| `pkg/core/src/retrovue/runtime/schedule_revision_writer.py` | `block.get("collection")`, `collection_id` on ScheduleItem | Scheduler DSL |
-| `pkg/core/src/retrovue/runtime/schedule_compiler.py` | `d["collection"]` | Scheduler DSL |
-| `pkg/core/src/retrovue/runtime/template_runtime.py` | `type: Literal["collection", "pool", "primary_content"]` | Scheduler DSL |
-| `pkg/core/src/retrovue/runtime/schedule_types.py` | "collection" in comments (series/collection) | Scheduler DSL (docs) |
-| `pkg/core/src/retrovue/usecases/schedule_reschedule.py` | `collection_id=it.collection_id` | Scheduler + ScheduleItem field |
+| `server/src/retrovue/runtime/source_resolver.py` | `_SUPPORTED_TYPES = {"asset", "collection", "pool", "program"}`, "collection" resolution by name | Scheduler DSL |
+| `server/src/retrovue/runtime/asset_resolver.py` | `register_collection`, `_collections`, `match.get("collection")`, `type not in ("collection", "pool")` | Scheduler DSL |
+| `server/src/retrovue/runtime/catalog_resolver.py` | `collection` filter, `col_name_map` (collection_uuid→name), `collection_name` on result type | Scheduler DSL + ingest |
+| `server/src/retrovue/runtime/dsl_schedule_service.py` | `Collection`, `PathMapping.collection_uuid`, `block "collection"`, `it.collection_id` | Scheduler DSL + ingest |
+| `server/src/retrovue/runtime/schedule_revision_writer.py` | `block.get("collection")`, `collection_id` on ScheduleItem | Scheduler DSL |
+| `server/src/retrovue/runtime/schedule_compiler.py` | `d["collection"]` | Scheduler DSL |
+| `server/src/retrovue/runtime/template_runtime.py` | `type: Literal["collection", "pool", "primary_content"]` | Scheduler DSL |
+| `server/src/retrovue/runtime/schedule_types.py` | "collection" in comments (series/collection) | Scheduler DSL (docs) |
+| `server/src/retrovue/usecases/schedule_reschedule.py` | `collection_id=it.collection_id` | Scheduler + ScheduleItem field |
 
 ### 3.3 Tests
 
 | File | References | Classification |
 |------|------------|----------------|
-| `pkg/core/tests/contracts/conftest.py` | "Test Container" fixture text | Test name |
-| `pkg/core/tests/contracts/test_*collection*.py` | All Collection/collection_id/CollectionIngestService | Test (follow code renames) |
-| `pkg/core/tests/contracts/test_processor_*.py` | `Collection`, `collection_uuid`, "Test Container" | Test |
-| `pkg/core/tests/contracts/test_asset_*.py` | `collection_id`, `collection_uuid`, `--collection` | Test |
-| `pkg/core/tests/contracts/test_source_*.py` | `usecase_discover_collections`, "collections" | Test |
-| `pkg/core/tests/contracts/test_interstitial_type_stamp.py` | `TestKnownCollectionMapping`, `TestUnknownCollectionRejection`, "collection", `collection_uuid`, `_get_interstitial_collection_uuid` | Test + invariant |
-| `pkg/core/tests/contracts/test_channel_*.py` | `collection_uuid` in fixtures | Test |
-| `pkg/core/tests/contracts/scheduling/*.py` | `collection_id=None` | Test (ScheduleItem) |
-| `pkg/core/tests/contracts/runtime/*.py` | `collection_id` | Test |
-| `pkg/core/tests/_legacy/**` | Legacy API `/collections`, `discover_collections`, `--collection-id` | Legacy test (compat or update) |
+| `server/tests/contracts/conftest.py` | "Test Container" fixture text | Test name |
+| `server/tests/contracts/test_*collection*.py` | All Collection/collection_id/CollectionIngestService | Test (follow code renames) |
+| `server/tests/contracts/test_processor_*.py` | `Collection`, `collection_uuid`, "Test Container" | Test |
+| `server/tests/contracts/test_asset_*.py` | `collection_id`, `collection_uuid`, `--collection` | Test |
+| `server/tests/contracts/test_source_*.py` | `usecase_discover_collections`, "collections" | Test |
+| `server/tests/contracts/test_interstitial_type_stamp.py` | `TestKnownCollectionMapping`, `TestUnknownCollectionRejection`, "collection", `collection_uuid`, `_get_interstitial_collection_uuid` | Test + invariant |
+| `server/tests/contracts/test_channel_*.py` | `collection_uuid` in fixtures | Test |
+| `server/tests/contracts/scheduling/*.py` | `collection_id=None` | Test (ScheduleItem) |
+| `server/tests/contracts/runtime/*.py` | `collection_id` | Test |
+| `server/tests/_legacy/**` | Legacy API `/collections`, `discover_collections`, `--collection-id` | Legacy test (compat or update) |
 | `tests/contracts/test_interstitial_enrichment.py` | `collection_uuid`, `_get_interstitial_collection_uuid` | Test (invariant) |
 
 ### 3.4 Migration history (do not modify)
@@ -153,44 +153,44 @@
 | `docs/contracts/architecture/ASSET_IDENTITY_MIGRATION.md` | collection_uuid, Collection, collections table | Docs → container_id / Container |
 | `docs/contracts/architecture/PIPELINE_MIGRATION_ARCHITECTURE.md` | (Container already used) | Already aligned |
 | `docs/contracts/core/ContainerDiscoveryContract_v0.1.md` | (Container) | Already aligned |
-| `pkg/core/docs/contracts/resources/CollectionIngestContract.md` | (referenced by code) | Rename to ContainerIngestContract + update body |
-| `pkg/core/docs/contracts/resources/CollectionUpdateContract.md` | collection_id, Collection | Docs → container |
-| `pkg/core/docs/contracts/resources/SourceIngestContract.md` | collection-level, collection ingest, collection_id | Docs → container |
-| `pkg/core/docs/contracts/resources/SourceDiscoverContract.md` | collection discovery, collections | Docs → container |
-| `pkg/core/docs/contracts/resources/AssetListContract.md` | --collection, collection_id | Docs → container |
-| `pkg/core/docs/contracts/resources/AssetAttentionContract.md` | --collection, collection_uuid | Docs → container |
-| `pkg/core/docs/contracts/resources/TrafficManagementContract.md` | collection_uuid | Docs → container_id |
+| `server/docs/contracts/resources/CollectionIngestContract.md` | (referenced by code) | Rename to ContainerIngestContract + update body |
+| `server/docs/contracts/resources/CollectionUpdateContract.md` | collection_id, Collection | Docs → container |
+| `server/docs/contracts/resources/SourceIngestContract.md` | collection-level, collection ingest, collection_id | Docs → container |
+| `server/docs/contracts/resources/SourceDiscoverContract.md` | collection discovery, collections | Docs → container |
+| `server/docs/contracts/resources/AssetListContract.md` | --collection, collection_id | Docs → container |
+| `server/docs/contracts/resources/AssetAttentionContract.md` | --collection, collection_uuid | Docs → container |
+| `server/docs/contracts/resources/TrafficManagementContract.md` | collection_uuid | Docs → container_id |
 | `docs/contracts/traffic_shaping.md` | collection_uuid, collection_name | Docs → container |
 | `docs/invariants/interstitial_enrichment.md` | apply_enrichers_to_collection, collections | Docs → container |
 | `docs/contracts/interstitial_enrichment.md` | collections (subdirs), Collection Type Map | Docs → container |
 | `docs/contracts/core/ProcessorCapabilityContract_v0.1.md` | processor run ffprobe --collection | Docs → --container |
-| `pkg/core/docs/contracts/INV-INTERSTITIAL-TYPE-STAMP-001.md` | collection_uuid filter | Docs → container |
-| `pkg/core/docs/overview/source-management.md` | collection_id | Docs → container_id |
-| `pkg/core/docs/data/domain/IngestPipeline.md` | collections | Docs → containers |
-| `pkg/core/docs/developer/TestingStrategy_CollectionContracts.md` | collection_uuid, Collection | Docs → container |
-| `pkg/core/docs/contracts/resources/cross-domain/Source_Collection_Guarantees.md` | (title) | Docs → Source_Container |
-| `pkg/core/.cursor/rules.json` | discover_collections, collections | Cursor rules → container |
+| `server/docs/contracts/INV-INTERSTITIAL-TYPE-STAMP-001.md` | collection_uuid filter | Docs → container |
+| `server/docs/overview/source-management.md` | collection_id | Docs → container_id |
+| `server/docs/data/domain/IngestPipeline.md` | collections | Docs → containers |
+| `server/docs/developer/TestingStrategy_CollectionContracts.md` | collection_uuid, Collection | Docs → container |
+| `server/docs/contracts/resources/cross-domain/Source_Collection_Guarantees.md` | (title) | Docs → Source_Container |
+| `server/.cursor/rules.json` | discover_collections, collections | Cursor rules → container |
 | `docs/domains/AssetResolution.md` | Sources own collections | Docs → containers |
-| Archive docs under `pkg/core/docs/archive/` | collection_id, collections | Docs (update when touching) |
+| Archive docs under `server/docs/archive/` | collection_id, collections | Docs (update when touching) |
 
 ### 3.6 Web / API (legacy)
 
 | File | References | Classification |
 |------|------------|----------------|
-| `pkg/core/src/retrovue/web/studio.py` | SQL `JOIN collections c ON c.uuid=a.collection_uuid` | Ingest entity (SQL; table rename in final phase) |
-| `pkg/core/src_legacy/retrovue/api/routers/ingest.py` | `/sources/{source_id}/collections` | Legacy API route |
-| `pkg/core/src_legacy/retrovue/api/web/pages.py` | `/sources/{id}/collections`, discover_collections | Legacy API |
-| `pkg/core/src_legacy/retrovue/api/web/templates/*.html` | collections, collection.external_id | Legacy UI |
-| `pkg/core/src_legacy/retrovue/content_manager/source_service.py` | discover_collections, Collection, db.refresh(collection) | Legacy (quarantine) |
-| `pkg/core/src_legacy/retrovue/content_manager/ingest_orchestrator.py` | _process_collection, collections | Legacy (quarantine) |
+| `server/src/retrovue/web/studio.py` | SQL `JOIN collections c ON c.uuid=a.collection_uuid` | Ingest entity (SQL; table rename in final phase) |
+| `server/src_legacy/retrovue/api/routers/ingest.py` | `/sources/{source_id}/collections` | Legacy API route |
+| `server/src_legacy/retrovue/api/web/pages.py` | `/sources/{id}/collections`, discover_collections | Legacy API |
+| `server/src_legacy/retrovue/api/web/templates/*.html` | collections, collection.external_id | Legacy UI |
+| `server/src_legacy/retrovue/content_manager/source_service.py` | discover_collections, Collection, db.refresh(collection) | Legacy (quarantine) |
+| `server/src_legacy/retrovue/content_manager/ingest_orchestrator.py` | _process_collection, collections | Legacy (quarantine) |
 
 ### 3.7 ScheduleItem / ScheduleRevision
 
 | File | References | Classification |
 |------|------------|----------------|
-| `pkg/core/src/retrovue/domain/entities.py` | ScheduleItem.collection_id | Ingest/scheduler (column → container_id in rename) |
-| `pkg/core/src/retrovue/runtime/schedule_revision_writer.py` | collection_id=, "collection_raw" | Scheduler DSL |
-| `pkg/core/src/retrovue/runtime/dsl_schedule_service.py` | it.collection_id, "collection" in meta | Scheduler DSL |
+| `server/src/retrovue/domain/entities.py` | ScheduleItem.collection_id | Ingest/scheduler (column → container_id in rename) |
+| `server/src/retrovue/runtime/schedule_revision_writer.py` | collection_id=, "collection_raw" | Scheduler DSL |
+| `server/src/retrovue/runtime/dsl_schedule_service.py` | it.collection_id, "collection" in meta | Scheduler DSL |
 
 ---
 
@@ -345,10 +345,10 @@ Phase 9 makes the repo self-policing and aligns documentation with the canonical
 - **Migration notes:** [MIGRATION_NOTES_COLLECTION_TO_CONTAINER.md](MIGRATION_NOTES_COLLECTION_TO_CONTAINER.md) explains the rename and where “Collection” may still appear (historical migrations, that note, refactor inventory, Plex API).
 - **Terminology doc:** Updated to “Container (Canonical)”; allowed remaining uses limited to historical migrations, migration notes, and external API (e.g. Plex).
 - **CI guard (Python):** Unchanged; fails if `Collection` or `collection_id` appears in scanned `.py` files outside path/line exclusions or `ALLOWED_TERMINOLOGY_FILES`. Path exclusions include `alembic/versions/`, refactor docs, and `MIGRATION_NOTES_COLLECTION`.
-- **Docs terminology test:** `test_docs_no_collection_terminology_outside_historical` in `test_container_terminology_guard.py` scans `.md` under `pkg/core/docs` and repo `docs/`; fails if “Collection” or `collection_id` appears outside excluded paths. Excluded: refactor/migration docs, `/archive/`, `contracts/`, `data/`, `overview/`, `developer/`, `domains/`. Architecture and operations docs are enforced; shrink exclusions as more docs are updated.
+- **Docs terminology test:** `test_docs_no_collection_terminology_outside_historical` in `test_container_terminology_guard.py` scans `.md` under `server/docs` and repo `docs/`; fails if “Collection” or `collection_id` appears outside excluded paths. Excluded: refactor/migration docs, `/archive/`, `contracts/`, `data/`, `overview/`, `developer/`, `domains/`. Architecture and operations docs are enforced; shrink exclusions as more docs are updated.
 - **Architecture docs updated:** DataFlow.md, SystemBoundaries.md, and IngestArchitecture.md use Container/container_id throughout.
 
-- **CI rule:** Both guard tests must pass in CI. Fail on `Collection` or `collection_id` outside allowlisted paths (Python) or outside excluded doc paths (markdown). Run: `pytest pkg/core/tests/contracts/test_container_terminology_guard.py`.
+- **CI rule:** Both guard tests must pass in CI. Fail on `Collection` or `collection_id` outside allowlisted paths (Python) or outside excluded doc paths (markdown). Run: `pytest server/tests/contracts/test_container_terminology_guard.py`.
 
 No database migration. Repo conceptually reads as Source → Container → …; “Collection” exists only in historical migrations and explicitly historical notes (and in allowlisted code until further renames).
 

@@ -12,7 +12,7 @@ Episode progression governs which episode airs for a given program placement on 
 
 This contract replaces:
 
-- `pkg/core/docs/contracts/runtime/INV-SERIAL-EPISODE-PROGRESSION.md`
+- `server/docs/contracts/runtime/INV-SERIAL-EPISODE-PROGRESSION.md`
 - `docs/contracts/progression_cursor.md` (sequential sections)
 - `docs/contracts/scheduler_cursor_integration.md`
 - `docs/contracts/invariants/core/runtime/INV-SCHEDULE-SEQUENTIAL-ADVANCE-001.md`
@@ -461,7 +461,7 @@ This is a direct consequence of INV-EPISODE-PROGRESSION-001 (determinism) and IN
 
 ## Retired Contracts
 
-### INV-SERIAL-EPISODE-PROGRESSION (pkg/core/docs/contracts/runtime/)
+### INV-SERIAL-EPISODE-PROGRESSION (server/docs/contracts/runtime/)
 
 Superseded by this contract. The calendar model, occurrence counting, and wrap policies defined there are preserved here as the canonical model. The placement identity tuple is replaced by run_id. Phase 3 scheduling model references are removed.
 
@@ -481,7 +481,7 @@ The `day_offset * slots_per_day` counter-seeding mechanism is superseded by cale
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_episode_progression.py`
+- `server/tests/contracts/test_episode_progression.py`
 
 | Test | Invariant | Scenario |
 |------|-----------|----------|
@@ -517,7 +517,7 @@ The `day_offset * slots_per_day` counter-seeding mechanism is superseded by cale
 | `test_shared_run_same_day_same_episode` | 004 | Two blocks at different times sharing `run_id` resolve identical episode for same broadcast day. |
 | `test_shared_run_time_shifted_same_episode` | 004, 012 | 06:00 and 18:00 blocks sharing `run_id` resolve identical episode; block start time does not influence selection. |
 
-- `pkg/core/tests/contracts/test_progression_run_store.py`
+- `server/tests/contracts/test_progression_run_store.py`
 
 | Test | Invariant | Scenario |
 |------|-----------|----------|

@@ -34,7 +34,7 @@ A source registration attempt with an unknown type emits a structured log event 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/ingest/test_inv_source_type_registry.py`
+- `server/tests/contracts/ingest/test_inv_source_type_registry.py`
 
 ## Enforcement Evidence
 

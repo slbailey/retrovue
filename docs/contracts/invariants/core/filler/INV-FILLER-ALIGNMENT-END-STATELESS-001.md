@@ -26,7 +26,7 @@ Invoke filler construction for two gaps in sequence with `alignment="end"`. Vary
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_filler_alignment.py`
+- `server/tests/contracts/test_filler_alignment.py`
 
 ## Enforcement Evidence
 

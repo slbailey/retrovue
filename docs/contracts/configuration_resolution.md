@@ -318,7 +318,7 @@ Key observations:
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_config_resolution.py`
+- `server/tests/contracts/test_inv_config_resolution.py`
 
 ## Enforcement Evidence
 TODO

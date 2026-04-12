@@ -24,7 +24,7 @@ Any HLS playlist or segment GET request producing a log line at INFO level or ab
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_no_disk_io.py`
+- `server/tests/contracts/runtime/test_inv_hls_no_disk_io.py`
 
 ## Enforcement Evidence
 

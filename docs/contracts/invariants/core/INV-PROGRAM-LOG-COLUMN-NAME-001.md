@@ -26,5 +26,5 @@ the entity's domain semantics: it stores a **program log** in JSON form.
 
 ## See Also
 
-- `pkg/core/src/retrovue/domain/entities.py` — ORM definition
-- `pkg/core/alembic/versions/20260303_rename_column_program_log_json.py` — migration
+- `server/src/retrovue/domain/entities.py` — ORM definition
+- `server/alembic/versions/20260303_rename_column_program_log_json.py` — migration

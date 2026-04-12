@@ -27,7 +27,7 @@ Viewer counted as present with no recent request; first-viewer transition trigge
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_viewer_presence.py`
+- `server/tests/contracts/runtime/test_inv_hls_viewer_presence.py`
 
 ## Enforcement Evidence
 

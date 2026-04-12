@@ -16,9 +16,9 @@ Any audio sample loss attributable to overflow or backpressure; silence injectio
 `LAW-LIVENESS`
 
 ## Required Tests
-- `pkg/air/tests/contracts/BlockPlan/SharedInvAudioContinuityContractTests.cpp` (`Compliant_PushAndPop_NoSamplesLost`) — push N, pop all, TotalSamplesPushed == TotalSamplesPopped, zero underflow
-- `pkg/air/tests/contracts/BlockPlan/SharedInvAudioContinuityContractTests.cpp` (`Compliant_Underflow_ReturnsFalse_NoSilenceInjected`) — empty buffer returns false, no fabrication, underflow counted
-- `pkg/air/tests/contracts/BlockPlan/SharedInvAudioContinuityContractTests.cpp` (`Compliant_SamplesContiguous_MultiFramePop`) — pop across frame boundaries, contiguous, pushed == popped
+- `runtime/tests/contracts/BlockPlan/SharedInvAudioContinuityContractTests.cpp` (`Compliant_PushAndPop_NoSamplesLost`) — push N, pop all, TotalSamplesPushed == TotalSamplesPopped, zero underflow
+- `runtime/tests/contracts/BlockPlan/SharedInvAudioContinuityContractTests.cpp` (`Compliant_Underflow_ReturnsFalse_NoSilenceInjected`) — empty buffer returns false, no fabrication, underflow counted
+- `runtime/tests/contracts/BlockPlan/SharedInvAudioContinuityContractTests.cpp` (`Compliant_SamplesContiguous_MultiFramePop`) — pop across frame boundaries, contiguous, pushed == popped
 
 ## Enforcement Evidence
 TODO

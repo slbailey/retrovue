@@ -30,7 +30,7 @@ Create two runs on the same channel: Bonanza at 10:00 (run_id "bonanza_am") and 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_episode_progression.py`
+- `server/tests/contracts/test_episode_progression.py`
 
 ## Enforcement Evidence
 

@@ -4,7 +4,7 @@ These scenarios define the expected behavior of the broadcast timeline engine
 according to INV-TIMELINE-* invariants. Each test is designed to FAIL under
 the current implementation, proving the invariant violation.
 
-Test file (when implemented): `pkg/core/tests/contracts/test_inv_timeline_authority.py`
+Test file (when implemented): `server/tests/contracts/test_inv_timeline_authority.py`
 
 ---
 

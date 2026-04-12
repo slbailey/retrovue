@@ -1,7 +1,7 @@
 # Test Matrix — Interaction Boundary Invariants
 
 **Status:** Active
-**Test file:** `pkg/core/tests/contracts/test_interaction_boundary_contract.py` (not yet implemented)
+**Test file:** `server/tests/contracts/test_interaction_boundary_contract.py` (not yet implemented)
 
 ---
 

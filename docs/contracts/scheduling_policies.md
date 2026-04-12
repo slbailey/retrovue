@@ -247,7 +247,7 @@ Every PolicyViolation MUST carry: `invariant_id` (string, non-empty), `rule_type
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_policies.py`
+- `server/tests/contracts/test_scheduling_policies.py`
 
 ---
 

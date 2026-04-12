@@ -26,7 +26,7 @@ Define a pool with assets of 10s, 20s, and 30s. Set `max_duration_sec: 15`. Veri
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_timeline_compilation_templates.py`
+- `server/tests/contracts/test_timeline_compilation_templates.py`
 
 ## Enforcement Evidence
 

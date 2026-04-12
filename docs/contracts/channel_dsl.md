@@ -438,7 +438,7 @@ For any compiled block: `block_duration = sum(structural_segment_durations) + su
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_channel_dsl.py`
+- `server/tests/contracts/test_channel_dsl.py`
 
 | Test | Invariant | Scenario |
 |---|---|---|

@@ -37,5 +37,5 @@ Generate PlaylistEvents from a ScheduleItem with known ad break markers at speci
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/playout/test_playlist_content_offsets.py::test_content_offsets_increase_monotonically`
-- `pkg/core/tests/contracts/playout/test_playlist_content_offsets.py::test_content_events_cover_asset_in_order`
+- `server/tests/contracts/playout/test_playlist_content_offsets.py::test_content_offsets_increase_monotonically`
+- `server/tests/contracts/playout/test_playlist_content_offsets.py::test_content_events_cover_asset_in_order`

@@ -1,7 +1,7 @@
 # Test Matrix — Asset & Asset Library Invariants
 
 **Status:** Active
-**Test file:** `pkg/core/tests/contracts/test_asset_invariants.py`
+**Test file:** `server/tests/contracts/test_asset_invariants.py`
 
 ---
 
@@ -142,10 +142,10 @@
 ## Section 5: Validation & Enrichment Pipeline
 
 **Test files:**
-- `pkg/core/tests/contracts/ingest/test_inv_validator_output_shape.py`
-- `pkg/core/tests/contracts/ingest/test_inv_enricher_idempotent.py`
-- `pkg/core/tests/contracts/ingest/test_inv_catalog_ready_schedulable.py`
-- `pkg/core/tests/contracts/ingest/test_inv_enricher_execution_mode.py`
+- `server/tests/contracts/ingest/test_inv_validator_output_shape.py`
+- `server/tests/contracts/ingest/test_inv_enricher_idempotent.py`
+- `server/tests/contracts/ingest/test_inv_catalog_ready_schedulable.py`
+- `server/tests/contracts/ingest/test_inv_enricher_execution_mode.py`
 
 ### INV-VALIDATOR-OUTPUT-SHAPE-001
 
@@ -205,8 +205,8 @@
 ## Section 5b: Enricher Observability (Phase 3)
 
 **Test files:**
-- `pkg/core/tests/contracts/ingest/test_inv_enricher_observability.py`
-- `pkg/core/tests/contracts/ingest/test_inv_enricher_result_versioned.py`
+- `server/tests/contracts/ingest/test_inv_enricher_observability.py`
+- `server/tests/contracts/ingest/test_inv_enricher_result_versioned.py`
 
 ### INV-ENRICHER-OBSERVABILITY-001
 
@@ -233,10 +233,10 @@
 ## Section 6: Source & Path Mapping (Phase 2)
 
 **Test files:**
-- `pkg/core/tests/contracts/ingest/test_inv_path_mapping_source_scoped.py`
-- `pkg/core/tests/contracts/ingest/test_inv_path_validation_on_import.py`
-- `pkg/core/tests/contracts/ingest/test_inv_source_type_registry.py`
-- `pkg/core/tests/contracts/ingest/test_inv_validator_result_persistence.py`
+- `server/tests/contracts/ingest/test_inv_path_mapping_source_scoped.py`
+- `server/tests/contracts/ingest/test_inv_path_validation_on_import.py`
+- `server/tests/contracts/ingest/test_inv_source_type_registry.py`
+- `server/tests/contracts/ingest/test_inv_validator_result_persistence.py`
 
 ### INV-PATH-MAPPING-SOURCE-SCOPED-001
 
@@ -281,8 +281,8 @@
 ## Section 7: Tag Canonical Form (Phase 6A)
 
 **Test files:**
-- `pkg/core/tests/contracts/test_inv_tag_canonical_form.py`
-- `pkg/core/tests/contracts/test_inv_tag_migration_idempotent.py`
+- `server/tests/contracts/test_inv_tag_canonical_form.py`
+- `server/tests/contracts/test_inv_tag_migration_idempotent.py`
 
 ### INV-TAG-CANONICAL-FORM-001
 

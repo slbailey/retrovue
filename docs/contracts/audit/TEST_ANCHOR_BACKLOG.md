@@ -37,7 +37,7 @@ These tests cannot be written until the listed infrastructure work is completed.
 
 **Test:** `Phase6A2_HardStopEnforced` — currently SKIPPED per Phase 8.6.
 
-**RESOLVED:** LAW-002 rewritten under BlockPlan semantics. `pkg/air/tests/contracts/BlockPlan/Law002HardStopContractTests.cpp` is canonical enforcement. Legacy Phase6A2 test RETIRED.
+**RESOLVED:** LAW-002 rewritten under BlockPlan semantics. `runtime/tests/contracts/BlockPlan/Law002HardStopContractTests.cpp` is canonical enforcement. Legacy Phase6A2 test RETIRED.
 
 ---
 

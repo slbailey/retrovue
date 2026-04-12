@@ -24,7 +24,7 @@ PDT value derived from system clock; generator calling time functions in PDT pat
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_manifest_consistency.py`
+- `server/tests/contracts/runtime/test_inv_hls_manifest_consistency.py`
 
 ## Enforcement Evidence
 

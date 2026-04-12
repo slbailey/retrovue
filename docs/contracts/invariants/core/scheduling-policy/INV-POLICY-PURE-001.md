@@ -30,7 +30,7 @@ Planning fault. A policy function that mutates state or performs I/O produces un
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_policies.py`
+- `server/tests/contracts/test_scheduling_policies.py`
 
 ## Enforcement Evidence
 

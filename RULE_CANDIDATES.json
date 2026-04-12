@@ -3,7 +3,7 @@
     {
       "rule_id": "ARCH-air-Phase6-001",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6-ExecutionContract.md",
+      "source_path": "runtime/docs/archive/phases/Phase6-ExecutionContract.md",
       "source_heading": "Contract",
       "source_quote": "On LoadPreview: loads asset into preview slot; shadow decode may start; does not go live.",
       "source_paraphrase": "LoadPreview loads asset into preview only; does not switch to live.",
@@ -19,7 +19,7 @@
     {
       "rule_id": "ARCH-air-Phase6-002",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6-ExecutionContract.md",
+      "source_path": "runtime/docs/archive/phases/Phase6-ExecutionContract.md",
       "source_heading": "Contract",
       "source_quote": "On SwitchToLive: promotes preview to live exactly when commanded (at boundary); seamless, no gap.",
       "source_paraphrase": "SwitchToLive promotes preview to live exactly when commanded; no gap.",
@@ -35,7 +35,7 @@
     {
       "rule_id": "ARCH-air-Phase6-003",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6-ExecutionContract.md",
+      "source_path": "runtime/docs/archive/phases/Phase6-ExecutionContract.md",
       "source_heading": "Test scaffolding — control-plane outcomes only",
       "source_quote": "Phase 6 tests must not inspect MPEG-TS bytes.",
       "source_paraphrase": "Phase 6 tests use gRPC outcomes only; no TS byte inspection.",
@@ -51,7 +51,7 @@
     {
       "rule_id": "ARCH-air-Phase6-004",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6-ExecutionContract.md",
+      "source_path": "runtime/docs/archive/phases/Phase6-ExecutionContract.md",
       "source_heading": "Tests (Phase 6 — gRPC / control-plane only)",
       "source_quote": "After LoadPreview: LoadPreviewResponse.shadow_decode_started == true",
       "source_paraphrase": "LoadPreview response must indicate shadow decode started.",
@@ -69,7 +69,7 @@
     {
       "rule_id": "ARCH-air-Phase6-005",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6-ExecutionContract.md",
+      "source_path": "runtime/docs/archive/phases/Phase6-ExecutionContract.md",
       "source_heading": "Tests (Phase 6 — gRPC / control-plane only)",
       "source_quote": "After SwitchToLive: SwitchToLiveResponse.pts_contiguous == true (when available)",
       "source_paraphrase": "SwitchToLive response indicates PTS continuity when implemented.",
@@ -87,7 +87,7 @@
     {
       "rule_id": "ARCH-air-Phase6-006",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6-ExecutionContract.md",
+      "source_path": "runtime/docs/archive/phases/Phase6-ExecutionContract.md",
       "source_heading": "Tests (Phase 6 — gRPC / control-plane only)",
       "source_quote": "Channel remains active across multiple switches; no spurious StopChannel.",
       "source_paraphrase": "Channel stays active across switches; StopChannel only when commanded.",
@@ -103,7 +103,7 @@
     {
       "rule_id": "ARCH-air-Phase6-007",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6-ExecutionContract.md",
+      "source_path": "runtime/docs/archive/phases/Phase6-ExecutionContract.md",
       "source_heading": "Tests (Phase 6 — gRPC / control-plane only)",
       "source_quote": "Receives LoadPreview for next segment before current segment ends",
       "source_paraphrase": "LoadPreview for next segment must occur before boundary.",
@@ -119,7 +119,7 @@
     {
       "rule_id": "ARCH-air-Phase6A0-001",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6A-0-ControlSurface.md",
+      "source_path": "runtime/docs/archive/phases/Phase6A-0-ControlSurface.md",
       "source_heading": "Contract",
       "source_quote": "Must compile and link against the generated code from protos/playout.proto.",
       "source_paraphrase": "Air must use proto-generated code.",
@@ -135,7 +135,7 @@
     {
       "rule_id": "ARCH-air-Phase6A0-002",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6A-0-ControlSurface.md",
+      "source_path": "runtime/docs/archive/phases/Phase6A-0-ControlSurface.md",
       "source_heading": "Contract",
       "source_quote": "Must expose PlayoutControl with StartChannel, LoadPreview, SwitchToLive, StopChannel.",
       "source_paraphrase": "Four core RPCs required on PlayoutControl.",
@@ -151,7 +151,7 @@
     {
       "rule_id": "ARCH-air-Phase6A0-003",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6A-0-ControlSurface.md",
+      "source_path": "runtime/docs/archive/phases/Phase6A-0-ControlSurface.md",
       "source_heading": "Ordering",
       "source_quote": "StartChannel initializes channel state but does not imply media playback.",
       "source_paraphrase": "StartChannel alone does not start media; LoadPreview+SwitchToLive required.",
@@ -167,7 +167,7 @@
     {
       "rule_id": "ARCH-air-Phase6A0-004",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6A-0-ControlSurface.md",
+      "source_path": "runtime/docs/archive/phases/Phase6A-0-ControlSurface.md",
       "source_heading": "Success vs error semantics (6A.0)",
       "source_quote": "StartChannel on an already-started channel → idempotent success",
       "source_paraphrase": "StartChannel idempotent when channel already started.",
@@ -183,7 +183,7 @@
     {
       "rule_id": "ARCH-air-Phase6A0-005",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6A-0-ControlSurface.md",
+      "source_path": "runtime/docs/archive/phases/Phase6A-0-ControlSurface.md",
       "source_heading": "Success vs error semantics (6A.0)",
       "source_quote": "LoadPreview before StartChannel for that channel → error (success=false).",
       "source_paraphrase": "LoadPreview without prior StartChannel must fail.",
@@ -199,7 +199,7 @@
     {
       "rule_id": "ARCH-air-Phase6A0-006",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6A-0-ControlSurface.md",
+      "source_path": "runtime/docs/archive/phases/Phase6A-0-ControlSurface.md",
       "source_heading": "Success vs error semantics (6A.0)",
       "source_quote": "SwitchToLive with no preview loaded → error (success=false).",
       "source_paraphrase": "SwitchToLive without preview must fail.",
@@ -215,7 +215,7 @@
     {
       "rule_id": "ARCH-air-Phase6A0-007",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6A-0-ControlSurface.md",
+      "source_path": "runtime/docs/archive/phases/Phase6A-0-ControlSurface.md",
       "source_heading": "Success vs error semantics (6A.0)",
       "source_quote": "StopChannel on unknown or already-stopped channel → idempotent success",
       "source_paraphrase": "StopChannel idempotent for unknown or stopped channel.",
@@ -231,7 +231,7 @@
     {
       "rule_id": "ARCH-air-Phase6A0-008",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6A-0-ControlSurface.md",
+      "source_path": "runtime/docs/archive/phases/Phase6A-0-ControlSurface.md",
       "source_heading": "Contract",
       "source_quote": "Air must not interpret plan_handle in 6A.0",
       "source_paraphrase": "plan_handle accepted for proto compatibility only; no behavior.",
@@ -247,7 +247,7 @@
     {
       "rule_id": "ARCH-air-Phase6A1-001",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6A-1-ExecutionProducer.md",
+      "source_path": "runtime/docs/archive/phases/Phase6A-1-ExecutionProducer.md",
       "source_heading": "Contract",
       "source_quote": "Engine (Air) owns preview/live slot state and switch timing; producers are passive",
       "source_paraphrase": "Engine owns slots and switch timing; producers respond only to Start/Stop.",
@@ -263,7 +263,7 @@
     {
       "rule_id": "ARCH-air-Phase6A1-002",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6A-1-ExecutionProducer.md",
+      "source_path": "runtime/docs/archive/phases/Phase6A-1-ExecutionProducer.md",
       "source_heading": "Contract",
       "source_quote": "Producers must not self-switch or manage switch timing internally.",
       "source_paraphrase": "Producers do not control when they go live.",
@@ -279,7 +279,7 @@
     {
       "rule_id": "ARCH-air-Phase6A1-003",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6A-1-ExecutionProducer.md",
+      "source_path": "runtime/docs/archive/phases/Phase6A-1-ExecutionProducer.md",
       "source_heading": "Stop semantics",
       "source_quote": "On StopChannel: All producers for that channel must stop; no frames after stop.",
       "source_paraphrase": "StopChannel stops all producers; no frames after.",
@@ -295,7 +295,7 @@
     {
       "rule_id": "ARCH-air-Phase6A1-004",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6A-1-ExecutionProducer.md",
+      "source_path": "runtime/docs/archive/phases/Phase6A-1-ExecutionProducer.md",
       "source_heading": "Stop semantics",
       "source_quote": "On segment boundary (hard_stop_time_ms): Producer must stop at or before; engine must never play past.",
       "source_paraphrase": "Producer stops at or before hard_stop_time_ms.",
@@ -311,7 +311,7 @@
     {
       "rule_id": "ARCH-air-Phase6A1-005",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6A-1-ExecutionProducer.md",
+      "source_path": "runtime/docs/archive/phases/Phase6A-1-ExecutionProducer.md",
       "source_heading": "Contract",
       "source_quote": "LoadPreview installs into preview slot; live unchanged until SwitchToLive.",
       "source_paraphrase": "LoadPreview updates preview only; live unchanged.",
@@ -327,7 +327,7 @@
     {
       "rule_id": "ARCH-air-Phase6A1-006",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6A-1-ExecutionProducer.md",
+      "source_path": "runtime/docs/archive/phases/Phase6A-1-ExecutionProducer.md",
       "source_heading": "Tests",
       "source_quote": "SwitchToLive promotes preview to live; old live is stopped (or recycled); preview cleared.",
       "source_paraphrase": "SwitchToLive swaps preview to live; old live stopped; preview cleared.",
@@ -343,7 +343,7 @@
     {
       "rule_id": "ARCH-air-Phase6A2-001",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6A-2-FileBackedProducer.md",
+      "source_path": "runtime/docs/archive/phases/Phase6A-2-FileBackedProducer.md",
       "source_heading": "Contract",
       "source_quote": "Honor start_offset_ms and hard_stop_time_ms.",
       "source_paraphrase": "FileBackedProducer must respect segment params.",
@@ -359,7 +359,7 @@
     {
       "rule_id": "ARCH-air-Phase6A2-002",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6A-2-FileBackedProducer.md",
+      "source_path": "runtime/docs/archive/phases/Phase6A-2-FileBackedProducer.md",
       "source_heading": "Seek",
       "source_quote": "Seek to position at or before start_offset_ms; no playback earlier than intended.",
       "source_paraphrase": "Seek at or before start_offset_ms; never start earlier than intended.",
@@ -375,7 +375,7 @@
     {
       "rule_id": "ARCH-air-Phase6A2-003",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6A-2-FileBackedProducer.md",
+      "source_path": "runtime/docs/archive/phases/Phase6A-2-FileBackedProducer.md",
       "source_heading": "Stop",
       "source_quote": "Stops at or before hard_stop_time_ms; never exceed hard stop.",
       "source_paraphrase": "Producer never plays past hard stop.",
@@ -391,7 +391,7 @@
     {
       "rule_id": "ARCH-air-Phase6A2-004",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6A-2-FileBackedProducer.md",
+      "source_path": "runtime/docs/archive/phases/Phase6A-2-FileBackedProducer.md",
       "source_heading": "Tests",
       "source_quote": "Invalid path or unreadable file yields defined error (e.g. LoadPreviewResponse.success=false).",
       "source_paraphrase": "Invalid asset path must return defined error.",
@@ -407,7 +407,7 @@
     {
       "rule_id": "ARCH-air-Phase6A2-005",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6A-2-FileBackedProducer.md",
+      "source_path": "runtime/docs/archive/phases/Phase6A-2-FileBackedProducer.md",
       "source_heading": "Tests",
       "source_quote": "StopChannel (or segment stop) causes producer to stop and release resources; no orphan ffmpeg processes.",
       "source_paraphrase": "Stop must release resources; no orphan processes.",
@@ -423,7 +423,7 @@
     {
       "rule_id": "ARCH-air-Phase6A3-001",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6A-3-ProgrammaticProducer.md",
+      "source_path": "runtime/docs/archive/phases/Phase6A-3-ProgrammaticProducer.md",
       "source_heading": "Contract",
       "source_quote": "No decode: Does not read files or call ffmpeg.",
       "source_paraphrase": "ProgrammaticProducer generates synthetic frames only.",
@@ -439,7 +439,7 @@
     {
       "rule_id": "ARCH-air-Phase6A3-002",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6A-3-ProgrammaticProducer.md",
+      "source_path": "runtime/docs/archive/phases/Phase6A-3-ProgrammaticProducer.md",
       "source_heading": "Contract",
       "source_quote": "Same interface: Fits ExecutionProducer lifecycle (Start/Stop) and slot model.",
       "source_paraphrase": "ProgrammaticProducer uses same lifecycle as ExecutionProducer.",
@@ -455,7 +455,7 @@
     {
       "rule_id": "ARCH-air-Phase6A3-003",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6A-3-ProgrammaticProducer.md",
+      "source_path": "runtime/docs/archive/phases/Phase6A-3-ProgrammaticProducer.md",
       "source_heading": "Tests",
       "source_quote": "Stop at hard_stop_time_ms (or StopChannel) stops the programmatic producer; no frames after stop.",
       "source_paraphrase": "ProgrammaticProducer honors hard stop and StopChannel.",
@@ -471,7 +471,7 @@
     {
       "rule_id": "ARCH-air-Phase6AOverview-001",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6A-Overview.md",
+      "source_path": "runtime/docs/archive/phases/Phase6A-Overview.md",
       "source_heading": "Cross-phase invariants",
       "source_quote": "No schedule or plan logic in Air: Air must not interpret schedules or plans.",
       "source_paraphrase": "Air does not interpret schedules; receives exact execution instructions.",
@@ -487,7 +487,7 @@
     {
       "rule_id": "ARCH-air-Phase6AOverview-002",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6A-Overview.md",
+      "source_path": "runtime/docs/archive/phases/Phase6A-Overview.md",
       "source_heading": "Cross-phase invariants",
       "source_quote": "Segment-based control: Media execution driven by LoadPreview (segment payload) then SwitchToLive.",
       "source_paraphrase": "Execution driven by LoadPreview then SwitchToLive at boundary.",
@@ -503,7 +503,7 @@
     {
       "rule_id": "ARCH-air-Phase6AOverview-003",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6A-Overview.md",
+      "source_path": "runtime/docs/archive/phases/Phase6A-Overview.md",
       "source_heading": "Cross-phase invariants",
       "source_quote": "Clock authority: MasterClock lives in the Python runtime. Air enforces deadlines.",
       "source_paraphrase": "MasterClock in Core; Air enforces deadlines, does not compute schedule time.",
@@ -519,7 +519,7 @@
     {
       "rule_id": "ARCH-air-Phase6AOverview-004",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6A-Overview.md",
+      "source_path": "runtime/docs/archive/phases/Phase6A-Overview.md",
       "source_heading": "Cross-phase invariants",
       "source_quote": "Hard stop authoritative: hard_stop_time_ms is authoritative; Air may stop at or before, never past.",
       "source_paraphrase": "hard_stop_time_ms authoritative; never play past.",
@@ -535,7 +535,7 @@
     {
       "rule_id": "ARCH-air-Phase6AOverview-005",
       "source_repo": "air",
-      "source_path": "pkg/air/docs/archive/phases/Phase6A-Overview.md",
+      "source_path": "runtime/docs/archive/phases/Phase6A-Overview.md",
       "source_heading": "Cross-phase invariants",
       "source_quote": "Heterogeneous producers: Engine supports both file-backed and programmatic producers.",
       "source_paraphrase": "Same lifecycle and slot model for file-backed and programmatic.",
@@ -551,7 +551,7 @@
     {
       "rule_id": "ARCH-core-Phase0Clock-001",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase0-ClockContract.md",
+      "source_path": "server/docs/archive/phases/Phase0-ClockContract.md",
       "source_heading": "Contract",
       "source_quote": "MasterClock (or equivalent) is the single time authority.",
       "source_paraphrase": "Single testable time authority for all downstream.",
@@ -567,7 +567,7 @@
     {
       "rule_id": "ARCH-core-Phase0Clock-002",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase0-ClockContract.md",
+      "source_path": "server/docs/archive/phases/Phase0-ClockContract.md",
       "source_heading": "Contract",
       "source_quote": "All downstream logic consumes time only via this interface.",
       "source_paraphrase": "No raw datetime.now() or time.time() for scheduling/playout.",
@@ -583,7 +583,7 @@
     {
       "rule_id": "ARCH-core-Phase0Clock-003",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase0-ClockContract.md",
+      "source_path": "server/docs/archive/phases/Phase0-ClockContract.md",
       "source_heading": "Contract",
       "source_quote": "No component calls datetime.now() or time.time() directly for scheduling/playout decisions.",
       "source_paraphrase": "Explicit prohibition on raw time calls.",
@@ -599,7 +599,7 @@
     {
       "rule_id": "ARCH-core-Phase0Playout-001",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase0-PlayoutRules.md",
+      "source_path": "server/docs/archive/phases/Phase0-PlayoutRules.md",
       "source_heading": "Non-Negotiable Rules",
       "source_quote": "Never chain episodes back-to-back.",
       "source_paraphrase": "Episodes separated by filler; no direct episode-to-episode.",
@@ -615,7 +615,7 @@
     {
       "rule_id": "ARCH-core-Phase0Playout-002",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase0-PlayoutRules.md",
+      "source_path": "server/docs/archive/phases/Phase0-PlayoutRules.md",
       "source_heading": "Non-Negotiable Rules",
       "source_quote": "Never let content drift off the grid.",
       "source_paraphrase": "Content must snap to grid; no drift.",
@@ -631,7 +631,7 @@
     {
       "rule_id": "ARCH-core-Phase0Playout-003",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase0-PlayoutRules.md",
+      "source_path": "server/docs/archive/phases/Phase0-PlayoutRules.md",
       "source_heading": "Non-Negotiable Rules",
       "source_quote": "Always cut at grid boundaries.",
       "source_paraphrase": "Segments end at grid boundaries.",
@@ -647,7 +647,7 @@
     {
       "rule_id": "ARCH-core-Phase0Playout-004",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase0-PlayoutRules.md",
+      "source_path": "server/docs/archive/phases/Phase0-PlayoutRules.md",
       "source_heading": "Filler as a Continuous Virtual Stream",
       "source_quote": "Never restart filler from 00:00 each time.",
       "source_paraphrase": "Filler uses continuous offset, not restart.",
@@ -663,7 +663,7 @@
     {
       "rule_id": "ARCH-core-Phase0Playout-005",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase0-PlayoutRules.md",
+      "source_path": "server/docs/archive/phases/Phase0-PlayoutRules.md",
       "source_heading": "Filler as a Continuous Virtual Stream",
       "source_quote": "Never let filler overrun the grid.",
       "source_paraphrase": "Filler stops at next grid boundary.",
@@ -679,7 +679,7 @@
     {
       "rule_id": "ARCH-core-Phase0Playout-006",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase0-PlayoutRules.md",
+      "source_path": "server/docs/archive/phases/Phase0-PlayoutRules.md",
       "source_heading": "Filler as a Continuous Virtual Stream",
       "source_quote": "Play exactly for the padding duration; Hard stop at the next grid boundary.",
       "source_paraphrase": "Filler plays exactly pad_len; hard stop at boundary.",
@@ -695,7 +695,7 @@
     {
       "rule_id": "ARCH-core-Phase1Grid-001",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase1-GridContract.md",
+      "source_path": "server/docs/archive/phases/Phase1-GridContract.md",
       "source_heading": "Contract",
       "source_quote": "Grid size = 30 minutes; Boundaries at :00 and :30.",
       "source_paraphrase": "Fixed 30-minute grid; :00 and :30 boundaries.",
@@ -711,7 +711,7 @@
     {
       "rule_id": "ARCH-core-Phase2Plan-001",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase2-SchedulePlanContract.md",
+      "source_path": "server/docs/archive/phases/Phase2-SchedulePlanContract.md",
       "source_heading": "Contract",
       "source_quote": "Each grid has exactly two items in order: A (samplecontent), B (filler).",
       "source_paraphrase": "Mock plan: two items per grid, A then B.",
@@ -727,7 +727,7 @@
     {
       "rule_id": "ARCH-core-Phase2Plan-002",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase2-SchedulePlanContract.md",
+      "source_path": "server/docs/archive/phases/Phase2-SchedulePlanContract.md",
       "source_heading": "Contract",
       "source_quote": "Order only; no durations, no offsets, no timing in the plan itself.",
       "source_paraphrase": "SchedulePlan is duration-free; structural only.",
@@ -743,7 +743,7 @@
     {
       "rule_id": "ARCH-core-Phase2_5Asset-001",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase2.5-AssetMetadataContract.md",
+      "source_path": "server/docs/archive/phases/Phase2.5-AssetMetadataContract.md",
       "source_heading": "Duration rules (hard requirements)",
       "source_quote": "duration_ms is authoritative; Measured once (e.g. ffprobe); Rounded down to integer ms.",
       "source_paraphrase": "Asset duration is authoritative, measured once, rounded down.",
@@ -759,7 +759,7 @@
     {
       "rule_id": "ARCH-core-Phase2_5Asset-002",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase2.5-AssetMetadataContract.md",
+      "source_path": "server/docs/archive/phases/Phase2.5-AssetMetadataContract.md",
       "source_heading": "Duration rules (hard requirements)",
       "source_quote": "Never recomputed in runtime logic; Never inferred from offsets or schedules.",
       "source_paraphrase": "Duration not recomputed or inferred at runtime.",
@@ -775,7 +775,7 @@
     {
       "rule_id": "ARCH-core-Phase2_5Asset-003",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase2.5-AssetMetadataContract.md",
+      "source_path": "server/docs/archive/phases/Phase2.5-AssetMetadataContract.md",
       "source_heading": "Asset (explicit contract)",
       "source_quote": "Asset objects are immutable.",
       "source_paraphrase": "Asset is frozen/immutable dataclass.",
@@ -791,7 +791,7 @@
     {
       "rule_id": "ARCH-core-Phase3Resolver-001",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase3-ActiveItemResolverContract.md",
+      "source_path": "server/docs/archive/phases/Phase3-ActiveItemResolverContract.md",
       "source_heading": "Mock duration config",
       "source_quote": "Resolver must assert grid_duration_ms == Phase 1 grid_duration; mismatch is configuration error.",
       "source_paraphrase": "Grid consistency: resolver fails fast if grid duration mismatch.",
@@ -807,7 +807,7 @@
     {
       "rule_id": "ARCH-core-Phase3Resolver-002",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase3-ActiveItemResolverContract.md",
+      "source_path": "server/docs/archive/phases/Phase3-ActiveItemResolverContract.md",
       "source_heading": "Contract",
       "source_quote": "elapsed_in_grid_ms < filler_start_ms → samplecontent; elapsed_in_grid_ms >= filler_start_ms → filler.",
       "source_paraphrase": "Boundary rule: >= filler_start_ms means filler.",
@@ -823,7 +823,7 @@
     {
       "rule_id": "ARCH-core-Phase4Pipeline-001",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase4-PlayoutPipelineContract.md",
+      "source_path": "server/docs/archive/phases/Phase4-PlayoutPipelineContract.md",
       "source_heading": "PlayoutSegment (explicit)",
       "source_quote": "hard_stop_time is authoritative when present; end_offset is advisory only.",
       "source_paraphrase": "Stopping precedence: hard_stop_time overrides end_offset.",
@@ -839,7 +839,7 @@
     {
       "rule_id": "ARCH-core-Phase4Pipeline-002",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase4-PlayoutPipelineContract.md",
+      "source_path": "server/docs/archive/phases/Phase4-PlayoutPipelineContract.md",
       "source_heading": "PlayoutSegment (explicit)",
       "source_quote": "start_offset_ms is media-relative only, never wall-clock-relative.",
       "source_paraphrase": "start_offset_ms is media-relative; Air seeks by offset.",
@@ -855,7 +855,7 @@
     {
       "rule_id": "ARCH-core-Phase4Pipeline-003",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase4-PlayoutPipelineContract.md",
+      "source_path": "server/docs/archive/phases/Phase4-PlayoutPipelineContract.md",
       "source_heading": "Air stopping rule (contractual)",
       "source_quote": "Air may stop at or before hard_stop_time_ms, but must never play past it.",
       "source_paraphrase": "Air never plays past hard stop.",
@@ -871,7 +871,7 @@
     {
       "rule_id": "ARCH-core-Phase4Pipeline-004",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase4-PlayoutPipelineContract.md",
+      "source_path": "server/docs/archive/phases/Phase4-PlayoutPipelineContract.md",
       "source_heading": "Tests",
       "source_quote": "Every invocation creates a new instance (no reuse/mutation).",
       "source_paraphrase": "PlayoutSegment/Request is disposable; no mutating shared state.",
@@ -887,7 +887,7 @@
     {
       "rule_id": "ARCH-core-Phase5CM-001",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase5-ChannelManagerContract.md",
+      "source_path": "server/docs/archive/phases/Phase5-ChannelManagerContract.md",
       "source_heading": "Prefeed window (explicit contract)",
       "source_quote": "CM must issue LoadPreview for the next segment no later than hard_stop_time_ms - prefeed_window_ms.",
       "source_paraphrase": "LoadPreview by prefeed deadline.",
@@ -903,7 +903,7 @@
     {
       "rule_id": "ARCH-core-Phase5CM-002",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase5-ChannelManagerContract.md",
+      "source_path": "server/docs/archive/phases/Phase5-ChannelManagerContract.md",
       "source_heading": "Contract",
       "source_quote": "Issues SwitchToLive at the boundary exactly as defined in the proto.",
       "source_paraphrase": "SwitchToLive at boundary.",
@@ -919,7 +919,7 @@
     {
       "rule_id": "ARCH-core-Phase5CM-003",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase5-ChannelManagerContract.md",
+      "source_path": "server/docs/archive/phases/Phase5-ChannelManagerContract.md",
       "source_heading": "Contract",
       "source_quote": "Immutability: Once issued to Air, PlayoutSegment is immutable; changes require new segment and LoadPreview.",
       "source_paraphrase": "PlayoutSegment immutable once issued; no mutation.",
@@ -935,7 +935,7 @@
     {
       "rule_id": "ARCH-core-Phase5CM-004",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase5-ChannelManagerContract.md",
+      "source_path": "server/docs/archive/phases/Phase5-ChannelManagerContract.md",
       "source_heading": "Contract",
       "source_quote": "Does not wait for Air to ask for the next segment; CM drives the timeline.",
       "source_paraphrase": "CM is proactive; drives timeline.",
@@ -951,7 +951,7 @@
     {
       "rule_id": "ARCH-core-Phase5CM-005",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase5-ChannelManagerContract.md",
+      "source_path": "server/docs/archive/phases/Phase5-ChannelManagerContract.md",
       "source_heading": "Contract",
       "source_quote": "Must not issue duplicate LoadPreview for the same next segment when re-evaluating.",
       "source_paraphrase": "Idempotent prefeed per segment; no duplicate LoadPreview.",
@@ -967,7 +967,7 @@
     {
       "rule_id": "ARCH-core-Phase7E2E-001",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase7-E2EAcceptanceContract.md",
+      "source_path": "server/docs/archive/phases/Phase7-E2EAcceptanceContract.md",
       "source_heading": "Purpose",
       "source_quote": "Phase 7 is the only HTTP- and real-playout-dependent phase.",
       "source_paraphrase": "HTTP tune-in and real ffmpeg only in Phase 7.",
@@ -983,7 +983,7 @@
     {
       "rule_id": "ARCH-core-Phase7E2E-002",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase7-E2EAcceptanceContract.md",
+      "source_path": "server/docs/archive/phases/Phase7-E2EAcceptanceContract.md",
       "source_heading": "Contract",
       "source_quote": "Boundaries: Grid boundaries (:00, :30) are respected forever (no early/late switch, no gap).",
       "source_paraphrase": "Grid boundaries respected; no gap.",
@@ -999,7 +999,7 @@
     {
       "rule_id": "ARCH-core-Phase7E2E-003",
       "source_repo": "core",
-      "source_path": "pkg/core/docs/archive/phases/Phase7-E2EAcceptanceContract.md",
+      "source_path": "server/docs/archive/phases/Phase7-E2EAcceptanceContract.md",
       "source_heading": "Contract",
       "source_quote": "Stability: No drift after hours.",
       "source_paraphrase": "No schedule drift over long run.",

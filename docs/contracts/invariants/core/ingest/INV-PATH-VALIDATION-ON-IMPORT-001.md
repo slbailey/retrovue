@@ -37,7 +37,7 @@ Path mappings are stored but NOT validated for file access at source registratio
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/ingest/test_inv_path_validation_on_import.py`
+- `server/tests/contracts/ingest/test_inv_path_validation_on_import.py`
 
 ## Enforcement Evidence
 

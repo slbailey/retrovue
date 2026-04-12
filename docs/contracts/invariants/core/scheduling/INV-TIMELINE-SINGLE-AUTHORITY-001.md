@@ -28,7 +28,7 @@ Query "what is scheduled at time T on channel C" through three interfaces: playb
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_timeline_authority.py`
+- `server/tests/contracts/test_inv_timeline_authority.py`
 
 ## Enforcement Evidence
 

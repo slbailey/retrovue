@@ -33,7 +33,7 @@ Planning fault. In `reject` mode, `CompileError` halts the broadcast day. In `bl
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_traffic_profiles_conformance.py`
+- `server/tests/contracts/test_traffic_profiles_conformance.py`
 
 ## Enforcement Evidence
 

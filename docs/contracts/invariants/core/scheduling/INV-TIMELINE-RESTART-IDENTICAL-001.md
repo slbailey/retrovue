@@ -26,7 +26,7 @@ Record the output of "what block covers time T" for every T in the compiled hori
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_timeline_authority.py`
+- `server/tests/contracts/test_inv_timeline_authority.py`
 
 ## Enforcement Evidence
 

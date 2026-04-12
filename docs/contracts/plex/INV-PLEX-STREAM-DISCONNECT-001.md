@@ -25,7 +25,7 @@ Viewer count does not decrement on Plex client disconnect. Playout continues aft
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/plex/test_plex_streaming.py` (TestPlexStreaming)
+- `server/tests/contracts/plex/test_plex_streaming.py` (TestPlexStreaming)
 
 ## Enforcement Evidence
 

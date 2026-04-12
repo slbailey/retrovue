@@ -34,7 +34,7 @@ Construct gaps of varying sizes relative to filler duration. For each alignment 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_filler_alignment.py`
+- `server/tests/contracts/test_filler_alignment.py`
 
 ## Enforcement Evidence
 

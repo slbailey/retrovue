@@ -23,11 +23,11 @@ Type=simple
 User=steve
 Group=steve
 WorkingDirectory=/opt/retrovue
-Environment=PATH=/opt/retrovue/pkg/core/.venv/bin:/usr/local/bin:/usr/bin:/bin
-Environment=VIRTUAL_ENV=/opt/retrovue/pkg/core/.venv
+Environment=PATH=/opt/retrovue/server/.venv/bin:/usr/local/bin:/usr/bin:/bin
+Environment=VIRTUAL_ENV=/opt/retrovue/server/.venv
 EnvironmentFile=/opt/retrovue/secrets.env
 
-ExecStart=/opt/retrovue/pkg/core/.venv/bin/retrovue start
+ExecStart=/opt/retrovue/server/.venv/bin/retrovue start
 
 # Auto-restart on ANY non-clean exit (crash, OOM, signal kill)
 Restart=on-failure

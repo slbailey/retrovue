@@ -37,7 +37,7 @@ Planning fault. `CompileError` raised at compile time. No schedule emitted.
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_bleed_no_gap.py`
+- `server/tests/contracts/runtime/test_inv_bleed_no_gap.py`
 
 ## Enforcement Evidence
 

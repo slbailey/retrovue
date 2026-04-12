@@ -40,8 +40,8 @@ Construct a catalog with assets carrying known deficiencies (missing tags, wrong
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_pool_resolution_visibility.py`
-- `pkg/core/tests/contracts/test_pool_diagnostics_integration.py`
+- `server/tests/contracts/test_pool_resolution_visibility.py`
+- `server/tests/contracts/test_pool_diagnostics_integration.py`
 
 ## Enforcement Evidence
 

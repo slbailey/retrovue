@@ -62,7 +62,7 @@ Phase docs (e.g. `docs/archive/phases/*`, `pkg/*/docs/archive/phases/*`) are **h
 
 | Layer   | Authority | Location                          |
 |---------|-----------|-----------------------------------|
-| Laws    | Supreme   | `pkg/air/docs/contracts/laws/`    |
+| Laws    | Supreme   | `runtime/docs/contracts/laws/`    |
 | Contracts| Primary  | `pkg/*/docs/contracts/**`         |
 | Phase docs | Reference | `*/*/docs/archive/phases/*`   |
 | Runbooks| Operational | `*/*/docs/*.md` (non-contract) |

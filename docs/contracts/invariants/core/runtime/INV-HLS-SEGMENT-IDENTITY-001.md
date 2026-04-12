@@ -25,7 +25,7 @@ Duplicate index assigned to distinct segments; index gap within a continuous pro
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_segment_production.py`
+- `server/tests/contracts/runtime/test_inv_hls_segment_production.py`
 
 ## Enforcement Evidence
 

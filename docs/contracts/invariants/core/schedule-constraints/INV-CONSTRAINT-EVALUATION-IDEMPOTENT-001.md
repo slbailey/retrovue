@@ -30,8 +30,8 @@ Call each constraint check function (blackout, adjacency, content restriction) t
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/scheduling/test_schedule_constraints.py::TestInvConstraintEvaluationIdempotent001`
+- `server/tests/contracts/scheduling/test_schedule_constraints.py::TestInvConstraintEvaluationIdempotent001`
 
 ## Enforcement Evidence
 
-- All functions in `pkg/core/src/retrovue/scheduling/schedule_constraints.py` are pure functions: frozen dataclass inputs, no side effects, no external state dependencies
+- All functions in `server/src/retrovue/scheduling/schedule_constraints.py` are pure functions: frozen dataclass inputs, no side effects, no external state dependencies

@@ -58,7 +58,7 @@ Behavioral: in a test harness, replace the AIR process with a spy. Run Schedule 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_constitution.py` (ARCH-BOUNDARY-001, ARCH-BOUNDARY-002)
+- `server/tests/contracts/test_scheduling_constitution.py` (ARCH-BOUNDARY-001, ARCH-BOUNDARY-002)
 
 ## Enforcement Evidence
 

@@ -16,8 +16,8 @@ Mux waiting indefinitely for media without emitting control-plane; Stop() exceed
 `LAW-LIVENESS`
 
 ## Required Tests
-- `pkg/air/tests/contracts/BlockPlan/SharedInvControlPlaneCadenceContractTests.cpp` (`Compliant_StopWithNoMedia_CompletesWithinBound`) — Start() with no media, Stop() within 3s, no deadlock
-- `pkg/air/tests/contracts/BlockPlan/SharedInvControlPlaneCadenceContractTests.cpp` (`Compliant_RunningStateManagedWithoutMedia`) — running state transitions correctly without media
+- `runtime/tests/contracts/BlockPlan/SharedInvControlPlaneCadenceContractTests.cpp` (`Compliant_StopWithNoMedia_CompletesWithinBound`) — Start() with no media, Stop() within 3s, no deadlock
+- `runtime/tests/contracts/BlockPlan/SharedInvControlPlaneCadenceContractTests.cpp` (`Compliant_RunningStateManagedWithoutMedia`) — running state transitions correctly without media
 
 ## Enforcement Evidence
 TODO

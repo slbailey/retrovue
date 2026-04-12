@@ -507,7 +507,7 @@ Within a block's segment sequence, segments MUST appear in this order: Tier 2 ob
 
 ## Required Tests
 
-`pkg/core/tests/contracts/test_block_assembly_tiers.py`
+`server/tests/contracts/test_block_assembly_tiers.py`
 
 | Test | Invariant | Scenario |
 |---|---|---|

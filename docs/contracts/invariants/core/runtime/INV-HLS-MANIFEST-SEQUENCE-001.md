@@ -25,7 +25,7 @@ ManifestGenerator derives `EXT-X-MEDIA-SEQUENCE` from SegmentRing state. Segment
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_manifest.py`
+- `server/tests/contracts/runtime/test_inv_hls_manifest.py`
 
 ## Enforcement Evidence
 

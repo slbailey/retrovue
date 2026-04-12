@@ -30,7 +30,7 @@ Runtime fault — CUN segment skipped at airtime due to missing file.
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_cun_synthesis.py`
+- `server/tests/contracts/test_cun_synthesis.py`
 
 ## Enforcement Evidence
 

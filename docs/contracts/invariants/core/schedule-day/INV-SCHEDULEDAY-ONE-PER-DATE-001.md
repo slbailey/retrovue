@@ -30,11 +30,11 @@ Materialize a ResolvedScheduleDay for (channel=C, date=D). Attempt to store a se
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_constitution.py::TestInvScheduledayOnePerDate001`
+- `server/tests/contracts/test_scheduling_constitution.py::TestInvScheduledayOnePerDate001`
 
 ## Enforcement Evidence
 
-- `pkg/core/src/retrovue/runtime/schedule_manager_service.py` — `InMemoryResolvedStore.store()` rejects duplicates, `force_replace()` atomically swaps
-- `pkg/core/src/retrovue/runtime/schedule_types.py` — `ResolvedScheduleStore` protocol defines `store()`, `force_replace()`
-- `pkg/core/src/retrovue/runtime/schedule_manager.py` — `resolve_schedule_day()` guards with `exists()` check before calling `store()`
+- `server/src/retrovue/runtime/schedule_manager_service.py` — `InMemoryResolvedStore.store()` rejects duplicates, `force_replace()` atomically swaps
+- `server/src/retrovue/runtime/schedule_types.py` — `ResolvedScheduleStore` protocol defines `store()`, `force_replace()`
+- `server/src/retrovue/runtime/schedule_manager.py` — `resolve_schedule_day()` guards with `exists()` check before calling `store()`
 - Error tag: `INV-SCHEDULEDAY-ONE-PER-DATE-001-VIOLATED`

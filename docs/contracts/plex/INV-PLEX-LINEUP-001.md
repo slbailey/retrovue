@@ -26,7 +26,7 @@ Lineup entry references a channel not in the registry. Lineup omits a registered
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/plex/test_plex_lineup.py`
+- `server/tests/contracts/plex/test_plex_lineup.py`
 
 ## Enforcement Evidence
 

@@ -2,7 +2,7 @@
 
 This document specifies how **contract tests** enforce the catalog and processor contracts in `docs/contracts/core/`. Without this harness, the contracts remain documentation only; the tests are the executable specification that implementations must satisfy.
 
-**Reference:** `docs/contracts/core/*.md`, `PIPELINE_MIGRATION_TASK_PLAN.md`, `pkg/core/tests/contracts/README.md`.
+**Reference:** `docs/contracts/core/*.md`, `PIPELINE_MIGRATION_TASK_PLAN.md`, `server/tests/contracts/README.md`.
 
 ---
 
@@ -16,7 +16,7 @@ This document specifies how **contract tests** enforce the catalog and processor
 
 ## Location and Naming
 
-- **Directory:** `pkg/core/tests/contracts/`
+- **Directory:** `server/tests/contracts/`
 - **Naming:** One test module per contract (or per contract domain). Use the pattern:
   - `test_container_discovery_contract.py` → ContainerDiscoveryContract
   - `test_catalog_reconciliation_contract.py` → CatalogReconciliationContract
@@ -39,7 +39,7 @@ This document specifies how **contract tests** enforce the catalog and processor
 1. **Deterministic:** No `time.sleep()` or wall-clock dependence. Use test doubles, frozen time, or in-memory state so that tests are repeatable and fast.
 2. **No direct DB destruction:** Contract tests assume an isolated test database or transactional rollback; they MUST NOT truncate or drop tables in a way that breaks other tests or the test environment.
 3. **Contract scope only:** Tests verify behavior described in the contract. They do not test implementation details that are not part of the contract (e.g. specific class names or private methods), unless needed to assert an observable guarantee.
-4. **CI:** These tests are part of the normal contract test run (e.g. `pytest pkg/core/tests/contracts/ -m contract` or the project’s existing contract test invocation).
+4. **CI:** These tests are part of the normal contract test run (e.g. `pytest server/tests/contracts/ -m contract` or the project’s existing contract test invocation).
 
 ---
 
@@ -204,10 +204,10 @@ When a phase is completed, the corresponding contract tests MUST pass (skips rem
 
 ## Running Contract Tests
 
-- **Full contract suite:** `pytest pkg/core/tests/contracts/ -v` (or with project’s contract marker).
+- **Full contract suite:** `pytest server/tests/contracts/ -v` (or with project’s contract marker).
 - **Per-contract:**  
-  `pytest pkg/core/tests/contracts/test_container_discovery_contract.py -v`  
-  `pytest pkg/core/tests/contracts/test_catalog_reconciliation_contract.py -v`  
+  `pytest server/tests/contracts/test_container_discovery_contract.py -v`  
+  `pytest server/tests/contracts/test_catalog_reconciliation_contract.py -v`  
   … etc.
 
 CI MUST run the contract tests as part of the pipeline so that contract violations are caught before merge or release.

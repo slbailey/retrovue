@@ -37,7 +37,7 @@ Invalid scenario: two ExecutionEntrys for the same channel both cover 06:00–06
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_playlog_continuity_single_authority.py`
+- `server/tests/contracts/test_inv_playlog_continuity_single_authority.py`
 
 ## Enforcement Evidence
 

@@ -31,7 +31,7 @@ Compile a block with Tier 1 presentation (10s), Tier 3 channel ident (5s), and c
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_block_assembly_tiers.py`
+- `server/tests/contracts/test_block_assembly_tiers.py`
 
 ## Enforcement Evidence
 

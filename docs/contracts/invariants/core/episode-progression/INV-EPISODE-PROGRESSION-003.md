@@ -31,7 +31,7 @@ Create a daily Progression Run anchored on Monday at E0 with `emissions_per_occu
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_episode_progression.py`
+- `server/tests/contracts/test_episode_progression.py`
 
 ## Enforcement Evidence
 

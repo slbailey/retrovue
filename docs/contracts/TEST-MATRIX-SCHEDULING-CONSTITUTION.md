@@ -9,7 +9,7 @@
 
 **Permitted laws (exhaustive):** `LAW-ELIGIBILITY` · `LAW-GRID` · `LAW-CONTENT-AUTHORITY` · `LAW-DERIVATION` · `LAW-RUNTIME-AUTHORITY` · `LAW-IMMUTABILITY`
 
-**Test file target:** Tests are distributed across domain-specific files in `pkg/core/tests/contracts/` and subdirectories (`runtime/`, `scheduling/`, `playout/`). There is no single monolithic test file.
+**Test file target:** Tests are distributed across domain-specific files in `server/tests/contracts/` and subdirectories (`runtime/`, `scheduling/`, `playout/`). There is no single monolithic test file.
 
 **Marker:** `@pytest.mark.contract`
 
@@ -1735,7 +1735,7 @@ The following domain tables group tests by functional area. Each test is classif
 #### Traffic DSL (Tier 2)
 
 **Contract:** `docs/contracts/traffic_dsl.md`
-**Test file:** `pkg/core/tests/contracts/test_traffic_dsl.py`
+**Test file:** `server/tests/contracts/test_traffic_dsl.py`
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|
@@ -1768,7 +1768,7 @@ The following domain tables group tests by functional area. Each test is classif
 #### BreakPlan (Tier 1)
 
 **Contract:** `docs/contracts/break_plan.md`
-**Test file:** `pkg/core/tests/contracts/test_break_plan.py` — **NOT YET CREATED.** BREAKPLAN-001..013 are aspirational.
+**Test file:** `server/tests/contracts/test_break_plan.py` — **NOT YET CREATED.** BREAKPLAN-001..013 are aspirational.
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|
@@ -1791,7 +1791,7 @@ The following domain tables group tests by functional area. Each test is classif
 #### BreakStructure (Tier 1)
 
 **Contract:** `docs/contracts/break_structure.md`
-**Test file:** `pkg/core/tests/contracts/test_break_structure.py`
+**Test file:** `server/tests/contracts/test_break_structure.py`
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|
@@ -1817,7 +1817,7 @@ The following domain tables group tests by functional area. Each test is classif
 #### Template Compilation (Tier 2)
 
 **Contract:** `docs/contracts/timeline_compilation_templates.md`
-**Test file:** `pkg/core/tests/contracts/test_timeline_compilation_templates.py` — **NOT YET CREATED.** TEMPLATE-001..023 are aspirational.
+**Test file:** `server/tests/contracts/test_timeline_compilation_templates.py` — **NOT YET CREATED.** TEMPLATE-001..023 are aspirational.
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|
@@ -1848,7 +1848,7 @@ The following domain tables group tests by functional area. Each test is classif
 #### Chapter Marker Break Placement (Tier 2)
 
 **Contract:** `docs/contracts/chapter_marker_break_placement.md`
-**Test file:** `pkg/core/tests/contracts/test_chapter_marker_break_placement.py` — **All 9 tests implemented and passing.**
+**Test file:** `server/tests/contracts/test_chapter_marker_break_placement.py` — **All 9 tests implemented and passing.**
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|
@@ -1867,7 +1867,7 @@ The following domain tables group tests by functional area. Each test is classif
 #### Traffic Manager (Tier 2)
 
 **Contract:** `docs/contracts/traffic_manager.md`
-**Test file:** `pkg/core/tests/contracts/test_traffic_manager.py`
+**Test file:** `server/tests/contracts/test_traffic_manager.py`
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|
@@ -1915,7 +1915,7 @@ The following domain tables group tests by functional area. Each test is classif
 
 #### Episode Progression (Tier 2)
 
-**Test file:** `pkg/core/tests/contracts/test_episode_progression.py`
+**Test file:** `server/tests/contracts/test_episode_progression.py`
 
 **Canonical contract:** `docs/contracts/episode_progression.md`
 
@@ -1958,7 +1958,7 @@ The following domain tables group tests by functional area. Each test is classif
 
 #### Programming Pool — Rating Match Normalization (Tier 1)
 
-**Test file:** `pkg/core/tests/contracts/test_pool_rating_normalize.py`
+**Test file:** `server/tests/contracts/test_pool_rating_normalize.py`
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|
@@ -1975,7 +1975,7 @@ The following domain tables group tests by functional area. Each test is classif
 
 #### Programming Pool — Tags Filter (Tier 1)
 
-**Test file:** `pkg/core/tests/contracts/test_pool_tags_filter.py`
+**Test file:** `server/tests/contracts/test_pool_tags_filter.py`
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|
@@ -1993,7 +1993,7 @@ The following domain tables group tests by functional area. Each test is classif
 
 #### Programming Pool — Resolution Visibility (Tier 2)
 
-**Test file:** `pkg/core/tests/contracts/test_pool_resolution_visibility.py`
+**Test file:** `server/tests/contracts/test_pool_resolution_visibility.py`
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|
@@ -2019,7 +2019,7 @@ The following domain tables group tests by functional area. Each test is classif
 
 #### Programming Pool — Resolution Visibility Integration (Tier 2)
 
-**Test file:** `pkg/core/tests/contracts/test_pool_diagnostics_integration.py`
+**Test file:** `server/tests/contracts/test_pool_diagnostics_integration.py`
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|
@@ -2040,7 +2040,7 @@ The following domain tables group tests by functional area. Each test is classif
 #### Pool Management — Name Uniqueness (Tier 1)
 
 **Contract:** `docs/contracts/pool_management.md`
-**Test file:** `pkg/core/tests/contracts/test_pool_management.py`
+**Test file:** `server/tests/contracts/test_pool_management.py`
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|
@@ -2060,7 +2060,7 @@ The following domain tables group tests by functional area. Each test is classif
 #### Pool Management — CLI Delegation (Tier 1)
 
 **Contract:** `docs/contracts/pool_management.md`
-**Test file:** `pkg/core/tests/contracts/test_pool_management.py`
+**Test file:** `server/tests/contracts/test_pool_management.py`
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|
@@ -2075,7 +2075,7 @@ The following domain tables group tests by functional area. Each test is classif
 #### Presentation Pool Entry Resolution (Tier 2)
 
 **Contract:** `docs/contracts/program_presentation.md`
-**Test file:** `pkg/core/tests/contracts/test_presentation_pool_entry.py`
+**Test file:** `server/tests/contracts/test_presentation_pool_entry.py`
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|
@@ -2092,7 +2092,7 @@ The following domain tables group tests by functional area. Each test is classif
 #### Schedule Block Program Reference — Program List (Tier 2)
 
 **Contract:** `docs/contracts/schedule_block_program_reference.md`
-**Test file:** `pkg/core/tests/contracts/test_schedule_block_program_list.py`
+**Test file:** `server/tests/contracts/test_schedule_block_program_list.py`
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|
@@ -2115,7 +2115,7 @@ The following domain tables group tests by functional area. Each test is classif
 
 ## Ingest — Interstitial Type Persistence
 
-**Test file:** `pkg/core/tests/contracts/test_inv_interstitial_type_persisted.py`
+**Test file:** `server/tests/contracts/test_inv_interstitial_type_persisted.py`
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|
@@ -2137,7 +2137,7 @@ The following domain tables group tests by functional area. Each test is classif
 
 ## Ingest — Enricher Must Execute or Fail
 
-**Test file:** `pkg/core/tests/contracts/test_inv_enricher_must_execute_or_fail.py`
+**Test file:** `server/tests/contracts/test_inv_enricher_must_execute_or_fail.py`
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|
@@ -2156,7 +2156,7 @@ The following domain tables group tests by functional area. Each test is classif
 
 ## Ingest — Tag Persistence Correctness
 
-**Test file:** `pkg/core/tests/contracts/test_inv_asset_tags_persisted_correctly.py`
+**Test file:** `server/tests/contracts/test_inv_asset_tags_persisted_correctly.py`
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|
@@ -2181,7 +2181,7 @@ The following domain tables group tests by functional area. Each test is classif
 
 ## Ingest — Asset Lifecycle Completion
 
-**Test file:** `pkg/core/tests/contracts/test_inv_asset_lifecycle_completion.py`
+**Test file:** `server/tests/contracts/test_inv_asset_lifecycle_completion.py`
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|
@@ -2198,7 +2198,7 @@ The following domain tables group tests by functional area. Each test is classif
 
 ## Timeline Authority Invariants
 
-**Test file:** `pkg/core/tests/contracts/test_inv_timeline_authority.py`
+**Test file:** `server/tests/contracts/test_inv_timeline_authority.py`
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|
@@ -2232,7 +2232,7 @@ The following domain tables group tests by functional area. Each test is classif
 
 **Contract:** `docs/contracts/block_assembly_tiers.md`
 
-**Test file:** `pkg/core/tests/contracts/test_block_assembly_tiers.py`
+**Test file:** `server/tests/contracts/test_block_assembly_tiers.py`
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|
@@ -2293,7 +2293,7 @@ The following domain tables group tests by functional area. Each test is classif
 
 **Contract:** `docs/contracts/scheduling_policies.md`
 
-**Test file:** `pkg/core/tests/contracts/test_scheduling_policies.py`
+**Test file:** `server/tests/contracts/test_scheduling_policies.py`
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|
@@ -2322,7 +2322,7 @@ The following domain tables group tests by functional area. Each test is classif
 
 **Contract:** `docs/contracts/invariants/core/runtime/INV-SCHEDULE-COMPILER-MODULE-SPLIT-001.md`
 
-**Test file:** `pkg/core/tests/contracts/test_schedule_compiler_module_split.py`
+**Test file:** `server/tests/contracts/test_schedule_compiler_module_split.py`
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|
@@ -2338,7 +2338,7 @@ The following domain tables group tests by functional area. Each test is classif
 
 **Contract:** `docs/contracts/invariants/core/playout/INV-DAEMON-FRONTIER-ACTUAL-001.md`
 
-**Test file:** `pkg/core/tests/contracts/runtime/test_inv_daemon_frontier_actual.py`
+**Test file:** `server/tests/contracts/runtime/test_inv_daemon_frontier_actual.py`
 
 | Test ID | Invariant(s) | Law(s) | Scenario |
 |---------|-------------|--------|----------|

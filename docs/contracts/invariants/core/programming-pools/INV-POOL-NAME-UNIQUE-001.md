@@ -30,7 +30,7 @@ Create a pool with name `"test-pool"`. Attempt to create a second pool with the 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_pool_management.py`
+- `server/tests/contracts/test_pool_management.py`
 
 ## Enforcement Evidence
 

@@ -13,5 +13,5 @@ Every PolicyViolation MUST carry: `invariant_id` (string, non-empty),
 
 ## Enforcement
 
-- **Contract tests:** `pkg/core/tests/contracts/test_scheduling_policies.py`
+- **Contract tests:** `server/tests/contracts/test_scheduling_policies.py`
 - **Canonical source:** `docs/contracts/invariants/core/scheduling-policy/INV-POLICY-VIOLATION-STRUCTURED-001.md`

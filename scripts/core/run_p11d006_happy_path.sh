@@ -20,7 +20,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-CORE_DIR="$REPO_ROOT/pkg/core"
+CORE_DIR="$REPO_ROOT/server"
 ASSET_A="${ASSET_A:-/opt/retrovue/assets/SampleA.mp4}"
 ASSET_B="${ASSET_B:-/opt/retrovue/assets/SampleB.mp4}"
 PORT="${PORT:-18808}"
@@ -53,11 +53,11 @@ if [[ ! -f "$ASSET_B" ]]; then
   exit 1
 fi
 
-AIR_BIN="$REPO_ROOT/pkg/air/build/retrovue_air"
+AIR_BIN="$REPO_ROOT/runtime/build/retrovue_air"
 if [[ -z "${RETROVUE_AIR_EXE:-}" ]] && [[ ! -x "$AIR_BIN" ]]; then
-  AIR_ALT="$REPO_ROOT/pkg/air/out/build/linux-debug/retrovue_air"
+  AIR_ALT="$REPO_ROOT/runtime/out/build/linux-debug/retrovue_air"
   if [[ ! -x "$AIR_ALT" ]]; then
-    echo "ERROR: AIR binary not found. Build pkg/air or set RETROVUE_AIR_EXE."
+    echo "ERROR: AIR binary not found. Build runtime or set RETROVUE_AIR_EXE."
     exit 1
   fi
 fi

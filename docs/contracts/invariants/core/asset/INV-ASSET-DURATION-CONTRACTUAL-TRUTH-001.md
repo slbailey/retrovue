@@ -30,10 +30,10 @@ Set `duration_ms` on an asset stub during simulated enrichment. Query via a mock
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_asset_invariants.py::TestInvAssetDurationContractualTruth001`
+- `server/tests/contracts/test_asset_invariants.py::TestInvAssetDurationContractualTruth001`
 
 ## Enforcement Evidence
 
-- `pkg/core/src/retrovue/catalog/db_asset_library.py` — `get_duration_ms()` returns stored value
-- `pkg/core/src/retrovue/usecases/ingest_orchestrator.py` — sets `duration_ms` from probe data
+- `server/src/retrovue/catalog/db_asset_library.py` — `get_duration_ms()` returns stored value
+- `server/src/retrovue/usecases/ingest_orchestrator.py` — sets `duration_ms` from probe data
 - Error tag: `INV-ASSET-DURATION-CONTRACTUAL-TRUTH-001-VIOLATED`

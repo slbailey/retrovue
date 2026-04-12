@@ -32,7 +32,7 @@ Planning fault. YAML validation error before compilation begins.
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_traffic_profiles_conformance.py`
+- `server/tests/contracts/test_traffic_profiles_conformance.py`
 
 ## Enforcement Evidence
 

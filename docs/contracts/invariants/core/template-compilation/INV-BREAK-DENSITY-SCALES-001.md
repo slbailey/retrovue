@@ -30,7 +30,7 @@ Apply a template with `target_segment_minutes: 11` to content of 22, 44, and 85 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_timeline_compilation_templates.py`
+- `server/tests/contracts/test_timeline_compilation_templates.py`
 
 ## Enforcement Evidence
 

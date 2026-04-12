@@ -37,4 +37,4 @@ Generate PlaylistEvents from a fixed ScheduleItem, fixed channel policy, and fix
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/playout/test_playlist_determinism.py::test_playlist_generation_is_deterministic`
+- `server/tests/contracts/playout/test_playlist_determinism.py::test_playlist_generation_is_deterministic`

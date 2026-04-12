@@ -68,10 +68,10 @@ DSL compilation. Pools originate exclusively from DSL YAML — either inline in 
 
 ## Implementation files
 
-- `pkg/core/src/retrovue/runtime/pool_dsl_normalize.py` — `select.where` → `match` normalization
-- `pkg/core/src/retrovue/runtime/asset_resolver.py` — `AssetResolver` protocol + `PoolDiagnostics`
-- `pkg/core/src/retrovue/runtime/catalog_resolver.py` — `CatalogAssetResolver.register_pools()` + query execution
-- `pkg/core/src/retrovue/dev/stub_asset_resolver.py` — test/dev resolver with pool support
+- `server/src/retrovue/runtime/pool_dsl_normalize.py` — `select.where` → `match` normalization
+- `server/src/retrovue/runtime/asset_resolver.py` — `AssetResolver` protocol + `PoolDiagnostics`
+- `server/src/retrovue/runtime/catalog_resolver.py` — `CatalogAssetResolver.register_pools()` + query execution
+- `server/src/retrovue/dev/stub_asset_resolver.py` — test/dev resolver with pool support
 
 ## What must NOT be assumed
 

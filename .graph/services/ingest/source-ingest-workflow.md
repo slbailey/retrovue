@@ -29,4 +29,4 @@ CLI command or API route handler (presentation layer). Receives source selector 
 
 ## Source location
 
-`pkg/core/src/retrovue/workflows/source_ingest.py`
+`server/src/retrovue/workflows/source_ingest.py`

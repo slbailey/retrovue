@@ -37,4 +37,4 @@ Generate PlaylistEvents from a ScheduleItem with a known slot duration (e.g., 30
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/playout/test_playlist_duration_coverage.py::test_playlist_events_cover_schedule_item_duration`
+- `server/tests/contracts/playout/test_playlist_duration_coverage.py::test_playlist_events_cover_schedule_item_duration`

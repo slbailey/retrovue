@@ -43,9 +43,9 @@ Thumbs.db
 *.temp
 # Log directories
 **/logs/
-!pkg/core/tests/contracts/fixtures/logs/
-pkg/air/logs/
-pkg/core/logs/
+!server/tests/contracts/fixtures/logs/
+runtime/logs/
+server/logs/
 # FFmpeg concat files from retrovue-core
 *.txt
 !requirements.txt
@@ -181,7 +181,7 @@ compile_commands.json
 
 # Build directories (including ASAN builds)
 **/build-asan/
-pkg/air/build-asan/
+runtime/build-asan/
 
 # CTest artifacts
 Testing/

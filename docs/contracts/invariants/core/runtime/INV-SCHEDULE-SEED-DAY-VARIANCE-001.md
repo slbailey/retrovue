@@ -38,4 +38,4 @@ deterministic rebuild: recompiling the same day produces the same output.
 ## See Also
 
 - `INV-SCHEDULE-SEED-DETERMINISTIC-001` — channel_seed() stability (unchanged)
-- `pkg/core/src/retrovue/runtime/schedule_compiler.py` — `compilation_seed()`, `_window_seed()`
+- `server/src/retrovue/runtime/schedule_compiler.py` — `compilation_seed()`, `_window_seed()`

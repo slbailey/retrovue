@@ -25,7 +25,7 @@ ManifestGenerator owns sequence tracking. The last-emitted value is per-channel 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_manifest_consistency.py`
+- `server/tests/contracts/runtime/test_inv_hls_manifest_consistency.py`
 
 ## Enforcement Evidence
 

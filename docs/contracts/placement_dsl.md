@@ -156,7 +156,7 @@ All placement positions MUST be strictly within (0.0, 1.0), not including endpoi
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/dsl/test_placement_strategies.py`
+- `server/tests/contracts/dsl/test_placement_strategies.py`
 
 | Test | Invariant | Scenario |
 |---|---|---|

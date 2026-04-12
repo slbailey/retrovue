@@ -29,7 +29,7 @@ JIP:
     offset >= episode + filler → skip episode + filler, pad only
 
 Usage:
-    source pkg/core/.venv/bin/activate
+    source server/.venv/bin/activate
     python tools/burn_in.py [--schedule PATH]
     python tools/burn_in.py --pipeline
     python tools/burn_in.py --horizon

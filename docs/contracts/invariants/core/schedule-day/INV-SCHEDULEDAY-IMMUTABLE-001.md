@@ -38,11 +38,11 @@ Materialize a ResolvedScheduleDay. Attempt direct field assignment (rejected by 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_constitution.py::TestInvScheduledayImmutable001`
+- `server/tests/contracts/test_scheduling_constitution.py::TestInvScheduledayImmutable001`
 
 ## Enforcement Evidence
 
-- `pkg/core/src/retrovue/runtime/schedule_types.py` — `ResolvedScheduleDay(frozen=True)`, `ResolvedSlot(frozen=True)`, `ResolvedAsset(frozen=True)`, `ProgramEvent(frozen=True)`, `SequenceState(frozen=True)`
-- `pkg/core/src/retrovue/runtime/schedule_manager_service.py` — `InMemoryResolvedStore.update()` unconditionally rejects, `operator_override()` creates new record with override metadata
-- `pkg/core/src/retrovue/runtime/schedule_manager_service.py` — `InMemoryResolvedStore.force_replace()` atomically swaps records
+- `server/src/retrovue/runtime/schedule_types.py` — `ResolvedScheduleDay(frozen=True)`, `ResolvedSlot(frozen=True)`, `ResolvedAsset(frozen=True)`, `ProgramEvent(frozen=True)`, `SequenceState(frozen=True)`
+- `server/src/retrovue/runtime/schedule_manager_service.py` — `InMemoryResolvedStore.update()` unconditionally rejects, `operator_override()` creates new record with override metadata
+- `server/src/retrovue/runtime/schedule_manager_service.py` — `InMemoryResolvedStore.force_replace()` atomically swaps records
 - Error tag: `INV-SCHEDULEDAY-IMMUTABLE-001-VIOLATED`

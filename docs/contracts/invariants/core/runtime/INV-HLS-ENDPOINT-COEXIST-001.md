@@ -26,7 +26,7 @@ HLS viewer not counted in channel population; second encoder started for HLS pat
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_endpoint_coexist.py`
+- `server/tests/contracts/runtime/test_inv_hls_endpoint_coexist.py`
 
 ## Enforcement Evidence
 

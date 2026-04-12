@@ -35,7 +35,7 @@ File change events detected by watch mode MUST be aggregated over a configurable
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/ingest/test_inv_watch_debounce.py`
+- `server/tests/contracts/ingest/test_inv_watch_debounce.py`
 
 ## Enforcement Evidence
 

@@ -115,7 +115,7 @@ Tick loop
 
 ## Required Tests
 
-- `pkg/air/tests/contracts/BlockPlan/EofPadTransitionContractTests.cpp`
+- `runtime/tests/contracts/BlockPlan/EofPadTransitionContractTests.cpp`
 
 | Test | Invariant | Scenario |
 |------|-----------|----------|

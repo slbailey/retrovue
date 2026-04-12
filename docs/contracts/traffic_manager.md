@@ -325,9 +325,9 @@ When the static filler file is shorter than the break, the traffic manager wraps
 ## Relationship to Existing Invariants
 
 This contract consolidates and supersedes traffic manager invariants previously scattered across:
-- `INV-BREAK-PAD-EXACT-001` in `pkg/core/docs/contracts/runtime/` — now `INV-TRAFFIC-FILL-EXACT-001`
-- `INV-BREAK-PAD-DISTRIBUTED-001` in `pkg/core/docs/contracts/runtime/` — now `INV-TRAFFIC-FILL-PAD-DISTRIBUTED-001`
-- `INV-TRAFFIC-LATE-BIND-001` in `pkg/core/docs/contracts/runtime/` — now `INV-TRAFFIC-FILL-LATE-BIND-001`
+- `INV-BREAK-PAD-EXACT-001` in `server/docs/contracts/runtime/` — now `INV-TRAFFIC-FILL-EXACT-001`
+- `INV-BREAK-PAD-DISTRIBUTED-001` in `server/docs/contracts/runtime/` — now `INV-TRAFFIC-FILL-PAD-DISTRIBUTED-001`
+- `INV-TRAFFIC-LATE-BIND-001` in `server/docs/contracts/runtime/` — now `INV-TRAFFIC-FILL-LATE-BIND-001`
 - Behavioral rules B-1 through B-6 in `TrafficManagementContract.md` — selection behavior now delegated to `traffic_policy.md`; data contract rules remain in `TrafficManagementContract.md`
 
 `INV-MOVIE-PRIMARY-ATOMIC` (primary content protection) has been moved to `break_detection.md` as `INV-BREAK-012`, where it belongs architecturally. Break detection prevents break placement inside primary content; the traffic manager trusts this guarantee.
@@ -336,7 +336,7 @@ This contract consolidates and supersedes traffic manager invariants previously 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_traffic_manager.py`
+- `server/tests/contracts/test_traffic_manager.py`
 
 | Test | Invariant | Scenario |
 |------|-----------|----------|

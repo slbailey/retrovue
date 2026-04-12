@@ -25,7 +25,7 @@ An RPC is issued without a timeout parameter. A deadline-exceeded response trigg
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/grpc/test_grpc_deadline_policy.py`
+- `server/tests/contracts/grpc/test_grpc_deadline_policy.py`
 
 ## Enforcement Evidence
 TODO

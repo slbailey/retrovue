@@ -25,7 +25,7 @@ Core terminates AIR before `SessionEnded` is received (except on timeout). AIR e
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/grpc/test_grpc_graceful_drain.py`
+- `server/tests/contracts/grpc/test_grpc_graceful_drain.py`
 
 ## Enforcement Evidence
 TODO

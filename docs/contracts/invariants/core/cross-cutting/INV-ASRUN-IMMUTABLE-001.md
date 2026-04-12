@@ -32,13 +32,13 @@ Any attempt to assign a field on an `AsRunEvent` instance raises `AttributeError
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_constitution.py` (TestInvAsrunImmutable001)
+- `server/tests/contracts/test_scheduling_constitution.py` (TestInvAsrunImmutable001)
 
 ## Enforcement Evidence
 
 **Enforcement location:**
-- `AsRunEvent` in `pkg/core/src/retrovue/runtime/asrun_logger.py` (line 33) — `@dataclass(frozen=True)` prevents all field mutation after construction.
-- `AsRunLogger.log_playout_end()` in `pkg/core/src/retrovue/runtime/asrun_logger.py` (line 144) — Uses `dataclasses.replace()` to produce a new instance with updated end time. Original instance is never modified.
+- `AsRunEvent` in `server/src/retrovue/runtime/asrun_logger.py` (line 33) — `@dataclass(frozen=True)` prevents all field mutation after construction.
+- `AsRunLogger.log_playout_end()` in `server/src/retrovue/runtime/asrun_logger.py` (line 144) — Uses `dataclasses.replace()` to produce a new instance with updated end time. Original instance is never modified.
 
 **Tests:**
 - `test_inv_asrun_immutable_001_reject_mutation`: Creates event, attempts field mutation. Asserts `AttributeError`. Verifies `log_playout_end()` returns new instance without modifying original.

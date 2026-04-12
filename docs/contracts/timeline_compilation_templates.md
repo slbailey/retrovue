@@ -257,7 +257,7 @@ No conflict. Templates operate within the existing BBL/scheduling architecture. 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_timeline_compilation_templates.py`
+- `server/tests/contracts/test_timeline_compilation_templates.py`
 
 | Test | Invariant | Scenario |
 |------|-----------|----------|

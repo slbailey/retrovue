@@ -34,7 +34,7 @@ Compile a block with: 85-minute movie (Tier 0), 10-second rating card (Tier 1), 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_block_assembly_tiers.py`
+- `server/tests/contracts/test_block_assembly_tiers.py`
 
 ## Enforcement Evidence
 

@@ -26,7 +26,7 @@ Schedule a program with duration D starting at time Tâ‚›. At any time T where Tâ
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_timeline_authority.py`
+- `server/tests/contracts/test_inv_timeline_authority.py`
 
 ## Enforcement Evidence
 

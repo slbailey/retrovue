@@ -37,11 +37,11 @@ Every enricher execution MUST produce a queryable record containing: enricher na
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/ingest/test_inv_enricher_observability.py`
+- `server/tests/contracts/ingest/test_inv_enricher_observability.py`
 
 ## Enforcement Evidence
 
-- `EnricherRun` model: `pkg/core/src/retrovue/domain/entities.py`
-- Runtime wiring: `pkg/core/src/retrovue/catalog/processor_runtime.py` (execute_job creates EnricherRun per enricher)
-- Progress query: `pkg/core/src/retrovue/catalog/enrichment_progress.py`
-- Migration: `pkg/core/alembic/versions/20260409_create_enricher_runs.py`
+- `EnricherRun` model: `server/src/retrovue/domain/entities.py`
+- Runtime wiring: `server/src/retrovue/catalog/processor_runtime.py` (execute_job creates EnricherRun per enricher)
+- Progress query: `server/src/retrovue/catalog/enrichment_progress.py`
+- Migration: `server/alembic/versions/20260409_create_enricher_runs.py`

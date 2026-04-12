@@ -30,7 +30,7 @@ Construct an assembly with 2 presentation segments and 1 content segment. Run br
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_program_presentation.py`
+- `server/tests/contracts/test_program_presentation.py`
 
 ## Enforcement Evidence
 

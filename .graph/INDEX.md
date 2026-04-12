@@ -142,7 +142,7 @@ Check these **when** the symptom matches the trigger—avoid loading all ambigui
 
 ## What not to load (global)
 
-- **RetroVue source** (`pkg/core/...`, `pkg/air/...`) for everyday architecture questions—use this graph + RetroVue `docs/contracts/`.
+- **RetroVue source** (`server/...`, `runtime/...`) for everyday architecture questions—use this graph + RetroVue `docs/contracts/`.
 - **Proto / generated stubs** unless changing the Core↔AIR API.
 - **Full `INVARIANTS.md`** table unless verifying an ID string—prefer the single `invariants/*/INV-*.md` stub here.
 

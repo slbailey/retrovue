@@ -46,7 +46,7 @@ Using FakeAdvancingClock: set clock to T. Set lock_horizon_depth to 3 hours. Att
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_constitution.py` (PLAYLOG-IMMUT-004, SCHED-DAY-REGEN-FUTURE)
+- `server/tests/contracts/test_scheduling_constitution.py` (PLAYLOG-IMMUT-004, SCHED-DAY-REGEN-FUTURE)
 
 ## Enforcement Evidence
 

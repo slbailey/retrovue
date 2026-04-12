@@ -1,7 +1,7 @@
 # Test Matrix — EPG Invariants
 
 **Status:** Active
-**Test file:** `pkg/core/tests/contracts/test_epg_invariants.py`
+**Test file:** `server/tests/contracts/test_epg_invariants.py`
 
 ---
 
@@ -85,7 +85,7 @@
 
 ### INV-EPG-READS-CANONICAL-SCHEDULE-001
 
-**Test file:** `pkg/core/tests/contracts/runtime/test_inv_epg_reads_canonical.py`
+**Test file:** `server/tests/contracts/runtime/test_inv_epg_reads_canonical.py`
 
 | ID | Scenario | Expected | Test |
 |----|----------|----------|------|
@@ -100,7 +100,7 @@
 
 ### INV-EPG-DURATION-VISIBILITY-001
 
-**Test file:** `pkg/core/tests/contracts/test_epg_duration_visibility.py`
+**Test file:** `server/tests/contracts/test_epg_duration_visibility.py`
 
 | ID | Scenario | Expected | Test |
 |----|----------|----------|------|

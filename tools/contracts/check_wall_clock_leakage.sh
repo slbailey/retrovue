@@ -33,14 +33,14 @@
 GREP_PATTERN='steady_clock::now|sleep_until|sleep_for|system_clock::now'
 
 # Only scan the BlockPlan subsystem (tick loop / playout timing decisions).
-SCAN_DIRS="pkg/air/src/blockplan pkg/air/include/retrovue/blockplan"
+SCAN_DIRS="runtime/src/blockplan runtime/include/retrovue/blockplan"
 
 is_permitted() {
   case "$1" in
     # ── Real-time clock implementation ─────────────────────────────────────
     # All wall-clock reads here are the intended production timing surface.
-    pkg/air/src/blockplan/OutputClock.cpp)                    return 0 ;;
-    pkg/air/include/retrovue/blockplan/IWaitStrategy.hpp)     return 0 ;;
+    runtime/src/blockplan/OutputClock.cpp)                    return 0 ;;
+    runtime/include/retrovue/blockplan/IWaitStrategy.hpp)     return 0 ;;
 
     # ── Diagnostic / observability only ────────────────────────────────────
     # These files read wall clock solely to measure elapsed durations or
@@ -50,22 +50,22 @@ is_permitted() {
     # PipelineManager: bootstrap audio gate timeout, StopFilling/join duration
     # logging, tick lateness metric (metrics_.late_ticks_total), inter-tick
     # gap detection.
-    pkg/air/src/blockplan/PipelineManager.cpp)                return 0 ;;
+    runtime/src/blockplan/PipelineManager.cpp)                return 0 ;;
 
     # TickProducer: prime_start / elapsed — measures prime duration for logging.
-    pkg/air/src/blockplan/TickProducer.cpp)                   return 0 ;;
+    runtime/src/blockplan/TickProducer.cpp)                   return 0 ;;
 
     # AudioLookaheadBuffer: t0 for rate-limited depth logging (once per second).
-    pkg/air/src/blockplan/AudioLookaheadBuffer.cpp)           return 0 ;;
+    runtime/src/blockplan/AudioLookaheadBuffer.cpp)           return 0 ;;
 
     # VideoLookaheadBuffer: fill_start_time_ for GetRefillRate() metrics;
     # `now` in fill loop for rate-limited MEM_WATCHDOG log;
     # decode_start/end for per-decode latency metrics.
-    pkg/air/src/blockplan/VideoLookaheadBuffer.cpp)           return 0 ;;
+    runtime/src/blockplan/VideoLookaheadBuffer.cpp)           return 0 ;;
 
     # RealAssetSource: open_start/end, stream_info_start/end — asset open
     # latency diagnostics.
-    pkg/air/src/blockplan/RealAssetSource.cpp)                return 0 ;;
+    runtime/src/blockplan/RealAssetSource.cpp)                return 0 ;;
 
     *) return 1 ;;
   esac

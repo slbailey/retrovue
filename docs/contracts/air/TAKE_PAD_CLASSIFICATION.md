@@ -140,7 +140,7 @@ Output frame classification MUST reflect the actual frame source, not the buffer
 
 #### Required Tests
 
-- `pkg/air/tests/contracts/BlockPlan/ContinuousOutputContractTests.cpp` — `PadFramesForEntireBlock`, `NulloptBurstTolerance`, `PadProof_PadOnlyMicroBlock`, `PadProof_BudgetShortfall_ExactCount`
+- `runtime/tests/contracts/BlockPlan/ContinuousOutputContractTests.cpp` — `PadFramesForEntireBlock`, `NulloptBurstTolerance`, `PadProof_PadOnlyMicroBlock`, `PadProof_BudgetShortfall_ExactCount`
 
 #### Enforcement Evidence
 
@@ -165,7 +165,7 @@ When a producer has `HasDecoder() == false` after `AssignBlock()`, ALL frames em
 
 #### Required Tests
 
-- `pkg/air/tests/contracts/BlockPlan/ContinuousOutputContractTests.cpp` — `PadFramesForEntireBlock`, `DegradedTakeCountTracked`
+- `runtime/tests/contracts/BlockPlan/ContinuousOutputContractTests.cpp` — `PadFramesForEntireBlock`, `DegradedTakeCountTracked`
 
 #### Enforcement Evidence
 
@@ -189,7 +189,7 @@ TODO
 
 #### Required Tests
 
-- `pkg/air/tests/contracts/BlockPlan/ContinuousOutputContractTests.cpp` — `PadProof_BudgetShortfall_ExactCount`
+- `runtime/tests/contracts/BlockPlan/ContinuousOutputContractTests.cpp` — `PadProof_BudgetShortfall_ExactCount`
 
 #### Enforcement Evidence
 

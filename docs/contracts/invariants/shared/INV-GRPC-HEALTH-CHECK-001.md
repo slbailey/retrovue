@@ -25,10 +25,10 @@ AIR does not implement the health service. Core uses a non-standard readiness pr
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/grpc/test_grpc_health_check.py`
+- `server/tests/contracts/grpc/test_grpc_health_check.py`
 
 ## Enforcement Evidence
 
-- **AIR**: `pkg/air/src/main.cpp` — `grpc::EnableDefaultHealthCheckService(true)` enables the built-in gRPC health service; `SetServingStatus("retrovue.playout.v1.PlayoutControl", true)` called after `BuildAndStart()`.
-- **Core**: `pkg/core/src/retrovue/runtime/playout_session.py` — `_wait_for_grpc()` uses `grpc_health.v1.health_pb2_grpc.HealthStub.Check()` with service name `retrovue.playout.v1.PlayoutControl` for readiness probing. Timeout configurable via `readiness_timeout_seconds` constructor parameter (maps to `playout.grpc.readiness_timeout_seconds`).
-- **Tests**: `pkg/core/tests/contracts/grpc/test_grpc_health_check.py` — source-inspection tests verify health check imports and configurable timeout presence.
+- **AIR**: `runtime/src/main.cpp` — `grpc::EnableDefaultHealthCheckService(true)` enables the built-in gRPC health service; `SetServingStatus("retrovue.playout.v1.PlayoutControl", true)` called after `BuildAndStart()`.
+- **Core**: `server/src/retrovue/runtime/playout_session.py` — `_wait_for_grpc()` uses `grpc_health.v1.health_pb2_grpc.HealthStub.Check()` with service name `retrovue.playout.v1.PlayoutControl` for readiness probing. Timeout configurable via `readiness_timeout_seconds` constructor parameter (maps to `playout.grpc.readiness_timeout_seconds`).
+- **Tests**: `server/tests/contracts/grpc/test_grpc_health_check.py` — source-inspection tests verify health check imports and configurable timeout presence.

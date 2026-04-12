@@ -32,7 +32,7 @@ Call `count_occurrences(anchor, target, mask)` twice with identical arguments. A
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_episode_progression.py`
+- `server/tests/contracts/test_episode_progression.py`
 
 ## Enforcement Evidence
 

@@ -25,7 +25,7 @@ Producer running with zero viewers and no linger timer; linger timer not cancell
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_channel_runtime.py`
+- `server/tests/contracts/runtime/test_inv_hls_channel_runtime.py`
 
 ## Enforcement Evidence
 

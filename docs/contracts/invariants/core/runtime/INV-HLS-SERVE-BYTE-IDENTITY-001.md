@@ -25,7 +25,7 @@ Response body differing from `segment.data`; any byte transformation in the serv
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_delivery_path.py`
+- `server/tests/contracts/runtime/test_inv_hls_delivery_path.py`
 
 ## Enforcement Evidence
 

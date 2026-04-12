@@ -183,8 +183,8 @@ A Tier-2 rebuild MUST NOT use a different expansion function, bypass the compile
 
 Tests enforcing these invariants:
 
-- `pkg/core/tests/contracts/test_template_graft_contract.py` — Primary segment detection rules (`INV-TEMPLATE-PRIMARY-SEGMENT-001`).
-- `pkg/core/tests/runtime/test_traffic_manager.py` — Traffic insertion operates only on filler placeholders; no content segment splitting.
+- `server/tests/contracts/test_template_graft_contract.py` — Primary segment detection rules (`INV-TEMPLATE-PRIMARY-SEGMENT-001`).
+- `server/tests/runtime/test_traffic_manager.py` — Traffic insertion operates only on filler placeholders; no content segment splitting.
 - `tests/contracts/test_inv_template_segments_compiled.py` — Compiled segments structure, persistence, and hydration.
 - `tests/contracts/test_schedule_rebuild.py` — Rebuild produces output equivalent to daemon path.
 

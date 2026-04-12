@@ -32,9 +32,9 @@ Attempt to create an ExecutionEntry without a PlaylistEvent reference and withou
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_constitution.py::TestInvExecutionentryDerivedFromTransmissionlog001`
-- `pkg/core/tests/contracts/scheduling/test_inv_execution_entry_derivation.py` (PLAYLOG-008: orphan rejected, PLAYLOG-009: override accepted)
+- `server/tests/contracts/test_scheduling_constitution.py::TestInvExecutionentryDerivedFromTransmissionlog001`
+- `server/tests/contracts/scheduling/test_inv_execution_entry_derivation.py` (PLAYLOG-008: orphan rejected, PLAYLOG-009: override accepted)
 
 ## Enforcement Evidence
 
-`ExecutionWindowStore.add_entries()` in `pkg/core/src/retrovue/runtime/execution_window_store.py` — when `enforce_derivation_from_playlist=True`, rejects any entry where `transmission_log_ref is None` and `is_operator_override is False` with tag `INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001-VIOLATED`. Check runs before the schedule lineage check (fail fast).
+`ExecutionWindowStore.add_entries()` in `server/src/retrovue/runtime/execution_window_store.py` — when `enforce_derivation_from_playlist=True`, rejects any entry where `transmission_log_ref is None` and `is_operator_override is False` with tag `INV-EXECUTIONENTRY-DERIVED-FROM-TRANSMISSIONLOG-001-VIOLATED`. Check runs before the schedule lineage check (fail fast).

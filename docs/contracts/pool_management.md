@@ -76,7 +76,7 @@ Returned by the inspect operation. Not persisted.
 
 ## Public API (Workflow)
 
-All pool management operations are exposed through `pkg/core/src/retrovue/workflows/pool_management.py`. CLI commands delegate to this workflow per `INV-CLI-NO-BUSINESS-LOGIC-001`.
+All pool management operations are exposed through `server/src/retrovue/workflows/pool_management.py`. CLI commands delegate to this workflow per `INV-CLI-NO-BUSINESS-LOGIC-001`.
 
 ### `create_pool`
 
@@ -218,7 +218,7 @@ The inspect operation MUST return `PoolDiagnostics` per the existing invariant. 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_pool_management.py`
+- `server/tests/contracts/test_pool_management.py`
 
 ---
 

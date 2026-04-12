@@ -8,15 +8,15 @@
 
 **Test framework:** Google Test (GTest). All contract tests are C++.
 
-**Test executable:** `mediatime_contract_tests` (defined in `pkg/air/CMakeLists.txt`)
+**Test executable:** `mediatime_contract_tests` (defined in `runtime/CMakeLists.txt`)
 
-**Run command:** `ctest --test-dir pkg/air/build -R MediaTimeContracts --output-on-failure`
+**Run command:** `ctest --test-dir runtime/build -R MediaTimeContracts --output-on-failure`
 
 ---
 
 ## 1. INV-VFR-DROP-GUARD-001
 
-**Test file:** `pkg/air/tests/contracts/BlockPlan/MediaTimeContractTests.cpp`
+**Test file:** `runtime/tests/contracts/BlockPlan/MediaTimeContractTests.cpp`
 
 | Test | Scenario | Expected |
 |---|---|---|
@@ -37,7 +37,7 @@
 
 ## 2. INV-FPS-RESAMPLE (Drift Prevention)
 
-**Test file:** `pkg/air/tests/contracts/test_inv_fps_resample_drift.cpp`
+**Test file:** `runtime/tests/contracts/test_inv_fps_resample_drift.cpp`
 
 | Test | Scenario | Expected |
 |---|---|---|
@@ -47,7 +47,7 @@
 
 ## 3. INV-FPS-MAPPING / INV-FPS-TICK-PTS (DROP Mode Correctness)
 
-**Test file:** `pkg/air/tests/contracts/BlockPlan/MediaTimeContractTests.cpp`
+**Test file:** `runtime/tests/contracts/BlockPlan/MediaTimeContractTests.cpp`
 
 | Test | Scenario | Expected |
 |---|---|---|

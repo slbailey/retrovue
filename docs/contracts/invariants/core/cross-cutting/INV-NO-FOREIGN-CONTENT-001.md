@@ -36,7 +36,7 @@ At each layer: inject an asset reference that is absent from the upstream author
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/scheduling/test_inv_no_foreign_content.py` (CROSS-FOREIGN-001, CROSS-FOREIGN-002, CROSS-FOREIGN-003)
+- `server/tests/contracts/scheduling/test_inv_no_foreign_content.py` (CROSS-FOREIGN-001, CROSS-FOREIGN-002, CROSS-FOREIGN-003)
 
 ## Enforcement Evidence
 

@@ -59,10 +59,10 @@ serve only as schedule-day aliases via `{ use: template_name }`.
 
 ## Enforcement
 
-Contract test: `pkg/core/tests/contracts/test_template_graft_contract.py`
+Contract test: `server/tests/contracts/test_template_graft_contract.py`
 
 ## Related
 
 - `docs/domains/ProgramTemplateAssembly.md` — template segment model
 - `docs/domains/ProgramScheduleAuthority_v1.0.md` — window_uuid semantics
-- `pkg/core/src/retrovue/runtime/schedule_compiler.py` — production compiler
+- `server/src/retrovue/runtime/schedule_compiler.py` — production compiler

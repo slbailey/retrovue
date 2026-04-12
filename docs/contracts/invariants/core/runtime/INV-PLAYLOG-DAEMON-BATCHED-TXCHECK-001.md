@@ -21,7 +21,7 @@ Per-block `_block_exists_in_txlog()` calls inside `_extend_to_target()`; absence
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_playlog_daemon_batched_txcheck.py`
+- `server/tests/contracts/runtime/test_inv_playlog_daemon_batched_txcheck.py`
 
 ## Enforcement Evidence
 

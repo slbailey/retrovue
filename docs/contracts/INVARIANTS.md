@@ -357,8 +357,9 @@ Canonical contracts: [core/programming_pools.md](core/programming_pools.md), [po
 | INV-TAG-CANONICAL-FORM-001 | [invariants/core/ingest/INV-TAG-CANONICAL-FORM-001.md](invariants/core/ingest/INV-TAG-CANONICAL-FORM-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
 | INV-TAG-MIGRATION-IDEMPOTENT-001 | [invariants/core/ingest/INV-TAG-MIGRATION-IDEMPOTENT-001.md](invariants/core/ingest/INV-TAG-MIGRATION-IDEMPOTENT-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
 | INV-CHAPTER-MARKER-SHAPE-001 | [invariants/core/ingest/INV-CHAPTER-MARKER-SHAPE-001.md](invariants/core/ingest/INV-CHAPTER-MARKER-SHAPE-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
+| INV-PROCESSOR-READINESS-GATE-001 | [invariants/core/ingest/INV-PROCESSOR-READINESS-GATE-001.md](invariants/core/ingest/INV-PROCESSOR-READINESS-GATE-001.md) | LAW-ELIGIBILITY, LAW-DERIVATION |
 
-Canonical contracts: [tag_canonical_form.md](tag_canonical_form.md)
+Canonical contracts: [tag_canonical_form.md](tag_canonical_form.md), [core/ProcessorCapabilityContract_v0.1.md](core/ProcessorCapabilityContract_v0.1.md)
 
 ### Ingest — Source Watch Mode
 
@@ -507,6 +508,12 @@ Canonical contract: [schedule_constraints.md](schedule_constraints.md)
 | INV-CHANNEL-RECONCILE-IDEMPOTENT | [channel_reconciliation.md](channel_reconciliation.md) | LAW-CONTENT-AUTHORITY |
 | INV-CHANNEL-RECONCILE-EMPTY-GUARD | [channel_reconciliation.md](channel_reconciliation.md) | LAW-CONTENT-AUTHORITY |
 
+### Infrastructure — Test Isolation
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-TEST-DB-ISOLATION-001 | [invariants/core/cross-cutting/INV-TEST-DB-ISOLATION-001.md](invariants/core/cross-cutting/INV-TEST-DB-ISOLATION-001.md) | — |
+
 ### Runtime
 
 | Invariant | File | Derived From |
@@ -651,10 +658,10 @@ Canonical contract: [delivery_hls.md](delivery_hls.md)
 | INV-SEAM-SWAP-READINESS-001 | [invariants/air/INV-SEAM-SWAP-READINESS-001.md](invariants/air/INV-SEAM-SWAP-READINESS-001.md) | Primary — derives from INV-SEAM-002, INV-VIDEO-LOOKAHEAD-001 |
 | INV-TIME-MODE-EQUIVALENCE-001 | [invariants/air/INV-TIME-MODE-EQUIVALENCE-001.md](invariants/air/INV-TIME-MODE-EQUIVALENCE-001.md) | Primary |
 | INV-VFR-DROP-GUARD-001 | [invariants/air/INV-VFR-DROP-GUARD-001.md](invariants/air/INV-VFR-DROP-GUARD-001.md) | Primary — derives from INV-FPS-RESAMPLE, LAW-LIVENESS |
-| INV-CADENCE-SOURCE-SYNC-001 | [CadenceSourceSyncContract.md](../../pkg/air/docs/contracts/semantics/CadenceSourceSyncContract.md) | Semantic — cadence must reflect live source FPS at all output ticks |
-| INV-CADENCE-SOURCE-SYNC-002 | [CadenceSourceSyncContract.md](../../pkg/air/docs/contracts/semantics/CadenceSourceSyncContract.md) | Semantic — producer transition must reinitialize cadence (all paths) |
-| INV-CADENCE-SOURCE-SYNC-003 | [CadenceSourceSyncContract.md](../../pkg/air/docs/contracts/semantics/CadenceSourceSyncContract.md) | Semantic — segment swap must refresh cadence |
-| INV-CADENCE-SOURCE-SYNC-004 | [CadenceSourceSyncContract.md](../../pkg/air/docs/contracts/semantics/CadenceSourceSyncContract.md) | Semantic — stale cadence causes observable speed error (always a defect) |
+| INV-CADENCE-SOURCE-SYNC-001 | [CadenceSourceSyncContract.md](../../runtime/docs/contracts/semantics/CadenceSourceSyncContract.md) | Semantic — cadence must reflect live source FPS at all output ticks |
+| INV-CADENCE-SOURCE-SYNC-002 | [CadenceSourceSyncContract.md](../../runtime/docs/contracts/semantics/CadenceSourceSyncContract.md) | Semantic — producer transition must reinitialize cadence (all paths) |
+| INV-CADENCE-SOURCE-SYNC-003 | [CadenceSourceSyncContract.md](../../runtime/docs/contracts/semantics/CadenceSourceSyncContract.md) | Semantic — segment swap must refresh cadence |
+| INV-CADENCE-SOURCE-SYNC-004 | [CadenceSourceSyncContract.md](../../runtime/docs/contracts/semantics/CadenceSourceSyncContract.md) | Semantic — stale cadence causes observable speed error (always a defect) |
 | INV-SEAM-BOUNDARY-COUNT-MATCH-001 | [invariants/air/INV-SEAM-BOUNDARY-COUNT-MATCH-001.md](invariants/air/INV-SEAM-BOUNDARY-COUNT-MATCH-001.md) | Primary — boundary count must match segment count at block activation |
 | INV-PRODUCER-DEMAND-DRIVEN-001 | [invariants/air/INV-PRODUCER-DEMAND-DRIVEN-001.md](invariants/air/INV-PRODUCER-DEMAND-DRIVEN-001.md) | Primary — decode must not advance without tick consumption |
 | INV-SEAM-CONTINUITY-GUARANTEED-001 | [invariants/air/INV-SEAM-CONTINUITY-GUARANTEED-001.md](invariants/air/INV-SEAM-CONTINUITY-GUARANTEED-001.md) | Primary — scheduled segment transitions must succeed with valid A/V |
@@ -743,9 +750,9 @@ The following invariants lack test matrix entries and are flagged for follow-up:
 
 See [audit/TEST_ANCHOR_BACKLOG.md](audit/TEST_ANCHOR_BACKLOG.md) for prioritized action.
 
-**LAW-RUNTIME-AUDIO-AUTHORITY** is listed as an Air law but does not appear in `docs/contracts/laws/` alongside the other 11 laws. It resides in `pkg/air/docs/contracts/laws/PlayoutInvariants-BroadcastGradeGuarantees.md`. Its downstream INV-* entries are not indexed here. TODO: add index entry and law file, or document as intentionally Air-domain-only.
+**LAW-RUNTIME-AUDIO-AUTHORITY** is listed as an Air law but does not appear in `docs/contracts/laws/` alongside the other 11 laws. It resides in `runtime/docs/contracts/laws/PlayoutInvariants-BroadcastGradeGuarantees.md`. Its downstream INV-* entries are not indexed here. TODO: add index entry and law file, or document as intentionally Air-domain-only.
 
 **Migrated in this pass:**
-- AIR-012, AIR-015 → `pkg/air/docs/contracts/coordination/OutputBusAndOutputSinkContract.md` §11–12
-- AIR-016 → `pkg/air/docs/contracts/coordination/OrchestrationLoopContract.md`
-- CORE-002, CORE-003 → `pkg/core/docs/contracts/resources/ChannelManagerContract.md`
+- AIR-012, AIR-015 → `runtime/docs/contracts/coordination/OutputBusAndOutputSinkContract.md` §11–12
+- AIR-016 → `runtime/docs/contracts/coordination/OrchestrationLoopContract.md`
+- CORE-002, CORE-003 → `server/docs/contracts/resources/ChannelManagerContract.md`

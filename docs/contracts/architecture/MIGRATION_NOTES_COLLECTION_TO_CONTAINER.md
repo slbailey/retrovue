@@ -14,7 +14,7 @@ The ingest/catalog entity formerly named **Collection** was renamed to **Contain
 ## Where “Collection” still appears
 
 1. **Historical Alembic migrations**  
-   Files under `pkg/core/alembic/versions/` that created or renamed the `collections` table or `collection_uuid` / `collection_id` columns. These must not be edited; they record schema history.
+   Files under `server/alembic/versions/` that created or renamed the `collections` table or `collection_uuid` / `collection_id` columns. These must not be edited; they record schema history.
 
 2. **This note and the refactor inventory**  
    `COLLECTION_TO_CONTAINER_REFACTOR_PHASE0_INVENTORY.md` and this file describe the migration and may use “Collection” when referring to the old name.

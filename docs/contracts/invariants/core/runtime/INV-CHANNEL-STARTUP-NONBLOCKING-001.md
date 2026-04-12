@@ -24,7 +24,7 @@ Schedule compilation triggered by viewer join. Observable as `_build_initial()` 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_channel_startup_nonblocking.py`
+- `server/tests/contracts/runtime/test_inv_channel_startup_nonblocking.py`
 
 ## Enforcement Evidence
 

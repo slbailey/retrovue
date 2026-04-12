@@ -27,12 +27,12 @@ Core owns loudness measurement truth. Core computes `gain_db` per asset and prop
 `LAW-LIVENESS`
 
 ## Required Tests
-- `pkg/air/tests/contracts/BlockPlan/SharedInvLoudnessNormalizedContractTests.cpp` (`GainFormula_TargetMinusIntegrated`) — Rule 7: gain_db = target_lufs - integrated_lufs, +6 dB ≈ 2.0× linear
-- `pkg/air/tests/contracts/BlockPlan/SharedInvLoudnessNormalizedContractTests.cpp` (`ZeroGainPassthrough_SamplesUnchanged`) — Rule 4: gain_db=0 passes through unchanged
-- `pkg/air/tests/contracts/BlockPlan/SharedInvLoudnessNormalizedContractTests.cpp` (`ClampPreventsWrap`) — Rule 3: large gain clamped to int16 range, no wraparound
-- `pkg/air/tests/contracts/BlockPlan/SharedInvLoudnessNormalizedContractTests.cpp` (`GainDoesNotAlterSampleCountOrPts`) — Rule 2: nb_samples and pts_us unchanged by gain
-- `pkg/air/tests/contracts/BlockPlan/LoudnessGainContractTests.cpp` — arithmetic coverage for gain conversion and application
-- `pkg/core/tests/contracts/test_inv_loudness_normalized_001.py` — Core-side: measurement truth, gain_db propagation, background measurement jobs
+- `runtime/tests/contracts/BlockPlan/SharedInvLoudnessNormalizedContractTests.cpp` (`GainFormula_TargetMinusIntegrated`) — Rule 7: gain_db = target_lufs - integrated_lufs, +6 dB ≈ 2.0× linear
+- `runtime/tests/contracts/BlockPlan/SharedInvLoudnessNormalizedContractTests.cpp` (`ZeroGainPassthrough_SamplesUnchanged`) — Rule 4: gain_db=0 passes through unchanged
+- `runtime/tests/contracts/BlockPlan/SharedInvLoudnessNormalizedContractTests.cpp` (`ClampPreventsWrap`) — Rule 3: large gain clamped to int16 range, no wraparound
+- `runtime/tests/contracts/BlockPlan/SharedInvLoudnessNormalizedContractTests.cpp` (`GainDoesNotAlterSampleCountOrPts`) — Rule 2: nb_samples and pts_us unchanged by gain
+- `runtime/tests/contracts/BlockPlan/LoudnessGainContractTests.cpp` — arithmetic coverage for gain conversion and application
+- `server/tests/contracts/test_inv_loudness_normalized_001.py` — Core-side: measurement truth, gain_db propagation, background measurement jobs
 
 ## Enforcement Evidence
 TODO

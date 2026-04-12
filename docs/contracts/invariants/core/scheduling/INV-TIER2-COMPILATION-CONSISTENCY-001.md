@@ -31,7 +31,7 @@ Compile schedule C1, persist PlaylistEvent entries from C1. Recompile to C2 (dif
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/scheduling/test_inv_tier2_compilation_consistency.py`
+- `server/tests/contracts/scheduling/test_inv_tier2_compilation_consistency.py`
 
 ## Enforcement Evidence
 

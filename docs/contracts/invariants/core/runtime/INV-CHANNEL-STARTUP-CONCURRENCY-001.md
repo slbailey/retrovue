@@ -26,7 +26,7 @@ Startup stampede degrades live streaming. Observable as: unbounded thread creati
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_channel_startup_concurrency.py`
+- `server/tests/contracts/runtime/test_inv_channel_startup_concurrency.py`
 
 ## Enforcement Evidence
 

@@ -25,7 +25,7 @@ The Plex adapter owns scan status reporting. No actual hardware scan occurs — 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/plex/test_plex_discovery.py` (TestPlexDiscovery)
+- `server/tests/contracts/plex/test_plex_discovery.py` (TestPlexDiscovery)
 
 ## Enforcement Evidence
 

@@ -330,8 +330,8 @@ Governed overrides follow the type compatibility rules from `configuration_resol
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_config_resolution.py`
-- `pkg/core/tests/contracts/test_channel_yaml_contract.py` (to be created)
+- `server/tests/contracts/test_inv_config_resolution.py`
+- `server/tests/contracts/test_channel_yaml_contract.py` (to be created)
 
 ## Enforcement Evidence
 TODO

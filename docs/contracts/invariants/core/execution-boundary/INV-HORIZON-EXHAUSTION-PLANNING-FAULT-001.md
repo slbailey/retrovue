@@ -55,7 +55,7 @@ Using FakeAdvancingClock: populate ExecutionWindowStore with entries covering [T
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_constitution.py` (EXEC-BOUNDARY-004, EXEC-BOUNDARY-005)
+- `server/tests/contracts/test_scheduling_constitution.py` (EXEC-BOUNDARY-004, EXEC-BOUNDARY-005)
 
 ## Enforcement Evidence
 

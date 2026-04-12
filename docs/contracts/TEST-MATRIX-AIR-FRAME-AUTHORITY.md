@@ -14,9 +14,9 @@
 
 **Test framework:** Google Test (GTest). All contract tests are C++.
 
-**Test executable:** `blockplan_contract_tests` (defined in `pkg/air/CMakeLists.txt`)
+**Test executable:** `blockplan_contract_tests` (defined in `runtime/CMakeLists.txt`)
 
-**Run command:** `ctest --test-dir pkg/air/build -R blockplan_contract --output-on-failure`
+**Run command:** `ctest --test-dir runtime/build -R blockplan_contract --output-on-failure`
 
 ---
 
@@ -92,7 +92,7 @@ PadProducer pp(/*width=*/1920, /*height=*/1080, /*fps=*/30, /*audio_channels=*/1
 
 ### INV-CONTINUOUS-FRAME-AUTHORITY-001
 
-**Test file:** `pkg/air/tests/contracts/BlockPlan/FrameAuthorityVacuumContractTests.cpp`
+**Test file:** `runtime/tests/contracts/BlockPlan/FrameAuthorityVacuumContractTests.cpp`
 
 | Test | Scenario | Expected |
 |---|---|---|
@@ -107,7 +107,7 @@ PadProducer pp(/*width=*/1920, /*height=*/1080, /*fps=*/30, /*audio_channels=*/1
 
 ### INV-NO-FRAME-AUTHORITY-VACUUM-001
 
-**Test file:** `pkg/air/tests/contracts/BlockPlan/NoFrameAuthorityVacuumContractTests.cpp`
+**Test file:** `runtime/tests/contracts/BlockPlan/NoFrameAuthorityVacuumContractTests.cpp`
 
 | Test | Scenario | Expected |
 |---|---|---|
@@ -119,7 +119,7 @@ PadProducer pp(/*width=*/1920, /*height=*/1080, /*fps=*/30, /*audio_channels=*/1
 
 ### INV-PAD-VIDEO-READINESS-001
 
-**Test file:** `pkg/air/tests/contracts/BlockPlan/PadVideoReadinessContractTests.cpp`
+**Test file:** `runtime/tests/contracts/BlockPlan/PadVideoReadinessContractTests.cpp`
 
 | Test | Scenario | Expected |
 |---|---|---|
@@ -131,7 +131,7 @@ PadProducer pp(/*width=*/1920, /*height=*/1080, /*fps=*/30, /*audio_channels=*/1
 
 ### INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001
 
-**Test file:** `pkg/air/tests/contracts/BlockPlan/AtomicAuthorityTransferContractTests.cpp`
+**Test file:** `runtime/tests/contracts/BlockPlan/AtomicAuthorityTransferContractTests.cpp`
 
 | Test | Scenario | Expected |
 |---|---|---|
@@ -149,13 +149,13 @@ PadProducer pp(/*width=*/1920, /*height=*/1080, /*fps=*/30, /*audio_channels=*/1
 | ContentSeamOverrideSuccessMatchesAuthority | CONTENT_SEAM_OVERRIDE popped content frame, swap fires | No violation |
 | ContentSeamOverrideWithoutSwapViolates | Content frame emitted but swap didn't fire (should never happen) | Violation (stale_frame_bleed) |
 
-**Test file:** `pkg/air/tests/contracts/BlockPlan/ForceExecutePadToContentBleedContractTests.cpp`
+**Test file:** `runtime/tests/contracts/BlockPlan/ForceExecutePadToContentBleedContractTests.cpp`
 
 | Test | Scenario | Expected |
 |---|---|---|
 | PadToContentSeamMustNotEmitStaleFrame | Block [CONTENT, PAD, CONTENT]; PAD→CONTENT via FORCE_EXECUTE | No stale_frame_bleed violation |
 
-**Test file:** `pkg/air/tests/contracts/BlockPlan/NormalCascadeSeamBleedContractTests.cpp`
+**Test file:** `runtime/tests/contracts/BlockPlan/NormalCascadeSeamBleedContractTests.cpp`
 
 | Test | Scenario | Expected |
 |---|---|---|
@@ -254,7 +254,7 @@ The following scenario reproduces the permanent `SEGMENT_SWAP_DEFERRED reason=no
 
 ### INV-LAST-SEGMENT-BLOCK-BOUNDARY-001
 
-**Test file:** `pkg/air/tests/contracts/BlockPlan/LastSegmentBlockBoundaryContractTests.cpp`
+**Test file:** `runtime/tests/contracts/BlockPlan/LastSegmentBlockBoundaryContractTests.cpp`
 
 | Test | Scenario | Expected |
 |---|---|---|
@@ -278,7 +278,7 @@ The following scenario reproduces the cadence repeat overriding an eligible inco
 
 ### INV-CADENCE-SEAM-ADVANCE-001
 
-**Test file:** `pkg/air/tests/contracts/BlockPlan/CadenceSeamAdvanceContractTests.cpp`
+**Test file:** `runtime/tests/contracts/BlockPlan/CadenceSeamAdvanceContractTests.cpp`
 
 | Test | Scenario | Expected |
 |---|---|---|

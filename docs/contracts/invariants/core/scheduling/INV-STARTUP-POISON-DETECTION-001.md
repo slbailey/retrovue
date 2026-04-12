@@ -31,7 +31,7 @@ Create a channel with a programmed day. Persist an empty active revision for tha
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/integration/test_integration_scheduling_authority.py`
+- `server/tests/contracts/integration/test_integration_scheduling_authority.py`
 
 ## Enforcement Evidence
 

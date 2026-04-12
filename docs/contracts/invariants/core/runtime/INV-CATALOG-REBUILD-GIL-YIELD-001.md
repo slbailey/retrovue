@@ -20,7 +20,7 @@ Absence of `time.sleep()` inside `_load()` asset-processing loop; yield duration
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_catalog_rebuild_gil_yield.py`
+- `server/tests/contracts/runtime/test_inv_catalog_rebuild_gil_yield.py`
 
 ## Enforcement Evidence
 

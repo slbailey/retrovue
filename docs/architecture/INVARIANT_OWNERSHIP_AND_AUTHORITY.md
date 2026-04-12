@@ -349,4 +349,4 @@ Architectural convenience is not justification for ownership violation.
 - [CANONICAL_RUNTIME_DATAFLOW.MD](./CANONICAL_RUNTIME_DATAFLOW.MD) — Runtime model
 - [CANONICAL_RULE_LEDGER.md](../contracts/CANONICAL_RULE_LEDGER.md) — All active invariants
 - [CLAUDE.md](../../CLAUDE.md) — System-level component responsibilities
-- [Core Lifecycle Contracts](../../pkg/core/docs/contracts/lifecycle/) — Core-owned lifecycle invariants (teardown, sessions, viewers)
+- [Core Lifecycle Contracts](../../server/docs/contracts/lifecycle/) — Core-owned lifecycle invariants (teardown, sessions, viewers)

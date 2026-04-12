@@ -41,10 +41,10 @@ future behavior.
 
 ## Enforcement
 
-Contract test: `pkg/core/tests/contracts/test_template_graft_contract.py`
+Contract test: `server/tests/contracts/test_template_graft_contract.py`
 (placeholder tests marked `@pytest.mark.skip` until implementation lands)
 
 ## Related
 
 - `INV-WINDOW-UUID-EMBEDDED-001` — Tier 1 emission
-- `pkg/core/src/retrovue/runtime/playlog_horizon_daemon.py` — Tier 2 writer
+- `server/src/retrovue/runtime/playlog_horizon_daemon.py` — Tier 2 writer

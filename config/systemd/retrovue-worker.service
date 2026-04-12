@@ -1,0 +1,59 @@
+# RetroVue Processor Worker — systemd service unit
+#
+# Runs the processor job queue worker that claims and executes
+# enrichment/processing jobs for ingested assets.
+#
+# Install:
+#   sudo cp /opt/retrovue/config/systemd/retrovue-worker.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable retrovue-worker
+#   sudo systemctl start retrovue-worker
+#
+# Logs:
+#   journalctl -u retrovue-worker -f          # follow live
+#   journalctl -u retrovue-worker --since today
+#
+# Status:
+#   sudo systemctl status retrovue-worker
+
+[Unit]
+Description=RetroVue Processor Worker
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=steve
+Group=steve
+WorkingDirectory=/opt/retrovue
+Environment=PATH=/opt/retrovue/server/.venv/bin:/usr/local/bin:/usr/bin:/bin
+Environment=VIRTUAL_ENV=/opt/retrovue/server/.venv
+EnvironmentFile=/opt/retrovue/secrets.env
+
+ExecStart=/opt/retrovue/server/.venv/bin/retrovue worker run --poll
+
+# Auto-restart: worker should always be running to process queued jobs
+Restart=always
+RestartSec=5
+
+# Logging — stdout/stderr -> journald (persistent, searchable, rotated)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=retrovue-worker
+
+# Process kill semantics
+KillMode=mixed
+TimeoutStopSec=15
+
+# Resource limits
+LimitNOFILE=65536
+
+# Crash rate limiting: 5 crashes in 60s -> give up (prevents tight restart loops)
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# OOM protection: lower priority than the main playout service
+OOMScoreAdjust=-200
+
+[Install]
+WantedBy=multi-user.target

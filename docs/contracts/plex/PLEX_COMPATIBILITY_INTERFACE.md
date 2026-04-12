@@ -262,12 +262,12 @@ Internally, RetroVue maintains its own scheduling and playout model. The Plex Co
 
 | Invariant | Description | Required tests |
 |-----------|-------------|----------------|
-| [INV-PLEX-DISCOVERY-001](INV-PLEX-DISCOVERY-001.md) | HDHomeRun discovery payload | `pkg/core/tests/contracts/plex/test_plex_discovery.py` |
-| [INV-PLEX-LINEUP-001](INV-PLEX-LINEUP-001.md) | Lineup one-to-one with channels, stable GuideNumber | `pkg/core/tests/contracts/plex/test_plex_lineup.py` |
-| [INV-PLEX-TUNER-STATUS-001](INV-PLEX-TUNER-STATUS-001.md) | Lineup status (scan, source) | `pkg/core/tests/contracts/plex/test_plex_discovery.py` |
-| [INV-PLEX-XMLTV-001](INV-PLEX-XMLTV-001.md) | XMLTV from EPG, channel IDs match lineup | `pkg/core/tests/contracts/plex/test_plex_epg.py` |
-| [INV-PLEX-STREAM-START-001](INV-PLEX-STREAM-START-001.md) | Stream via ProgramDirector, no adapter playout | `pkg/core/tests/contracts/plex/test_plex_streaming.py` |
-| [INV-PLEX-STREAM-DISCONNECT-001](INV-PLEX-STREAM-DISCONNECT-001.md) | Disconnect → tune_out, last viewer stops playout | `pkg/core/tests/contracts/plex/test_plex_streaming.py` |
-| [INV-PLEX-FANOUT-001](INV-PLEX-FANOUT-001.md) | Plex and direct viewers share same producer | `pkg/core/tests/contracts/plex/test_plex_streaming.py` |
+| [INV-PLEX-DISCOVERY-001](INV-PLEX-DISCOVERY-001.md) | HDHomeRun discovery payload | `server/tests/contracts/plex/test_plex_discovery.py` |
+| [INV-PLEX-LINEUP-001](INV-PLEX-LINEUP-001.md) | Lineup one-to-one with channels, stable GuideNumber | `server/tests/contracts/plex/test_plex_lineup.py` |
+| [INV-PLEX-TUNER-STATUS-001](INV-PLEX-TUNER-STATUS-001.md) | Lineup status (scan, source) | `server/tests/contracts/plex/test_plex_discovery.py` |
+| [INV-PLEX-XMLTV-001](INV-PLEX-XMLTV-001.md) | XMLTV from EPG, channel IDs match lineup | `server/tests/contracts/plex/test_plex_epg.py` |
+| [INV-PLEX-STREAM-START-001](INV-PLEX-STREAM-START-001.md) | Stream via ProgramDirector, no adapter playout | `server/tests/contracts/plex/test_plex_streaming.py` |
+| [INV-PLEX-STREAM-DISCONNECT-001](INV-PLEX-STREAM-DISCONNECT-001.md) | Disconnect → tune_out, last viewer stops playout | `server/tests/contracts/plex/test_plex_streaming.py` |
+| [INV-PLEX-FANOUT-001](INV-PLEX-FANOUT-001.md) | Plex and direct viewers share same producer | `server/tests/contracts/plex/test_plex_streaming.py` |
 
 Test matrix: [TEST-MATRIX-PLEX.md](../TEST-MATRIX-PLEX.md).

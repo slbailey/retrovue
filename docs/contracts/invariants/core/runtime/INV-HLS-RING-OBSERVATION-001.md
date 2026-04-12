@@ -25,7 +25,7 @@ Torn read (inconsistent oldest/newest); retrieval failure immediately after succ
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_hls_segment_ring.py`
+- `server/tests/contracts/runtime/test_inv_hls_segment_ring.py`
 
 ## Enforcement Evidence
 

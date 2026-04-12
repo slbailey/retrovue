@@ -209,7 +209,7 @@ Multiple opportunities may have positions within milliseconds of each other (e.g
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_break_plan.py`
+- `server/tests/contracts/test_break_plan.py`
 
 | Test | Invariant | Scenario |
 |------|-----------|----------|

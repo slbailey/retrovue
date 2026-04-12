@@ -35,7 +35,7 @@ Insert a `ProgramLogDay` with `range_start = now - 1h`. Attempt reschedule. Asse
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/scheduling/test_inv_reschedule_future_guard.py`
+- `server/tests/contracts/scheduling/test_inv_reschedule_future_guard.py`
 
 ## Enforcement Evidence
 

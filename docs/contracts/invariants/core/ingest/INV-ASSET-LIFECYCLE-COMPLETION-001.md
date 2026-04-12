@@ -42,7 +42,7 @@ The state MUST NOT remain `"enriching"`. The state transition MUST execute on ev
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_asset_lifecycle_completion.py`
+- `server/tests/contracts/test_inv_asset_lifecycle_completion.py`
 
 ## Enforcement Evidence
 

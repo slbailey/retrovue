@@ -35,12 +35,12 @@ Attempt to insert a ScheduleDay with `plan_id = NULL` and `is_manual_override = 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_scheduling_constitution.py::TestInvScheduledayDerivationTraceable001`
+- `server/tests/contracts/test_scheduling_constitution.py::TestInvScheduledayDerivationTraceable001`
 
 ## Enforcement Evidence
 
-- `pkg/core/src/retrovue/runtime/schedule_types.py` — `ResolvedScheduleDay.plan_id: str | None = None` field added to frozen dataclass
-- `pkg/core/src/retrovue/runtime/schedule_manager_service.py` — `_enforce_derivation_traceability()` checks `plan_id is None and not is_manual_override` and raises `ValueError` with `INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001-VIOLATED` tag
-- `pkg/core/src/retrovue/runtime/schedule_manager_service.py` — `InMemoryResolvedStore.store()` calls `_enforce_derivation_traceability()` before commit when `enforce_derivation_traceability=True`
-- `pkg/core/src/retrovue/runtime/schedule_manager_service.py` — `InMemoryResolvedStore.force_replace()` calls `_enforce_derivation_traceability()` before commit when `enforce_derivation_traceability=True`
+- `server/src/retrovue/runtime/schedule_types.py` — `ResolvedScheduleDay.plan_id: str | None = None` field added to frozen dataclass
+- `server/src/retrovue/runtime/schedule_manager_service.py` — `_enforce_derivation_traceability()` checks `plan_id is None and not is_manual_override` and raises `ValueError` with `INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001-VIOLATED` tag
+- `server/src/retrovue/runtime/schedule_manager_service.py` — `InMemoryResolvedStore.store()` calls `_enforce_derivation_traceability()` before commit when `enforce_derivation_traceability=True`
+- `server/src/retrovue/runtime/schedule_manager_service.py` — `InMemoryResolvedStore.force_replace()` calls `_enforce_derivation_traceability()` before commit when `enforce_derivation_traceability=True`
 - Error tag: `INV-SCHEDULEDAY-DERIVATION-TRACEABLE-001-VIOLATED`

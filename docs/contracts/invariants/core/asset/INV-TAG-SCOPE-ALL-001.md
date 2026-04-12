@@ -33,7 +33,7 @@ After any tag mutation, `SELECT COUNT(*) FROM asset_tags WHERE tag = <old>` MUST
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_tag_management_operations.py`
+- `server/tests/contracts/test_tag_management_operations.py`
 
 ## Enforcement Evidence
 

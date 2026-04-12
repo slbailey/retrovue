@@ -37,7 +37,7 @@ Query `AssetEditorial.payload->>'interstitial_type'` for assets in interstitial 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/test_inv_interstitial_type_persisted.py`
+- `server/tests/contracts/test_inv_interstitial_type_persisted.py`
 
 ## Enforcement Evidence
 

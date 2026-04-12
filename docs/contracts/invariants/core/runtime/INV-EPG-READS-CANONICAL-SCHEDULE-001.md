@@ -33,7 +33,7 @@ Planning fault. EPG/playout disagreement when EPG recompiles independently.
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/runtime/test_inv_epg_reads_canonical.py`
+- `server/tests/contracts/runtime/test_inv_epg_reads_canonical.py`
 
 ## Enforcement Evidence
 

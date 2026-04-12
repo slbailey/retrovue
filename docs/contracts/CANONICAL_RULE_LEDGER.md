@@ -17,7 +17,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | core, air (both); Phase 0+ |
 | **phase_applicability** | 0, 6A, 7+ |
 | **sources** | ARCH-core-Phase0Clock-001, ARCH-core-Phase0Clock-002, ARCH-core-Phase0Clock-003, ARCH-air-Phase6AOverview-003, ARCH-main-MpegTSTiming-T001, ARCH-main-MpegTSDomain-SINK012 |
-| **where_it_belongs** | `pkg/air/docs/contracts/laws/PlayoutInvariants-BroadcastGradeGuarantees.md` §1 Clock Invariant; `pkg/core/docs/contracts/resources/MasterClockContract.md` |
+| **where_it_belongs** | `runtime/docs/contracts/laws/PlayoutInvariants-BroadcastGradeGuarantees.md` §1 Clock Invariant; `server/docs/contracts/resources/MasterClockContract.md` |
 | **required_tests** | INV-AUDIO-HOUSE-FORMAT-001 (stub); `retrovue runtime masterclock`; test_sink_timing_clock_usage |
 | **required_log_events_fields** | (none for clock authority) |
 | **codified_status** | **yes** — PlayoutInvariants §1; MasterClockContract MC-007 |
@@ -33,7 +33,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | both (Core declares block boundaries; Air enforces fence) |
 | **phase_applicability** | 8+ |
 | **sources** | ARCH-air-Phase6AOverview-004, ARCH-air-Phase6A1-004, ARCH-air-Phase6A2-001, ARCH-air-Phase6A2-003, ARCH-air-Phase6A3-003, ARCH-core-Phase4Pipeline-001, ARCH-core-Phase4Pipeline-003 |
-| **where_it_belongs** | `pkg/air/tests/contracts/BlockPlan/Law002HardStopContractTests.cpp` |
+| **where_it_belongs** | `runtime/tests/contracts/BlockPlan/Law002HardStopContractTests.cpp` |
 | **required_tests** | `Law002HardStopContractTests.cpp`: LAW002_Phase8_BlockBoundaryEnforced_ContentStopsAtFence, LAW002_Phase8_TwoBlocks_EachStopsAtOwnFence |
 | **required_log_events_fields** | (none specified) |
 | **codified_status** | **yes** — Enforced by PipelineManager block fence. Phase6A2_HardStopEnforced RETIRED (superseded by BlockPlan boundary enforcement in Phase 8). |
@@ -49,7 +49,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | both |
 | **phase_applicability** | 6, 6A, 6A.0 |
 | **sources** | ARCH-air-Phase6AOverview-001, ARCH-air-Phase6AOverview-002, ARCH-air-Phase6A0-003 |
-| **where_it_belongs** | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §THINK vs ACT; `pkg/air/docs/archive/phases/Phase6A-Overview.md` |
+| **where_it_belongs** | `runtime/docs/contracts/semantics/PlayoutEngineContract.md` §THINK vs ACT; `runtime/docs/archive/phases/Phase6A-Overview.md` |
 | **required_tests** | StartChannel alone produces no decode/output; legacy preload RPC precedes legacy switch RPC |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **RETIRED** — Superseded by Phase 8 BlockPlan model. See [Phase8DecommissionContract](architecture/Phase8DecommissionContract.md). Legacy segment RPCs decommissioned. Cross-ref: [Phase8DecommissionContract](architecture/Phase8DecommissionContract.md) |
@@ -65,7 +65,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | core |
 | **phase_applicability** | 0, 1, 7 |
 | **sources** | ARCH-core-Phase0Playout-002, ARCH-core-Phase0Playout-003, ARCH-core-Phase1Grid-001, ARCH-core-Phase7E2E-002 |
-| **where_it_belongs** | `pkg/core/docs/contracts/runtime/ScheduleManagerContract.md`; `pkg/core/docs/scheduling/` |
+| **where_it_belongs** | `server/docs/contracts/runtime/ScheduleManagerContract.md`; `server/docs/scheduling/` |
 | **required_tests** | grid_start(10:00)=10:00, grid_end=10:30; assert cuts at :00/:30; boundaries respected across switches |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **partial** — ScheduleManager* contracts exist; grid math in core; Phase 0 playout rules archived |
@@ -81,7 +81,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | core |
 | **phase_applicability** | 0 |
 | **sources** | ARCH-core-Phase0Playout-001, ARCH-core-Phase0Playout-004, ARCH-core-Phase0Playout-005, ARCH-core-Phase0Playout-006 |
-| **where_it_belongs** | `pkg/core/docs/scheduling/`; `pkg/core/docs/archive/phases/Phase0-PlayoutRules.md` |
+| **where_it_belongs** | `server/docs/scheduling/`; `server/docs/archive/phases/Phase0-PlayoutRules.md` |
 | **required_tests** | (retired) |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **RETIRED** — Superseded by `INV-SCHED-GRID-FILLER-PADDING` in SchedulePlanInvariantsContract. Continuous modulo offset was Phase 0 behavior only. Filler always starts at frame 0; no carry-over state. |
@@ -97,7 +97,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | air |
 | **phase_applicability** | 6, 7+ |
 | **sources** | ARCH-air-Phase6-002, ARCH-main-MpegTSDomain-SINK011, ARCH-main-MpegTSTiming-T006 |
-| **where_it_belongs** | `pkg/air/docs/contracts/laws/PlayoutInvariants-BroadcastGradeGuarantees.md` §5 Switching; `pkg/air/docs/contracts/semantics/OutputContinuityContract.md` |
+| **where_it_belongs** | `runtime/docs/contracts/laws/PlayoutInvariants-BroadcastGradeGuarantees.md` §5 Switching; `runtime/docs/contracts/semantics/OutputContinuityContract.md` |
 | **required_tests** | Record output PTS; verify strictly increasing; legacy switch RPCResponse.pts_contiguous; test_sink_frame_order |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **yes** — PlayoutInvariants §5 Switching; INV-P8-002 |
@@ -113,7 +113,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | both |
 | **phase_applicability** | 7 |
 | **sources** | ARCH-core-Phase7E2E-003 |
-| **where_it_belongs** | `pkg/core/docs/archive/phases/Phase7-E2EAcceptanceContract.md`; E2E acceptance tests |
+| **where_it_belongs** | `server/docs/archive/phases/Phase7-E2EAcceptanceContract.md`; E2E acceptance tests |
 | **required_tests** | Run N × 30 min; assert offsets and hard stops correct |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **partial** — E2E contract archived; harness/tests may be missing |
@@ -131,7 +131,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | air |
 | **phase_applicability** | 6A.0 |
 | **sources** | ARCH-air-Phase6A0-001, ARCH-air-Phase6A0-002, ARCH-air-Phase6A0-008 |
-| **where_it_belongs** | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §Service Definition; `protos/playout.proto` |
+| **where_it_belongs** | `runtime/docs/contracts/semantics/PlayoutEngineContract.md` §Service Definition; `protos/playout.proto` |
 | **required_tests** | Build succeeds; client can call all four RPCs; plan_handle values do not affect behavior |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **yes** — PlayoutEngineContract; proto schema |
@@ -147,7 +147,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | air |
 | **phase_applicability** | 6A.0 |
 | **sources** | ARCH-air-Phase6A0-004, ARCH-air-Phase6A0-007 |
-| **where_it_belongs** | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §Idempotency; §StartChannel; §StopChannel |
+| **where_it_belongs** | `runtime/docs/contracts/semantics/PlayoutEngineContract.md` §Idempotency; §StartChannel; §StopChannel |
 | **required_tests** | Call StartChannel twice → both success; StopChannel on unknown → success |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **yes** — PlayoutEngineContract PE-START-002, PE-STOP-002 |
@@ -163,7 +163,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | air |
 | **phase_applicability** | 6A.0 |
 | **sources** | ARCH-air-Phase6A0-005 |
-| **where_it_belongs** | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §legacy preload RPC; PE-CTL-001 |
+| **where_it_belongs** | `runtime/docs/contracts/semantics/PlayoutEngineContract.md` §legacy preload RPC; PE-CTL-001 |
 | **required_tests** | Call legacy preload RPC without StartChannel; assert success=false |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **yes** — PlayoutEngineContract PE-CTL-001 |
@@ -179,7 +179,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | air |
 | **phase_applicability** | 6A.0 |
 | **sources** | ARCH-air-Phase6A0-006 |
-| **where_it_belongs** | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §legacy switch RPC; PE-CTL-002 |
+| **where_it_belongs** | `runtime/docs/contracts/semantics/PlayoutEngineContract.md` §legacy switch RPC; PE-CTL-002 |
 | **required_tests** | Call legacy switch RPC without legacy preload RPC; assert success=false |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **yes** — PlayoutEngineContract PE-CTL-002 |
@@ -195,7 +195,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | air |
 | **phase_applicability** | 6, 6A, 6A.1 |
 | **sources** | ARCH-air-Phase6-001, ARCH-air-Phase6-002, ARCH-air-Phase6A1-005, ARCH-air-Phase6A1-006 |
-| **where_it_belongs** | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §legacy preload RPC; §legacy switch RPC; `pkg/air/docs/contracts/coordination/ProducerBusContract.md` |
+| **where_it_belongs** | `runtime/docs/contracts/semantics/PlayoutEngineContract.md` §legacy preload RPC; §legacy switch RPC; `runtime/docs/contracts/coordination/ProducerBusContract.md` |
 | **required_tests** | legacy preload RPCResponse.shadow_decode_started; legacy switch RPCResponse.pts_contiguous; preview updated, live unchanged; old live stopped |
 | **required_log_events_fields** | legacy preload RPCResponse.shadow_decode_started, legacy switch RPCResponse.pts_contiguous |
 | **codified_status** | **yes** — PlayoutEngineContract; Phase6A-1 |
@@ -211,7 +211,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | air |
 | **phase_applicability** | 6A.1 |
 | **sources** | ARCH-air-Phase6A1-001, ARCH-air-Phase6A1-002 |
-| **where_it_belongs** | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §THINK vs ACT; `pkg/air/docs/contracts/coordination/ProducerBusContract.md` |
+| **where_it_belongs** | `runtime/docs/contracts/semantics/PlayoutEngineContract.md` §THINK vs ACT; `runtime/docs/contracts/coordination/ProducerBusContract.md` |
 | **required_tests** | Producer does not self-switch; engine controls all transitions |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **yes** — PlayoutInvariants §2 Timeline; INV-P8-TIME-BLINDNESS |
@@ -227,7 +227,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | air |
 | **phase_applicability** | 6, 6A.1, 6A.2 |
 | **sources** | ARCH-air-Phase6-006, ARCH-air-Phase6A1-003, ARCH-air-Phase6A2-005 |
-| **where_it_belongs** | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §StopChannel; `pkg/air/docs/contracts/semantics/FileProducerContract.md` |
+| **where_it_belongs** | `runtime/docs/contracts/semantics/PlayoutEngineContract.md` §StopChannel; `runtime/docs/contracts/semantics/FileProducerContract.md` |
 | **required_tests** | No frames after StopChannel; no orphan ffmpeg; resources released |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **yes** — PlayoutEngineContract StopChannel; PE-STOP-001 |
@@ -243,7 +243,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | air |
 | **phase_applicability** | 6A.2 |
 | **sources** | ARCH-air-Phase6A2-001, ARCH-air-Phase6A2-002, ARCH-air-Phase6A2-004 |
-| **where_it_belongs** | `pkg/air/docs/contracts/semantics/FileProducerContract.md` |
+| **where_it_belongs** | `runtime/docs/contracts/semantics/FileProducerContract.md` |
 | **required_tests** | Output respects start and stop; seek within tolerance; legacy preload RPCResponse.success=false for invalid path |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **yes** — FileProducerContract; PROD-010, PROD-010b |
@@ -259,7 +259,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | air |
 | **phase_applicability** | 6A.3 |
 | **sources** | ARCH-air-Phase6AOverview-005, ARCH-air-Phase6A3-001, ARCH-air-Phase6A3-002, ARCH-air-Phase6A3-003 |
-| **where_it_belongs** | `pkg/air/docs/contracts/coordination/ProducerBusContract.md`; `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` |
+| **where_it_belongs** | `runtime/docs/contracts/coordination/ProducerBusContract.md`; `runtime/docs/contracts/semantics/PlayoutEngineContract.md` |
 | **required_tests** | Alternation FileBackedSegment → ProgrammaticSegment; no ffmpeg for programmatic path |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **partial** — ProducerBusContract; ProgrammaticProducer not explicitly codified |
@@ -275,7 +275,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | both (Core issues; Air receives) |
 | **phase_applicability** | 6 |
 | **sources** | ARCH-air-Phase6-007 |
-| **where_it_belongs** | `pkg/core/docs/archive/phases/Phase5-ChannelManagerContract.md`; Core owns prefeed; Air receives |
+| **where_it_belongs** | `server/docs/archive/phases/Phase5-ChannelManagerContract.md`; Core owns prefeed; Air receives |
 | **required_tests** | legacy preload RPC call timestamp < boundary; legacy switch RPC at boundary |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **partial** — Core Phase5; Air receives, does not enforce ordering |
@@ -291,7 +291,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | air (test methodology) |
 | **phase_applicability** | 6 |
 | **sources** | ARCH-air-Phase6-003 |
-| **where_it_belongs** | `pkg/air/docs/archive/phases/Phase6-ExecutionContract.md`; test methodology |
+| **where_it_belongs** | `runtime/docs/archive/phases/Phase6-ExecutionContract.md`; test methodology |
 | **required_tests** | Assert no TS parsing in Phase 6 test code |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **no** — Phase 6 archived; methodology in archive only |
@@ -307,10 +307,10 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | air |
 | **phase_applicability** | 7+ |
 | **sources** | ARCH-main-MpegTSDomain-SINK010, ARCH-main-MpegTSDomain-SINK013, ARCH-main-MpegTSDomain-SINK014, ARCH-main-MpegTSDomain-SINK015 |
-| **where_it_belongs** | `pkg/air/docs/contracts/semantics/OutputContinuityContract.md`; `docs/legacy/air/contracts/MpegTSPlayoutSinkDomainContract.md` (to migrate) |
+| **where_it_belongs** | `runtime/docs/contracts/semantics/OutputContinuityContract.md`; `docs/legacy/air/contracts/MpegTSPlayoutSinkDomainContract.md` (to migrate) |
 | **required_tests** | test_sink_lifecycle, test_sink_encoding, test_sink_streaming |
 | **required_log_events_fields** | (none) |
-| **codified_status** | **no** — legacy contract; pkg/air contracts cover output continuity; SINK-013/014/015 not fully migrated |
+| **codified_status** | **no** — legacy contract; runtime contracts cover output continuity; SINK-013/014/015 not fully migrated |
 
 ---
 
@@ -323,7 +323,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | air |
 | **phase_applicability** | 7+ |
 | **sources** | ARCH-main-MpegTSTiming-T001, ARCH-main-MpegTSTiming-T002, ARCH-main-MpegTSTiming-T003, ARCH-main-MpegTSTiming-T005, ARCH-main-MpegTSTiming-T007 |
-| **where_it_belongs** | `pkg/air/docs/contracts/semantics/OutputTimingContract.md`; `pkg/air/docs/contracts/semantics/MasterClockContract.md` |
+| **where_it_belongs** | `runtime/docs/contracts/semantics/OutputTimingContract.md`; `runtime/docs/contracts/semantics/MasterClockContract.md` |
 | **required_tests** | test_sink_timing_clock_usage, test_sink_timing_pts_mapping, test_sink_timing_early_frames, test_sink_timing_late_drops, test_sink_timing_stop |
 | **required_log_events_fields** | late_frame_drops |
 | **codified_status** | **RESOLVED** — MasterClock governs CT/scheduling only (LAW-001). OutputTiming governs delivery pacing independently using process-local monotonic clock (OutputTimingContract §5.2). Legacy T-001 "MasterClock as sole sink time source" applies to CT domain, not delivery pacing. |
@@ -339,7 +339,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | air |
 | **phase_applicability** | 7+ |
 | **sources** | ARCH-main-MpegTSDomain-SINK020, ARCH-main-MpegTSTiming-T004 |
-| **where_it_belongs** | `pkg/air/docs/contracts/coordination/INV-P10-PIPELINE-FLOW-CONTROL.md`; `pkg/air/docs/contracts/semantics/RealTimeHoldPolicy.md` |
+| **where_it_belongs** | `runtime/docs/contracts/coordination/INV-P10-PIPELINE-FLOW-CONTROL.md`; `runtime/docs/contracts/semantics/RealTimeHoldPolicy.md` |
 | **required_tests** | test_sink_buffer_handling; start with empty buffer, verify counter and worker alive |
 | **required_log_events_fields** | buffer_empty_count, buffer_underruns, sink_buffer_empty_total |
 | **codified_status** | **partial** — INV-P10 covers backpressure; SINK-020/T-004 in legacy |
@@ -355,7 +355,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | air |
 | **phase_applicability** | 7+ |
 | **sources** | ARCH-main-MpegTSDomain-SINK021, ARCH-main-MpegTSDomain-SINK022, ARCH-main-MpegTSDomain-SINK023, ARCH-main-MpegTSDomain-SINK030, ARCH-main-MpegTSDomain-SINK031 |
-| **where_it_belongs** | `pkg/air/docs/contracts/coordination/INV-P10-PIPELINE-FLOW-CONTROL.md`; `docs/legacy/air/contracts/MpegTSPlayoutSinkDomainContract.md` |
+| **where_it_belongs** | `runtime/docs/contracts/coordination/INV-P10-PIPELINE-FLOW-CONTROL.md`; `docs/legacy/air/contracts/MpegTSPlayoutSinkDomainContract.md` |
 | **required_tests** | test_sink_buffer_handling, test_sink_network_handling, test_sink_error_handling |
 | **required_log_events_fields** | late_frames, frames_dropped, sink_late_frames_total, sink_frames_dropped_total, sink_encoding_errors_total, sink_network_errors_total, sink_status |
 | **codified_status** | **no** — legacy SINK-0xx; INV-P10 covers some; SINK-021/022/023/030/031 not fully codified |
@@ -371,10 +371,10 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | air |
 | **phase_applicability** | 7+ |
 | **sources** | ARCH-main-Orch-ORCH001, ARCH-main-Orch-ORCH002, ARCH-main-Orch-ORCH003 |
-| **where_it_belongs** | `pkg/air/docs/contracts/coordination/INV-P10-PIPELINE-FLOW-CONTROL.md`; `docs/legacy/air/contracts/OrchestrationLoopDomainContract.md` |
+| **where_it_belongs** | `runtime/docs/contracts/coordination/INV-P10-PIPELINE-FLOW-CONTROL.md`; `docs/legacy/air/contracts/OrchestrationLoopDomainContract.md` |
 | **required_tests** | (harness missing) |
 | **required_log_events_fields** | orchestration_tick_skew_ms, orchestration_latency_ms, orchestration_tick_violation_total, orchestration_backpressure_events_total, orchestration_backpressure_recovery_ms, orchestration_starvation_alert_total, orchestration_teardown_duration_ms |
-| **codified_status** | **no** — legacy OrchestrationLoopDomainContract; ORCH_001/002/003 not in pkg/air |
+| **codified_status** | **no** — legacy OrchestrationLoopDomainContract; ORCH_001/002/003 not in runtime |
 
 ---
 
@@ -389,7 +389,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | both (Core produces; Air consumes) |
 | **phase_applicability** | 4 |
 | **sources** | ARCH-core-Phase4Pipeline-002 |
-| **where_it_belongs** | `pkg/core/docs/archive/phases/Phase4-PlayoutPipelineContract.md`; `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` legacy preload RPC |
+| **where_it_belongs** | `server/docs/archive/phases/Phase4-PlayoutPipelineContract.md`; `runtime/docs/contracts/semantics/PlayoutEngineContract.md` legacy preload RPC |
 | **required_tests** | Assert start_offset_ms in segment is media position; not wall time |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **yes** — Phase4; PlayoutEngineContract legacy preload RPC |
@@ -405,7 +405,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | core |
 | **phase_applicability** | 4, 5 |
 | **sources** | ARCH-core-Phase4Pipeline-004, ARCH-core-Phase5CM-003 |
-| **where_it_belongs** | `pkg/core/docs/archive/phases/Phase4-PlayoutPipelineContract.md`; `pkg/core/docs/archive/phases/Phase5-ChannelManagerContract.md`; `pkg/core/docs/contracts/resources/ChannelManagerContract.md` |
+| **where_it_belongs** | `server/docs/archive/phases/Phase4-PlayoutPipelineContract.md`; `server/docs/archive/phases/Phase5-ChannelManagerContract.md`; `server/docs/contracts/resources/ChannelManagerContract.md` |
 | **required_tests** | Assert each call returns new instance; CM never mutates issued segment |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **partial** — Phase4/5 archived; ChannelManagerContract exists but may not state immutability |
@@ -421,7 +421,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | core |
 | **phase_applicability** | 5 |
 | **sources** | ARCH-core-Phase5CM-001, ARCH-core-Phase5CM-002, ARCH-core-Phase5CM-004, ARCH-core-Phase5CM-005 |
-| **where_it_belongs** | `pkg/core/docs/archive/phases/Phase5-ChannelManagerContract.md`; `pkg/core/docs/contracts/resources/ChannelManagerContract.md` |
+| **where_it_belongs** | `server/docs/archive/phases/Phase5-ChannelManagerContract.md`; `server/docs/contracts/resources/ChannelManagerContract.md` |
 | **required_tests** | legacy preload RPC timestamp <= hard_stop_time_ms - prefeed_window_ms; legacy switch RPC at boundary; at most one legacy preload RPC per next segment |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **partial** — Phase5 archived; ChannelManagerContract has HTTP/startup; prefeed semantics not fully codified |
@@ -437,7 +437,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | core |
 | **phase_applicability** | 2 |
 | **sources** | ARCH-core-Phase2Plan-001, ARCH-core-Phase2Plan-002 |
-| **where_it_belongs** | `pkg/core/docs/archive/phases/Phase2-SchedulePlanContract.md`; `pkg/core/docs/contracts/resources/SchedulePlan*.md` |
+| **where_it_belongs** | `server/docs/archive/phases/Phase2-SchedulePlanContract.md`; `server/docs/contracts/resources/SchedulePlan*.md` |
 | **required_tests** | Each grid has two items in correct order; plan has no duration/offset/timing fields |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **partial** — Phase2 archived; SchedulePlan contracts exist for add/list/show |
@@ -453,7 +453,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | core |
 | **phase_applicability** | 2.5 |
 | **sources** | ARCH-core-Phase2_5Asset-001, ARCH-core-Phase2_5Asset-002, ARCH-core-Phase2_5Asset-003 |
-| **where_it_belongs** | `pkg/core/docs/contracts/resources/AssetContract.md`; `pkg/core/docs/archive/phases/Phase2.5-AssetMetadataContract.md` |
+| **where_it_belongs** | `server/docs/contracts/resources/AssetContract.md`; `server/docs/archive/phases/Phase2.5-AssetMetadataContract.md` |
 | **required_tests** | duration_ms is int, > 0; Phase 3/4 use asset.duration_ms; no probing at runtime; Asset frozen |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **partial** — AssetContract exists; Phase2.5 duration rules not fully in canonical AssetContract |
@@ -469,7 +469,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | core |
 | **phase_applicability** | 3 |
 | **sources** | ARCH-core-Phase3Resolver-001, ARCH-core-Phase3Resolver-002 |
-| **where_it_belongs** | `pkg/core/docs/contracts/runtime/ScheduleManagerContract.md`; `pkg/core/docs/archive/phases/Phase3-ActiveItemResolverContract.md` |
+| **where_it_belongs** | `server/docs/contracts/runtime/ScheduleManagerContract.md`; `server/docs/archive/phases/Phase3-ActiveItemResolverContract.md` |
 | **required_tests** | Mismatch causes fail fast; 1_498_000 → samplecontent; 1_499_000 → filler |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **partial** — ScheduleManager* contracts; Phase3 resolver semantics in archive |
@@ -485,7 +485,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | both |
 | **phase_applicability** | 7 |
 | **sources** | ARCH-core-Phase7E2E-001 |
-| **where_it_belongs** | `pkg/core/docs/archive/phases/Phase7-E2EAcceptanceContract.md`; `docs/ComponentMap.md` |
+| **where_it_belongs** | `server/docs/archive/phases/Phase7-E2EAcceptanceContract.md`; `docs/ComponentMap.md` |
 | **required_tests** | Phases 0-6 use direct API; Phase 7 uses GET /channel/{id}.ts |
 | **required_log_events_fields** | (none) |
 | **codified_status** | **no** — Phase7 archived; ComponentMap may reference |
@@ -503,7 +503,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | air |
 | **phase_applicability** | 6, 6A |
 | **sources** | ARCH-air-Phase6-004, ARCH-air-Phase6-005 |
-| **where_it_belongs** | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §legacy preload RPC; §legacy switch RPC |
+| **where_it_belongs** | `runtime/docs/contracts/semantics/PlayoutEngineContract.md` §legacy preload RPC; §legacy switch RPC |
 | **required_tests** | Assert legacy preload RPCResponse.shadow_decode_started; legacy switch RPCResponse.pts_contiguous |
 | **required_log_events_fields** | legacy preload RPCResponse.shadow_decode_started, legacy switch RPCResponse.pts_contiguous |
 | **codified_status** | **yes** — PlayoutEngineContract defines response fields |
@@ -519,7 +519,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | air |
 | **phase_applicability** | 7+ |
 | **sources** | PlayoutEngineContract Part 2; ARCH-main-MpegTSDomain-Telemetry |
-| **where_it_belongs** | `pkg/air/docs/contracts/semantics/PlayoutEngineContract.md` §Part 2 Telemetry; `pkg/air/docs/contracts/semantics/MetricsAndTimingContract.md` |
+| **where_it_belongs** | `runtime/docs/contracts/semantics/PlayoutEngineContract.md` §Part 2 Telemetry; `runtime/docs/contracts/semantics/MetricsAndTimingContract.md` |
 | **required_tests** | Assert metrics exported; PE-TEL-001 through PE-TEL-004 |
 | **required_log_events_fields** | retrovue_playout_* metrics |
 | **codified_status** | **partial** — PlayoutEngineContract defines; enforcement deferred Phase 7+ |
@@ -535,10 +535,10 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | air |
 | **phase_applicability** | 7+ |
 | **sources** | ARCH-main-MpegTSDomain-Telemetry |
-| **where_it_belongs** | `docs/legacy/air/contracts/MpegTSPlayoutSinkDomainContract.md` §Telemetry; to migrate to `pkg/air/docs/contracts/semantics/MetricsExportContract.md` |
+| **where_it_belongs** | `docs/legacy/air/contracts/MpegTSPlayoutSinkDomainContract.md` §Telemetry; to migrate to `runtime/docs/contracts/semantics/MetricsExportContract.md` |
 | **required_tests** | Assert metrics exported |
 | **required_log_events_fields** | sink_frames_sent_total, sink_frames_dropped_total, sink_late_frames_total, sink_encoding_errors_total, sink_network_errors_total, sink_buffer_empty_total, sink_running, sink_status |
-| **codified_status** | **no** — legacy MpegTSPlayoutSinkDomainContract; not in pkg/air MetricsExportContract |
+| **codified_status** | **no** — legacy MpegTSPlayoutSinkDomainContract; not in runtime MetricsExportContract |
 
 ---
 
@@ -551,7 +551,7 @@ Deduped and clustered from `RULE_CANDIDATES.json`. Traceability: each canonical 
 | **scope** | air |
 | **phase_applicability** | 7+ |
 | **sources** | ARCH-main-Orch-ORCH001, ARCH-main-Orch-ORCH002, ARCH-main-Orch-ORCH003 |
-| **where_it_belongs** | `docs/legacy/air/contracts/OrchestrationLoopDomainContract.md`; to migrate to pkg/air |
+| **where_it_belongs** | `docs/legacy/air/contracts/OrchestrationLoopDomainContract.md`; to migrate to runtime |
 | **required_tests** | (harness missing) |
 | **required_log_events_fields** | orchestration_tick_skew_ms, orchestration_latency_ms, orchestration_tick_violation_total, orchestration_backpressure_events_total, orchestration_backpressure_recovery_ms, orchestration_starvation_alert_total, orchestration_teardown_duration_ms |
 | **codified_status** | **no** — legacy only |

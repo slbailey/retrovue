@@ -32,10 +32,10 @@ Construct a plan with one zone containing Asset A. Define a blackout constraint 
 
 ## Required Tests
 
-- `pkg/core/tests/contracts/scheduling/test_schedule_constraints.py::TestInvConstraintBlackout001`
+- `server/tests/contracts/scheduling/test_schedule_constraints.py::TestInvConstraintBlackout001`
 
 ## Enforcement Evidence
 
-- `pkg/core/src/retrovue/scheduling/schedule_constraints.py` — `check_blackout_constraints()`
-- `pkg/core/src/retrovue/usecases/zone_coverage_check.py` — integrated into `validate_zone_plan_integrity()` after eligibility checks
+- `server/src/retrovue/scheduling/schedule_constraints.py` — `check_blackout_constraints()`
+- `server/src/retrovue/usecases/zone_coverage_check.py` — integrated into `validate_zone_plan_integrity()` after eligibility checks
 - Error tag: `INV-CONSTRAINT-BLACKOUT-001-VIOLATED`
