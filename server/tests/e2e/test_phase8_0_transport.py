@@ -27,8 +27,8 @@ from pathlib import Path
 import pytest
 import requests
 
-# Load proto stubs from server/core/proto/retrovue (canonical: protos/playout.proto)
-_PROTO_DIR = Path(__file__).resolve().parents[2] / "core" / "proto" / "retrovue"
+# Load proto stubs from server/src/retrovue/proto/ (canonical: protos/playout.proto)
+_PROTO_DIR = Path(__file__).resolve().parents[2] / "src" / "retrovue" / "proto"
 try:
     import grpc
     import importlib.util

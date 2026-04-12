@@ -58,15 +58,10 @@ class FeedResult(Enum):
 
 
 def _get_playout_stubs() -> tuple[types.ModuleType, types.ModuleType]:
-    """Load playout_pb2 and playout_pb2_grpc from server/core/proto/retrovue."""
-    # Try multiple paths for flexibility
+    """Load playout_pb2 and playout_pb2_grpc from server/src/retrovue/proto/."""
     candidates = [
-        Path(__file__).resolve().parents[3] / "core" / "proto" / "retrovue",
-        Path(__file__).resolve().parents[4] / "core" / "proto" / "retrovue",
-        Path("/opt/retrovue/server/core/proto/retrovue"),
-        # Legacy location — proto stubs before the restructure/reta-209 move
-        Path(__file__).resolve().parents[4] / "legacy" / "core-proto" / "proto" / "retrovue",
-        Path("/opt/retrovue/legacy/core-proto/proto/retrovue"),
+        Path(__file__).resolve().parent.parent / "proto",
+        Path("/opt/retrovue/server/src/retrovue/proto"),
     ]
     _proto_dir = None
     for p in candidates:

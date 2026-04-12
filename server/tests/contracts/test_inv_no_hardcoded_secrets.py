@@ -31,10 +31,8 @@ EXCLUDED_PREFIXES = (
 # e.g. gRPC stubs with channel_credentials=None, enricher templates with api_key as param name
 EXCLUDED_FILES = {
     # Auto-generated gRPC stubs
-    "server/core/proto/execution_evidence_v1_pb2_grpc.py",
-    "server/core/proto/retrovue/execution_evidence_v1_pb2_grpc.py",
-    "server/core/proto/retrovue/playout_pb2_grpc.py",
-    "server/core/proto/playout_pb2_grpc.py",
+    "server/src/retrovue/proto/execution_evidence_v1_pb2_grpc.py",
+    "server/src/retrovue/proto/playout_pb2_grpc.py",
     # Enricher/importer templates and base classes (parameter names, not literal values)
     "server/src/retrovue/adapters/enrichers/enricher_template.py",
     "server/src/retrovue/adapters/enrichers/base.py",

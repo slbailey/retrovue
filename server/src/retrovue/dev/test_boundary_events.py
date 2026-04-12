@@ -44,8 +44,8 @@ import importlib.util
 import types
 
 def _get_playout_stubs():
-    """Load playout_pb2 and playout_pb2_grpc from server/core/proto/retrovue."""
-    _proto_dir = Path("/opt/retrovue/server/core/proto/retrovue")
+    """Load playout_pb2 and playout_pb2_grpc from server/src/retrovue/proto/."""
+    _proto_dir = Path("/opt/retrovue/server/src/retrovue/proto")
     if not _proto_dir.is_dir():
         raise RuntimeError("Proto stubs not found")
 

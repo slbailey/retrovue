@@ -114,12 +114,19 @@ def ensure_socket_dir_exists(socket_path: Path) -> None:
 
 
 def _get_playout_stubs() -> tuple[types.ModuleType, types.ModuleType]:
-    """Load playout_pb2 and playout_pb2_grpc from server/core/proto/retrovue. Returns (playout_pb2, playout_pb2_grpc)."""
-    _core_root = Path(__file__).resolve().parents[3]
-    _proto_retrovue_dir = _core_root / "core" / "proto" / "retrovue"
-    if not _proto_retrovue_dir.is_dir():
+    """Load playout_pb2 and playout_pb2_grpc from server/src/retrovue/proto/. Returns (playout_pb2, playout_pb2_grpc)."""
+    candidates = [
+        Path(__file__).resolve().parent.parent / "proto",
+        Path("/opt/retrovue/server/src/retrovue/proto"),
+    ]
+    _proto_retrovue_dir = None
+    for p in candidates:
+        if p.is_dir() and (p / "playout_pb2.py").exists():
+            _proto_retrovue_dir = p
+            break
+    if _proto_retrovue_dir is None:
         raise RuntimeError(
-            f"Proto stubs not found at {_proto_retrovue_dir}. "
+            "Proto stubs not found. "
             "Run scripts/air/generate_proto.sh or equivalent to generate playout_pb2(_grpc).py."
         )
     _spec_pb2 = importlib.util.spec_from_file_location(

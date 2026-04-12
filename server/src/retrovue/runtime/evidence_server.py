@@ -31,9 +31,8 @@ import grpc
 if TYPE_CHECKING:
     from retrovue.runtime.clock import MasterClock as MasterClockType
 
-# Proto stubs live in server/core/proto/retrovue/; add to path for import.
-_CORE_ROOT = Path(__file__).resolve().parents[3]  # server
-_PROTO_DIR = str(_CORE_ROOT / "core" / "proto" / "retrovue")
+# Proto stubs live in server/src/retrovue/proto/; add to path for import.
+_PROTO_DIR = str(Path(__file__).resolve().parent.parent / "proto")
 if _PROTO_DIR not in sys.path:
     sys.path.insert(0, _PROTO_DIR)
 
