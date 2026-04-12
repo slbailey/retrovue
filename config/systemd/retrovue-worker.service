@@ -30,7 +30,7 @@ Environment=PATH=/opt/retrovue/pkg/core/.venv/bin:/usr/local/bin:/usr/bin:/bin
 Environment=VIRTUAL_ENV=/opt/retrovue/pkg/core/.venv
 EnvironmentFile=/opt/retrovue/secrets.env
 
-ExecStart=/opt/retrovue/pkg/core/.venv/bin/retrovue worker run
+ExecStart=/opt/retrovue/pkg/core/.venv/bin/retrovue worker run --poll
 
 # Auto-restart: worker should always be running to process queued jobs
 Restart=always

@@ -14,6 +14,8 @@ app = typer.Typer(name="worker", help="Processor job queue worker")
 def run(
     once: bool = typer.Option(False, "--once", help="Process a single job then exit"),
     iterations: int | None = typer.Option(None, "--iterations", "-n", help="Max number of jobs to process (default: until queue empty)"),
+    poll: bool = typer.Option(False, "--poll", help="Keep running: sleep and re-check when the queue is empty"),
+    interval: int = typer.Option(30, "--interval", help="Seconds to sleep between poll cycles (default: 30)"),
 ):
     """Run the processor worker: claim jobs from the queue and execute them."""
     if once:
@@ -21,7 +23,7 @@ def run(
         if not processed:
             typer.echo("No job available.")
     else:
-        count = run_loop(iterations=iterations)
+        count = run_loop(iterations=iterations, poll=poll, interval=interval)
         typer.echo(f"Processed {count} job(s).")
 
 
