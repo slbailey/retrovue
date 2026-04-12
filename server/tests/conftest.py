@@ -44,12 +44,24 @@ def _force_test_db(monkeypatch):
     """
     Automatically point DB at TEST_DATABASE_URL during pytest.
 
-    If TEST_DATABASE_URL is not set, we fall back to DATABASE_URL so tests still run.
+    TEST_DATABASE_URL MUST be set. Tests must never silently fall back to
+    the production DATABASE_URL — that caused test data to pollute prod.
     """
-    use_test = bool(settings.test_database_url)
+    if not settings.test_database_url:
+        raise RuntimeError(
+            "TEST_DATABASE_URL is not set. Refusing to run tests against "
+            "the production database. Set TEST_DATABASE_URL in your "
+            "environment or .env file."
+        )
+    if settings.test_database_url == settings.database_url:
+        raise RuntimeError(
+            "TEST_DATABASE_URL is identical to DATABASE_URL. Refusing to run "
+            "tests against the production database. Set TEST_DATABASE_URL to a "
+            "separate test database (e.g. retrovue_test)."
+        )
 
     # rebuild engine for tests
-    engine = db_module.get_engine(for_test=use_test)
+    engine = db_module.get_engine(for_test=True)
 
     # override the module-level SessionLocal with a test-bound one
     TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, future=True)

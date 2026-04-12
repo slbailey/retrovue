@@ -357,8 +357,9 @@ Canonical contracts: [core/programming_pools.md](core/programming_pools.md), [po
 | INV-TAG-CANONICAL-FORM-001 | [invariants/core/ingest/INV-TAG-CANONICAL-FORM-001.md](invariants/core/ingest/INV-TAG-CANONICAL-FORM-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
 | INV-TAG-MIGRATION-IDEMPOTENT-001 | [invariants/core/ingest/INV-TAG-MIGRATION-IDEMPOTENT-001.md](invariants/core/ingest/INV-TAG-MIGRATION-IDEMPOTENT-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
 | INV-CHAPTER-MARKER-SHAPE-001 | [invariants/core/ingest/INV-CHAPTER-MARKER-SHAPE-001.md](invariants/core/ingest/INV-CHAPTER-MARKER-SHAPE-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
+| INV-PROCESSOR-READINESS-GATE-001 | [invariants/core/ingest/INV-PROCESSOR-READINESS-GATE-001.md](invariants/core/ingest/INV-PROCESSOR-READINESS-GATE-001.md) | LAW-ELIGIBILITY, LAW-DERIVATION |
 
-Canonical contracts: [tag_canonical_form.md](tag_canonical_form.md)
+Canonical contracts: [tag_canonical_form.md](tag_canonical_form.md), [core/ProcessorCapabilityContract_v0.1.md](core/ProcessorCapabilityContract_v0.1.md)
 
 ### Ingest — Source Watch Mode
 
@@ -506,6 +507,12 @@ Canonical contract: [schedule_constraints.md](schedule_constraints.md)
 | INV-CHANNEL-RECONCILE-DELETE | [channel_reconciliation.md](channel_reconciliation.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
 | INV-CHANNEL-RECONCILE-IDEMPOTENT | [channel_reconciliation.md](channel_reconciliation.md) | LAW-CONTENT-AUTHORITY |
 | INV-CHANNEL-RECONCILE-EMPTY-GUARD | [channel_reconciliation.md](channel_reconciliation.md) | LAW-CONTENT-AUTHORITY |
+
+### Infrastructure — Test Isolation
+
+| Invariant | File | Derived From |
+|-----------|------|--------------|
+| INV-TEST-DB-ISOLATION-001 | [invariants/core/cross-cutting/INV-TEST-DB-ISOLATION-001.md](invariants/core/cross-cutting/INV-TEST-DB-ISOLATION-001.md) | — |
 
 ### Runtime
 

@@ -58,7 +58,19 @@ def get_engine(db_url: str | None = None, for_test: bool = False) -> Engine:
     Returns the global engine when using the default, to avoid unnecessary engine creation.
     """
     # Decide which URL to use
-    if for_test and settings.test_database_url:
+    if for_test:
+        if not settings.test_database_url:
+            raise RuntimeError(
+                "TEST_DATABASE_URL is not set. Tests MUST NOT run against the "
+                "production database. Set TEST_DATABASE_URL to a dedicated test "
+                "database before running the test suite."
+            )
+        if settings.test_database_url == settings.database_url:
+            raise RuntimeError(
+                "TEST_DATABASE_URL is identical to DATABASE_URL. Tests MUST NOT "
+                "run against the production database. Set TEST_DATABASE_URL to a "
+                "separate test database (e.g. retrovue_test)."
+            )
         chosen_url = settings.test_database_url
     else:
         chosen_url = db_url or settings.database_url
