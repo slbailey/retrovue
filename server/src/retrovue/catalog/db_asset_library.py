@@ -118,7 +118,7 @@ def _apply_traffic_config(
     allowed_types is a legacy fallback only — allowed_pools takes precedence.
     """
     profiles = traffic.get("profiles", {})
-    default_name = traffic.get("default") or traffic.get("default_profile")
+    default_name = traffic.get("default_profile")
 
     if default_name and default_name in profiles:
         profile = profiles[default_name]

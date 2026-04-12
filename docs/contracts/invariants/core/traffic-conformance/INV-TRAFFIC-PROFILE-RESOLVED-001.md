@@ -10,11 +10,11 @@ Every block with breaks MUST have a resolved traffic profile so TrafficManager c
 
 ## Guarantee
 
-Every compiled block that contains break structures MUST carry a resolved traffic profile name. Resolution precedence: block-level override > template `breaks.traffic_profile` > channel `traffic.default`. An unresolvable profile reference MUST fail at YAML validation time. TrafficManager MUST NOT infer traffic policy from content type or template name.
+Every compiled block that contains break structures MUST carry a resolved traffic profile name. Resolution precedence: block-level override > template `breaks.traffic_profile` > channel `traffic.default_profile`. An unresolvable profile reference MUST fail at YAML validation time. TrafficManager MUST NOT infer traffic policy from content type or template name.
 
 ## Preconditions
 
-- Channel YAML declares `traffic.default` and `traffic.profiles`.
+- Channel YAML declares `traffic.default_profile` and `traffic.profiles`.
 - Template (if referenced) is fully resolved including `extends`.
 
 ## Observability

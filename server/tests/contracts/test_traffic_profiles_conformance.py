@@ -230,7 +230,7 @@ def _traffic_section(
         }
     return {
         "profiles": profiles,
-        "default": default,
+        "default_profile": default,
     }
 
 
@@ -600,6 +600,50 @@ class TestTrafficProfileFallsBackToChannelDefault:
         )
 
 
+class TestTrafficKeyConsistency:
+    """INV-TRAFFIC-PROFILE-RESOLVED-001: The canonical key for channel-level
+    default traffic profile is ``default_profile`` — the same key enforced
+    by the DSL validator (INV-TRAFFIC-DSL-DEFAULT-REQUIRED-001).
+
+    All resolution and validation paths must use ``default_profile``, never
+    the stale ``default`` alias."""
+
+    def test_default_profile_key_resolves(self):
+        """Channel traffic section using ``default_profile`` key must resolve
+        the channel default correctly (no fallback to ``default`` key)."""
+        templates = {
+            "sitcom": {
+                "breaks": {
+                    "strategy": "synthetic",
+                    "target_segment_minutes": 11,
+                    # No traffic_profile on template
+                },
+            },
+        }
+        traffic = {
+            "profiles": {
+                "channel_default": {
+                    "allowed_types": ["promo", "trailer"],
+                    "default_cooldown_seconds": 3600,
+                    "max_plays_per_day": 0,
+                },
+            },
+            "default_profile": "channel_default",
+        }
+        resolver = _make_resolver(episodes={"ep-001": 1320})
+        dsl = _base_dsl(
+            templates=templates,
+            program_template="sitcom",
+            grid_blocks=1,
+            traffic=traffic,
+        )
+        result = compile_schedule(dsl, resolver, resolved_config=TEST_RESOLVED_CONFIG)
+        block = _extract_block(result)
+        assert block.get("traffic_profile") == "channel_default", (
+            f"default_profile key must resolve; got {block.get('traffic_profile')}"
+        )
+
+
 class TestTrafficProfileMissingFailsValidation:
     """INV-TRAFFIC-PROFILE-RESOLVED-001: Block with breaks but no resolvable
     profile fails at validation."""
@@ -626,7 +670,7 @@ class TestTrafficProfileMissingFailsValidation:
                     "max_plays_per_day": 0,
                 },
             },
-            # No "default" key → resolution yields None
+            # No "default_profile" key → resolution yields None
         }
         resolver = _make_resolver(episodes={"ep-001": 1320})
         dsl = _base_dsl(

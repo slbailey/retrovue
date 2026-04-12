@@ -67,7 +67,7 @@ Traffic profile resolution for a compiled block follows this precedence:
 
 1. **Block-level override:** `traffic_profile` on the schedule block entry (per `traffic_dsl.md`).
 2. **Template-level profile:** `breaks.traffic_profile` from the block's resolved template.
-3. **Channel default:** `traffic.default` from the channel YAML (per `traffic_dsl.md`).
+3. **Channel default:** `traffic.default_profile` from the channel YAML (per `traffic_dsl.md`).
 
 The first non-null value wins. If all three are null, compilation MUST fail with a clear error — every block that contains breaks MUST have a resolvable traffic profile.
 
@@ -101,7 +101,7 @@ A template MAY declare a `trailing` section with interstitial blocks that appear
 Trailing block traffic profile resolution:
 1. `trailing[].traffic_profile` (entry-level override).
 2. `breaks.traffic_profile` (template break profile as fallback).
-3. `traffic.default` (channel default).
+3. `traffic.default_profile` (channel default).
 
 ---
 
@@ -217,7 +217,7 @@ Every template MUST declare or inherit an `overconstrained` policy (`bleed` or `
 
 ### INV-TRAFFIC-PROFILE-RESOLVED-001 — Traffic profile resolution for every break-bearing block
 
-Every compiled block that contains break structures MUST have a resolved traffic profile. Resolution follows the precedence: block-level override > template `breaks.traffic_profile` > channel `traffic.default`. An unresolvable profile MUST fail at validation time. TrafficManager MUST NOT infer traffic policy from content type or template name.
+Every compiled block that contains break structures MUST have a resolved traffic profile. Resolution follows the precedence: block-level override > template `breaks.traffic_profile` > channel `traffic.default_profile`. An unresolvable profile MUST fail at validation time. TrafficManager MUST NOT infer traffic policy from content type or template name.
 
 ### INV-UNDERRUN-WARNING-001 — Extreme underrun emits structured warning
 

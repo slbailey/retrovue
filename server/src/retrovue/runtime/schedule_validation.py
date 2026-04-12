@@ -121,11 +121,11 @@ def _validate_traffic_profile_refs(dsl: dict[str, Any]) -> list[str]:
 
     profiles = traffic.get("profiles", {})
 
-    # Validate traffic.default
-    default_ref = traffic.get("default")
+    # Validate traffic.default_profile
+    default_ref = traffic.get("default_profile")
     if default_ref and default_ref not in profiles:
         errors.append(
-            f"INV-TRAFFIC-PROFILE-RESOLVED-001: traffic.default "
+            f"INV-TRAFFIC-PROFILE-RESOLVED-001: traffic.default_profile "
             f"'{default_ref}' not found in traffic.profiles"
         )
 

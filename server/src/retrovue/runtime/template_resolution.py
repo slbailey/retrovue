@@ -296,7 +296,7 @@ def _resolve_block_traffic_profile(
     INV-TRAFFIC-PROFILE-RESOLVED-001: Resolution precedence:
         1. Block-level override (schedule block traffic_profile)
         2. Template breaks.traffic_profile
-        3. Channel traffic.default
+        3. Channel traffic.default_profile
 
     Returns the resolved profile name, or None if no traffic section exists.
     """
@@ -313,10 +313,10 @@ def _resolve_block_traffic_profile(
         if template_profile:
             return template_profile
 
-    # 3. Channel traffic.default
+    # 3. Channel traffic.default_profile
     traffic = dsl.get("traffic")
     if traffic:
-        return traffic.get("default")
+        return traffic.get("default_profile")
 
     return None
 

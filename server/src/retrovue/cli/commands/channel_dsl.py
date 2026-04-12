@@ -131,7 +131,7 @@ def _resolve_traffic_profile(dsl: dict[str, Any], block: dict[str, Any]) -> dict
         return None
 
     # Block-level override → channel default
-    profile_name = block.get("traffic_profile") or traffic.get("default") or traffic.get("default_profile")
+    profile_name = block.get("traffic_profile") or traffic.get("default_profile")
     if not profile_name or profile_name not in profiles:
         return None
 

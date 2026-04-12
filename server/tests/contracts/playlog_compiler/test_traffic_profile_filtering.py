@@ -45,7 +45,7 @@ class TestTrafficPolicyResolution:
                     "default_cooldown_seconds": 7200,
                 },
             },
-            "default": "premium",
+            "default_profile": "premium",
         }
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
@@ -66,7 +66,7 @@ class TestTrafficPolicyResolution:
                     "allowed_pools": ["traffic_trailers", "traffic_teasers"],
                 },
             },
-            "default": "premium",
+            "default_profile": "premium",
         }
         pools = {
             "traffic_trailers": {"select": {"where": {"type": {"eq": "trailer"}}}},
@@ -85,7 +85,7 @@ class TestTrafficPolicyResolution:
             "profiles": {
                 "sitcom": {"allowed_pools": ["nonexistent_pool"]},
             },
-            "default": "sitcom",
+            "default_profile": "sitcom",
         }
         pools = {"other_pool": {"select": {"where": {"type": {"eq": "promo"}}}}}
 
@@ -99,17 +99,17 @@ class TestTrafficPolicyResolution:
             "profiles": {
                 "sitcom": {"allowed_pools": ["commercials"]},
             },
-            "default": "sitcom",
+            "default_profile": "sitcom",
         }
         with pytest.raises(ValueError, match="undefined pools"):
             _apply_traffic_config(policy, traffic)
 
-    def test_legacy_default_profile_key(self):
-        """Legacy default_profile key also works."""
+    def test_default_profile_key_is_canonical(self):
+        """default_profile is the canonical key for channel default traffic profile."""
         policy = dict(DEFAULT_TRAFFIC_POLICY)
         traffic = {
-            "profiles": {"legacy": {"allowed_types": ["promo"]}},
-            "default_profile": "legacy",
+            "profiles": {"standard": {"allowed_types": ["promo"]}},
+            "default_profile": "standard",
         }
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)
