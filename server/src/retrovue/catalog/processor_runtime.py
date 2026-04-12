@@ -15,6 +15,7 @@ from typing import Any
 import structlog
 from sqlalchemy.orm import Session
 
+from ..adapters.enrichers.interstitial_type_enricher import COLLECTION_TYPE_MAP
 from ..adapters.importers.base import DiscoveredItem
 from ..adapters.registry import ENRICHERS
 from ..domain.entities import (
@@ -196,6 +197,11 @@ def _enricher_instance(processor_id: str, collection_name: str = "") -> Any:
         return None
     try:
         if processor_id == "interstitial-type":
+            # Guard: only construct for interstitial collections, matching
+            # the ingest pipeline guard in container_ingest.py.
+            # Non-interstitial collections are a legitimate skip (not an error).
+            if collection_name not in COLLECTION_TYPE_MAP:
+                return None
             return cls(collection_name=collection_name)
         return cls()
     except Exception as exc:

@@ -44,22 +44,16 @@ class TestEnricherInstanceRaises:
     """_enricher_instance MUST raise EnricherConstructionError, not return None."""
 
     # Tier: 1 | Structural invariant
-    def test_empty_collection_name_raises(self):
-        """Empty collection_name → EnricherConstructionError, not None."""
-        with pytest.raises(EnricherConstructionError) as exc_info:
-            _enricher_instance("interstitial-type", "")
-
-        assert exc_info.value.processor_id == "interstitial-type"
-        assert "collection_name" in exc_info.value.reason.lower() or "empty" in exc_info.value.reason.lower()
+    def test_empty_collection_name_skips(self):
+        """Empty collection_name → None (legitimate skip, not applicable)."""
+        result = _enricher_instance("interstitial-type", "")
+        assert result is None
 
     # Tier: 1 | Structural invariant
-    def test_unknown_collection_name_raises(self):
-        """Unknown collection_name → EnricherConstructionError."""
-        with pytest.raises(EnricherConstructionError) as exc_info:
-            _enricher_instance("interstitial-type", "not_a_collection")
-
-        assert exc_info.value.processor_id == "interstitial-type"
-        assert "not_a_collection" in exc_info.value.reason
+    def test_unknown_collection_name_skips(self):
+        """Unknown collection_name → None (legitimate skip, collection not interstitial)."""
+        result = _enricher_instance("interstitial-type", "not_a_collection")
+        assert result is None
 
     # Tier: 1 | Structural invariant
     def test_valid_collection_name_succeeds(self):
@@ -75,18 +69,11 @@ class TestEnricherInstanceRaises:
         assert result is None
 
     # Tier: 1 | Structural invariant
-    def test_error_contains_invariant_id(self):
-        """Error message must reference the invariant for traceability."""
-        with pytest.raises(EnricherConstructionError, match="INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001"):
-            _enricher_instance("interstitial-type", "")
-
-    # Tier: 1 | Structural invariant
-    def test_error_preserves_cause(self):
-        """EnricherConstructionError must chain the original exception."""
-        with pytest.raises(EnricherConstructionError) as exc_info:
-            _enricher_instance("interstitial-type", "bad_name")
-
-        assert exc_info.value.__cause__ is not None
+    def test_non_interstitial_collections_skip(self):
+        """Collections not in COLLECTION_TYPE_MAP → None (consistent with ingest guard)."""
+        for non_interstitial in ["TV Shows", "MonsterVision", "RetroTV", "Movies", "Horror"]:
+            result = _enricher_instance("interstitial-type", non_interstitial)
+            assert result is None, f"Expected None for non-interstitial collection '{non_interstitial}'"
 
 
 # ===========================================================================
@@ -160,19 +147,16 @@ class TestExecuteJobRecordsFailure:
     """execute_job MUST record a failed ProcessorRun when enricher construction fails."""
 
     # Tier: 2 | Scheduling logic invariant
-    def test_construction_failure_produces_failed_run_record(self):
-        """When enricher construction fails, a ProcessorRun with status=failed
-        must be persisted — the failure is NOT silently skipped.
+    def test_non_interstitial_collection_skips_enricher(self):
+        """When collection is not interstitial, interstitial-type enricher is
+        legitimately skipped — no failed run record, no error.
         """
         asset = _FakeAsset()
-        # Container with empty name → interstitial-type enricher will fail
+        # Container with empty name → interstitial-type enricher skipped (not failed)
         container = _FakeContainer(name="")
         db = _TrackingSession(asset, container)
         job = _FakeJob()
 
-        # execute_job should NOT raise — it catches construction errors
-        # and records them as failed runs, then continues with other processors.
-        # But it may raise on the final state transition. We catch that.
         try:
             execute_job(db, job)
         except Exception:
@@ -185,30 +169,21 @@ class TestExecuteJobRecordsFailure:
             if isinstance(obj, ProcessorRun)
         ]
 
-        # Must have at least one failed run for interstitial-type
-        failed_runs = [
+        # interstitial-type should NOT appear as failed — it's a legitimate skip
+        failed_interstitial = [
             r for r in run_records
             if r.processor_id == "interstitial-type" and r.status == RUN_STATUS_FAILED
         ]
-        assert len(failed_runs) >= 1, (
-            f"INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001: expected failed ProcessorRun "
-            f"for 'interstitial-type', got run records: "
-            f"{[(r.processor_id, r.status) for r in run_records]}"
+        assert len(failed_interstitial) == 0, (
+            f"Non-interstitial collection should skip enricher, not fail it. "
+            f"Got failed runs: {[(r.processor_id, r.status) for r in failed_interstitial]}"
         )
 
-        # Error message must explain the failure
-        assert failed_runs[0].error_message is not None
-        assert "INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001" in failed_runs[0].error_message
-
     # Tier: 2 | Scheduling logic invariant
-    def test_construction_failure_logs_error(self, capsys):
-        """Construction failure must emit enricher_construction_failed log.
-
-        structlog writes to stdout, not the standard logging framework,
-        so we capture stdout instead of using caplog.
-        """
+    def test_interstitial_collection_runs_enricher(self):
+        """When collection IS interstitial, enricher runs and produces a run record."""
         asset = _FakeAsset()
-        container = _FakeContainer(name="")
+        container = _FakeContainer(name="station_ids")
         db = _TrackingSession(asset, container)
         job = _FakeJob()
 
@@ -217,12 +192,14 @@ class TestExecuteJobRecordsFailure:
         except Exception:
             pass
 
-        captured = capsys.readouterr()
-        assert "enricher_construction_failed" in captured.out, (
-            f"Expected enricher_construction_failed in stdout. "
-            f"Got: {captured.out[:500]}"
+        from retrovue.domain.entities import ProcessorRun
+        run_records = [
+            obj for obj in db.added
+            if isinstance(obj, ProcessorRun) and obj.processor_id == "interstitial-type"
+        ]
+        assert len(run_records) >= 1, (
+            "Interstitial collection must produce a ProcessorRun for interstitial-type"
         )
-        assert "interstitial-type" in captured.out
 
 
 # ===========================================================================
@@ -276,21 +253,18 @@ class TestEnricherExecutionFailureVisible:
 
 
 class TestNoSilentSkip:
-    """Every processor_id resolved for a job's target_type must produce
-    a ProcessorRun record — either completed or failed, never absent.
+    """Every applicable processor_id must produce a ProcessorRun record.
+    Non-applicable processors (e.g. interstitial-type for non-interstitial
+    collections) are legitimately skipped — no run record required.
     """
 
     # Tier: 1 | Structural invariant
-    def test_construction_failure_not_absent_from_runs(self):
-        """A construction-failed enricher must NOT be absent from run records.
-
-        Before fix: _enricher_instance returned None, loop skipped with
-        `continue`, no run record created → silent absence.
-
-        After fix: EnricherConstructionError caught, failed run recorded.
+    def test_applicable_enricher_produces_run_record(self):
+        """An applicable enricher (valid interstitial collection) must produce
+        a ProcessorRun record — never silently absent.
         """
         asset = _FakeAsset()
-        container = _FakeContainer(name="")  # Will cause construction failure
+        container = _FakeContainer(name="station_ids")  # Valid interstitial collection
         db = _TrackingSession(asset, container)
         job = _FakeJob()
 
@@ -307,10 +281,37 @@ class TestNoSilentSkip:
 
         processor_ids_in_runs = {r.processor_id for r in run_records}
 
-        # interstitial-type is in CAPABILITY_REGISTRY for ASSET target_type
-        # and must appear in run records even when construction fails
         assert "interstitial-type" in processor_ids_in_runs, (
             f"INV-ENRICHER-MUST-EXECUTE-OR-FAIL-001: 'interstitial-type' "
-            f"must appear in run records (even as failed), not silently absent. "
+            f"must appear in run records for interstitial collections. "
             f"Found: {processor_ids_in_runs}"
+        )
+
+    # Tier: 1 | Structural invariant
+    def test_non_applicable_enricher_legitimately_absent(self):
+        """Non-interstitial collection → interstitial-type enricher legitimately
+        absent from run records (guard skip, not silent failure).
+        """
+        asset = _FakeAsset()
+        container = _FakeContainer(name="MonsterVision")  # Not interstitial
+        db = _TrackingSession(asset, container)
+        job = _FakeJob()
+
+        try:
+            execute_job(db, job)
+        except Exception:
+            pass
+
+        from retrovue.domain.entities import ProcessorRun
+        run_records = [
+            obj for obj in db.added
+            if isinstance(obj, ProcessorRun)
+        ]
+
+        interstitial_runs = [
+            r for r in run_records if r.processor_id == "interstitial-type"
+        ]
+        assert len(interstitial_runs) == 0, (
+            f"Non-interstitial collection should not produce interstitial-type runs. "
+            f"Found: {[(r.processor_id, r.status) for r in interstitial_runs]}"
         )
