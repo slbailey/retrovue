@@ -271,18 +271,16 @@ class TestEnricherInstanceFailureModes:
     """
 
     # Tier: 2 | Scheduling logic invariant
-    def test_empty_collection_name_raises(self):
-        """Empty collection_name causes EnricherConstructionError (not silent None)."""
-        from retrovue.catalog.processor_runtime import EnricherConstructionError
-        with pytest.raises(EnricherConstructionError):
-            _enricher_instance("interstitial-type", "")
+    def test_empty_collection_name_returns_none(self):
+        """Empty collection_name → None (legitimate skip, not applicable)."""
+        result = _enricher_instance("interstitial-type", "")
+        assert result is None
 
     # Tier: 2 | Scheduling logic invariant
-    def test_unknown_collection_name_raises(self):
-        """Unknown collection_name causes EnricherConstructionError."""
-        from retrovue.catalog.processor_runtime import EnricherConstructionError
-        with pytest.raises(EnricherConstructionError):
-            _enricher_instance("interstitial-type", "not_a_real_collection")
+    def test_unknown_collection_name_returns_none(self):
+        """Unknown collection_name → None (legitimate skip, collection not interstitial)."""
+        result = _enricher_instance("interstitial-type", "not_a_real_collection")
+        assert result is None
 
     # Tier: 2 | Scheduling logic invariant
     def test_valid_collection_name_returns_enricher(self):
