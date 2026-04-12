@@ -25,7 +25,7 @@ from retrovue.runtime.program_assembly import assemble_schedule_block
 # Config loading
 # ---------------------------------------------------------------------------
 
-HBO_CONFIG_PATH = Path(__file__).resolve().parents[4] / "config" / "channels" / "hbo.yaml"
+HBO_CONFIG_PATH = Path(__file__).resolve().parents[3] / "config" / "channels" / "hbo.yaml"
 
 
 def _load_hbo_config() -> dict:

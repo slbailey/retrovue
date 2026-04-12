@@ -68,8 +68,8 @@ def test_valid_schedule_sources_is_dsl_only():
 
 def test_program_director_registry_does_not_register_phase8_services():
     """ProgramDirector embedded registry must not reference Phase8* services."""
-    repo_root = Path(__file__).resolve().parents[5]
-    core_src = repo_root / "pkg" / "core" / "src"
+    repo_root = Path(__file__).resolve().parents[4]
+    core_src = repo_root / "server" / "src"
     program_director_path = core_src / "retrovue" / "runtime" / "program_director.py"
     assert program_director_path.exists(), f"Missing {program_director_path}"
     text = program_director_path.read_text()
@@ -87,8 +87,8 @@ def test_program_director_registry_does_not_register_phase8_services():
 
 def test_no_phase8_classes_in_core_src():
     """No Phase8 schedule/director class definitions remain in server/src."""
-    repo_root = Path(__file__).resolve().parents[5]
-    core_src = repo_root / "pkg" / "core" / "src"
+    repo_root = Path(__file__).resolve().parents[4]
+    core_src = repo_root / "server" / "src"
     assert core_src.exists(), f"Missing {core_src}"
     forbidden_class_defs = (
         "class Phase8ScheduleService",
@@ -113,8 +113,8 @@ def test_no_phase8_classes_in_core_src():
 
 def test_no_import_of_phase8_air_producer_in_core_src():
     """No production code under server/src may import Phase8AirProducer."""
-    repo_root = Path(__file__).resolve().parents[5]
-    core_src = repo_root / "pkg" / "core" / "src"
+    repo_root = Path(__file__).resolve().parents[4]
+    core_src = repo_root / "server" / "src"
     assert core_src.exists(), f"Missing {core_src}"
     found: list[str] = []
     for py_path in core_src.rglob("*.py"):

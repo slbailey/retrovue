@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[4]  # server/tests/contracts -> repo root
+REPO_ROOT = Path(__file__).resolve().parents[3]  # server/tests/contracts -> repo root
 
 # Extensions to scan — matches the invariant's "Deterministic Testability" section
 SOURCE_EXTENSIONS = {".py", ".yaml", ".yml", ".json", ".sh", ".toml", ".cfg", ".ini"}
@@ -69,6 +69,8 @@ EXCLUDED_FILES = {
     "server/tests/_legacy/test_identity_model.py",
     # Contract conftest (documentation example in docstring)
     "server/tests/contracts/conftest.py",
+    # Conftest guard (fake DSN in test assertions, not real credentials)
+    "server/tests/test_conftest_guard.py",
     # DB check scripts (env var fallbacks with placeholder creds / redaction utility)
     "scripts/core/check_db.py",
     "scripts/core/check_localhost_db.py",
