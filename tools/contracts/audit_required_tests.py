@@ -25,9 +25,9 @@ def find_invariant_docs(root: str) -> list[str]:
     return sorted(out)
 
 
-# Paths must match: pkg/*/tests/**/*.py, pkg/*/tests/**/*.cpp, tests/**/*.py, tests/**/*.cpp
+# Paths must match: server/tests/**/*.py, server/tests/**/*.cpp, tests/**/*.py, tests/**/*.cpp
 _PATH_RE = re.compile(
-    r"^(?:pkg/[^/]+/tests/.+\.(?:py|cpp)|tests/.+\.(?:py|cpp))$"
+    r"^(?:server/tests/.+\.(?:py|cpp)|tests/.+\.(?:py|cpp))$"
 )
 
 

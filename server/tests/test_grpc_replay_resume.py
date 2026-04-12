@@ -37,7 +37,7 @@ import grpc
 import pytest
 
 # Proto stubs path.
-_PROTO_DIR = str(Path(__file__).resolve().parents[1] / "core" / "proto")
+_PROTO_DIR = str(Path(__file__).resolve().parents[1] / "src" / "retrovue" / "proto")
 if _PROTO_DIR not in sys.path:
     sys.path.insert(0, _PROTO_DIR)
 

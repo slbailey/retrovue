@@ -70,7 +70,7 @@
 
 **Server implementation:** `server/src/retrovue/runtime/evidence_server.py` — `EvidenceServicer` (implements `ExecutionEvidenceServiceServicer`), `EvidenceStream`; registered via `pb2_grpc.add_ExecutionEvidenceServiceServicer_to_server`.  
 **Client implementation:** `runtime/src/evidence/GrpcEvidenceClient.cpp` — connects to `evidence_endpoint`, runs `EvidenceStream` (send EvidenceFromAir, read EvidenceAckFromCore).  
-**Python stubs:** `server/core/proto/retrovue/execution_evidence_v1_pb2*.py` (and `server/core/proto/execution_evidence_v1_pb2_grpc.py`).
+**Python stubs:** `server/src/retrovue/proto/execution_evidence_v1_pb2*.py` (and `server/src/retrovue/proto/execution_evidence_v1_pb2_grpc.py`).
 
 ---
 

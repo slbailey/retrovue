@@ -6,7 +6,7 @@ Derived from: `docs/contracts/interstitial_enrichment.md`
 
 ### INV-INTERSTITIAL-TYPE-STAMP-001
 
-Every interstitial asset ingested from a filesystem source MUST have `editorial.interstitial_type` set to a canonical type determined by the Collection Type Map. The collection name is authoritative. File-level inference MUST NOT override the collection-level type.
+Every interstitial asset ingested from a filesystem source MUST have `editorial.interstitial_type` set to a canonical type determined by the Container Type Map. The container name is authoritative. File-level inference MUST NOT override the container-level type.
 
 ### Rationale
 
@@ -14,13 +14,13 @@ Without a single authoritative source for interstitial type, file-level inferenc
 
 ### Enforcement Surface
 
-- `InterstitialTypeEnricher` — overwrites `editorial.interstitial_type` using Collection Type Map lookup
+- `InterstitialTypeEnricher` — overwrites `editorial.interstitial_type` using Container Type Map lookup
 - `apply_enrichers_to_collection()` — auto-injects the enricher at priority -1
 
 ### Test Coverage
 
-- Each of the 9 collection names in the Collection Type Map MUST produce its corresponding canonical type after enrichment.
-- A pre-existing file-level `interstitial_type` in editorial MUST be overwritten by the collection-level type.
+- Each of the 9 container names in the Container Type Map MUST produce its corresponding canonical type after enrichment.
+- A pre-existing file-level `interstitial_type` in editorial MUST be overwritten by the container-level type.
 - Other editorial fields (e.g. `title`, `interstitial_category`) MUST be preserved after enrichment.
 
 ---
@@ -67,7 +67,7 @@ Coupling the traffic layer to storage topology would make traffic selection frag
 
 ### INV-INTERSTITIAL-ENRICHER-INJECT-001
 
-`apply_enrichers_to_container()` (contract term; code may still use `apply_enrichers_to_collection`) MUST auto-inject `InterstitialTypeEnricher` at priority -1 for containers whose name appears in the Collection Type Map. No manual enricher attachment is required for interstitial containers.
+`apply_enrichers_to_container()` (contract term; code may still use `apply_enrichers_to_collection`) MUST auto-inject `InterstitialTypeEnricher` at priority -1 for containers whose name appears in the Container Type Map. No manual enricher attachment is required for interstitial containers.
 
 ### Rationale
 
@@ -75,18 +75,18 @@ Manual enricher configuration per container is error-prone. Auto-injection at pr
 
 ### Enforcement Surface
 
-- Apply-enrichers-to-container — checks container name against Collection Type Map keys and prepends `InterstitialTypeEnricher`
+- Apply-enrichers-to-container — checks container name against Container Type Map keys and prepends `InterstitialTypeEnricher`
 
 ### Test Coverage
 
-- A container named in the Collection Type Map MUST have `InterstitialTypeEnricher` in its enricher pipeline without explicit attachment.
+- A container named in the Container Type Map MUST have `InterstitialTypeEnricher` in its enricher pipeline without explicit attachment.
 - The auto-injected enricher MUST execute before all other enrichers (priority -1).
 
 ---
 
 ### INV-INTERSTITIAL-UNKNOWN-REJECT-001
 
-If a container name is not a key in the Collection Type Map, the `InterstitialTypeEnricher` MUST raise an error. Silent fallback to any default type MUST NOT occur.
+If a container name is not a key in the Container Type Map, the `InterstitialTypeEnricher` MUST raise an error. Silent fallback to any default type MUST NOT occur.
 
 ### Rationale
 
@@ -223,11 +223,11 @@ Break slots have finite budgets. An asset with zero, negative, or excessive dura
 
 ### INV-INTERSTITIAL-COLLECTION-DEPTH-001
 
-Collection discovery MUST enumerate only immediate subdirectories of each root path. It MUST NOT recurse beyond the first level.
+Container discovery MUST enumerate only immediate subdirectories of each root path. It MUST NOT recurse beyond the first level.
 
 ### Rationale
 
-Collections are the organizational unit for interstitial media. Recursing deeper would conflate subcategory directories with collections, producing incorrect collection-to-type mappings and duplicate collection entries.
+Containers are the organizational unit for interstitial media. Recursing deeper would conflate subcategory directories with containers, producing incorrect container-to-type mappings and duplicate container entries.
 
 ### Enforcement Surface
 
@@ -287,7 +287,7 @@ Each collection MUST receive a stable `external_id` derived from the SHA-256 has
 
 ### Rationale
 
-Collection identity must be deterministic and path-dependent so that the same directory always produces the same external_id, while identically named directories at different absolute paths produce distinct identifiers.
+Container identity must be deterministic and path-dependent so that the same directory always produces the same external_id, while identically named directories at different absolute paths produce distinct identifiers.
 
 ### Enforcement Surface
 

@@ -19,9 +19,9 @@ if str(SRC_PATH) not in sys.path:
 # Ensure server itself is on sys.path so absolute imports like
 # ``from tests.contracts.utils...`` resolve when pytest runs from
 # the repository root (not just from server/).
-PKG_CORE = str(PROJECT_ROOT)
-if PKG_CORE not in sys.path:
-    sys.path.insert(0, PKG_CORE)
+SERVER_ROOT = str(PROJECT_ROOT)
+if SERVER_ROOT not in sys.path:
+    sys.path.insert(0, SERVER_ROOT)
 
 from retrovue.infra import db as db_module
 from retrovue.infra.settings import settings

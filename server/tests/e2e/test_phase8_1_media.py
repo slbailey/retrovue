@@ -27,7 +27,7 @@ import requests
 pytestmark = pytest.mark.skip(reason="E2E test requires Air binary and runtime environment")
 
 # Reuse Phase 8.0 proto/grpc loading
-_PROTO_DIR = Path(__file__).resolve().parents[2] / "core" / "proto" / "retrovue"
+_PROTO_DIR = Path(__file__).resolve().parents[2] / "src" / "retrovue" / "proto"
 try:
     import grpc
     import importlib.util
@@ -69,7 +69,7 @@ _DEFAULT_PROGRAM_FORMAT_JSON = '{"video":{"width":1920,"height":1080,"frame_rate
 
 
 def _find_retrovue_air() -> Path | None:
-    repo_root = Path(__file__).resolve().parents[4]
+    repo_root = Path(__file__).resolve().parents[3]
     candidates = [
         repo_root / "runtime" / "out" / "build" / "linux-debug" / "retrovue_air",
         repo_root / "runtime" / "build" / "retrovue_air",
@@ -82,7 +82,7 @@ def _find_retrovue_air() -> Path | None:
 
 
 def _find_sample_asset() -> Path | None:
-    repo_root = Path(__file__).resolve().parents[4]
+    repo_root = Path(__file__).resolve().parents[3]
     for name in ("samplecontent.mp4", "filler.mp4"):
         p = repo_root / "assets" / name
         if p.is_file():

@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 
 # Load proto stubs from server/src/retrovue/proto/
-_PROTO_DIR = Path(__file__).resolve().parents[4] / "server" / "src" / "retrovue" / "proto"
+_PROTO_DIR = Path(__file__).resolve().parents[3] / "server" / "src" / "retrovue" / "proto"
 try:
     import grpc
     import importlib.util
@@ -71,10 +71,10 @@ _DEFAULT_PROGRAM_FORMAT_JSON = '{"video":{"width":1920,"height":1080,"frame_rate
 
 def _find_retrovue_air() -> Path | None:
     """Find the retrovue_air executable."""
-    repo_root = Path(__file__).resolve().parents[4]
+    repo_root = Path(__file__).resolve().parents[3]
     candidates = [
-        repo_root / "pkg" / "air" / "build" / "retrovue_air",
-        repo_root / "pkg" / "air" / "out" / "build" / "linux-debug" / "retrovue_air",
+        repo_root / "runtime" / "build" / "retrovue_air",
+        repo_root / "runtime" / "out" / "build" / "linux-debug" / "retrovue_air",
         Path(os.environ.get("RETROVUE_AIR_EXE", "")),
     ]
     for p in candidates:
@@ -85,7 +85,7 @@ def _find_retrovue_air() -> Path | None:
 
 def _find_sample_asset() -> Path | None:
     """Find a sample video asset for testing."""
-    repo_root = Path(__file__).resolve().parents[4]
+    repo_root = Path(__file__).resolve().parents[3]
     for name in ("samplecontent.mp4", "filler.mp4", "SampleA.mp4", "SampleB.mp4"):
         p = repo_root / "assets" / name
         if p.is_file():

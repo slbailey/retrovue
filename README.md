@@ -14,13 +14,10 @@ This project is a monorepo containing the following components:
 │   ├── air/        # C++ playback engine docs
 │   ├── core/       # Python coordinator docs
 │   └── standards/  # Documentation standards and templates
-├── pkg/
-│   ├── air/        # C++ real-time playback engine source
-│   └── core/       # Python coordinator and application logic source
+├── runtime/        # C++ real-time playback engine (AIR) source and build
+├── server/         # Python coordinator and application logic
 ├── protos/         # Consolidated Protobuf API definitions
-├── scripts/
-│   ├── air/        # Scripts specific to the C++ package
-│   └── core/       # Scripts specific to the Python package
+├── scripts/        # Build and utility scripts
 └── README.md
 ```
 

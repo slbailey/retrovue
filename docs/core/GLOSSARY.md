@@ -9,8 +9,8 @@ Short authoritative definitions for internal terms. Use these spellings and mean
 **Asset**  
 The leaf unit RetroVue can eventually broadcast. Each asset belongs to exactly one collection and has a lifecycle state (`new`, `enriching`, `ready`, `retired`) indicating its readiness for scheduling. Only assets in `ready` state are eligible for broadcast.
 
-**Collection**  
-A logical grouping of related content from a source (e.g., "The Simpsons", "Classic Movies", "Commercials"). Collections organize content into broadcast-relevant categories.
+**Container**  
+A logical grouping of related content from a source (e.g., "The Simpsons", "Classic Movies", "Commercials"). Containers organize content into broadcast-relevant categories.
 
 **Source**  
 An origin of media content (e.g., Plex server, local filesystem, ad library). Sources are discovered and enumerated to find available content.
@@ -79,7 +79,7 @@ Pluggable module that takes an input object and returns an updated version of th
 
 - `scope=ingest`: operates on Asset during ingest enrichment.
 - `scope=playout`: operates on a playout plan before ffmpeg launch.  
-  Enrichers are ordered and can be attached to Collections (ingest) or Channels (playout).
+  Enrichers are ordered and can be attached to Containers (ingest) or Channels (playout).
 
 Ingest enrichers are allowed to mutate asset metadata and state (e.g. move new → enriching → ready).  
 Playout enrichers do not mutate assets; they decorate playout segments.
@@ -88,7 +88,7 @@ Playout enrichers do not mutate assets; they decorate playout segments.
 24-hour period starting at channel's broadcast_day_start (e.g., 06:00). Human-readable times in plan show and ScheduleDay views reflect broadcast-day offset.
 
 **Operator**  
-A human configuring Sources, Collections, Channels, Producers, and Enrichers using the CLI.
+A human configuring Sources, Containers, Channels, Producers, and Enrichers using the CLI.
 
 ## Canonical Pipeline
 

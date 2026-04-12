@@ -76,7 +76,7 @@ _EXPECTED_AIR_EXE_NAMES = frozenset({"retrovue_air"})
 # Resolved once at import time so the reaper matches on the exact deployment path.
 _DEPLOYMENT_AIR_DIR: Path | None = None
 try:
-    _repo_root = Path(__file__).resolve().parents[5]  # .../server/src/retrovue/runtime -> repo root
+    _repo_root = Path(__file__).resolve().parents[4]  # .../server/src/retrovue/runtime -> repo root
     _candidate = _repo_root / "runtime" / "build" / "retrovue_air"
     if _candidate.is_file():
         _DEPLOYMENT_AIR_DIR = _candidate.parent.resolve()

@@ -54,7 +54,7 @@ Define the canonical tone, structure, and formatting rules for all Retrovue docu
 
 ## Terminology
 
-- Treat canonical nouns as proper names: Channel, Collection, Source, ChannelManager, MasterClock, PlaylogEvent, DiscoveredItem.
+- Treat canonical nouns as proper names: Channel, Container, Source, ChannelManager, MasterClock, PlaylogEvent, DiscoveredItem.
 - Maintain existing naming conventions (kebab-case slugs, snake_case CLI flags).
 - Add new vocabulary to `docs/GLOSSARY.md`; link to it from the introducing document.
 - Refer to CLI commands as `retrovue <noun> <verb>` and include representative examples.

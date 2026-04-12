@@ -44,7 +44,7 @@ If the contract references internal names, method signatures, or implementation 
 
 ## Phase docs and canonical rule authority
 
-Phase docs (e.g. `docs/archive/phases/*`, `pkg/*/docs/archive/phases/*`) are **historical** and **may not be normative**. Normative authority resides in laws and contracts.
+Phase docs (e.g. `docs/archive/phases/*`) are **historical** and **may not be normative**. Normative authority resides in laws and contracts.
 
 ### Policy
 
@@ -63,7 +63,7 @@ Phase docs (e.g. `docs/archive/phases/*`, `pkg/*/docs/archive/phases/*`) are **h
 | Layer   | Authority | Location                          |
 |---------|-----------|-----------------------------------|
 | Laws    | Supreme   | `runtime/docs/contracts/laws/`    |
-| Contracts| Primary  | `pkg/*/docs/contracts/**`         |
+| Contracts| Primary  | `docs/contracts/**`, `runtime/docs/contracts/**` |
 | Phase docs | Reference | `*/*/docs/archive/phases/*`   |
 | Runbooks| Operational | `*/*/docs/*.md` (non-contract) |
 

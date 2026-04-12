@@ -5,6 +5,6 @@
 - **C++ (Air):** Build only in `runtime/build`. Use:
   `cmake -S runtime -B runtime/build ...` and `cmake --build runtime/build ...`.
 - **Proto:** Single source is `protos/playout.proto`. Generate with `sh scripts/air/generate_proto.sh`.
-  Python stubs: `server/core/proto/retrovue/`.
+  Python stubs: `server/src/retrovue/proto/`.
 
 See CLAUDE.md for full build and test commands.

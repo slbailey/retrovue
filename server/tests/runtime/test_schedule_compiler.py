@@ -35,7 +35,7 @@ from retrovue.runtime.schedule_compiler import (
 # ---------------------------------------------------------------------------
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
-SCHEMA_PATH = Path(__file__).parents[4] / "docs" / "contracts" / "core" / "programming_dsl.schema.json"
+SCHEMA_PATH = Path(__file__).parents[3] / "docs" / "contracts" / "core" / "programming_dsl.schema.json"
 
 
 # ---------------------------------------------------------------------------

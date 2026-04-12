@@ -95,7 +95,7 @@ This directory is the **only canonical source of runtime guarantees** for playou
 
 ## Rules of the road
 1) A contract is **outcomes, not procedures**.  
-2) Every invariant MUST list required tests under `tests/contracts/` (or `pkg/*/tests/contracts/`).  
+2) Every invariant MUST list required tests under `server/tests/contracts/`.  
 3) Legacy phase docs are **not** allowed to be referenced by new work.
 MD
 

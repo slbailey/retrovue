@@ -33,7 +33,7 @@ from typing import Any
 ProcessHandle = subprocess.Popen[bytes]
 
 # Air stdout/stderr go here: runtime/logs/<channel_id>-air.log
-_AIR_LOG_DIR = Path(__file__).resolve().parents[5] / "runtime" / "logs"
+_AIR_LOG_DIR = Path(__file__).resolve().parents[4] / "runtime" / "logs"
 
 
 def _air_log_path(channel_id: str) -> Path:
@@ -61,8 +61,8 @@ def _open_air_log(channel_id: str):
 
 def _find_air_binary() -> Path | None:
     """Locate retrovue_air executable. Returns None if not found."""
-    # __file__ is .../server/src/retrovue/usecases/channel_manager_launch.py -> parents[5] = repo root
-    repo_root = Path(__file__).resolve().parents[5]
+    # __file__ is .../server/src/retrovue/usecases/channel_manager_launch.py -> parents[4] = repo root
+    repo_root = Path(__file__).resolve().parents[4]
     candidates = [
         Path(os.environ.get("RETROVUE_AIR_EXE", "")),
         repo_root / "runtime" / "build" / "retrovue_air",
