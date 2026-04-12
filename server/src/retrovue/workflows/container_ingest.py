@@ -973,14 +973,17 @@ class ContainerIngestService:
                     pass
             # Run validation pipeline and auto-approve if all validators pass.
             # INV-VALIDATOR-OUTPUT-SHAPE-001, INV-CATALOG-READY-SCHEDULABLE-001
+            # INV-PROCESSOR-READINESS-GATE-001
             from ..validators.auto_approve import try_auto_approve
             from ..validators.pipeline import ValidationPipeline
+            from ..validators.readiness_gate import ReadinessGateValidator
             from ..validators.duration import DurationValidator
             from ..validators.codec import CodecValidator
             from ..validators.container_format import ContainerFormatValidator
             from ..validators.playability import PlayabilityValidator
 
             _pipeline = ValidationPipeline([
+                ReadinessGateValidator(),
                 DurationValidator(),
                 CodecValidator(),
                 ContainerFormatValidator(),

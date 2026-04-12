@@ -17,6 +17,9 @@ Processors MUST declare:
 - required metadata
 - produced metadata
 - execution order
+- required_for_readiness (boolean)
+
+`required_for_readiness` indicates whether the processor MUST complete before an asset can transition to `ready`. If `required_for_readiness` is `True`, the asset MUST NOT reach `ready` state until the processor has run and its `produced_metadata` fields are populated on the asset.
 
 Example:
 
@@ -24,6 +27,7 @@ Example:
 processor: ffprobe
 target: MEDIA
 execution_order: 10
+required_for_readiness: true
 produces:
   duration_ms
   video_codec

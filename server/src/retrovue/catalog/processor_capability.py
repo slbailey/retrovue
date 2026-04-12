@@ -12,7 +12,13 @@ from typing import Any
 
 from ..adapters.registry import ENRICHERS
 
-__all__ = ["ProcessorCapability", "get_capability", "get_processors_for_target", "CAPABILITY_REGISTRY"]
+__all__ = [
+    "ProcessorCapability",
+    "get_capability",
+    "get_processors_for_target",
+    "get_readiness_required_processors",
+    "CAPABILITY_REGISTRY",
+]
 
 
 @dataclass(frozen=True)
@@ -24,6 +30,7 @@ class ProcessorCapability:
     execution_order: int
     produced_metadata: tuple[str, ...]
     required_metadata: tuple[str, ...]
+    required_for_readiness: bool = False
 
 
 # Registry keyed by processor_id (same keys as ENRICHERS).
@@ -41,6 +48,7 @@ CAPABILITY_REGISTRY: dict[str, ProcessorCapability] = {
             "resolution",
         ),
         required_metadata=("path_uri",),
+        required_for_readiness=True,
     ),
     "loudness": ProcessorCapability(
         processor_id="loudness",
@@ -62,6 +70,11 @@ CAPABILITY_REGISTRY: dict[str, ProcessorCapability] = {
 def get_capability(processor_id: str) -> ProcessorCapability | None:
     """Return capability for a processor, or None if unknown."""
     return CAPABILITY_REGISTRY.get(processor_id)
+
+
+def get_readiness_required_processors() -> list[ProcessorCapability]:
+    """Return capabilities for processors with required_for_readiness=True."""
+    return [cap for cap in CAPABILITY_REGISTRY.values() if cap.required_for_readiness]
 
 
 def get_processors_for_target(target_type: str) -> list[str]:
