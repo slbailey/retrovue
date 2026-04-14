@@ -10,7 +10,15 @@
 # Third-party vendored or downloaded code
 /third_party/
 
-# IDE and editor files
+# AIR local FFmpeg / x264: full source trees, submodule checkouts, and install/
+# prefixes are produced by runtime/scripts/build_*_static.sh — not committed.
+# (runtime/third_party/README.md remains tracked as the contract pointer.)
+runtime/third_party/ffmpeg/
+runtime/third_party/x264/
+
+# Legacy / packaged experiments (e.g. pkg/air); not part of the monorepo source tree.
+/pkg/
+
 .vs/
 .vscode/
 .idea/

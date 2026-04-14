@@ -9,6 +9,9 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      # Must match runtime/third_party/README.md (pinned x264 for reproducible AIR deps).
+      X264_EXPECTED_GIT_COMMIT: 0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee
     strategy:
       matrix:
         python-version: ["3.12"]
@@ -36,6 +39,17 @@ jobs:
         run: |
           pwd
           ls -la
+
+      - name: Build pinned x264 and verify (AIR)
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y nasm
+          rm -rf runtime/third_party/x264/src
+          git clone https://code.videolan.org/videolan/x264.git runtime/third_party/x264/src
+          git -C runtime/third_party/x264/src checkout "${X264_EXPECTED_GIT_COMMIT}"
+          bash runtime/scripts/build_x264_static.sh
+          bash runtime/scripts/verify_x264_ffmpeg.sh
 
       - name: Audit invariant required tests
         run: cd "$GITHUB_WORKSPACE" && python tools/contracts/audit_required_tests.py
