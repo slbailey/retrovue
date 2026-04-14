@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import re
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -258,12 +259,9 @@ class FFprobeEnricher(BaseEnricher):
 
         # format-level stuff
         fmt = meta.get("format") or {}
-        if "duration" in fmt:
-            try:
-                dur_sec = float(fmt["duration"])
-                probed["duration_ms"] = int(dur_sec * 1000)
-            except Exception:
-                pass
+        duration_ms = self._extract_duration_ms(meta)
+        if duration_ms is not None and duration_ms > 0:
+            probed["duration_ms"] = duration_ms
 
         if "bit_rate" in fmt:
             try:
@@ -331,6 +329,79 @@ class FFprobeEnricher(BaseEnricher):
 
 
         return {k: v for k, v in probed.items() if v is not None}
+
+    def _extract_duration_ms(self, meta: dict[str, Any]) -> int | None:
+        """
+        Normalize duration extraction across ffprobe payload variants.
+
+        Priority:
+        1) format.duration
+        2) max(stream.duration)
+        3) stream.tags.DURATION (HH:MM:SS[.fraction])
+        """
+        if not isinstance(meta, dict):
+            return None
+
+        fmt = meta.get("format") or {}
+        format_duration = self._parse_numeric_duration_seconds(fmt.get("duration"))
+        if format_duration is not None and format_duration > 0:
+            return int(round(format_duration * 1000))
+
+        streams = meta.get("streams") or []
+        stream_durations_sec: list[float] = []
+        for stream in streams:
+            if not isinstance(stream, dict):
+                continue
+            sec = self._parse_numeric_duration_seconds(stream.get("duration"))
+            if sec is not None and sec > 0:
+                stream_durations_sec.append(sec)
+        if stream_durations_sec:
+            return int(round(max(stream_durations_sec) * 1000))
+
+        # Fallback: tags duration HH:MM:SS[.fraction]
+        for stream in streams:
+            if not isinstance(stream, dict):
+                continue
+            tags = stream.get("tags") or {}
+            if not isinstance(tags, dict):
+                continue
+            tag_val = tags.get("DURATION")
+            sec = self._parse_hms_duration_seconds(tag_val)
+            if sec is not None and sec > 0:
+                return int(round(sec * 1000))
+
+        return None
+
+    @staticmethod
+    def _parse_numeric_duration_seconds(raw: Any) -> float | None:
+        if raw is None:
+            return None
+        if isinstance(raw, str):
+            candidate = raw.strip()
+            if not candidate or candidate.upper() == "N/A":
+                return None
+            try:
+                return float(candidate)
+            except Exception:
+                return None
+        try:
+            return float(raw)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _parse_hms_duration_seconds(raw: Any) -> float | None:
+        if not isinstance(raw, str):
+            return None
+        candidate = raw.strip()
+        # HH:MM:SS or HH:MM:SS.fraction
+        m = re.fullmatch(r"(\d+):([0-5]\d):([0-5]\d(?:\.\d+)?)", candidate)
+        if not m:
+            return None
+        hours = int(m.group(1))
+        minutes = int(m.group(2))
+        seconds = float(m.group(3))
+        return (hours * 3600) + (minutes * 60) + seconds
 
     def _metadata_to_labels(self, metadata: dict[str, Any]) -> list[str]:
         """

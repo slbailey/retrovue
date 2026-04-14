@@ -1,24 +1,45 @@
 # INV-AUDIO-CONTINUITY-NO-DROP
 
 ## Behavioral Guarantee
-Audio samples MUST NOT be discarded due to queue overflow, congestion, or backpressure. Total samples pushed MUST equal total samples popped across any complete cycle. Underflow MUST return false (no silence fabrication).
+
+For every audio sample that **enters** `AudioLookaheadBuffer` via a successful **`Push`**, the buffer **MUST** preserve **sample continuity**: no loss due to **queue overflow**, **queue congestion** (capacity), or **post-push backpressure** handling inside the buffer. Total samples **pushed** **MUST** equal total samples **popped** across any **complete** drain cycle that does not reset the buffer. **Underflow** on pop **MUST** return false and **MUST NOT** fabricate silence.
 
 ## Authority Model
-`AudioLookaheadBuffer` owns this guarantee. Push blocks at capacity (never drops). TryPopSamples returns false on underflow (never injects synthetic audio).
+
+**`AudioLookaheadBuffer`** owns continuity **after admission**. **`VideoLookaheadBuffer`** fill thread owns **pre-push** decisions per **INV-FILL-AV-LEAD-CLAMP-001**.
 
 ## Boundary / Constraint
-Backpressure resolution mechanisms MUST NOT violate sample continuity. Pop across frame boundaries MUST return contiguous samples with no gaps or drops at frame seams. Underflow events MUST be counted for observability.
+
+### Committed vs suppressed samples
+
+1. **Committed sample:** A sample that is accepted into the buffer’s accounting by **`Push`** returning success (`kPushed` or equivalent).
+2. **Suppressed sample:** Decoded audio that **never** calls `Push` success because **`INV-FILL-AV-LEAD-CLAMP-001`** forbids admission for that decode cycle.
+
+**Formal resolution (Conflict B):** **Suppression is not a “drop” under this invariant.** This invariant’s “MUST NOT be discarded” applies **only** to samples **after** successful **`Push`**. **Suppressed** samples are **outside** `AudioLookaheadBuffer` duty; they are governed by **INV-FILL-AV-LEAD-CLAMP-001** and **MUST** be counted by fill-domain diagnostics (counters / logs) so they are **not** confused with **post-push** loss.
+
+### Queue backpressure
+
+`Push` **MUST** block at capacity — **not** discard. That remains mandatory.
+
+### Pop
+
+Pop across frame boundaries **MUST** return contiguous committed samples. Underflow **MUST** be observable (counted).
 
 ## Violation
-Any audio sample loss attributable to overflow or backpressure; silence injection on underflow; non-contiguous samples on cross-boundary pop. MUST be logged.
+
+- Any **committed** sample lost due to overflow, erroneous discard inside the buffer, or silent fabrication on underflow.
+- Classifying **INV-FILL-AV-LEAD-CLAMP-001** suppression as a violation of **this** invariant (it is **not**).
 
 ## Derives From
+
 `LAW-LIVENESS`
 
 ## Required Tests
-- `runtime/tests/contracts/BlockPlan/SharedInvAudioContinuityContractTests.cpp` (`Compliant_PushAndPop_NoSamplesLost`) — push N, pop all, TotalSamplesPushed == TotalSamplesPopped, zero underflow
-- `runtime/tests/contracts/BlockPlan/SharedInvAudioContinuityContractTests.cpp` (`Compliant_Underflow_ReturnsFalse_NoSilenceInjected`) — empty buffer returns false, no fabrication, underflow counted
-- `runtime/tests/contracts/BlockPlan/SharedInvAudioContinuityContractTests.cpp` (`Compliant_SamplesContiguous_MultiFramePop`) — pop across frame boundaries, contiguous, pushed == popped
+
+- `runtime/tests/contracts/BlockPlan/SharedInvAudioContinuityContractTests.cpp` (`Compliant_PushAndPop_NoSamplesLost`)
+- `runtime/tests/contracts/BlockPlan/SharedInvAudioContinuityContractTests.cpp` (`Compliant_Underflow_ReturnsFalse_NoSilenceInjected`)
+- `runtime/tests/contracts/BlockPlan/SharedInvAudioContinuityContractTests.cpp` (`Compliant_SamplesContiguous_MultiFramePop`)
 
 ## Enforcement Evidence
+
 TODO

@@ -67,7 +67,7 @@ set(LIBAV_LIBRARIES_STATIC
 )
 
 # ---- Proto (canonical path: repo root protos/playout.proto) ----
-set(PLAYOUT_PROTO "${CMAKE_CURRENT_SOURCE_DIR}/../../protos/playout.proto")
+set(PLAYOUT_PROTO "${CMAKE_CURRENT_SOURCE_DIR}/../protos/playout.proto")
 get_filename_component(PLAYOUT_PROTO "${PLAYOUT_PROTO}" ABSOLUTE)
 get_filename_component(PROTO_IMPORT_DIR "${PLAYOUT_PROTO}" DIRECTORY)
 # Use the directory containing the .proto so generated files land in PROTO_GEN_DIR as playout.pb.cc (no protos/ subdir)
@@ -120,7 +120,7 @@ target_include_directories(playout_proto
 )
 
 # ---- Proto: execution_evidence_v1.proto (AIR → Core evidence stream) ----
-set(EVIDENCE_PROTO "${CMAKE_CURRENT_SOURCE_DIR}/../../protos/execution_evidence_v1.proto")
+set(EVIDENCE_PROTO "${CMAKE_CURRENT_SOURCE_DIR}/../protos/execution_evidence_v1.proto")
 get_filename_component(EVIDENCE_PROTO "${EVIDENCE_PROTO}" ABSOLUTE)
 
 set(EVIDENCE_PB_CC "${PROTO_GEN_DIR}/execution_evidence_v1.pb.cc")
@@ -304,6 +304,7 @@ target_link_libraries(retrovue_air_core
     z
     lzma
     bz2
+    drm
 )
 # RPATH for any shared deps (binaries under runtime/build); harmless when everything is static.
 set(X264_RPATH "\$ORIGIN/../third_party/x264/install/lib")
@@ -531,6 +532,7 @@ add_executable(blockplan_contract_tests
   tests/contracts/BlockPlan/EofPadTransitionContractTests.cpp
   tests/contracts/BlockPlan/DecodeResultModelContractTests.cpp
   tests/contracts/BlockPlan/EofPadRealSystemContractTests.cpp
+  tests/contracts/BlockPlan/BootstrapAvPhaseContractTests.cpp
 )
 
 target_link_libraries(blockplan_contract_tests
@@ -623,6 +625,7 @@ set_tests_properties(AudioLookaheadContracts PROPERTIES LABELS "contract")
 # ---- VideoLookaheadBuffer Contract Tests (INV-VIDEO-LOOKAHEAD-001) ----
 add_executable(video_lookahead_tests
   tests/contracts/BlockPlan/VideoLookaheadBufferTests.cpp
+  tests/contracts/BlockPlan/FillAvLeadClampContractTests.cpp
 )
 
 target_link_libraries(video_lookahead_tests

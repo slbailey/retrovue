@@ -109,6 +109,20 @@ def _hydrate_compiled_segments(
         dur_ms = int(cs["duration_ms"])
         seg_asset_id = cs.get("asset_id", "")
 
+        # Zero/negative durations cannot be sent to AIR: BlockPlanValidator rejects
+        # them (segment N has non-positive duration), which leaves decoder_ok=false
+        # and can wedge preroll (INV-PREROLL-READY-001). Skip bad rows; trailing
+        # filler below restores slot_duration_ms when the sum undershoots.
+        if dur_ms <= 0:
+            logger.warning(
+                "Skipping compiled segment with non-positive duration_ms=%s "
+                "segment_type=%s asset_id=%s",
+                dur_ms,
+                cs.get("segment_type"),
+                seg_asset_id or asset_id,
+            )
+            continue
+
         # Resolve asset_id → file URI and loudness gain via catalog.
         # INV-HYDRATE-GAIN-FALLBACK-001: catalog gain wins when resolvable;
         # fall back to compiled value when not.
@@ -182,11 +196,13 @@ def load_segmented_blocks_from_active_revision(
 
     revision = None
     if pointer is not None:
-        revision = (
+        ptr_rev = (
             db.query(ScheduleRevision)
             .filter(ScheduleRevision.id == pointer.schedule_revision_id)
             .first()
         )
+        if ptr_rev is not None and ptr_rev.status == "active":
+            revision = ptr_rev
 
     if revision is None:
         revision = (

@@ -31,6 +31,17 @@ ContainerIngestService = collection_ingest_service.ContainerIngestService
 resolve_container_selector = collection_ingest_service.resolve_container_selector
 
 
+def _extract_mapping_paths(mapping) -> tuple[str | None, str | None]:
+    """Return canonical mapping fields, with legacy compatibility fallback."""
+    source_path = getattr(mapping, "source_path", None)
+    retrovue_path = getattr(mapping, "retrovue_path", None)
+    if source_path is None and hasattr(mapping, "plex_path"):
+        source_path = getattr(mapping, "plex_path", None)
+    if retrovue_path is None and hasattr(mapping, "local_path"):
+        retrovue_path = getattr(mapping, "local_path", None)
+    return source_path, retrovue_path
+
+
 def _get_db_context(test_db: bool):
     """Return an appropriate DB context manager based on test_db flag."""
 
@@ -190,9 +201,15 @@ def show_collection(
                 )
             except Exception:
                 mappings = []
-            mapping_pairs = [
-                {"plex_path": m.plex_path, "local_path": m.local_path} for m in mappings
-            ]
+            mapping_pairs = []
+            for m in mappings:
+                source_path, retrovue_path = _extract_mapping_paths(m)
+                mapping_pairs.append(
+                    {
+                        "source_path": source_path,
+                        "retrovue_path": retrovue_path,
+                    }
+                )
 
             # Enrichers from collection.config["enrichers"] with resolved details
             configured = []
@@ -255,11 +272,14 @@ def show_collection(
 
             # Path mappings table
             table_pm = Table(title="Path Mappings")
-            table_pm.add_column("Plex Path", style="cyan")
-            table_pm.add_column("Local Path", style="green")
+            table_pm.add_column("Source Path", style="cyan")
+            table_pm.add_column("RetroVue Path", style="green")
             if mapping_pairs:
                 for pm in mapping_pairs:
-                    table_pm.add_row(pm["plex_path"], pm["local_path"] or "(unmapped)")
+                    table_pm.add_row(
+                        pm["source_path"] or "(unknown)",
+                        pm["retrovue_path"] or "(unmapped)",
+                    )
             else:
                 table_pm.add_row("(none)", "(none)")
             console.print(table_pm)
@@ -388,7 +408,10 @@ def list_collections(
                 mapping_pairs = []
                 for mapping in path_mappings:
                     mapping_pairs.append(
-                        {"plex_path": mapping.plex_path, "local_path": mapping.local_path}
+                        {
+                            "source_path": _extract_mapping_paths(mapping)[0],
+                            "retrovue_path": _extract_mapping_paths(mapping)[1],
+                        }
                     )
 
                 # Fallback: if no mapping rows, show external path as (unmapped)
@@ -403,7 +426,7 @@ def list_collections(
                             or cfg.get("folder")
                         )
                         if ext_path:
-                            mapping_pairs.append({"plex_path": ext_path, "local_path": None})
+                            mapping_pairs.append({"source_path": ext_path, "retrovue_path": None})
                     except Exception:
                         pass
 
@@ -455,7 +478,8 @@ def list_collections(
                     if collection["mapping_pairs"]:
                         mapping_text = "\n".join(
                             [
-                                f"• {mapping['plex_path']} -> {mapping['local_path'] or '(unmapped)'}"
+                                f"• {mapping['source_path'] or '(unknown)'} -> "
+                                f"{mapping['retrovue_path'] or '(unmapped)'}"
                                 for mapping in collection["mapping_pairs"]
                             ]
                         )
@@ -845,13 +869,20 @@ def update_collection(
 @container_app.command("approve")
 def approve_collection(
     collection_id: str = typer.Argument(..., help="Collection ID, external ID, or name"),
+    make_ready: bool = typer.Option(
+        False,
+        "--make-ready",
+        help="Promote new assets with positive duration to ready before approval",
+    ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview without writing"),
     json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
 ):
     """
     Approve all ready assets in a container for broadcast.
 
-    Only assets with state=ready are approved; new/enriching assets are skipped.
+    By default, only assets with state=ready are approved.
+    With --make-ready, assets in state=new with duration_ms > 0 are first
+    promoted to ready, then approved.
 
     Examples:
         retrovue container approve "Intros"
@@ -866,16 +897,19 @@ def approve_collection(
             typer.echo(f"Error: {e}", err=True)
             raise typer.Exit(1)
 
-        assets = (
+        promotable = (
             db.query(Asset)
             .filter(
                 Asset.container_id == collection.uuid,
-                Asset.state == "ready",
-                Asset.approved_for_broadcast.is_(False),
+                Asset.state == "new",
+                Asset.duration_ms.isnot(None),
+                Asset.duration_ms > 0,
                 Asset.is_deleted.is_(False),
             )
             .all()
         )
+
+        promoted = len(promotable) if make_ready else 0
 
         skipped = (
             db.query(Asset)
@@ -888,9 +922,39 @@ def approve_collection(
         )
 
         if not dry_run:
+            if make_ready:
+                for asset in promotable:
+                    asset.state = "ready"
+            assets = (
+                db.query(Asset)
+                .filter(
+                    Asset.container_id == collection.uuid,
+                    Asset.state == "ready",
+                    Asset.approved_for_broadcast.is_(False),
+                    Asset.is_deleted.is_(False),
+                )
+                .all()
+            )
             for asset in assets:
                 asset.approved_for_broadcast = True
             db.commit()
+        else:
+            assets = (
+                db.query(Asset)
+                .filter(
+                    Asset.container_id == collection.uuid,
+                    Asset.state == "ready",
+                    Asset.approved_for_broadcast.is_(False),
+                    Asset.is_deleted.is_(False),
+                )
+                .all()
+            )
+            if make_ready:
+                # In dry-run, include promotable assets that would become ready.
+                by_uuid = {str(getattr(a, "uuid", "")): a for a in assets}
+                for a in promotable:
+                    by_uuid[str(getattr(a, "uuid", ""))] = a
+                assets = list(by_uuid.values())
 
         if json_output:
             typer.echo(
@@ -898,6 +962,7 @@ def approve_collection(
                     {
                         "collection": collection.name,
                         "approved": len(assets),
+                        "promoted_to_ready": promoted,
                         "skipped_not_ready": skipped,
                         "dry_run": dry_run,
                     },
@@ -907,8 +972,14 @@ def approve_collection(
         else:
             typer.echo(f"Collection: {collection.name}")
             if dry_run:
+                if make_ready:
+                    typer.echo(
+                        f"  [dry-run] Would promote {promoted} asset(s) to ready before approval"
+                    )
                 typer.echo(f"  [dry-run] Would approve {len(assets)} ready asset(s)")
             else:
+                if make_ready:
+                    typer.echo(f"  Promoted: {promoted} asset(s) to ready")
                 typer.echo(f"  Approved: {len(assets)} asset(s)")
             if skipped:
                 typer.echo(f"  Skipped:  {skipped} asset(s) not yet ready")

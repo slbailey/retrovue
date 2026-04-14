@@ -146,6 +146,10 @@ class SocketSink {
   // =========================================================================
   void HoldEmission();
   void OpenEmissionGate();
+  // True after OpenEmissionGate(); false after HoldEmission(). For contract tests (INV-BOOTSTRAP-AV-PHASE-001).
+  bool IsEmissionGateOpen() const {
+    return emission_gate_open_.load(std::memory_order_acquire);
+  }
 
  private:
   void WriterThreadLoop();

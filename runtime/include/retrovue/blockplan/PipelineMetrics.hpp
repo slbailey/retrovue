@@ -106,6 +106,9 @@ struct PipelineMetrics {
   int64_t pacer_max_late_ms = 0;
   int64_t pacer_chunks_paced = 0;
 
+  // INV-BOOTSTRAP-AV-PHASE-001: bootstrap gate timeout (phase-invalid handoff aborted).
+  int64_t air_bootstrap_phase_failure_total = 0;
+
   // ---- Channel ----
   int32_t channel_id = 0;
   bool continuous_mode_active = false;
@@ -305,6 +308,11 @@ struct PipelineMetrics {
     oss << "# TYPE air_continuous_detach_count counter\n";
     oss << "air_continuous_detach_count{channel=\"" << ch << "\"} "
         << detach_count << "\n";
+
+    oss << "\n# HELP air_bootstrap_phase_failure_total Bootstrap gate timeout (INV-BOOTSTRAP-AV-PHASE-001)\n";
+    oss << "# TYPE air_bootstrap_phase_failure_total counter\n";
+    oss << "air_bootstrap_phase_failure_total{channel=\"" << ch << "\"} "
+        << air_bootstrap_phase_failure_total << "\n";
 
     // Audio silence injection (INV-TICK-GUARANTEED-OUTPUT)
     oss << "\n# HELP air_continuous_audio_silence_injected Ticks where silence bridged audio underflow\n";

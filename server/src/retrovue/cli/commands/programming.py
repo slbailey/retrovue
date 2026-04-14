@@ -146,7 +146,7 @@ def rebuild_cmd(
     channel_id: str = typer.Option(None, "--channel", "-c", help="Channel ID (rebuilds all channels if omitted)"),
 ) -> None:
     """Force-recompile a locked broadcast day by deleting the cached row and recompiling."""
-    from datetime import date
+    from datetime import date, datetime, timezone
 
     try:
         target_date = date.fromisoformat(date_str)
@@ -154,18 +154,43 @@ def rebuild_cmd(
         typer.echo(f"Error: Invalid date format '{date_str}'. Use YYYY-MM-DD.", err=True)
         raise typer.Exit(1)
 
-    from retrovue.domain.entities import ScheduleRevision
+    from sqlalchemy import select
+
+    from retrovue.domain.entities import Channel, ChannelActiveRevision, ScheduleRevision
     from retrovue.infra.uow import session
 
     with session() as db:
+        channel_pk_filter = None
+        if channel_id:
+            channel_pk_filter = select(Channel.id).where(Channel.slug == channel_id)
+
+        # Drop active-revision pointers for this day (and channel, if scoped).
+        # Otherwise load_segmented_blocks_from_active_revision still follows the
+        # pointer to a now-superseded row and the schedule never changes.
+        ptr_q = db.query(ChannelActiveRevision).filter(
+            ChannelActiveRevision.broadcast_day == target_date,
+        )
+        if channel_pk_filter is not None:
+            ptr_q = ptr_q.filter(
+                ChannelActiveRevision.channel_id.in_(channel_pk_filter),
+            )
+        ptr_q.delete(synchronize_session=False)
+
         query = db.query(ScheduleRevision).filter(
             ScheduleRevision.broadcast_day == target_date,
             ScheduleRevision.status == "active",
         )
-        if channel_id:
-            query = query.join(ScheduleRevision.channel).filter_by(slug=channel_id)
+        if channel_pk_filter is not None:
+            query = query.filter(ScheduleRevision.channel_id.in_(channel_pk_filter))
 
-        deleted = query.update({ScheduleRevision.status: "superseded"}, synchronize_session=False)
+        now = datetime.now(timezone.utc)
+        deleted = query.update(
+            {
+                ScheduleRevision.status: "superseded",
+                ScheduleRevision.superseded_at: now,
+            },
+            synchronize_session=False,
+        )
 
     if deleted:
         typer.echo(f"Superseded {deleted} active revision(s) for {date_str}. They will recompile on next access.")

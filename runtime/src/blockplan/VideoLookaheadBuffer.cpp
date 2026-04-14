@@ -27,11 +27,30 @@ namespace retrovue::blockplan {
 
 using retrovue::util::Logger;
 
+namespace {
+
+// Validation-only (unset in production runs): log every AV_LEAD_CLAMP evaluation that fires.
+bool ValidationLogAllAvLeadClamp() {
+  const char* v = std::getenv("RETROVUE_AV_LEAD_CLAMP_LOG_ALL");
+  return v && v[0] == '1' && v[1] == '\0';
+}
+
+// Validation-only: disable fill-domain lead clamp suppression for A/B log comparison.
+// Does not ship as default behavior; must be explicitly set in the environment.
+bool ValidationDisableAvLeadClamp() {
+  const char* v = std::getenv("RETROVUE_DISABLE_AV_LEAD_CLAMP");
+  return v && v[0] == '1' && v[1] == '\0';
+}
+
+}  // namespace
+
 // Debug-only: active fill thread count for lifecycle audit (INV-FILL-THREAD-LIFECYCLE-001).
 static std::atomic<int> g_active_fill_threads{0};
 
 // Steady-state: audio-below-low may override parking only within this many frames above target.
 static constexpr int kBurstMarginFrames = 5;
+// INV-FILL-AV-LEAD-CLAMP-001: positive lead bound — member av_phase_tolerance_ms_ (default 120),
+// set via SetAvPhaseToleranceMs from PipelineManagerOptions.av_phase_tolerance_ms.
 
 // INV-FIVS-HORIZON: Sentinel for "consumer hasn't started" (pre-first-tick).
 // Distinct from negative lookahead (decoder behind consumer).
@@ -46,6 +65,10 @@ VideoLookaheadBuffer::VideoLookaheadBuffer(int target_depth_frames,
       lookahead_target_(lookahead_target > 0 ? lookahead_target : target_depth_frames),
       frame_store_(static_cast<size_t>(ComputeHardCap(target_depth_frames))),
       hard_cap_frames_(ComputeHardCap(target_depth_frames)) {}
+
+void VideoLookaheadBuffer::SetAvPhaseToleranceMs(int ms) {
+  av_phase_tolerance_ms_ = std::max(1, ms);
+}
 
 VideoLookaheadBuffer::~VideoLookaheadBuffer() {
   if (fill_running_) {
@@ -428,6 +451,19 @@ void VideoLookaheadBuffer::FillLoop() {
     // we drop the video frame this cycle (do not enqueue); audio is still pushed.
     bool drop_video_this_cycle = false;
 
+    auto estimate_video_ms = [&](int lookahead, int store_size) -> int {
+      if (output_fps_.num <= 0 || output_fps_.den <= 0) return 0;
+      int buffered_frames = 0;
+      if (lookahead == kLookaheadConsumerUnknown) {
+        buffered_frames = std::max(0, store_size);
+      } else {
+        buffered_frames = std::max(0, lookahead);
+      }
+      const int64_t video_ms =
+          (static_cast<int64_t>(buffered_frames) * 1000 * output_fps_.den) / output_fps_.num;
+      return static_cast<int>(std::max<int64_t>(0, video_ms));
+    };
+
     // INV-P10-PIPELINE-FLOW-CONTROL: Strict slot-based gating (no hysteresis).
     //
     // FILLING path (steady_filling_ == true): Read depth under a brief lock.
@@ -531,6 +567,9 @@ void VideoLookaheadBuffer::FillLoop() {
           skip_wait = true;
         }
       } else if (is_bootstrap) {
+        const int bootstrap_audio_ms = audio_buffer ? audio_buffer->DepthMs() : 0;
+        const int bootstrap_video_ms = estimate_video_ms(gate_lookahead, gate_store_size);
+        const int bootstrap_av_delta_ms = bootstrap_audio_ms - bootstrap_video_ms;
         // Bootstrap: skip wait when lookahead below target or store below target.
         // INV-AIR-EOF-NON-REPEATABLE-001: After EOF, use deque size (pad frames
         // share source_frame_index, so FIVS doesn't grow).
@@ -539,7 +578,10 @@ void VideoLookaheadBuffer::FillLoop() {
             : (gate_lookahead == kLookaheadConsumerUnknown
                 ? gate_store_size < target_depth_frames_
                 : gate_lookahead < lookahead_target_);
-        if (bootstrap_needs_more) {
+        const bool bootstrap_av_lead_too_high =
+            bootstrap_av_delta_ms > av_phase_tolerance_ms_ &&
+            gate_store_size < bootstrap_cap_frames_;
+        if (bootstrap_needs_more || bootstrap_av_lead_too_high) {
           if (filling_now) skip_wait = true;
         }
       }
@@ -604,6 +646,18 @@ void VideoLookaheadBuffer::FillLoop() {
               if (audio_buffer && audio_buffer->DepthMs() < bootstrap_min_audio_ms_) {
                 wake_reason = "bootstrap";
                 return true;
+              }
+              if (audio_buffer) {
+                const int video_ms = (output_fps_.num > 0 && output_fps_.den > 0)
+                    ? static_cast<int>(((static_cast<int64_t>(
+                        (la == kLookaheadConsumerUnknown ? store_sz : std::max(0, la))) *
+                        1000 * output_fps_.den) / output_fps_.num))
+                    : 0;
+                const int av_delta_ms = audio_buffer->DepthMs() - video_ms;
+                if (av_delta_ms > av_phase_tolerance_ms_ && store_sz < bootstrap_cap_frames_) {
+                  wake_reason = "bootstrap_av_lead";
+                  return true;
+                }
               }
               return false;
             });
@@ -970,6 +1024,42 @@ void VideoLookaheadBuffer::FillLoop() {
     // ─────────────────────────────────────────────────────────────────────
     if (!pending_audio_frames.empty() && audio_buffer &&
         audio_suppression_reason == AudioSuppressionReason::kNone) {
+      int push_lookahead = kLookaheadConsumerUnknown;
+      int push_store_size = 0;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        push_lookahead = ComputeLookaheadLocked();
+        push_store_size = static_cast<int>(frame_store_.Size());
+      }
+      const int audio_ms = audio_buffer->DepthMs();
+      const int video_ms = estimate_video_ms(push_lookahead, push_store_size);
+      const int av_delta_ms = audio_ms - video_ms;
+      const bool audio_high = audio_ms > audio_buffer->HighWaterMs();
+      const bool av_lead_too_high = av_delta_ms > av_phase_tolerance_ms_;
+      const bool want_clamp = !ValidationDisableAvLeadClamp() && (audio_high || av_lead_too_high);
+      if (want_clamp) {
+        audio_suppression_reason = AudioSuppressionReason::kAvLeadClamp;
+        av_lead_clamp_events_.fetch_add(1, std::memory_order_relaxed);
+        static int64_t clamp_count = 0;
+        ++clamp_count;
+        const bool log_all = ValidationLogAllAvLeadClamp();
+        if (log_all || clamp_count <= 10 || clamp_count % 200 == 0) {
+          std::ostringstream oss;
+          oss << "[FillLoop:" << buffer_label_ << "] AV_LEAD_CLAMP"
+              << " reason=" << (av_lead_too_high ? "av_delta" : "audio_high_water")
+              << " audio_ms=" << audio_ms
+              << " video_ms=" << video_ms
+              << " av_delta_ms=" << av_delta_ms
+              << " max_av_lead_ms=" << av_phase_tolerance_ms_
+              << " high_water_ms=" << audio_buffer->HighWaterMs()
+              << " lookahead=" << push_lookahead
+              << " store_size=" << push_store_size;
+          Logger::Warn(oss.str());
+        }
+      }
+    }
+    if (!pending_audio_frames.empty() && audio_buffer &&
+        audio_suppression_reason == AudioSuppressionReason::kNone) {
       int64_t audio_samples_this_decode = 0;
       int audio_frames_this_decode = 0;
       for (auto& af : pending_audio_frames) {
@@ -1049,6 +1139,10 @@ void VideoLookaheadBuffer::FillLoop() {
           Logger::Info(oss.str());
         }
       }
+    }
+    if (audio_suppression_reason == AudioSuppressionReason::kAvLeadClamp) {
+      audio_frames_suppressed_non_generation_.fetch_add(
+          static_cast<int64_t>(pending_audio_frames.size()), std::memory_order_relaxed);
     }
     pending_audio_frames.clear();
 

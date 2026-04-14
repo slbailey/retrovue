@@ -12,6 +12,15 @@ Protects `LAW-CONTENT-AUTHORITY` by ensuring that enricher failures produce obse
 
 If a processor_id is resolved for a job's target_type, the corresponding enricher MUST either execute successfully OR produce a failed `ProcessorRun` record with an error message. The enricher MUST NOT be silently skipped.
 
+If required output cannot be produced, the enricher MUST emit structured failure reasons. For duration extraction enrichers, structured failure payload MUST include:
+- `probe_paths_checked`
+- `failure_reason`
+
+`failure_reason` MUST be machine-readable and include one of:
+- `no_duration_extracted`
+- `invalid_duration_zero`
+- `parse_error`
+
 ## Preconditions
 
 - The processor_id is present in `CAPABILITY_REGISTRY` for the job's `target_type`.
@@ -21,6 +30,7 @@ If a processor_id is resolved for a job's target_type, the corresponding enriche
 
 - `enricher_construction_failed` structured log event with processor_id, target_id, collection, and reason.
 - `ProcessorRun` row with `status=failed` and `error_message` naming the construction failure.
+- Structured enricher failure payload with probe-path diagnostics when output derivation fails.
 
 ## Deterministic Testability
 
@@ -29,6 +39,7 @@ If a processor_id is resolved for a job's target_type, the corresponding enriche
 3. Assert that a `ProcessorRun` record with `status=failed` exists for `interstitial-type`.
 4. Assert that the structured log contains `enricher_construction_failed`.
 5. Assert that no silent skip occurred (the enricher is not simply absent from the run records).
+6. For duration enricher failure fixtures, assert `probe_paths_checked` and `failure_reason` are present and stable.
 
 ## Failure Semantics
 

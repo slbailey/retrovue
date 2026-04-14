@@ -461,6 +461,7 @@ Canonical contract: [schedule_constraints.md](schedule_constraints.md)
 |-----------|------|--------------|
 | INV-ASSET-PROBE-ONLY-FIELD-AUTHORITY-001 | [invariants/core/asset/INV-ASSET-PROBE-ONLY-FIELD-AUTHORITY-001.md](invariants/core/asset/INV-ASSET-PROBE-ONLY-FIELD-AUTHORITY-001.md) | LAW-DERIVATION |
 | INV-ASSET-DURATION-CONTRACTUAL-TRUTH-001 | [invariants/core/asset/INV-ASSET-DURATION-CONTRACTUAL-TRUTH-001.md](invariants/core/asset/INV-ASSET-DURATION-CONTRACTUAL-TRUTH-001.md) | LAW-ELIGIBILITY, LAW-DERIVATION |
+| INV-DURATION-EXTRACTION-NORMALIZATION-001 | [invariants/core/asset/INV-DURATION-EXTRACTION-NORMALIZATION-001.md](invariants/core/asset/INV-DURATION-EXTRACTION-NORMALIZATION-001.md) | LAW-ELIGIBILITY, LAW-DERIVATION |
 | INV-ASSET-MARKER-BOUNDS-001 | [invariants/core/asset/INV-ASSET-MARKER-BOUNDS-001.md](invariants/core/asset/INV-ASSET-MARKER-BOUNDS-001.md) | — |
 
 ### Asset — Tag Management
@@ -643,6 +644,9 @@ Canonical contract: [delivery_hls.md](delivery_hls.md)
 | Invariant | File | Classification |
 |-----------|------|----------------|
 | INV-BACKPRESSURE-SYMMETRIC | [invariants/air/INV-BACKPRESSURE-SYMMETRIC.md](invariants/air/INV-BACKPRESSURE-SYMMETRIC.md) | Primary |
+| INV-PACING-SINGLE-AUTHORITY-001 | [invariants/air/INV-PACING-SINGLE-AUTHORITY-001.md](invariants/air/INV-PACING-SINGLE-AUTHORITY-001.md) | Primary — derives LAW-CLOCK, LAW-RUNTIME-AUTHORITY |
+| INV-BOOTSTRAP-AV-PHASE-001 | [invariants/air/INV-BOOTSTRAP-AV-PHASE-001.md](invariants/air/INV-BOOTSTRAP-AV-PHASE-001.md) | Primary — derives LAW-CLOCK, LAW-LIVENESS |
+| INV-FILL-AV-LEAD-CLAMP-001 | [invariants/air/INV-FILL-AV-LEAD-CLAMP-001.md](invariants/air/INV-FILL-AV-LEAD-CLAMP-001.md) | Primary — derives LAW-LIVENESS, LAW-RUNTIME-AUTHORITY |
 | INV-BUFFER-EQUILIBRIUM | [invariants/air/INV-BUFFER-EQUILIBRIUM.md](invariants/air/INV-BUFFER-EQUILIBRIUM.md) | Primary |
 | INV-DECODE-GATE | [invariants/air/INV-DECODE-GATE.md](invariants/air/INV-DECODE-GATE.md) | Primary |
 | INV-NO-SILENCE-INJECTION | [invariants/air/INV-NO-SILENCE-INJECTION.md](invariants/air/INV-NO-SILENCE-INJECTION.md) | Primary |
@@ -746,7 +750,7 @@ The following invariants lack test matrix entries and are flagged for follow-up:
 | INV-LOUDNESS-NORMALIZED-001 | Shared invariant; no test matrix |
 | INV-TIME-AUTHORITY-SINGLE-SOURCE | Shared; overlaps LAW-CLOCK; no test mapping |
 | INV-SWITCH-BOUNDARY-TIMING | No Derived From law cited; enforcement unclear |
-| INV-PACING-001, INV-PACING-ENFORCEMENT-002, INV-DECODE-RATE-001, INV-SEGMENT-CONTENT-001 | Primitive air invariants; doc-only; P4 in backlog |
+| INV-PACING-001, INV-PACING-ENFORCEMENT-002, INV-DECODE-RATE-001, INV-SEGMENT-CONTENT-001 | **INV-PACING-001 (single authority slice)** superseded by indexed **INV-PACING-SINGLE-AUTHORITY-001**; remainder still doc-only / P4 backlog |
 
 See [audit/TEST_ANCHOR_BACKLOG.md](audit/TEST_ANCHOR_BACKLOG.md) for prioritized action.
 

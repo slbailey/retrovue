@@ -136,6 +136,47 @@ class TestProcessorExecutionContract:
         assert dur == 5000
         assert run_count >= 1
 
+    def test_media_container_metadata_maps_to_container_format_field(self):
+        """Processor metadata key 'container' must map to Asset.container_format, not relationship 'container'."""
+        with session() as db:
+            src, coll = _make_source_and_collection(db)
+            asset = _make_asset(db, coll, src, duration_ms=1000)
+            job = ProcessorJob(
+                id=uuid.uuid4(),
+                target_type="MEDIA",
+                target_id=asset.uuid,
+                status="running",
+            )
+            db.add(job)
+            db.flush()
+            job_id = job.id
+            asset_id = asset.uuid
+
+        def _fake_enrich(item):
+            item.raw_labels = list(getattr(item, "raw_labels", [])) + [
+                "duration_ms:5000",
+                "container:matroska,webm",
+            ]
+            item.probed = dict(getattr(item, "probed", None) or {})
+            item.probed["duration_ms"] = 5000
+            item.probed["container"] = "matroska,webm"
+            return item
+
+        class FakeEnricher:
+            def enrich(self, item):
+                return _fake_enrich(item)
+
+        fake_ffprobe = type("FakeFfprobe", (FakeEnricher,), {})
+        with patch("retrovue.catalog.processor_runtime.ENRICHERS", {"ffprobe": fake_ffprobe, "loudness": fake_ffprobe}):
+            with session() as db:
+                job = db.get(ProcessorJob, job_id)
+                execute_job(db, job)
+
+        with session() as db:
+            row = db.get(Asset, asset_id)
+            assert row is not None
+            assert row.container_format == "matroska,webm"
+
     def test_processor_runs_recorded_per_execution(self):
         """After success, processor_runs has one row per processor; after failure, run rows for each invoked."""
         with session() as db:
@@ -244,3 +285,65 @@ class TestProcessorExecutionContract:
                 _ = r.started_at
                 _ = r.status
         assert run_count >= 1
+
+    def test_media_job_resolves_plex_uri_to_local_path_before_ffprobe(self):
+        """MEDIA jobs with plex:// URIs must resolve to local paths before enricher execution."""
+        with session() as db:
+            src = Source(
+                external_id=f"test-plex-{uuid.uuid4().hex[:12]}",
+                name="Plex Source",
+                type="plex",
+                config={},
+            )
+            db.add(src)
+            db.flush()
+            coll = Container(
+                source_id=src.id,
+                external_id=f"test-coll-{uuid.uuid4().hex[:12]}",
+                name="Plex Container",
+                config={"locations": ["/media/library"]},
+            )
+            db.add(coll)
+            db.flush()
+            asset = _make_asset(db, coll, src, uri="plex://34835", duration_ms=1000)
+            job = ProcessorJob(
+                id=uuid.uuid4(),
+                target_type="MEDIA",
+                target_id=asset.uuid,
+                status="running",
+            )
+            db.add(job)
+            db.flush()
+            job_id = job.id
+            asset_id = asset.uuid
+
+        class FakeEnricher:
+            def enrich(self, item):
+                # Contract: ffprobe must not receive raw plex:// URI.
+                assert item.path_uri == "/mnt/data/media/monstervision/Episode.mkv"
+                item.raw_labels = list(getattr(item, "raw_labels", [])) + ["duration_ms:5000"]
+                item.probed = dict(getattr(item, "probed", None) or {})
+                item.probed["duration_ms"] = 5000
+                return item
+
+        fake_ffprobe = type("FakeFfprobe", (FakeEnricher,), {})
+
+        with (
+            patch("retrovue.catalog.processor_runtime.ENRICHERS", {"ffprobe": fake_ffprobe, "loudness": fake_ffprobe}),
+            patch("retrovue.catalog.processor_runtime.resolve_effective_mappings", return_value=[("/media/library", "/mnt/data/media/monstervision")]),
+            patch("retrovue.catalog.processor_runtime.get_importer") as mock_get_importer,
+            patch("retrovue.catalog.processor_runtime.AssetPathResolver") as mock_resolver_cls,
+        ):
+            mock_get_importer.return_value = type("Importer", (), {"client": object()})()
+            mock_resolver = mock_resolver_cls.return_value
+            mock_resolver.resolve.return_value = "/mnt/data/media/monstervision/Episode.mkv"
+
+            with session() as db:
+                job = db.get(ProcessorJob, job_id)
+                execute_job(db, job)
+
+        with session() as db:
+            row = db.get(Asset, asset_id)
+            assert row is not None
+            assert row.canonical_uri == "/mnt/data/media/monstervision/Episode.mkv"
+            assert row.duration_ms == 5000

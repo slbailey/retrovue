@@ -106,6 +106,16 @@
 | TDCT-001 | Duration set at enrichment, unchanged | Planning sees same value | `TestInvAssetDurationContractualTruth001::test_tdct_001_duration_set_at_enrichment` |
 | TDCT-002 | Asset library returns stored value | No recalculation | `TestInvAssetDurationContractualTruth001::test_tdct_002_asset_library_returns_stored_value` |
 
+### INV-DURATION-EXTRACTION-NORMALIZATION-001
+
+| ID | Scenario | Expected | Test |
+|----|----------|----------|------|
+| TDEN-001 | `format.duration` present, stream duration unavailable | Valid duration from `format.duration` | `TestInvDurationExtractionNormalization001::test_tden_001_format_duration_preferred` |
+| TDEN-002 | Missing format duration, multiple stream durations | Valid duration from `max(stream.duration)` | `TestInvDurationExtractionNormalization001::test_tden_002_max_stream_duration_fallback` |
+| TDEN-003 | Only `stream.tags.DURATION` present | Valid duration parsed from tag | `TestInvDurationExtractionNormalization001::test_tden_003_tag_duration_fallback` |
+| TDEN-004 | No valid duration in any source | Invalid duration classification | `TestInvDurationExtractionNormalization001::test_tden_004_all_sources_fail_invalid` |
+| TDEN-005 | Non-positive extracted duration | Invalid duration classification | `TestInvDurationExtractionNormalization001::test_tden_005_non_positive_invalid` |
+
 ### INV-ASSET-MARKER-BOUNDS-001
 
 | ID | Scenario | Expected | Test |

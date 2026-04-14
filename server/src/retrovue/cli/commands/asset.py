@@ -17,6 +17,7 @@ from ...domain.tag_normalization import canonicalize_tag, normalize_tag_set
 from ...infra.uow import session
 from ...usecases import asset_attention as _uc_asset_attention
 from ...usecases import asset_inspect as _uc_asset_inspect
+from ...usecases import asset_list as _uc_asset_list
 from ...usecases import asset_update as _uc_asset_update
 from ...usecases.asset_enrich_stale import enrich_stale_assets
 
@@ -35,6 +36,72 @@ def resolve_asset_selector(db, asset_id: str) -> Asset:
         typer.echo(f"Error: asset not found: {asset_id}", err=True)
         raise typer.Exit(1)
     return asset
+
+
+@app.command("list")
+def list_assets(
+    container: str = typer.Option(
+        ...,
+        "--container",
+        help="Container UUID, external ID, or name (for example: bumpers)",
+    ),
+    issues_only: bool = typer.Option(
+        False,
+        "--issues-only",
+        help="Only include invalid-duration or non-broadcast-ready assets",
+    ),
+    invalid_duration_only: bool = typer.Option(
+        False,
+        "--invalid-duration-only",
+        help="Only include assets with missing/non-positive duration",
+    ),
+    limit: int = typer.Option(200, "--limit", help="Max assets to return"),
+    json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
+):
+    """
+    List assets in a container with duration/readiness diagnostics.
+    """
+    try:
+        with session() as db:
+            rows = _uc_asset_list.list_assets_for_container(
+                db,
+                container_selector=container,
+                issues_only=issues_only,
+                limit=limit,
+            )
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1)
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1)
+
+    if invalid_duration_only:
+        rows = [r for r in rows if r["invalid_duration"]]
+
+    if json_output:
+        typer.echo(
+            json.dumps(
+                {
+                    "status": "ok",
+                    "total": len(rows),
+                    "assets": rows,
+                },
+                indent=2,
+            )
+        )
+        raise typer.Exit(0)
+
+    if not rows:
+        typer.echo("No assets found for the requested container/scope")
+        raise typer.Exit(0)
+
+    for r in rows:
+        typer.echo(
+            f"{r['uuid']}  state={r['state']:<10} approved={r['approved_for_broadcast']} "
+            f"duration_ms={r['duration_ms']} invalid_duration={r['invalid_duration']} "
+            f"broadcast_ready={r['broadcast_ready']}  {r['uri']}"
+        )
 
 
 @app.command("attention")

@@ -950,7 +950,7 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
     if (frame.width <= 0 || frame.height <= 0 ||
         frame.width > 32767 || frame.height > 32767) {
       std::cerr << "[EncoderPipeline] Invalid frame dimensions: " << frame.width << "x" << frame.height << std::endl;
-      avcodec_close(codec_ctx_);
+      avcodec_free_context(&codec_ctx_);
       codec_opened_ = false;
       return false;
     }
@@ -974,7 +974,7 @@ bool EncoderPipeline::encodeFrame(const retrovue::buffer::Frame& frame, int64_t 
                   << " packet_=" << static_cast<void*>(packet_)
                   << " expected_YUV420P_bytes=" << (frame.width * frame.height * 3 / 2) << std::endl;
       }
-      avcodec_close(codec_ctx_);
+      avcodec_free_context(&codec_ctx_);
       codec_opened_ = false;
       return false;  // Do not touch frame_->data; caller may call close() next.
     }
@@ -1395,17 +1395,17 @@ bool EncoderPipeline::IsInitialized() const {
 }
 
 #ifdef RETROVUE_FFMPEG_AVAILABLE
-int EncoderPipeline::AVIOWriteThunk(void* opaque, uint8_t* buf, int buf_size) {
+int EncoderPipeline::AVIOWriteThunk(void* opaque, const uint8_t* buf, int buf_size) {
   if (opaque == nullptr) return -1;
   auto* pipeline = reinterpret_cast<EncoderPipeline*>(opaque);
   return pipeline->HandleAVIOWrite(buf, buf_size);
 }
 
-int EncoderPipeline::HandleAVIOWrite(uint8_t* buf, int buf_size) {
+int EncoderPipeline::HandleAVIOWrite(const uint8_t* buf, int buf_size) {
   if (!avio_write_callback_) return -1;
   window_counters_.avio_write_calls++;
   window_counters_.avio_write_bytes += buf_size;
-  return avio_write_callback_(avio_opaque_, buf, buf_size);
+  return avio_write_callback_(avio_opaque_, const_cast<uint8_t*>(buf), buf_size);
 }
 #endif  // RETROVUE_FFMPEG_AVAILABLE
 

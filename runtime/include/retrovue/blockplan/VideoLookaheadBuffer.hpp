@@ -30,12 +30,13 @@
 namespace retrovue::blockplan {
 
 // INV-AV-FILL-INTERLOCK-001: Explicit reason codes for audio suppression.
-// The ONLY legitimate reason to suppress audio while video advances LatestIndex
-// is generation mismatch (stale fill thread after a fence/swap). Any other
-// suppression reason is a contract violation and must abort.
+// Legitimate reasons to suppress audio while video advances LatestIndex:
+//  1) generation mismatch (stale fill thread after fence/swap), or
+//  2) explicit A/V lead clamp to keep bootstrap/fill phase bounded.
 enum class AudioSuppressionReason {
   kNone,               // audio was pushed — no suppression
   kGenerationMismatch, // stale fill thread; audio buffer swapped to new generation
+  kAvLeadClamp,        // audio suppressed to enforce bounded A/V lead during fill/bootstrap
 };
 
 // INV-BUFFER-LIFECYCLE-001: Unified buffer lifecycle state.
@@ -171,6 +172,15 @@ class VideoLookaheadBuffer {
   int64_t AudioFramesSuppressedNonGeneration() const {
     return audio_frames_suppressed_non_generation_.load(std::memory_order_relaxed);
   }
+
+  // INV-FILL-AV-LEAD-CLAMP-001 — events where audio was not pushed due to kAvLeadClamp.
+  int64_t AvLeadClampEventCount() const {
+    return av_lead_clamp_events_.load(std::memory_order_relaxed);
+  }
+
+  // INV-FILL-AV-LEAD-CLAMP-001 / INV-BOOTSTRAP-AV-PHASE-001 — must match PipelineManagerOptions.av_phase_tolerance_ms.
+  void SetAvPhaseToleranceMs(int ms);
+  int AvPhaseToleranceMs() const { return av_phase_tolerance_ms_; }
 
   // Total frames pushed since creation or last Reset().
   int64_t TotalFramesPushed() const;
@@ -373,6 +383,10 @@ class VideoLookaheadBuffer {
   // INV-AV-FILL-INTERLOCK-001: counts audio suppressed for reasons OTHER than
   // generation mismatch. Any increment on a LIVE buffer is a hard contract violation.
   std::atomic<int64_t> audio_frames_suppressed_non_generation_{0};
+  // INV-FILL-AV-LEAD-CLAMP-001: decode cycles where kAvLeadClamp suppressed Push.
+  std::atomic<int64_t> av_lead_clamp_events_{0};
+
+  int av_phase_tolerance_ms_{120};
 
   // --- FIVS stall diagnostics (INV-FIVS-LOOKAHEAD-STATE-001) ---
  public:

@@ -8,6 +8,36 @@ pools:
     match:
       type: episode
       series_title: Cheers
+  traffic_commercials:
+    match:
+      type: commercial
+  traffic_promos:
+    match:
+      type: promo
+  traffic_bumpers:
+    match:
+      type: bumper
+  traffic_station_ids:
+    match:
+      type: station_id
+
+traffic:
+  profiles:
+    default:
+      allowed_pools: [traffic_commercials, traffic_promos, traffic_bumpers]
+      weights:
+        traffic_commercials: 6
+        traffic_promos: 2
+        traffic_bumpers: 1
+      default_cooldown_seconds: 3600
+      max_plays_per_day: 0
+
+  default: default
+
+  break_config:
+    to_break_bumper_ms: 3000
+    from_break_bumper_ms: 3000
+    station_id_ms: 5000
 
 schedule:
   all_day:

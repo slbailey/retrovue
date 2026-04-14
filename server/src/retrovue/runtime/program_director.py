@@ -2469,7 +2469,16 @@ class ProgramDirector:
         async def watch_channel(channel_id: str) -> HTMLResponse:
             """Serve the HLS web player page."""
             import json as _json
-            html_path = Path("/opt/retrovue/server/templates/player/watch.html")
+            candidate_paths = [
+                Path("/opt/retrovue/server/templates/player/watch.html"),
+                Path("/opt/retrovue/legacy/studio-ui/templates/player/watch.html"),
+            ]
+            html_path = next((p for p in candidate_paths if p.exists()), None)
+            if html_path is None:
+                return HTMLResponse(
+                    status_code=500,
+                    content="watch template missing",
+                )
             html = html_path.read_text()
 
             channel_name = channel_id
@@ -2492,7 +2501,16 @@ class ProgramDirector:
         @self.fastapi_app.get("/epg", response_class=HTMLResponse)
         def epg_guide_html() -> HTMLResponse:
             """Serve the EPG HTML page."""
-            html_path = Path("/opt/retrovue/server/templates") / "epg" / "guide.html"
+            candidate_paths = [
+                Path("/opt/retrovue/server/templates/epg/guide.html"),
+                Path("/opt/retrovue/legacy/studio-ui/templates/epg/guide.html"),
+            ]
+            html_path = next((p for p in candidate_paths if p.exists()), None)
+            if html_path is None:
+                return HTMLResponse(
+                    status_code=500,
+                    content="EPG template missing",
+                )
             return HTMLResponse(content=html_path.read_text())
 
         # --- IPTV Guide (no M3U playlist: Plex uses HDHomeRun discover/lineup only) ---

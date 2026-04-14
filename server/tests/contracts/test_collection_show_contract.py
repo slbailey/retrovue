@@ -40,8 +40,8 @@ class TestCollectionShowContract:
 
             # Path mappings query
             mock_pm = MagicMock()
-            mock_pm.plex_path = "/plex/TV_Shows"
-            mock_pm.local_path = "Z:/TV_Shows"
+            mock_pm.source_path = "/plex/TV_Shows"
+            mock_pm.retrovue_path = "Z:/TV_Shows"
             fake_db.query.return_value.filter.return_value.all.return_value = [mock_pm]
 
             # Enricher rows lookups

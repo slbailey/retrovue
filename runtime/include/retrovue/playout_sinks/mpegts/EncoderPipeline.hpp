@@ -6,6 +6,11 @@
 #ifndef RETROVUE_PLAYOUT_SINKS_MPEGTS_ENCODER_PIPELINE_HPP_
 #define RETROVUE_PLAYOUT_SINKS_MPEGTS_ENCODER_PIPELINE_HPP_
 
+// INV-PACING-SINGLE-AUTHORITY-001: encoder/mux must not repair fill/bootstrap A/V phase skew.
+#ifndef RETROVUE_ENCODER_BOOTSTRAP_AV_PHASE_REPAIR
+#define RETROVUE_ENCODER_BOOTSTRAP_AV_PHASE_REPAIR 0
+#endif
+
 #include "retrovue/playout_sinks/mpegts/MpegTSPlayoutSinkConfig.hpp"
 #include "retrovue/playout_sinks/mpegts/MuxInterleaver.hpp"
 
@@ -232,8 +237,8 @@ class EncoderPipeline {
   int (*avio_write_callback_)(void* opaque, uint8_t* buf, int buf_size);
   AVIOContext* custom_avio_ctx_;
 
-  static int AVIOWriteThunk(void* opaque, uint8_t* buf, int buf_size);
-  int HandleAVIOWrite(uint8_t* buf, int buf_size);
+  static int AVIOWriteThunk(void* opaque, const uint8_t* buf, int buf_size);
+  int HandleAVIOWrite(const uint8_t* buf, int buf_size);
 
   // OutputTiming: Gate packet emission to enforce real-time delivery discipline.
   // See OutputTimingContract.md for invariants.

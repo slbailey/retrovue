@@ -386,7 +386,7 @@ class ContainerIngestService:
 
         # Build enricher pipeline for this container (ingest scope)
         # Read from persisted Enricher instances referenced by container.config['enrichers']
-        pipeline: list[tuple[str, int, Any]] = []  # (enricher_id, priority, instance)
+        pipeline: list[tuple[int, str, Any]] = []  # (priority, processor_id, instance)
         pipeline_signature: list[dict[str, Any]] = []
         try:
             cfg = dict(getattr(container, "config", {}) or {})
@@ -412,12 +412,14 @@ class ContainerIngestService:
                     instance = cls(**(row.config or {})) if cls else None
                     if instance is None:
                         continue
-                    pipeline.append((enricher_id, priority, instance))
+                    # Queue/runtime dispatch keys by processor type (e.g. "ffprobe"),
+                    # not by configured enricher_id.
+                    pipeline.append((priority, row.type, instance))
                 except Exception:
                     continue
             # Stable order by priority, then id
-            pipeline.sort(key=lambda t: (t[1], t[0]))
-            pipeline_signature = [{"enricher_id": eid, "priority": pr} for (eid, pr, _) in pipeline]
+            pipeline.sort(key=lambda t: (t[0], t[1]))
+            pipeline_signature = [{"enricher_id": pid, "priority": pr} for (pr, pid, _) in pipeline]
         except Exception:
             pipeline = []
             pipeline_signature = []
@@ -435,7 +437,7 @@ class ContainerIngestService:
             if coll_name in COLLECTION_TYPE_MAP:
                 it_enricher = InterstitialTypeEnricher(collection_name=coll_name)
                 # Prepend at priority -1 so it runs before any other enrichers
-                pipeline.insert(0, ("interstitial-type", -1, it_enricher))
+                pipeline.insert(0, (-1, "interstitial-type", it_enricher))
                 pipeline_signature.insert(0, {
                     "enricher_id": "interstitial-type",
                     "priority": -1,
@@ -488,7 +490,7 @@ class ContainerIngestService:
             catalog_state,
             full_container_scope=(scope == "container"),
         )
-        processor_ids_for_enqueue = [eid for eid, _, _ in pipeline]
+        processor_ids_for_enqueue = [pid for _, pid, _ in pipeline]
 
         # Resolve effective path mappings (source inheritance + container overrides)
         # per INV-PATH-MAPPING-SOURCE-SCOPED-001

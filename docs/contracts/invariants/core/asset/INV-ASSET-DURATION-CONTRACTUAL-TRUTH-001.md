@@ -10,11 +10,12 @@ Asset duration is the foundational input to the scheduling grid. If duration wer
 
 ## Guarantee
 
-Asset duration MUST be measured exactly once at ingest by ffprobe and stored as `duration_ms` on the Asset entity. The planning pipeline MUST consume `duration_ms` as contractual truth via the Asset Library. Duration MUST NOT be re-derived, re-probed, or independently calculated during planning or execution.
+Asset duration MUST be measured exactly once at ingest by ffprobe and stored as `duration_ms` on the Asset entity. "Measured once at ingest" refers to the normalized result of duration extraction across allowed ffprobe source locations, not to a single raw field read. The planning pipeline MUST consume `duration_ms` as contractual truth via the Asset Library. Duration MUST NOT be re-derived, re-probed, or independently calculated during planning or execution.
 
 ## Preconditions
 
 The asset MUST have completed enrichment and have a valid `duration_ms > 0`.
+Duration normalization MUST have completed per `INV-DURATION-EXTRACTION-NORMALIZATION-001` before persistence.
 
 ## Observability
 
@@ -31,6 +32,7 @@ Set `duration_ms` on an asset stub during simulated enrichment. Query via a mock
 ## Required Tests
 
 - `server/tests/contracts/test_asset_invariants.py::TestInvAssetDurationContractualTruth001`
+- `server/tests/contracts/ingest/test_inv_duration_extraction_normalization.py`
 
 ## Enforcement Evidence
 

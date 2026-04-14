@@ -82,6 +82,9 @@ struct BlockActivationContext {
 // Explicit configuration; no policy from injected dependencies.
 struct PipelineManagerOptions {
   int bootstrap_gate_timeout_ms = 2000;
+  // INV-BOOTSTRAP-AV-PHASE-001 / INV-FILL-AV-LEAD-CLAMP-001: single tolerance (ms)
+  // for gate |Δ| and fill-domain positive A/V lead. Default 120.
+  int av_phase_tolerance_ms = 120;
 };
 
 class PipelineManager : public IPlayoutExecutionEngine {
@@ -216,6 +219,26 @@ class PipelineManager : public IPlayoutExecutionEngine {
   static int64_t SourceFrameForTick(int64_t tick,
                                      int64_t in_num, int64_t in_den,
                                      int64_t out_num, int64_t out_den);
+
+  // INV-BOOTSTRAP-AV-PHASE-001 — pure gate math (single source with Run() bootstrap poll).
+  static int ComputeVideoTimeMsGate(int video_depth_frames, RationalFps output_fps);
+
+  struct BootstrapPhaseGateSnapshot {
+    int audio_depth_ms = 0;
+    int video_time_ms_gate = 0;
+    int gate_av_delta_ms = 0;
+    bool audio_floor_met = false;
+    bool audio_ceiling_met = false;
+    bool av_phase_met = false;
+    bool phase_valid = false;
+  };
+  static BootstrapPhaseGateSnapshot EvaluateBootstrapPhaseGate(
+      int audio_depth_ms,
+      int video_depth_frames,
+      RationalFps output_fps,
+      int audio_prime_floor_ms,
+      int bootstrap_audio_ceiling_ms,
+      int av_phase_tolerance_ms);
 
  private:
   std::shared_ptr<ITimeSource> time_source_;

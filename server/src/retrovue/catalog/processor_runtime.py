@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from ..adapters.enrichers.interstitial_type_enricher import COLLECTION_TYPE_MAP
 from ..adapters.importers.base import DiscoveredItem
-from ..adapters.registry import ENRICHERS
+from ..adapters.registry import ENRICHERS, get_importer
 from ..domain.entities import (
     Asset,
     AssetEditorial,
@@ -26,8 +26,11 @@ from ..domain.entities import (
     EnricherRun,
     ProcessorOutput,
     ProcessorRun,
+    Source,
 )
 from ..infra.metadata.persistence import persist_asset_metadata
+from ..usecases.asset_path_resolver import AssetPathResolver
+from ..workflows.path_mapping import resolve_effective_mappings
 
 from .processor_capability import get_capability, get_processors_for_target
 
@@ -240,6 +243,52 @@ def _compute_input_fingerprint(asset: Asset) -> str:
     return "|".join(parts)
 
 
+def _resolve_processing_uri(
+    db: Session,
+    *,
+    asset: Asset,
+    container: Container | None,
+    path_uri: str,
+) -> str:
+    """Resolve plex:// URIs to local paths before processor execution."""
+    if not path_uri.startswith("plex://"):
+        return path_uri
+
+    try:
+        src = getattr(container, "source", None) if container is not None else None
+        if src is None:
+            src = db.get(Source, asset.source_id)
+
+        mappings: list[tuple[str, str]] = []
+        if src is not None and container is not None:
+            mappings = resolve_effective_mappings(source=src, container=container)
+
+        coll_locs = []
+        if container is not None:
+            coll_locs = (getattr(container, "config", None) or {}).get("locations", []) or []
+
+        plex_client = None
+        if src is not None and getattr(src, "type", None) == "plex":
+            src_cfg = {k: v for k, v in (getattr(src, "config", None) or {}).items() if k != "enrichers"}
+            importer = get_importer(src.type, **src_cfg)
+            plex_client = getattr(importer, "client", None)
+
+        resolver = AssetPathResolver(
+            path_mappings=mappings,
+            plex_client=plex_client,
+            collection_locations=coll_locs,
+        )
+        resolved = resolver.resolve(uri=path_uri, canonical_uri=getattr(asset, "canonical_uri", None))
+        if resolved:
+            return resolved
+    except Exception:
+        # Preserve existing fallback behavior: unresolved plex:// will fail in enricher
+        # and be recorded as a processor failure.
+        pass
+
+    return path_uri
+
+
 def _finalize_asset_state(asset: Any) -> None:
     """Evaluate and apply the asset state transition after processor execution.
 
@@ -283,12 +332,22 @@ def execute_job(db: Session, job: Any) -> None:
         raise ValueError(f"Asset {asset.uuid} has no uri/canonical_uri for enrichment")
 
     collection_name = ""
+    coll = None
     try:
         coll = db.get(Container, asset.container_id)
         if coll is not None:
             collection_name = getattr(coll, "name", "") or ""
     except Exception:
         pass
+
+    path_uri = _resolve_processing_uri(
+        db,
+        asset=asset,
+        container=coll,
+        path_uri=path_uri,
+    )
+    if path_uri and not path_uri.startswith("plex://"):
+        asset.canonical_uri = path_uri
 
     # Load existing metadata once
     existing_probed: dict[str, Any] = {}
@@ -506,7 +565,9 @@ def execute_job(db: Session, job: Any) -> None:
             except (ValueError, TypeError):
                 pass
         elif key in ("video_codec", "audio_codec", "container") and v is not None:
-            setattr(asset, key, v)
+            # DB column is container_format; avoid clobbering ORM relationship "container".
+            attr_name = "container_format" if key == "container" else key
+            setattr(asset, attr_name, v)
     probed_to_persist = {**ctx.existing_probed, **ctx.mutable_probed}
     if probed_to_persist:
         persist_asset_metadata(db, asset, probed=probed_to_persist)

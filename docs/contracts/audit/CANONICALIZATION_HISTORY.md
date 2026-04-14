@@ -4,6 +4,18 @@ Record of the governance audit and canonicalization pass performed on the RetroV
 
 ---
 
+## 2026-04-14 — Bootstrap A/V phase and pacing authority
+
+| Action | Detail |
+|--------|--------|
+| **Added** | `INV-PACING-SINGLE-AUTHORITY-001`, `INV-BOOTSTRAP-AV-PHASE-001`, `INV-FILL-AV-LEAD-CLAMP-001` under `docs/contracts/invariants/air/` |
+| **Updated** | `INV-BACKPRESSURE-SYMMETRIC` — removed incorrect global “≤ one frame” A/V delta claim; scoped to **INV-DECODE-GATE** capacity symmetry; cross-ref fill clamp |
+| **Updated** | `INV-AUDIO-CONTINUITY-NO-DROP` — **committed vs suppressed** samples; suppression is not a buffer drop |
+| **Index** | `docs/contracts/INVARIANTS.md` — new rows; backlog note for `INV-PACING-001` single-authority slice superseded |
+| **Resolved** | **Conflict A:** ms tolerance (`av_phase_tolerance_ms`, default 120) replaces frame-only global bound for **lead**; slot gate unchanged. **Conflict B:** pre-`Push` suppression ≠ post-`Push` continuity violation. **Conflict C:** dual estimators (`video_time_ms_fill` vs `video_time_ms_gate`) both canonical with separate obligations |
+
+---
+
 ## Audit Scope
 
 220+ rules inventoried across: root governance docs, `docs/contracts/`, `runtime/docs/contracts/`, `server/docs/contracts/`, individual invariant files, laws, and test matrices.

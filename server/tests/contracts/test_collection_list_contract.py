@@ -37,8 +37,8 @@ def _make_collection(
     )
 
 
-def _make_path_mapping(*, plex_path: str = "/media/tv", local_path: str = ""):
-    return SimpleNamespace(plex_path=plex_path, local_path=local_path)
+def _make_path_mapping(*, source_path: str = "/media/tv", retrovue_path: str = ""):
+    return SimpleNamespace(source_path=source_path, retrovue_path=retrovue_path)
 
 
 def _mock_db_session(mock_session):
@@ -294,7 +294,7 @@ def test_collection_list_contract__b6_returns_structured_json(cli_runner):
             _make_collection("4b2b05e7-d7d2-414a-a587-3f5df9b53f44"),
         ]
         pathmaps_q.filter.return_value.all.return_value = [
-            _make_path_mapping(local_path="/local/tv"),
+            _make_path_mapping(retrovue_path="/local/tv"),
         ]
 
         result = cli_runner.invoke(app, ["container", "list", "--json"])
@@ -315,6 +315,9 @@ def test_collection_list_contract__b6_returns_structured_json(cli_runner):
                 "mapping_pairs": ...,
             },
         )
+        assert payload[0]["mapping_pairs"] == [
+            {"source_path": "/media/tv", "retrovue_path": "/local/tv"}
+        ]
 
 
 def test_collection_list_contract__b7_output_is_deterministic(cli_runner):

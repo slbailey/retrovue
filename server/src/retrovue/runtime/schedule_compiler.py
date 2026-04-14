@@ -286,7 +286,22 @@ def _expand_to_compiled_segments(
             fixed_dur = elem.get("duration_sec")
             if pool_name and hasattr(resolver, "query"):
                 match = {"type": elem.get("type", "bumper")}
-                candidates = resolver.query(match)
+                raw_ids = resolver.query(match)
+                # AIR rejects segment_duration_ms<=0. Catalog rows often get
+                # duration_sec=0 when assets.duration_ms was never probed — and
+                # max_duration_sec would still admit 0s (0<=max). Drop them and
+                # keep query order so the next valid bumper wins deterministically.
+                candidates = [
+                    c for c in raw_ids
+                    if resolver.lookup(c).duration_sec > 0
+                ]
+                if len(raw_ids) > len(candidates):
+                    logger.warning(
+                        "INV-STRUCTURAL-DURATION-001: pool %r excluded %d asset(s) "
+                        "with duration_sec<=0 (set assets.duration_ms via media probe)",
+                        pool_name,
+                        len(raw_ids) - len(candidates),
+                    )
                 # Filter by max_duration_sec (pool selection, not truncation)
                 if max_dur is not None:
                     candidates = [
@@ -310,6 +325,15 @@ def _expand_to_compiled_segments(
                     ))
 
     for s in preroll_segs:
+        if s.duration_ms <= 0:
+            logger.warning(
+                "INV-STRUCTURAL-DURATION-001: omitting assembly preroll segment "
+                "type=%s asset_id=%s duration_ms=%s",
+                s.segment_type,
+                s.asset_id,
+                s.duration_ms,
+            )
+            continue
         # Resolve gain_db for structural assets
         seg_gain = 0.0
         if s.asset_id:

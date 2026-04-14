@@ -244,7 +244,9 @@ def apply_enrichers_to_collection(
             instance = cls(**(row.config or {})) if cls else None
             if instance is None:
                 continue
-            pipeline.append((priority, enricher_id, instance))
+            # Queue/runtime capability lookup is keyed by processor type
+            # (for example: "ffprobe"), not enricher_id UUID-like strings.
+            pipeline.append((priority, row.type, instance))
         except Exception:
             continue
     pipeline.sort(key=lambda t: (t[0], t[1]))
@@ -326,7 +328,7 @@ def apply_enrichers_to_collection(
                     pm_rows = db.query(_PM).filter(
                         _PM.container_id == container.uuid
                     ).all()
-                    pm_list = [(r.plex_path, r.local_path) for r in pm_rows]
+                    pm_list = [(r.source_path, r.retrovue_path) for r in pm_rows]
                     coll_locs = (container.config or {}).get("locations", [])
                     plex_client = None
                     src = getattr(container, "source", None)

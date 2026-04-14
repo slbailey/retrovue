@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from retrovue.runtime.clock import MasterClock
+from retrovue.runtime.schedule_types import ScheduledBlock, ScheduledSegment
 
 
 class MockGridScheduleService:
@@ -283,3 +284,39 @@ class MockAlternatingScheduleService:
             "metadata": {"phase": "mock_ab", "segment_seconds": self.segment_seconds},
         }
         return [segment]
+
+    def get_block_at(self, channel_id: str, utc_ms: int) -> "ScheduledBlock | None":
+        """Return the wall-clock block covering ``utc_ms`` (BlockPlan / ChannelManager).
+
+        Grid aligns to ``self._epoch`` (same basis as ``get_playout_plan_now``) with
+        one segment per ``segment_seconds`` window, alternating asset A and B.
+        """
+        with self._lock:
+            if channel_id != self.MOCK_AB_CHANNEL_ID or channel_id not in self._loaded_channels:
+                return None
+        seg_ms = int(round(self.segment_seconds * 1000.0))
+        if seg_ms <= 0:
+            return None
+        epoch_ms = int(self._epoch.timestamp() * 1000)
+        rel = utc_ms - epoch_ms
+        if rel < 0:
+            # Wall clock before Unix epoch — no block (harness uses real "now").
+            return None
+        segment_index = rel // seg_ms
+        block_start_ms = epoch_ms + segment_index * seg_ms
+        block_end_ms = block_start_ms + seg_ms
+        use_a = (segment_index % 2) == 0
+        asset_uri = self.asset_a_path if use_a else self.asset_b_path
+        block_id = f"mock-ab-{segment_index}"
+        seg = ScheduledSegment(
+            segment_type="content",
+            asset_uri=asset_uri,
+            asset_start_offset_ms=0,
+            segment_duration_ms=seg_ms,
+        )
+        return ScheduledBlock(
+            block_id=block_id,
+            start_utc_ms=block_start_ms,
+            end_utc_ms=block_end_ms,
+            segments=(seg,),
+        )

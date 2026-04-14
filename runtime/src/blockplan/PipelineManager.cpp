@@ -91,6 +91,30 @@ static constexpr int kMinSegmentSwapVideoFrames = 2;
 static constexpr int kMinSegmentPrepHeadroomMs = 250;
 static constexpr int kMinSegmentPrepHeadroomFrames = 8;
 
+int PipelineManager::ComputeVideoTimeMsGate(int video_depth_frames, RationalFps output_fps) {
+  if (output_fps.num <= 0 || output_fps.den <= 0) return 0;
+  const int vd = std::max(0, video_depth_frames);
+  return static_cast<int>((static_cast<int64_t>(vd) * 1000 * output_fps.den) / output_fps.num);
+}
+
+PipelineManager::BootstrapPhaseGateSnapshot PipelineManager::EvaluateBootstrapPhaseGate(
+    int audio_depth_ms,
+    int video_depth_frames,
+    RationalFps output_fps,
+    int audio_prime_floor_ms,
+    int bootstrap_audio_ceiling_ms,
+    int av_phase_tolerance_ms) {
+  BootstrapPhaseGateSnapshot s;
+  s.audio_depth_ms = audio_depth_ms;
+  s.video_time_ms_gate = ComputeVideoTimeMsGate(video_depth_frames, output_fps);
+  s.gate_av_delta_ms = audio_depth_ms - s.video_time_ms_gate;
+  s.audio_floor_met = audio_depth_ms >= audio_prime_floor_ms;
+  s.audio_ceiling_met = audio_depth_ms <= bootstrap_audio_ceiling_ms;
+  s.av_phase_met = std::abs(s.gate_av_delta_ms) <= av_phase_tolerance_ms;
+  s.phase_valid = s.audio_floor_met && s.audio_ceiling_met && s.av_phase_met;
+  return s;
+}
+
 // Task 2: Format fence_tick for logging — sentinel INT64_MAX prints as "UNARMED".
 static std::string FormatFenceTick(int64_t tick) {
   if (tick == std::numeric_limits<int64_t>::max()) return "UNARMED";
@@ -987,6 +1011,7 @@ void PipelineManager::Run() {
   video_buffer_ = std::make_unique<VideoLookaheadBuffer>(
       video_target_depth, video_low_water);
   video_buffer_->SetBufferLabel("LIVE_VIDEO_BUFFER");
+  video_buffer_->SetAvPhaseToleranceMs(options_.av_phase_tolerance_ms);
 
   // Persistent pad B chain: created once, always-ready for PAD seams (swap only).
   pad_b_producer_ = CreateProducer();
@@ -1263,6 +1288,14 @@ void PipelineManager::Run() {
 
       auto gate_start = std::chrono::steady_clock::now();
       int depth_ms = audio_buffer_->DepthMs();
+      const int kMaxBootstrapAudioMs = std::min(
+          audio_buffer_->HardCapMs(), audio_buffer_->HighWaterMs());
+      auto compute_video_ms = [&]() -> int {
+        return ComputeVideoTimeMsGate(video_buffer_->DepthFrames(), ctx_->fps);
+      };
+      auto compute_av_delta_ms = [&]() -> int {
+        return audio_buffer_->DepthMs() - compute_video_ms();
+      };
 
       // INV-AUDIO-PRIME-003: Bootstrap fill phase.
       // The fill thread parks when video_depth >= target_depth_frames_ (15).
@@ -1302,30 +1335,54 @@ void PipelineManager::Run() {
           bootstrap_epoch_ms);
 
       int gate_poll_count = 0;
-      while (depth_ms < kMinAudioPrimeMs) {
+      while (true) {
+        depth_ms = audio_buffer_->DepthMs();
+        const auto gate_snap = EvaluateBootstrapPhaseGate(
+            depth_ms,
+            video_buffer_->DepthFrames(),
+            ctx_->fps,
+            kMinAudioPrimeMs,
+            kMaxBootstrapAudioMs,
+            options_.av_phase_tolerance_ms);
+        if (gate_snap.phase_valid) break;
+
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - gate_start).count();
         if (elapsed >= kGateTimeoutMs) {
           { std::ostringstream oss;
             oss << "[PipelineManager] INV-AUDIO-PRIME-002: gate timeout"
+                << " invariant_id=INV-BOOTSTRAP-AV-PHASE-001"
+                << " reason=bootstrap_gate_timeout"
                 << " depth_ms=" << depth_ms
                 << " required=" << kMinAudioPrimeMs
+                << " max_bootstrap_audio_ms=" << kMaxBootstrapAudioMs
+                << " av_delta_ms=" << gate_snap.gate_av_delta_ms
+                << " max_av_delta_ms=" << options_.av_phase_tolerance_ms
                 << " elapsed_ms=" << elapsed
                 << " pushed=" << audio_buffer_->TotalSamplesPushed()
                 << " popped=" << audio_buffer_->TotalSamplesPopped()
                 << " video_depth=" << video_buffer_->DepthFrames();
             Logger::Warn(oss.str()); }
-          break;
+          {
+            std::lock_guard<std::mutex> lock(metrics_mutex_);
+            metrics_.air_bootstrap_phase_failure_total++;
+          }
+          // Hard contract: do not hand off a phase-invalid bootstrap state.
+          ctx_->stop_requested.store(true, std::memory_order_release);
+          return;
         }
         if (ctx_->stop_requested.load(std::memory_order_acquire)) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        depth_ms = audio_buffer_->DepthMs();
         gate_poll_count++;
         // Log every 100ms during gate wait
         if (gate_poll_count % 100 == 0) {
+          const int poll_delta_ms = compute_av_delta_ms();
           { std::ostringstream oss;
             oss << "[PipelineManager] GATE_POLL elapsed_ms=" << elapsed
                 << " audio_depth_ms=" << depth_ms
+                << " video_depth_ms=" << compute_video_ms()
+                << " av_delta_ms=" << poll_delta_ms
+                << " max_av_delta_ms=" << options_.av_phase_tolerance_ms
                 << " pushed=" << audio_buffer_->TotalSamplesPushed()
                 << " popped=" << audio_buffer_->TotalSamplesPopped()
                 << " video_depth=" << video_buffer_->DepthFrames()
@@ -1341,9 +1398,13 @@ void PipelineManager::Run() {
           std::chrono::steady_clock::now() - gate_start).count();
 
       { std::ostringstream oss;
+        const int end_audio_ms = audio_buffer_->DepthMs();
+        const int end_video_ms = compute_video_ms();
         oss << "[PipelineManager] INV-AUDIO-PRIME-003: bootstrap_end"
             << " bootstrap_epoch_ms=" << bootstrap_epoch_ms
-            << " audio_depth_ms=" << audio_buffer_->DepthMs()
+            << " audio_depth_ms=" << end_audio_ms
+            << " video_depth_ms=" << end_video_ms
+            << " av_delta_ms=" << (end_audio_ms - end_video_ms)
             << " video_depth=" << video_buffer_->DepthFrames()
             << " steady_target=" << video_buffer_->TargetDepthFrames()
             << " gate_ms=" << gate_elapsed;
