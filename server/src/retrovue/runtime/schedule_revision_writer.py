@@ -1,18 +1,26 @@
 """Helpers for writing ScheduleRevision + ScheduleItem from compiler output.
 
-Stage 2 dual-write authority:
-- Legacy ProgramLogDay storage may still exist during migration, but is non-authoritative.
-- Relational schedule rows are written from the SAME compiler output object.
+Time-splice authority (INV-SCHEDULE-SPLICE-001, INV-SCHEDULE-FUTURE-ONLY-MUTATION-001):
+- Preserves prefix P (items with start_time <= now) as copies into a new revision.
+- Replaces pending tail with S_new from program_blocks (all starts strictly > now).
+- Cold start (no active revision): persists all program_blocks (backfill-friendly).
+
+INV-SCHEDULE-TIME-IMMUTABILITY-001: SQL UPDATE/DELETE on sealed or live rows is blocked
+via engine-level guards (see _register_schedule_item_immutability_guards).
 """
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from copy import deepcopy
+from datetime import date, datetime, timedelta, timezone
 import logging
 import uuid as uuid_mod
 from typing import Any
 
+from sqlalchemy import event, select
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.sql.dml import Delete, Update
 
 from retrovue.domain.entities import (
     Channel,
@@ -25,9 +33,10 @@ from retrovue.runtime.clock import MasterClock
 logger = logging.getLogger(__name__)
 
 # LAW-CLOCK: Single time authority for all scheduling decisions.
-# Module-level instance — stateless, equivalent to datetime.now(UTC)
-# in production but conformant with the MasterClock protocol.
 _clock = MasterClock()
+
+# Engines that have schedule_item immutability listeners attached (id(engine)).
+_GUARDED_ENGINE_IDS: set[int] = set()
 
 
 def _parse_uuid(value: Any) -> uuid_mod.UUID | None:
@@ -44,20 +53,12 @@ def _parse_uuid(value: Any) -> uuid_mod.UUID | None:
 
 
 def _infer_content_type(block: dict[str, Any]) -> str:
-    """Infer ScheduleItem.content_type from V2 compiler block metadata.
-
-    V2 blocks carry a selector dict with fill_mode. Long-form single-asset
-    programs (fill_mode=single with episode_duration > 1h) are movies.
-    Selector rating filters also indicate movie content.
-
-    Unknowns default to "episode".
-    """
+    """Infer ScheduleItem.content_type from V2 compiler block metadata."""
     selector = block.get("selector")
     if isinstance(selector, dict):
         if any(k in selector for k in ("rating_include", "rating_exclude", "max_duration_sec")):
             return "movie"
 
-    # Long-form content heuristic: episode_duration > 1 hour = movie
     ep_dur = block.get("episode_duration_sec", 0)
     if ep_dur and ep_dur > 3600:
         return "movie"
@@ -76,6 +77,160 @@ def _infer_content_type(block: dict[str, Any]) -> str:
     return "episode"
 
 
+def _item_end_utc(start: datetime, duration_sec: int) -> datetime:
+    return start + timedelta(seconds=int(duration_sec))
+
+
+def _is_sealed(start: datetime, duration_sec: int, now: datetime) -> bool:
+    return _item_end_utc(start, duration_sec) <= now
+
+
+def _is_live(start: datetime, duration_sec: int, now: datetime) -> bool:
+    end = _item_end_utc(start, duration_sec)
+    return start <= now < end
+
+
+def _coerce_execute_params(multiparams: Any, params: Any) -> dict[str, Any]:
+    if multiparams:
+        if isinstance(multiparams, (list, tuple)) and len(multiparams) > 0:
+            first = multiparams[0]
+            if isinstance(first, dict):
+                return first
+        if isinstance(multiparams, dict):
+            return multiparams
+    if isinstance(params, dict):
+        return params
+    if params is not None:
+        try:
+            return dict(params)
+        except Exception:
+            pass
+    return {}
+
+
+def _guard_schedule_items_sql(
+    conn: Connection,
+    clauseelement: Any,
+    multiparams: Any,
+    params: Any,
+    execution_options: Any,
+) -> None:
+    """Block UPDATE/DELETE on sealed or live schedule_items (INV-SCHEDULE-TIME-IMMUTABILITY-001)."""
+    if not isinstance(clauseelement, (Update, Delete)):
+        return
+    tbl = clauseelement.table
+    if tbl is None or getattr(tbl, "name", None) != "schedule_items":
+        return
+    wc = clauseelement.whereclause
+    if wc is None:
+        raise ValueError(
+            "INV-SCHEDULE-TIME-IMMUTABILITY-001: schedule_items UPDATE/DELETE must "
+            "target specific rows (WHERE clause required)"
+        )
+    stmt = select(
+        ScheduleItem.id,
+        ScheduleItem.start_time,
+        ScheduleItem.duration_sec,
+    ).where(wc)
+    now = _clock.now_utc()
+    op = "update" if isinstance(clauseelement, Update) else "delete"
+
+    param_sets: list[dict[str, Any]]
+    if isinstance(multiparams, list) and multiparams:
+        param_sets = [x for x in multiparams if isinstance(x, dict)]
+        if not param_sets:
+            param_sets = [_coerce_execute_params(multiparams, params)]
+    else:
+        param_sets = [_coerce_execute_params(multiparams, params)]
+
+    for bind in param_sets:
+        try:
+            result = conn.execute(stmt, bind)
+        except Exception as exc:
+            raise ValueError(
+                "INV-SCHEDULE-TIME-IMMUTABILITY-001: failed to validate schedule_items "
+                f"mutation target: {exc}"
+            ) from exc
+        rows = result.fetchall()
+        for row in rows:
+            rid, st, dur = row[0], row[1], int(row[2])
+            if st.tzinfo is None:
+                st = st.replace(tzinfo=timezone.utc)
+            else:
+                st = st.astimezone(timezone.utc)
+            if _is_sealed(st, dur, now) or _is_live(st, dur, now):
+                raise ValueError(
+                    f"INV-SCHEDULE-TIME-IMMUTABILITY-001: cannot {op} sealed or live "
+                    f"schedule_item id={rid}"
+                )
+
+
+def _register_schedule_item_immutability_guards(engine: Engine) -> None:
+    eid = id(engine)
+    if eid in _GUARDED_ENGINE_IDS:
+        return
+    event.listen(engine, "before_execute", _guard_schedule_items_sql)
+    _GUARDED_ENGINE_IDS.add(eid)
+
+
+def _ensure_guards_for_session_bind(db: Any) -> None:
+    try:
+        bind = db.get_bind()
+        if isinstance(bind, Engine):
+            _register_schedule_item_immutability_guards(bind)
+    except Exception:
+        pass
+
+
+def _schedule_item_from_block(
+    revision_id: uuid_mod.UUID,
+    slot_index: int,
+    block: dict[str, Any],
+) -> ScheduleItem:
+    start_at = datetime.fromisoformat(block["start_at"])
+    if start_at.tzinfo is None:
+        start_at = start_at.replace(tzinfo=timezone.utc)
+    else:
+        start_at = start_at.astimezone(timezone.utc)
+    return ScheduleItem(
+        schedule_revision_id=revision_id,
+        start_time=start_at,
+        duration_sec=int(block["slot_duration_sec"]),
+        asset_id=_parse_uuid(block.get("asset_id")),
+        container_id=_parse_uuid(block.get("collection")),
+        content_type=_infer_content_type(block),
+        window_uuid=_parse_uuid(block.get("window_uuid")),
+        slot_index=slot_index,
+        metadata_={
+            "title": block.get("title"),
+            "asset_id_raw": block.get("asset_id"),
+            "collection_raw": block.get("collection"),
+            "selector": block.get("selector"),
+            "episode_duration_sec": block.get("episode_duration_sec"),
+            "compiled_segments": block.get("compiled_segments"),
+        },
+    )
+
+
+def _copy_preserved_item(
+    src: ScheduleItem,
+    revision_id: uuid_mod.UUID,
+    slot_index: int,
+) -> ScheduleItem:
+    meta = deepcopy(src.metadata_) if src.metadata_ is not None else None
+    return ScheduleItem(
+        schedule_revision_id=revision_id,
+        start_time=src.start_time,
+        duration_sec=int(src.duration_sec),
+        asset_id=src.asset_id,
+        container_id=src.container_id,
+        content_type=src.content_type,
+        window_uuid=src.window_uuid,
+        slot_index=slot_index,
+        metadata_=meta,
+    )
+
+
 def write_active_revision_from_compiled_schedule(
     db,
     *,
@@ -84,27 +239,18 @@ def write_active_revision_from_compiled_schedule(
     schedule: dict[str, Any],
     created_by: str = "dsl_schedule_service",
 ) -> bool:
-    """Write relational schedule rows from compiled schedule output.
+    """Write relational schedule rows from compiled schedule output (time-splice).
 
-    INV-TIMELINE-BOUNDARY-IMMUTABLE-001: The wall-clock time at invocation
-    defines an immutable boundary.  If an active revision exists and
-    contains ANY ScheduleItem with start_time before the boundary, the
-    write is refused — those items represent committed (past or in-flight)
-    timeline that MUST NOT be modified.
+    Raises:
+        ValueError: empty program_blocks, invalid S_new times, or splice validation failure.
 
-    INV-TIMELINE-APPEND-ONLY-001: A revision whose items are ALL in the
-    future (start_time >= boundary) MAY be superseded — the timeline for
-    that day has not yet committed to the viewer.
+    Returns:
+        True when relational rows were written.
 
-    Lifecycle (when write is permitted):
-      1) supersede existing future-only revision (if any)
-      2) insert new active ScheduleRevision
-      3) insert deterministic ScheduleItems
-      4) upsert ChannelActiveRevision pointer
-
-    Returns True when relational rows were written, False when the write
-    was skipped.
+    Unknown channel: returns False (backward compatible with callers that skip silently).
     """
+    _ensure_guards_for_session_bind(db)
+
     channel = db.query(Channel).filter(Channel.slug == channel_slug).first()
     if channel is None:
         logger.warning(
@@ -113,55 +259,58 @@ def write_active_revision_from_compiled_schedule(
         )
         return False
 
-    # INV-TIMELINE-BOUNDARY-IMMUTABLE-001: Capture the immutable boundary
-    # at the moment this write is attempted.  Everything before this time
-    # is committed history.
-    # LAW-CLOCK: MasterClock is the single time authority.
-    boundary = _clock.now_utc()
+    blocks = schedule.get("program_blocks", [])
+    if not blocks:
+        raise ValueError(
+            "INV-PERSISTENCE-GUARD-NONEMPTY-001: program_blocks must not be empty "
+            f"for {channel_slug}/{broadcast_day}"
+        )
 
-    # INV-TIMELINE-BOUNDARY-IMMUTABLE-001: Check whether the existing
-    # active revision (if any) has committed items.
-    existing_active = db.query(ScheduleRevision).filter(
+    now = _clock.now_utc()
+
+    _rev_q = db.query(ScheduleRevision).filter(
         ScheduleRevision.channel_id == channel.id,
         ScheduleRevision.broadcast_day == broadcast_day,
         ScheduleRevision.status == "active",
-    ).first()
+    )
+    if hasattr(_rev_q, "with_for_update"):
+        _rev_q = _rev_q.with_for_update()
+    existing_active = _rev_q.first()
 
+    # Parse and normalize all incoming block starts
+    parsed_blocks: list[tuple[datetime, dict[str, Any]]] = []
+    for block in blocks:
+        start_at = datetime.fromisoformat(block["start_at"])
+        if start_at.tzinfo is None:
+            start_at = start_at.replace(tzinfo=timezone.utc)
+        else:
+            start_at = start_at.astimezone(timezone.utc)
+        parsed_blocks.append((start_at, block))
+
+    if existing_active is None:
+        # Cold start: compiler is authoritative for the requested broadcast_day.
+        # Blocks may lie entirely in the past relative to wall clock (backfill / late materialize).
+        pass
+    else:
+        # Splice: S_new must be strictly future-only (pending tail)
+        for start_at, _block in parsed_blocks:
+            if start_at <= now:
+                raise ValueError(
+                    "INV-SCHEDULE-FUTURE-ONLY-MUTATION-001: S_new items must have "
+                    f"start_time > now (got start={start_at.isoformat()}, now={now.isoformat()})"
+                )
+
+    old_items_snapshot: list[ScheduleItem] = []
     if existing_active is not None:
-        has_committed = db.query(ScheduleItem).filter(
-            ScheduleItem.schedule_revision_id == existing_active.id,
-            ScheduleItem.start_time < boundary,
-        ).first()
-
-        if has_committed is not None:
-            logger.info(
-                "INV-TIMELINE-BOUNDARY-IMMUTABLE-001: refusing to modify "
-                "committed timeline — revision %s for %s/%s has items "
-                "before boundary %s (created_by=%s, activated_at=%s)",
-                existing_active.id,
-                channel_slug,
-                broadcast_day,
-                boundary.isoformat(),
-                existing_active.created_by,
-                existing_active.activated_at,
-            )
-            return False
-
-    # INV-PERSISTENCE-GUARD-NONEMPTY-001: Reject empty revisions for
-    # programmed days BEFORE writing.  Zero blocks after overlap
-    # push-forward is a carry-in computation error, not valid output.
-    blocks = schedule.get("program_blocks", [])
-    if not blocks:
-        logger.warning(
-            "INV-PERSISTENCE-GUARD-NONEMPTY-001: refusing to persist "
-            "empty revision for %s/%s (0 program_blocks). "
-            "This is a compile failure, not a valid schedule.",
-            channel_slug, broadcast_day,
+        old_items_snapshot = (
+            db.query(ScheduleItem)
+            .filter(ScheduleItem.schedule_revision_id == existing_active.id)
+            .order_by(ScheduleItem.slot_index)
+            .all()
         )
-        return False
 
-    # Supersede ALL active revisions for this channel+day via bulk update.
-    # This is idempotent — if none exist, zero rows are affected.
+    # Supersede prior active revision for this channel+day
+    boundary = now
     db.query(ScheduleRevision).filter(
         ScheduleRevision.channel_id == channel.id,
         ScheduleRevision.broadcast_day == broadcast_day,
@@ -172,13 +321,13 @@ def write_active_revision_from_compiled_schedule(
     )
     db.flush()
 
-    now = _clock.now_utc()
+    activated_at = _clock.now_utc()
 
     revision = ScheduleRevision(
         channel_id=channel.id,
         broadcast_day=broadcast_day,
         status="active",
-        activated_at=now,
+        activated_at=activated_at,
         created_by=created_by,
         metadata_={
             "source": schedule.get("source"),
@@ -187,43 +336,45 @@ def write_active_revision_from_compiled_schedule(
         },
     )
     db.add(revision)
-    db.flush()  # acquire revision.id for FK rows
+    db.flush()
 
-    blocks = schedule.get("program_blocks", [])
-    for slot_index, block in enumerate(blocks):
-        start_at = datetime.fromisoformat(block["start_at"])
-        item = ScheduleItem(
+    slot = 0
+    if existing_active is not None:
+        prefix = [it for it in old_items_snapshot if it.start_time <= now]
+        for src in prefix:
+            db.add(_copy_preserved_item(src, revision.id, slot))
+            slot += 1
+
+    for start_at, block in parsed_blocks:
+        db.add(_schedule_item_from_block(revision.id, slot, block))
+        slot += 1
+
+    upsert_stmt = (
+        pg_insert(ChannelActiveRevision.__table__)
+        .values(
+            channel_id=channel.id,
+            broadcast_day=broadcast_day,
             schedule_revision_id=revision.id,
-            start_time=start_at,
-            duration_sec=int(block["slot_duration_sec"]),
-            asset_id=_parse_uuid(block.get("asset_id")),
-            container_id=_parse_uuid(block.get("collection")),
-            content_type=_infer_content_type(block),
-            window_uuid=_parse_uuid(block.get("window_uuid")),
-            slot_index=slot_index,
-            metadata_={
-                "title": block.get("title"),
-                "asset_id_raw": block.get("asset_id"),
-                "collection_raw": block.get("collection"),
-                "selector": block.get("selector"),
-                "episode_duration_sec": block.get("episode_duration_sec"),
-                "compiled_segments": block.get("compiled_segments"),
+            updated_at=activated_at,
+        )
+        .on_conflict_do_update(
+            index_elements=["channel_id", "broadcast_day"],
+            set_={
+                "schedule_revision_id": revision.id,
+                "updated_at": activated_at,
             },
         )
-        db.add(item)
-
-    upsert_stmt = pg_insert(ChannelActiveRevision.__table__).values(
-        channel_id=channel.id,
-        broadcast_day=broadcast_day,
-        schedule_revision_id=revision.id,
-        updated_at=now,
-    ).on_conflict_do_update(
-        index_elements=["channel_id", "broadcast_day"],
-        set_={
-            "schedule_revision_id": revision.id,
-            "updated_at": now,
-        },
     )
     db.execute(upsert_stmt)
 
     return True
+
+
+# Register immutability guards on the default app engine at import (production).
+try:
+    from retrovue.infra import db as _db_mod
+
+    _register_schedule_item_immutability_guards(_db_mod.engine)
+except Exception:
+    # Tests or minimal imports may not have DB configured yet.
+    pass

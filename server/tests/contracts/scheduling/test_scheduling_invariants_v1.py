@@ -702,9 +702,33 @@ class TestInvScheduleFutureOnlyMutation001:
         try:
             ch = _make_channel(pg_session, slug)
             clock = ControllableMasterClock(epoch=_ANCHOR)
-            boundary = clock.now_utc()
+            # Cold publish: one block entirely in the future so we can splice next.
+            seed = _schedule_block(_ANCHOR + timedelta(hours=2), 1800, title="seed")
+            sched0 = {
+                "version": "program-schedule.v2",
+                "hash": "h0",
+                "program_blocks": [seed],
+            }
+            with patch(
+                "retrovue.runtime.schedule_revision_writer._clock", clock
+            ):
+                assert (
+                    write_active_revision_from_compiled_schedule(
+                        pg_session,
+                        channel_slug=slug,
+                        broadcast_day=_BDAY,
+                        schedule=sched0,
+                        created_by="test",
+                    )
+                    is True
+                )
+            pg_session.commit()
+
+            # Splice with S_new containing only a block that starts at or before now → reject.
+            clock.advance(3600.0)  # now = 13:00; seed still pending (starts 14:00)
+            assert clock.now_utc() < datetime.fromisoformat(seed["start_at"])
             past_block = _schedule_block(
-                boundary - timedelta(minutes=1), 600, title="past_in_snew"
+                clock.now_utc() - timedelta(minutes=1), 600, title="past_in_snew"
             )
             sched = {
                 "version": "program-schedule.v2",
@@ -714,32 +738,15 @@ class TestInvScheduleFutureOnlyMutation001:
             with patch(
                 "retrovue.runtime.schedule_revision_writer._clock", clock
             ):
-                ok = write_active_revision_from_compiled_schedule(
-                    pg_session,
-                    channel_slug=slug,
-                    broadcast_day=_BDAY,
-                    schedule=sched,
-                    created_by="test",
-                )
-            assert ok is True
-            pg_session.commit()
-            rev = (
-                pg_session.query(ScheduleRevision)
-                .filter(
-                    ScheduleRevision.channel_id == ch.id,
-                    ScheduleRevision.status == "active",
-                )
-                .one()
-            )
-            it = (
-                pg_session.query(ScheduleItem)
-                .filter(ScheduleItem.schedule_revision_id == rev.id)
-                .one()
-            )
-            assert it.start_time > boundary, (
-                "INV-SCHEDULE-FUTURE-ONLY-MUTATION-001: S_new must not persist "
-                "items with start_time <= boundary"
-            )
+                with pytest.raises(ValueError, match="INV-SCHEDULE-FUTURE-ONLY-MUTATION-001"):
+                    write_active_revision_from_compiled_schedule(
+                        pg_session,
+                        channel_slug=slug,
+                        broadcast_day=_BDAY,
+                        schedule=sched,
+                        created_by="test",
+                    )
+            pg_session.rollback()
         finally:
             _cleanup_channel_slug(pg_session, slug)
 

@@ -96,18 +96,13 @@ class TestRevisionNonemptyProgrammed:
     """Empty revisions must not be persisted for programmed days."""
 
     def test_empty_program_blocks_still_creates_revision(self):
-        """CURRENT BEHAVIOR (violates contract): The writer accepts an empty
-        program_blocks list and creates a revision with zero items.
-
-        This test documents the violation. The contract requires the writer
-        to reject this.
-        """
+        """INV-REVISION-NONEMPTY-PROGRAMMED-001: empty program_blocks must not
+        produce a persisted revision."""
         channel = Channel(
             id=uuid_mod.uuid4(), slug="test-ch", title="Test",
         )
         db = _FakeDB(channel=channel)
 
-        # Schedule with zero program blocks (the bug scenario)
         empty_schedule = {
             "program_blocks": [],
             "source": {"compiler_version": "test"},
@@ -119,29 +114,18 @@ class TestRevisionNonemptyProgrammed:
             mock_clock.now_utc.return_value = datetime(
                 2026, 4, 1, 12, 0, tzinfo=timezone.utc,
             )
-            result = write_active_revision_from_compiled_schedule(
-                db,
-                channel_slug="test-ch",
-                broadcast_day=date(2026, 4, 1),
-                schedule=empty_schedule,
-                created_by="test",
-            )
+            with pytest.raises(ValueError, match="INV-PERSISTENCE-GUARD-NONEMPTY"):
+                write_active_revision_from_compiled_schedule(
+                    db,
+                    channel_slug="test-ch",
+                    broadcast_day=date(2026, 4, 1),
+                    schedule=empty_schedule,
+                    created_by="test",
+                )
 
         revisions = [x for x in db.added if isinstance(x, ScheduleRevision)]
         items = [x for x in db.added if isinstance(x, ScheduleItem)]
-
-        # CURRENT: writer creates a revision with zero items (BUG)
-        # CONTRACT: writer MUST reject empty schedules for programmed days
-        #
-        # When the fix is applied, change this test to:
-        #   assert result is False  (write rejected)
-        #   assert len(revisions) == 0  (no revision created)
-        if len(revisions) > 0 and len(items) == 0:
-            pytest.fail(
-                "INV-REVISION-NONEMPTY-PROGRAMMED-001 VIOLATION: "
-                f"Revision created with {len(items)} items on a programmed day. "
-                "An active revision for a programmed day MUST contain >= 1 item."
-            )
+        assert len(revisions) == 0 and len(items) == 0
 
     def test_nonempty_schedule_creates_revision_with_items(self):
         """Normal case: non-empty schedule creates revision with items."""
