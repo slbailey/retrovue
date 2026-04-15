@@ -13,9 +13,6 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from retrovue.config.testing import TEST_RESOLVED_CONFIG
 from retrovue.runtime.dsl_schedule_service import DslScheduleService
 
 
@@ -211,6 +208,84 @@ class TestInvEpgReadsCanonical001:
         assert result is not None
         assert len(result) == 24
         assert result[0]["asset_id"] == "asset.movie_1"
+        assert result[0].get("schedule_revision_id") == "1"
+
+    # Tier: 2 | Scheduling logic invariant
+    def test_get_canonical_epg_returns_empty_list_when_window_has_no_overlap(self):
+        """Valid canonical revision with items, but none overlap the window → []."""
+        window_start = datetime(2026, 3, 1, 6, 0, tzinfo=UTC)
+        window_end = datetime(2026, 3, 2, 6, 0, tzinfo=UTC)
+
+        rev1 = MagicMock()
+        rev1.id = 1
+        rev1.broadcast_day = date(2026, 3, 1)
+
+        far_item = _make_schedule_item(
+            "Far Future",
+            datetime(2026, 3, 5, 6, 0, tzinfo=UTC),
+            3600,
+            asset_id="asset.far",
+            revision_id=1,
+        )
+
+        mock_db = _mock_db_for_epg(
+            channel_id=1,
+            items=[far_item],
+            revisions=[rev1],
+        )
+
+        with patch("retrovue.runtime.dsl_schedule_service.session") as mock_session:
+            mock_session.return_value.__enter__ = MagicMock(return_value=mock_db)
+            mock_session.return_value.__exit__ = MagicMock(return_value=False)
+
+            result = DslScheduleService.get_canonical_epg(
+                "showtime-cinema", window_start, window_end
+            )
+
+        assert result == []
+
+    # Tier: 2 | Scheduling logic invariant
+    def test_build_epg_payload_distinguishes_unavailable_empty_and_ok(self):
+        """HTTP EPG payload must tag channels: unavailable vs empty window vs populated."""
+        from retrovue.epg.read_path import build_epg_payload
+
+        chs = [
+            {
+                "channel_id": "a",
+                "name": "A",
+                "schedule_config": {"channel_tz": "UTC", "broadcast_day_start_hour": 6},
+            },
+            {
+                "channel_id": "b",
+                "name": "B",
+                "schedule_config": {"channel_tz": "UTC", "broadcast_day_start_hour": 6},
+            },
+            {
+                "channel_id": "c",
+                "name": "C",
+                "schedule_config": {"channel_tz": "UTC", "broadcast_day_start_hour": 6},
+            },
+        ]
+        block = {
+            "start_at": "2026-03-01T12:00:00+00:00",
+            "slot_duration_sec": 3600,
+            "asset_id": "asset.x",
+            "schedule_revision_id": "42",
+        }
+        resolver = MagicMock()
+        resolver._catalog = []
+
+        with patch(
+            "retrovue.epg.read_path.DslScheduleService.get_canonical_epg",
+            side_effect=[None, [], [block]],
+        ):
+            payload = build_epg_payload(chs, "2026-03-01", resolver)
+
+        assert payload["channel_schedule"][0]["schedule_status"] == "unavailable"
+        assert payload["channel_schedule"][1]["schedule_status"] == "empty_window"
+        assert payload["channel_schedule"][2]["schedule_status"] == "ok"
+        assert len(payload["entries"]) == 1
+        assert payload["entries"][0]["schedule_revision_id"] == "42"
 
     # Tier: 2 | Scheduling logic invariant
     def test_get_canonical_epg_returns_none_when_not_cached(self):

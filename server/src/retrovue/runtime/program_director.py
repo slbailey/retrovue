@@ -1732,6 +1732,14 @@ class ProgramDirector:
                     if fanout:
                         break
                 if not fanout:
+                    prod = getattr(manager, "active_producer", None)
+                    self._logger.error(
+                        "[HTTP] TS fanout_timeout channel=%s session_id=%s "
+                        "active_producer=%s (no ChannelStream after 10s)",
+                        channel_id,
+                        session_id,
+                        "set" if prod is not None else "none",
+                    )
                     _run_stream_cleanup(channel_id, session_id, manager, None, reason="fanout_timeout")
                     return Response(
                         content="Channel not ready",
@@ -1971,103 +1979,21 @@ class ProgramDirector:
             INV-EPG-READS-CANONICAL-SCHEDULE-001: reads from canonical relational
             schedule data, does NOT call compile_schedule() directly.
             """
-            from zoneinfo import ZoneInfo
-            from retrovue.runtime.dsl_schedule_service import DslScheduleService
+            from retrovue.epg.read_path import build_epg_payload, resolve_epg_broadcast_day
             from retrovue.runtime.catalog_resolver import CatalogAssetResolver
             from retrovue.infra.uow import session
-
-            if date is None:
-                now = datetime.now(ZoneInfo("America/New_York"))
-                if now.hour < 6:
-                    broadcast_day = (now - timedelta(days=1)).strftime("%Y-%m-%d")
-                else:
-                    broadcast_day = now.strftime("%Y-%m-%d")
-            else:
-                broadcast_day = date
 
             channels = self._load_channels_list()
 
             if channel:
                 channels = [c for c in channels if c["channel_id"] == channel]
 
-            # Compute broadcast day window for range-based EPG lookup
-            from datetime import date as _date_type
-            _bd = _date_type.fromisoformat(broadcast_day)
-            _programming_day_start = 6  # 06:00 local
-            _tz = ZoneInfo("America/New_York")
-            window_start = datetime(_bd.year, _bd.month, _bd.day, _programming_day_start, 0, tzinfo=_tz)
-            window_end = window_start + timedelta(hours=24)
+            broadcast_day = resolve_epg_broadcast_day(channels, date)
 
-            # Build resolver once for metadata lookups
             with session() as db:
-                _shared_resolver = CatalogAssetResolver(db)
+                shared_resolver = CatalogAssetResolver(db)
 
-            all_entries = []
-            for ch in channels:
-                try:
-                    # INV-EPG-READS-CANONICAL-SCHEDULE-001: read canonical relational schedule
-                    blocks = DslScheduleService.get_canonical_epg(
-                        ch["channel_id"], window_start, window_end
-                    )
-                    if blocks is None:
-                        all_entries.append({
-                            "channel_id": ch["channel_id"],
-                            "channel_name": ch["name"],
-                            "error": "Schedule not yet compiled",
-                        })
-                        continue
-
-                    from retrovue.epg.duration import epg_display_duration
-
-                    for block in blocks:
-                        asset_id = block["asset_id"]
-                        series_title = block.get("title", "")
-                        season_number = None
-                        episode_number = None
-
-                        description = ""
-                        episode_title = ""
-                        for cat_entry in _shared_resolver._catalog:
-                            if cat_entry.canonical_id == asset_id:
-                                series_title = cat_entry.series_title or series_title
-                                season_number = cat_entry.season
-                                episode_number = cat_entry.episode
-                                description = getattr(cat_entry, "description", "") or ""
-                                episode_title = getattr(cat_entry, "title", "") or ""
-                                break
-
-                        start_dt = datetime.fromisoformat(block["start_at"])
-                        slot_sec = block["slot_duration_sec"]
-                        ep_sec = block.get("episode_duration_sec", block["slot_duration_sec"])
-                        end_dt = start_dt + timedelta(seconds=slot_sec)
-
-                        all_entries.append({
-                            "channel_id": ch["channel_id"],
-                            "channel_name": ch["name"],
-                            "start_time": start_dt.isoformat(),
-                            "end_time": end_dt.isoformat(),
-                            "title": (series_title or episode_title or "Untitled"),
-                            "episode_title": episode_title,
-                            "season": season_number,
-                            "episode": episode_number,
-                            "description": description,
-                            "duration_minutes": round(ep_sec / 60, 1),
-                            "slot_minutes": round(slot_sec / 60, 1),
-                            "display_duration": epg_display_duration(
-                                start_dt, end_dt, slot_sec, ep_sec,
-                                is_movie=season_number is None,
-                            ),
-                            "asset_id": str(asset_id) if asset_id else None,
-                        })
-                except Exception as e:
-                    self._logger.error("EPG error for %s: %s", ch["channel_id"], e, exc_info=True)
-                    all_entries.append({
-                        "channel_id": ch["channel_id"],
-                        "channel_name": ch["name"],
-                        "error": str(e),
-                    })
-
-            return {"broadcast_day": broadcast_day, "entries": all_entries}
+            return build_epg_payload(channels, broadcast_day, shared_resolver)
 
 
         @self.fastapi_app.get("/channel/{channel_id}/status")

@@ -539,16 +539,44 @@ async function loadDate(dateStr) {
 }
 
 function renderGuide(data) {
-  const entries = data.entries.filter(e => !e.error);
-  if (!entries.length) {
+  const programEntries = (data.entries || []).filter(e => !e.error);
+  const cs = data.channel_schedule;
+  let chIds;
+  const channels = {};
+  if (cs && cs.length) {
+    chIds = [];
+    cs.forEach(row => {
+      chIds.push(row.channel_id);
+      channels[row.channel_id] = {
+        name: row.channel_name,
+        entries: [],
+        status: row.schedule_status || 'ok',
+      };
+    });
+    programEntries.forEach(e => {
+      if (!channels[e.channel_id]) {
+        chIds.push(e.channel_id);
+        channels[e.channel_id] = { name: e.channel_name, entries: [], status: 'ok' };
+      }
+      channels[e.channel_id].entries.push(e);
+    });
+  } else {
+    if (!programEntries.length) {
+      document.getElementById('loading').innerHTML = '<span>No program data available.</span>';
+      return;
+    }
+    programEntries.forEach(e => {
+      if (!channels[e.channel_id]) {
+        channels[e.channel_id] = { name: e.channel_name, entries: [], status: 'ok' };
+      }
+      channels[e.channel_id].entries.push(e);
+    });
+    chIds = Object.keys(channels).sort();
+  }
+  if (!chIds || !chIds.length) {
     document.getElementById('loading').innerHTML = '<span>No program data available.</span>';
     return;
   }
-  const channels = {};
-  entries.forEach(e => {
-    if (!channels[e.channel_id]) channels[e.channel_id] = { name: e.channel_name, entries: [] };
-    channels[e.channel_id].entries.push(e);
-  });
   const dayStart = new Date(currentDate + 'T06:00:00');
   const dayEnd = new Date(dayStart);
   dayEnd.setDate(dayEnd.getDate() + 1);
@@ -571,7 +599,6 @@ function renderGuide(data) {
   }
   const chNamesEl = document.getElementById('channelNames');
   chNamesEl.innerHTML = '';
-  const chIds = Object.keys(channels).sort();
   chIds.forEach(chId => {
     const div = document.createElement('div');
     div.className = 'ch-name';
@@ -591,7 +618,32 @@ function renderGuide(data) {
     const row = document.createElement('div');
     row.className = 'channel-row';
     row.style.width = (totalSlots * 200) + 'px';
-    channels[chId].entries.forEach(entry => {
+    const info = channels[chId];
+    if (info.status === 'unavailable') {
+      const msg = document.createElement('div');
+      msg.className = 'program-block';
+      msg.style.left = '4px';
+      msg.style.width = Math.max(totalSlots * 200 - 8, 120) + 'px';
+      msg.style.background = 'rgba(120,40,40,0.35)';
+      msg.style.color = '#e0e0e0';
+      msg.textContent = 'Schedule unavailable';
+      row.appendChild(msg);
+      gridBody.appendChild(row);
+      return;
+    }
+    if (info.status === 'empty_window' && (!info.entries || !info.entries.length)) {
+      const msg = document.createElement('div');
+      msg.className = 'program-block';
+      msg.style.left = '4px';
+      msg.style.width = Math.max(totalSlots * 200 - 8, 120) + 'px';
+      msg.style.background = 'rgba(60,60,80,0.45)';
+      msg.style.color = '#ccc';
+      msg.textContent = 'No programs in this window';
+      row.appendChild(msg);
+      gridBody.appendChild(row);
+      return;
+    }
+    info.entries.forEach(entry => {
       const start = new Date(entry.start_time);
       const end = new Date(entry.end_time);
       if (end <= dayStart || start >= dayEnd) return;
