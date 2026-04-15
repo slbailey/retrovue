@@ -21,6 +21,8 @@ This directory is the **only canonical source of runtime guarantees** for playou
   - `docs/contracts/plex/PLEX_COMPATIBILITY_INTERFACE.md` — Plex / HDHomeRun integration (tuner discovery, lineup, guide, artwork)
   - `docs/contracts/xmltv/XMLTV_EXPORT_CONTRACT.md` — XMLTV export (EPG → XMLTV, schedule correctness, lineup consistency)
   - `docs/contracts/epg/EPG_GENERATION_CONTRACT.md` — EPG generation (Schedule → EPG timeline, continuity, determinism)
+- Scheduling (time-splice model — MasterClock, single active revision, compiler suffix):
+  - `docs/contracts/scheduling/` — [README](scheduling/README.md): `SCHEDULING-CONTRACT-v1.1.md`, `SCHEDULE-PERSISTENCE-DESIGN-v1.0.md`, `SCHEDULE-COMPILER-RUNTIME-INTEGRATION-v1.0.md`
 - Domain authority documents (glossary, pipeline model, authority vocabulary):
   - `docs/domains/` — Domain-level reference documents (HorizonManager, ScheduleManager, PlaylistEventExecution, etc.)
 ## Test labels: contract (CI) vs soak (nightly)
