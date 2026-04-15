@@ -409,6 +409,7 @@ Canonical contract: [schedule_block_program_reference.md](schedule_block_program
 | INV-TIMELINE-CONTINUITY-001 | [invariants/core/scheduling/INV-TIMELINE-CONTINUITY-001.md](invariants/core/scheduling/INV-TIMELINE-CONTINUITY-001.md) | LAW-GRID, LAW-LIVENESS, LAW-TIMELINE |
 | INV-TIMELINE-EPG-PLAYOUT-AGREE-001 | [invariants/core/scheduling/INV-TIMELINE-EPG-PLAYOUT-AGREE-001.md](invariants/core/scheduling/INV-TIMELINE-EPG-PLAYOUT-AGREE-001.md) | LAW-CONTENT-AUTHORITY, LAW-DERIVATION |
 | INV-TIMELINE-BOUNDARY-IMMUTABLE-001 | [invariants/core/scheduling/INV-TIMELINE-BOUNDARY-IMMUTABLE-001.md](invariants/core/scheduling/INV-TIMELINE-BOUNDARY-IMMUTABLE-001.md) | LAW-IMMUTABILITY, LAW-CONTENT-AUTHORITY, LAW-TIMELINE |
+| INV-SCHEDULE-REVISION-MONOTONICITY-001 | [invariants/core/scheduling/INV-SCHEDULE-REVISION-MONOTONICITY-001.md](invariants/core/scheduling/INV-SCHEDULE-REVISION-MONOTONICITY-001.md) | LAW-DERIVATION, LAW-CONTENT-AUTHORITY |
 
 ### Scheduling — Schedule Constraints
 

@@ -1,6 +1,6 @@
 # Test Matrix: Scheduling Constitution
 
-**Scope:** Deterministic-clock validation of all 6 constitutional Laws and 42 Invariants governing the RetroVue scheduling pipeline.
+**Scope:** Deterministic-clock validation of all 6 constitutional Laws and 43 Invariants governing the RetroVue scheduling pipeline.
 
 **Authoritative inputs:**
 - `docs/contracts/laws/LAW-*.md` (6 laws)
@@ -2222,6 +2222,8 @@ The following domain tables group tests by functional area. Each test is classif
 | TL-EPG-HC-006 | INV-EPG-HORIZON-COVERAGE-001 | LAW-DERIVATION, LAW-LIVENESS | EPG horizon extends as scheduler daemon compiles future days |
 | TL-BOUND-001 | INV-TIMELINE-BOUNDARY-IMMUTABLE-001 | LAW-IMMUTABILITY | Timeline entries with start < T₍boundary₎ unchanged after scheduling operation |
 | TL-BOUND-002 | INV-TIMELINE-BOUNDARY-IMMUTABLE-001 | LAW-IMMUTABILITY | Boundary established before scheduling operation begins |
+| REV-MONO-001 | INV-SCHEDULE-REVISION-MONOTONICITY-001 | LAW-DERIVATION | After observing R_new active, no read treats superseded R_old as active for pending editorial time |
+| REV-MONO-002 | INV-SCHEDULE-REVISION-MONOTONICITY-001 | LAW-DERIVATION, LAW-CONTENT-AUTHORITY | Timeline cache for schedule includes revision identity or is invalidated on publish |
 | TL-JIP-001 | INV-TIMELINE-RESTART-IDENTICAL-001, INV-TIMELINE-LONGFORM-INVIOLATE-001 | LAW-CONTENT-AUTHORITY, LAW-TIMELINE | JIP offset (T₂ - Tₛ) consistent across restart for same program |
 
 **Scenario document:** `docs/contracts/test-scenarios/TIMELINE-INVARIANT-TEST-SCENARIOS.md`
