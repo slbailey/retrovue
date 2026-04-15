@@ -220,6 +220,18 @@ class PipelineManager : public IPlayoutExecutionEngine {
                                      int64_t in_num, int64_t in_den,
                                      int64_t out_num, int64_t out_den);
 
+  // INV-AUDIO-CLOCK-AUTHORITY-001:
+  // Compute cumulative expected audio samples from OutputClock elapsed time.
+  static int64_t ComputeExpectedAudioSamplesFromOutputClockNs(
+      int64_t output_clock_elapsed_ns,
+      int sample_rate);
+
+  // INV-AUDIO-CLOCK-AUTHORITY-001:
+  // Compute due samples for current tick from cumulative accounting.
+  static int ComputeDueAudioSamples(
+      int64_t expected_audio_samples,
+      int64_t actual_audio_samples_emitted);
+
   // INV-BOOTSTRAP-AV-PHASE-001 — pure gate math (single source with Run() bootstrap poll).
   static int ComputeVideoTimeMsGate(int video_depth_frames, RationalFps output_fps);
 

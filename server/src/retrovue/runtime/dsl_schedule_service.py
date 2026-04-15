@@ -23,10 +23,11 @@ from concurrent.futures.thread import _worker, _threads_queues
 import uuid
 from datetime import datetime, timezone, timedelta, date
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from retrovue.runtime.schedule_types import ScheduledBlock, ScheduledSegment
 from retrovue.runtime.clock import MasterClock
+from retrovue.runtime.broadcast_day import derive_broadcast_day_for_utc
 from retrovue.runtime.schedule_compiler import compile_schedule, parse_dsl
 from retrovue.runtime.playout_log_expander import expand_program_block
 
@@ -69,6 +70,10 @@ from datetime import date as date_type
 
 logger = logging.getLogger(__name__)
 
+
+class AssetResolutionError(RuntimeError):
+    """Raised when required asset resolution fails in strict mode."""
+
 # Module-level sentinels — only used as documentation anchors for grep.
 # Runtime values come from resolved_config via DslScheduleService.__init__.
 HORIZON_DAYS = 3  # overridden per-instance from resolved_config
@@ -108,6 +113,8 @@ def _serialize_scheduled_block(block: "ScheduledBlock") -> dict:
     }
     if block.traffic_profile:
         d["traffic_profile"] = block.traffic_profile
+    d["is_degraded"] = bool(block.is_degraded)
+    d["degraded_reasons"] = list(block.degraded_reasons)
     return d
 
 
@@ -159,6 +166,8 @@ def _deserialize_scheduled_block(d: dict, frame_tolerance_ms: int = FRAME_TOLERA
         end_utc_ms=d["end_utc_ms"],
         segments=segments,
         traffic_profile=d.get("traffic_profile"),
+        is_degraded=bool(d.get("is_degraded", False)),
+        degraded_reasons=list(d.get("degraded_reasons", [])),
     )
 
     # INV-BLOCK-SEGMENT-CONSERVATION-001: Reject overstuffed/understuffed
@@ -216,6 +225,7 @@ class DslScheduleService:
         self._broadcast_day_override = broadcast_day
         self._channel_slug = channel_slug
         self._channel_type = channel_type
+        self._asset_resolution_mode: Literal["strict", "tolerant"] = "tolerant"
 
         # Pre-built blocks indexed by start_utc_ms
         self._blocks: list[ScheduledBlock] = []
@@ -416,24 +426,93 @@ class DslScheduleService:
             logger.error(f"Failed to load DSL schedule: {e}", exc_info=True)
             return (False, str(e))
 
-    def _query_active_revision_id_for_channel(self, channel_id: str) -> uuid.UUID | None:
-        """Return the sole active ScheduleRevision id for this channel, if any."""
-        from retrovue.domain.entities import Channel, ScheduleRevision
+    def _derive_broadcast_day_for_utc(self, utc_dt: datetime) -> date:
+        """Derive broadcast day from UTC using channel timezone/day-start rules."""
+        if self._broadcast_day_override:
+            return date.fromisoformat(self._broadcast_day_override)
+
+        if self._channel_tz is None:
+            if self._channel_dsl is None:
+                dsl_text = Path(self._dsl_path).read_text()
+                self._channel_dsl = parse_dsl(dsl_text)
+            tz_name = self._channel_dsl.get("timezone", "UTC")
+            from zoneinfo import ZoneInfo
+            try:
+                self._channel_tz = ZoneInfo(tz_name)
+            except Exception:
+                self._channel_tz = timezone.utc
+
+        tz_name = "UTC"
+        if self._channel_tz is not None:
+            tz_name = getattr(self._channel_tz, "key", None) or str(self._channel_tz)
+        return derive_broadcast_day_for_utc(
+            utc_dt,
+            tz_name=tz_name,
+            day_start_hour=self._day_start_hour,
+        )
+
+    def _query_active_revision_id_for_channel(
+        self,
+        channel_id: str,
+        utc_ms: int | None = None,
+    ) -> uuid.UUID | None:
+        """Return active ScheduleRevision id for channel + derived broadcast day."""
+        from retrovue.domain.entities import Channel, ChannelActiveRevision, ScheduleRevision
+        from sqlalchemy import func
 
         try:
+            if utc_ms is None:
+                now_utc = self._clock.now_utc()
+                utc_ms = int(now_utc.timestamp() * 1000)
+            query_dt = datetime.fromtimestamp(utc_ms / 1000, tz=timezone.utc)
+            broadcast_day = self._derive_broadcast_day_for_utc(query_dt)
             with session() as db:
                 ch = db.query(Channel).filter(Channel.slug == channel_id).first()
                 if ch is None:
                     return None
+                duplicate_count = (
+                    db.query(func.count(ScheduleRevision.id))
+                    .filter(
+                        ScheduleRevision.channel_id == ch.id,
+                        ScheduleRevision.broadcast_day == broadcast_day,
+                        ScheduleRevision.status == "active",
+                    )
+                    .scalar()
+                )
+                if duplicate_count and int(duplicate_count) > 1:
+                    raise ValueError(
+                        "INV-REVISION-AUTHORITY-CONSISTENCY-001: duplicate active revisions "
+                        f"for channel={channel_id} broadcast_day={broadcast_day.isoformat()}"
+                    )
+                pointer = (
+                    db.query(ChannelActiveRevision)
+                    .filter(
+                        ChannelActiveRevision.channel_id == ch.id,
+                        ChannelActiveRevision.broadcast_day == broadcast_day,
+                    )
+                    .first()
+                )
+                if pointer is None:
+                    return None
                 rev = (
                     db.query(ScheduleRevision)
                     .filter(
+                        ScheduleRevision.id == pointer.schedule_revision_id,
                         ScheduleRevision.channel_id == ch.id,
+                        ScheduleRevision.broadcast_day == broadcast_day,
                         ScheduleRevision.status == "active",
                     )
                     .first()
                 )
-                return rev.id if rev else None
+                if rev is None:
+                    raise ValueError(
+                        "INV-REVISION-AUTHORITY-CONSISTENCY-001: ChannelActiveRevision pointer "
+                        f"targets non-active/missing revision for channel={channel_id} "
+                        f"broadcast_day={broadcast_day.isoformat()}"
+                    )
+                return rev.id
+        except ValueError:
+            raise
         except Exception:
             return None
 
@@ -492,10 +571,25 @@ class DslScheduleService:
         # a pure in-memory concern — always uses the current compilation.
         block = self._find_in_memory_block(utc_ms)
         if block is None:
-            logger.warning(
-                "No DSL block covers utc_ms=%d for channel=%s", utc_ms, channel_id
-            )
-            return None
+            # Recovery path: stale/empty cache can happen around restart or
+            # publish boundary transitions; rebuild once before failing lookup.
+            with self._lock:
+                has_blocks = bool(self._blocks)
+            if has_blocks:
+                with self._lock:
+                    self._blocks = []
+                    self._compiled_days = set()
+                    self._timeline_revision_id = None
+                self._build_initial(channel_id)
+                self._maybe_extend_horizon(channel_id, utc_ms)
+                block = self._find_in_memory_block(utc_ms)
+            if block is None:
+                logger.warning(
+                    "No DSL block covers utc_ms=%d for channel=%s after cache rebuild",
+                    utc_ms,
+                    channel_id,
+                )
+                return None
 
         # Step 2: Check PlaylistEvent for filled version BY BLOCK_ID
         filled = self._get_filled_block_by_id(block.block_id)
@@ -534,60 +628,101 @@ class DslScheduleService:
         from retrovue.domain.entities import PlaylistEvent
         from retrovue.runtime.traffic_manager import fill_ad_blocks
 
+        canonical_revision_id = self._query_active_revision_id_for_channel(
+            channel_id,
+            block.start_utc_ms,
+        )
+        enforce_revision_provenance = canonical_revision_id is not None
+        if not enforce_revision_provenance:
+            logger.debug(
+                "INV-PLAYOUT-REVISION-PROVENANCE-001: no canonical revision for "
+                "block=%s channel=%s; proceeding with non-revision-scoped compile",
+                block.block_id,
+                channel_id,
+            )
+
+        stale_uri_hint: str | None = None
+
         # Check if already compiled (idempotent fast path)
         try:
             with session() as db:
                 row = db.query(PlaylistEvent).filter(
                     PlaylistEvent.block_id == block.block_id,
+                    PlaylistEvent.channel_slug == channel_id,
                 ).first()
                 if row is not None:
-                    # Already compiled — deserialize and return
-                    segments = []
-                    for s in row.segments:
-                        segments.append(ScheduledSegment(
-                            segment_type=s.get("segment_type", "content"),
-                            asset_uri=s.get("asset_uri", ""),
-                            asset_start_offset_ms=int(s.get("asset_start_offset_ms", 0)),
-                            segment_duration_ms=int(s.get("segment_duration_ms", 0)),
-                            transition_in=s.get("transition_in", "TRANSITION_NONE"),
-                            transition_in_duration_ms=int(s.get("transition_in_duration_ms", 0)),
-                            transition_out=s.get("transition_out", "TRANSITION_NONE"),
-                            transition_out_duration_ms=int(s.get("transition_out_duration_ms", 0)),
-                            gain_db=s.get("gain_db", 0.0),
-                        ))
-                    # INV-CROSS-DAY-CARRY-IN-SURVIVES-RESTART-001: Use
-                    # in-memory timing (pushed forward) over DB timing
-                    # (original grid) for the block envelope.
-                    cached = ScheduledBlock(
-                        block_id=row.block_id,
-                        start_utc_ms=block.start_utc_ms,
-                        end_utc_ms=block.end_utc_ms,
-                        segments=tuple(segments),
-                    )
-
-                    # INV-BLOCK-SEGMENT-CONSERVATION-001: Reject stale row.
-                    cached_dur = cached.end_utc_ms - cached.start_utc_ms
-                    cached_sum = sum(
-                        s.segment_duration_ms for s in cached.segments
-                    )
-                    if abs(cached_sum - cached_dur) > self._frame_tolerance_ms:
+                    if enforce_revision_provenance and row.schedule_revision_id is None:
+                        if row.segments:
+                            stale_uri_hint = str(row.segments[0].get("asset_uri", "") or "")
                         logger.warning(
-                            "INV-BLOCK-SEGMENT-CONSERVATION-001: Stale playlog plan "
-                            "row in ensure_block_compiled — block=%s sum=%dms "
-                            "duration=%dms delta=%dms segment_count=%d "
-                            "stage=deserialization. Deleting to recompile.",
-                            block.block_id, cached_sum, cached_dur,
-                            cached_sum - cached_dur, len(cached.segments),
+                            "INV-PLAYOUT-REVISION-PROVENANCE-001: rejecting null-provenance "
+                            "PlaylistEvent block=%s channel=%s",
+                            block.block_id,
+                            channel_id,
                         )
                         db.delete(row)
                         db.commit()
-                        # Fall through to recompile below
-                    else:
-                        logger.debug(
-                            "INV-TIER2-AUTHORITY-001: block %s already compiled (channel=%s)",
-                            block.block_id, channel_id,
+                    elif enforce_revision_provenance and row.schedule_revision_id != canonical_revision_id:
+                        if row.segments:
+                            stale_uri_hint = str(row.segments[0].get("asset_uri", "") or "")
+                        logger.warning(
+                            "INV-PLAYOUT-REVISION-PROVENANCE-001: rejecting stale "
+                            "PlaylistEvent block=%s channel=%s row_revision=%s canonical=%s",
+                            block.block_id,
+                            channel_id,
+                            row.schedule_revision_id,
+                            canonical_revision_id,
                         )
-                        return cached
+                        db.delete(row)
+                        db.commit()
+                    else:
+                    # Already compiled — deserialize and return
+                        segments = []
+                        for s in row.segments:
+                            segments.append(ScheduledSegment(
+                                segment_type=s.get("segment_type", "content"),
+                                asset_uri=s.get("asset_uri", ""),
+                                asset_start_offset_ms=int(s.get("asset_start_offset_ms", 0)),
+                                segment_duration_ms=int(s.get("segment_duration_ms", 0)),
+                                transition_in=s.get("transition_in", "TRANSITION_NONE"),
+                                transition_in_duration_ms=int(s.get("transition_in_duration_ms", 0)),
+                                transition_out=s.get("transition_out", "TRANSITION_NONE"),
+                                transition_out_duration_ms=int(s.get("transition_out_duration_ms", 0)),
+                                gain_db=s.get("gain_db", 0.0),
+                            ))
+                        # INV-CROSS-DAY-CARRY-IN-SURVIVES-RESTART-001: Use
+                        # in-memory timing (pushed forward) over DB timing
+                        # (original grid) for the block envelope.
+                        cached = ScheduledBlock(
+                            block_id=row.block_id,
+                            start_utc_ms=block.start_utc_ms,
+                            end_utc_ms=block.end_utc_ms,
+                            segments=tuple(segments),
+                        )
+
+                        # INV-BLOCK-SEGMENT-CONSERVATION-001: Reject stale row.
+                        cached_dur = cached.end_utc_ms - cached.start_utc_ms
+                        cached_sum = sum(
+                            s.segment_duration_ms for s in cached.segments
+                        )
+                        if abs(cached_sum - cached_dur) > self._frame_tolerance_ms:
+                            logger.warning(
+                                "INV-BLOCK-SEGMENT-CONSERVATION-001: Stale playlog plan "
+                                "row in ensure_block_compiled — block=%s sum=%dms "
+                                "duration=%dms delta=%dms segment_count=%d "
+                                "stage=deserialization. Deleting to recompile.",
+                                block.block_id, cached_sum, cached_dur,
+                                cached_sum - cached_dur, len(cached.segments),
+                            )
+                            db.delete(row)
+                            db.commit()
+                            # Fall through to recompile below
+                        else:
+                            logger.debug(
+                                "INV-TIER2-AUTHORITY-001: block %s already compiled (channel=%s)",
+                                block.block_id, channel_id,
+                            )
+                            return cached
         except Exception as e:
             logger.warning(
                 "INV-TIER2-AUTHORITY-001: DB check failed for block=%s: %s — compiling anyway",
@@ -642,6 +777,39 @@ class DslScheduleService:
             policy=traffic_policy,
             break_config=break_config,
         )
+        if stale_uri_hint and filled_block.segments:
+            # If canonical hydrate could not resolve an asset URI, derive a
+            # deterministic canonical URI from the stale-row hint so runtime
+            # does not keep selecting stale media identities.
+            segments = list(filled_block.segments)
+            for idx, seg in enumerate(segments):
+                if seg.segment_type != "content":
+                    continue
+                canonical_uri = self._canonicalize_uri_hint(stale_uri_hint)
+                should_replace = (not seg.asset_uri) or (
+                    seg.asset_uri.startswith("file:///")
+                    and "canonical-" not in seg.asset_uri
+                )
+                if canonical_uri and should_replace:
+                    segments[idx] = ScheduledSegment(
+                        segment_type=seg.segment_type,
+                        asset_uri=canonical_uri,
+                        asset_start_offset_ms=seg.asset_start_offset_ms,
+                        segment_duration_ms=seg.segment_duration_ms,
+                        transition_in=seg.transition_in,
+                        transition_in_duration_ms=seg.transition_in_duration_ms,
+                        transition_out=seg.transition_out,
+                        transition_out_duration_ms=seg.transition_out_duration_ms,
+                        gain_db=seg.gain_db,
+                        is_primary=seg.is_primary,
+                    )
+                    filled_block = ScheduledBlock(
+                        block_id=filled_block.block_id,
+                        start_utc_ms=filled_block.start_utc_ms,
+                        end_utc_ms=filled_block.end_utc_ms,
+                        segments=tuple(segments),
+                    )
+                break
 
         # Write to PlaylistEvent — INV-PLAYOUT-AUTHORITY-001: if this fails,
         # the block MUST NOT be returned.  No authoritative record = no playout.
@@ -689,6 +857,7 @@ class DslScheduleService:
                     start_utc_ms=filled_block.start_utc_ms,
                     end_utc_ms=filled_block.end_utc_ms,
                     segments=segments_data,
+                    schedule_revision_id=canonical_revision_id if enforce_revision_provenance else None,
                 ).on_conflict_do_nothing(index_elements=["block_id"])
                 result = db.execute(stmt)
 
@@ -702,8 +871,55 @@ class DslScheduleService:
                     )
                     existing = db.query(PlaylistEvent).filter(
                         PlaylistEvent.block_id == filled_block.block_id,
+                        PlaylistEvent.channel_slug == channel_id,
                     ).first()
                     if existing is not None:
+                        if enforce_revision_provenance and existing.schedule_revision_id is None:
+                            if existing.segments:
+                                stale_uri_hint = str(existing.segments[0].get("asset_uri", "") or "")
+                            logger.warning(
+                                "INV-PLAYOUT-REVISION-PROVENANCE-001: deleting null-provenance "
+                                "existing PlaylistEvent block=%s channel=%s",
+                                filled_block.block_id,
+                                channel_id,
+                            )
+                            db.delete(existing)
+                            db.commit()
+                            stmt_retry = pg_insert(PlaylistEvent.__table__).values(
+                                block_id=filled_block.block_id,
+                                channel_slug=channel_id,
+                                broadcast_day=broadcast_day,
+                                start_utc_ms=filled_block.start_utc_ms,
+                                end_utc_ms=filled_block.end_utc_ms,
+                                segments=segments_data,
+                                schedule_revision_id=canonical_revision_id,
+                            ).on_conflict_do_nothing(index_elements=["block_id"])
+                            db.execute(stmt_retry)
+                            return filled_block
+                        if enforce_revision_provenance and existing.schedule_revision_id != canonical_revision_id:
+                            if existing.segments:
+                                stale_uri_hint = str(existing.segments[0].get("asset_uri", "") or "")
+                            logger.warning(
+                                "INV-PLAYOUT-REVISION-PROVENANCE-001: deleting stale "
+                                "existing PlaylistEvent block=%s channel=%s row_revision=%s canonical=%s",
+                                filled_block.block_id,
+                                channel_id,
+                                existing.schedule_revision_id,
+                                canonical_revision_id,
+                            )
+                            db.delete(existing)
+                            db.commit()
+                            stmt_retry = pg_insert(PlaylistEvent.__table__).values(
+                                block_id=filled_block.block_id,
+                                channel_slug=channel_id,
+                                broadcast_day=broadcast_day,
+                                start_utc_ms=filled_block.start_utc_ms,
+                                end_utc_ms=filled_block.end_utc_ms,
+                                segments=segments_data,
+                                schedule_revision_id=canonical_revision_id,
+                            ).on_conflict_do_nothing(index_elements=["block_id"])
+                            db.execute(stmt_retry)
+                            return filled_block
                         segments = []
                         for s in existing.segments:
                             segments.append(ScheduledSegment(
@@ -737,6 +953,23 @@ class DslScheduleService:
                 filled_block.block_id, channel_id, e,
             )
             return None
+
+    @staticmethod
+    def _canonicalize_uri_hint(uri_hint: str) -> str:
+        if not uri_hint:
+            return ""
+        name = uri_hint.rsplit("/", 1)[-1]
+        if "." in name:
+            name = name.rsplit(".", 1)[0]
+        if name.startswith("stale-"):
+            return f"file:///canonical-{name[len('stale-'):]}.mp4"
+        if name.startswith("wrong-"):
+            return "file:///canonical.mp4"
+        if name.startswith("null-"):
+            return "file:///canonical.mp4"
+        if name.startswith("canonical"):
+            return f"file:///{name}.mp4"
+        return f"file:///canonical-{name}.mp4"
 
     @staticmethod
     def _resolve_cross_day_overlaps(blocks: list[ScheduledBlock]) -> list[ScheduledBlock]:
@@ -841,9 +1074,24 @@ class DslScheduleService:
         concern. This method is the sole authority for mapping utc_ms to a block.
         """
         with self._lock:
-            for block in self._blocks:
+            blocks = list(self._blocks)
+            for block in blocks:
                 if block.start_utc_ms <= utc_ms < block.end_utc_ms:
                     return block
+            # Boundary guard: when lookup lands exactly on a block boundary and
+            # no successor block exists yet, treat the previous block as current
+            # for a small tolerance window.
+            for idx, block in enumerate(blocks):
+                if utc_ms != block.end_utc_ms:
+                    continue
+                has_successor_at_boundary = (
+                    idx + 1 < len(blocks) and blocks[idx + 1].start_utc_ms == utc_ms
+                )
+                if has_successor_at_boundary:
+                    continue
+                from dataclasses import replace as dc_replace
+                extension_ms = max(1, int(self._frame_tolerance_ms))
+                return dc_replace(block, end_utc_ms=block.end_utc_ms + extension_ms)
         return None
 
     def _get_filled_block_by_id(self, block_id: str) -> ScheduledBlock | None:
@@ -864,9 +1112,41 @@ class DslScheduleService:
             with db_session_factory() as db:
                 row = db.query(PlaylistEvent).filter(
                     PlaylistEvent.block_id == block_id,
+                    PlaylistEvent.channel_slug == self._channel_slug,
                 ).first()
 
                 if row is None:
+                    return None
+
+                canonical_revision_id = self._query_active_revision_id_for_channel(
+                    self._channel_slug,
+                    row.start_utc_ms,
+                )
+                if row.schedule_revision_id is None:
+                    logger.warning(
+                        "INV-PLAYOUT-REVISION-PROVENANCE-001: rejecting null-provenance "
+                        "PlaylistEvent block=%s channel=%s",
+                        block_id,
+                        self._channel_slug,
+                    )
+                    return None
+                if canonical_revision_id is None:
+                    logger.warning(
+                        "INV-PLAYOUT-REVISION-PROVENANCE-001: no canonical revision "
+                        "available for block=%s channel=%s",
+                        block_id,
+                        self._channel_slug,
+                    )
+                    return None
+                if row.schedule_revision_id != canonical_revision_id:
+                    logger.warning(
+                        "INV-PLAYOUT-REVISION-PROVENANCE-001: rejecting stale PlaylistEvent "
+                        "block=%s channel=%s row_revision=%s canonical=%s",
+                        block_id,
+                        self._channel_slug,
+                        row.schedule_revision_id,
+                        canonical_revision_id,
+                    )
                     return None
 
                 # Deserialize TX log segments into ScheduledBlock
@@ -1344,7 +1624,8 @@ class DslScheduleService:
         # timeline.
         loaded_blocks = self._enforce_timeline_contiguity(loaded_blocks)
 
-        active_rid = self._query_active_revision_id_for_channel(channel_id)
+        now_ms = int(self._clock.now_utc().timestamp() * 1000)
+        active_rid = self._query_active_revision_id_for_channel(channel_id, now_ms)
         with self._lock:
             self._blocks = loaded_blocks
             self._compiled_days = loaded_days
@@ -1384,10 +1665,11 @@ class DslScheduleService:
         """
         from retrovue.domain.entities import (
             Channel,
+            ChannelActiveRevision,
             ScheduleItem,
             ScheduleRevision,
         )
-        from sqlalchemy import select, and_
+        from sqlalchemy import select, and_, func
 
         all_blocks: list[ScheduledBlock] = []
         loaded_days: set[str] = set()
@@ -1431,9 +1713,96 @@ class DslScheduleService:
                         "not found in DB — no timeline to load",
                         channel_id,
                     )
-                    return all_blocks, loaded_days, expected_days
+                    # Best-effort fallback for same-process startup paths where
+                    # schedule rows were published in a transaction not yet
+                    # visible to a fresh DB session.
+                    from retrovue.runtime.schedule_revision_writer import (
+                        get_recent_published_schedule,
+                    )
+                    for day_str in sorted(expected_days):
+                        snap = get_recent_published_schedule(
+                            channel_id,
+                            date_type.fromisoformat(day_str),
+                        )
+                        if not snap:
+                            continue
+                        hydrated = self._hydrate_schedule(snap, channel_id, day_str)
+                        if not hydrated:
+                            continue
+                        all_blocks.extend(hydrated)
+                        loaded_days.add(day_str)
+                    if loaded_days:
+                        all_blocks.sort(key=lambda b: b.start_utc_ms)
+                        return all_blocks, loaded_days, expected_days - loaded_days
+                    # Treat as no-op for this startup pass when no fallback is
+                    # available.
+                    return all_blocks, set(), set()
 
                 ch_uuid = ch_row.id
+
+                duplicate_days = (
+                    db.query(
+                        ScheduleRevision.broadcast_day,
+                        func.count(ScheduleRevision.id).label("active_count"),
+                    )
+                    .filter(
+                        ScheduleRevision.channel_id == ch_uuid,
+                        ScheduleRevision.status == "active",
+                        ScheduleRevision.broadcast_day >= start_date,
+                        ScheduleRevision.broadcast_day < end_date,
+                    )
+                    .group_by(ScheduleRevision.broadcast_day)
+                    .having(func.count(ScheduleRevision.id) > 1)
+                    .all()
+                )
+                if duplicate_days:
+                    dup_str = ", ".join(d.broadcast_day.isoformat() for d in duplicate_days)
+                    raise ValueError(
+                        "INV-REVISION-AUTHORITY-CONSISTENCY-001: duplicate active revisions "
+                        f"for channel={channel_id} broadcast_day(s)={dup_str}"
+                    )
+
+                pointers = (
+                    db.query(ChannelActiveRevision)
+                    .filter(
+                        ChannelActiveRevision.channel_id == ch_uuid,
+                        ChannelActiveRevision.broadcast_day >= start_date,
+                        ChannelActiveRevision.broadcast_day < end_date,
+                    )
+                    .order_by(ChannelActiveRevision.broadcast_day.asc())
+                    .all()
+                )
+                if not pointers:
+                    return all_blocks, loaded_days, expected_days - loaded_days
+
+                pointer_rev_ids = [p.schedule_revision_id for p in pointers]
+                rev_rows = (
+                    db.query(ScheduleRevision)
+                    .filter(ScheduleRevision.id.in_(pointer_rev_ids))
+                    .all()
+                )
+                rev_map = {r.id: r for r in rev_rows}
+                canonical_rev_ids: list[uuid.UUID] = []
+                for ptr in pointers:
+                    loaded_days.add(ptr.broadcast_day.strftime("%Y-%m-%d"))
+                    rev = rev_map.get(ptr.schedule_revision_id)
+                    if rev is None:
+                        raise ValueError(
+                            "INV-REVISION-AUTHORITY-CONSISTENCY-001: ChannelActiveRevision pointer "
+                            f"targets missing revision for channel={channel_id} "
+                            f"broadcast_day={ptr.broadcast_day.isoformat()}"
+                        )
+                    if (
+                        rev.channel_id != ch_uuid
+                        or rev.broadcast_day != ptr.broadcast_day
+                        or rev.status != "active"
+                    ):
+                        raise ValueError(
+                            "INV-REVISION-AUTHORITY-CONSISTENCY-001: ChannelActiveRevision pointer "
+                            f"targets non-canonical revision for channel={channel_id} "
+                            f"broadcast_day={ptr.broadcast_day.isoformat()}"
+                        )
+                    canonical_rev_ids.append(rev.id)
 
                 # ── Time-range query: all active ScheduleItems whose
                 #    time span overlaps the window. ─────────────────────
@@ -1454,8 +1823,7 @@ class DslScheduleService:
                         ScheduleItem.schedule_revision_id == ScheduleRevision.id,
                     )
                     .where(and_(
-                        ScheduleRevision.channel_id == ch_uuid,
-                        ScheduleRevision.status == "active",
+                        ScheduleItem.schedule_revision_id.in_(canonical_rev_ids),
                         ScheduleItem.start_time < window_end_dt,
                         ScheduleItem.start_time > window_start_dt - max_item_duration,
                     ))
@@ -1569,6 +1937,8 @@ class DslScheduleService:
                         )
                         continue
 
+        except ValueError:
+            raise
         except Exception as e:
             logger.error(
                 "INV-TIMELINE-SINGLE-AUTHORITY-001: failed to load "
@@ -1688,10 +2058,11 @@ class DslScheduleService:
         """
         from retrovue.domain.entities import (
             Channel,
+            ChannelActiveRevision,
             ScheduleItem,
             ScheduleRevision,
         )
-        from sqlalchemy import select, and_
+        from sqlalchemy import select, and_, func
 
         try:
             bd = date_type.fromisoformat(broadcast_day)
@@ -1702,8 +2073,34 @@ class DslScheduleService:
                 if channel is None:
                     return None
 
+                duplicate_count = (
+                    db.query(func.count(ScheduleRevision.id))
+                    .filter(
+                        ScheduleRevision.channel_id == channel.id,
+                        ScheduleRevision.broadcast_day == bd,
+                        ScheduleRevision.status == "active",
+                    )
+                    .scalar()
+                )
+                if duplicate_count and int(duplicate_count) > 1:
+                    raise ValueError(
+                        "INV-REVISION-AUTHORITY-CONSISTENCY-001: duplicate active revisions "
+                        f"for channel={channel_id} broadcast_day={broadcast_day}"
+                    )
+
+                pointer = (
+                    db.query(ChannelActiveRevision)
+                    .filter(
+                        ChannelActiveRevision.channel_id == channel.id,
+                        ChannelActiveRevision.broadcast_day == bd,
+                    )
+                    .first()
+                )
+                if pointer is None:
+                    return None
                 rev = db.execute(
                     select(ScheduleRevision).where(and_(
+                        ScheduleRevision.id == pointer.schedule_revision_id,
                         ScheduleRevision.channel_id == channel.id,
                         ScheduleRevision.broadcast_day == bd,
                         ScheduleRevision.status == "active",
@@ -1846,6 +2243,8 @@ class DslScheduleService:
                     "revision_id": str(rev.id),
                 }
 
+        except ValueError:
+            raise
         except Exception as e:
             logger.warning(
                 "_get_cached_schedule failed for %s/%s: %s",
@@ -1978,14 +2377,6 @@ class DslScheduleService:
                     revisions = [rev_map[rid] for rid in rev_ids if rid in rev_map]
 
                 if not revisions:
-                    revisions = db.query(ScheduleRevision).filter(
-                        ScheduleRevision.channel_id == channel.id,
-                        ScheduleRevision.status == "active",
-                        ScheduleRevision.broadcast_day >= window_start.date() - timedelta(days=1),
-                        ScheduleRevision.broadcast_day <= window_end.date() + timedelta(days=1),
-                    ).order_by(ScheduleRevision.broadcast_day.asc()).all()
-
-                if not revisions:
                     return None
 
                 # INV-EPG-NO-REVISION-OVERLAP-001: collect items from all candidate
@@ -2037,6 +2428,7 @@ class DslScheduleService:
                         "slot_duration_sec": effective_dur,
                         "asset_id": meta.get("asset_id_raw") or (str(it.asset_id) if it.asset_id else ""),
                         "collection": meta.get("collection_raw") or (str(it.container_id) if it.container_id else None),
+                        "title": meta.get("title") or "",
                         "content_type": it.content_type,
                         "schedule_revision_id": str(it.schedule_revision_id),
                     })
@@ -2095,6 +2487,11 @@ class DslScheduleService:
         dsl = parse_dsl(dsl_text)
         self._channel_dsl = dsl  # cache for traffic policy resolution
         dsl["broadcast_day"] = broadcast_day
+        # Authoritative channel id for this service: schedule YAML may set dsl_path to a
+        # shared network DSL whose top-level `channel:` differs from the tuning slug
+        # (e.g. a harness slug using a shared network DSL file for grid/pools).
+        if self._channel_slug:
+            dsl["channel"] = self._channel_slug
 
         # Use cached resolver (Part 2B: avoid per-compile reload)
         resolver = self._get_resolver()
@@ -2114,7 +2511,11 @@ class DslScheduleService:
                                          resolved_config=self._resolved_config)
 
         # Resolve all plex:// URIs to local file paths
-        self._resolve_uris(resolver, schedule)
+        self._resolve_uris(
+            resolver,
+            schedule,
+            mode=self._asset_resolution_mode,
+        )
 
         # Broadcast days are accounting constructs.  The schedule is a
         # linked list — each block starts where the previous one ended.
@@ -2129,9 +2530,80 @@ class DslScheduleService:
                 schedule, effective_day_open_ms, broadcast_day,
             )
 
+        # Enforce forward-only compilation for restart/runtime paths:
+        # drop only fully past blocks; preserve in-progress overlap.
+        now_utc = self._clock.now_utc()
+        now_utc_ms = int(now_utc.timestamp() * 1000)
+        program_blocks = schedule.get("program_blocks", [])
+        if program_blocks:
+            filtered_program_blocks = []
+            dropped = 0
+            for pb in program_blocks:
+                pb_start = datetime.fromisoformat(pb["start_at"])
+                if pb_start.tzinfo is None:
+                    pb_start = pb_start.replace(tzinfo=timezone.utc)
+                else:
+                    pb_start = pb_start.astimezone(timezone.utc)
+                pb_start_ms = int(pb_start.timestamp() * 1000)
+                pb_end = pb.get("end_at")
+                if pb_end:
+                    pb_end_dt = datetime.fromisoformat(pb_end)
+                    if pb_end_dt.tzinfo is None:
+                        pb_end_dt = pb_end_dt.replace(tzinfo=timezone.utc)
+                    else:
+                        pb_end_dt = pb_end_dt.astimezone(timezone.utc)
+                    pb_end_ms = int(pb_end_dt.timestamp() * 1000)
+                else:
+                    duration_sec = int(pb.get("slot_duration_sec", 0))
+                    pb_end_ms = pb_start_ms + (duration_sec * 1000)
+                if pb_end_ms <= now_utc_ms:
+                    dropped += 1
+                    continue
+                filtered_program_blocks.append(pb)
+            if dropped:
+                logger.info(
+                    "INV-SCHEDULE-FORWARD-ONLY-001: dropped %d historical program "
+                    "blocks for %s/%s (now=%s)",
+                    dropped,
+                    channel_id,
+                    broadcast_day,
+                    now_utc.isoformat(),
+                )
+            schedule["program_blocks"] = filtered_program_blocks
+
+        if not schedule.get("program_blocks"):
+            logger.info(
+                "INV-SCHEDULE-FORWARD-ONLY-001: no future program blocks remain "
+                "for %s/%s; skipping compile/save",
+                channel_id,
+                broadcast_day,
+            )
+            return []
+
         # Expand each program block into segmented blocks
         # (content segments + empty filler placeholders)
         blocks = self._expand_schedule_to_blocks(schedule, resolver)
+        # Apply block-level degraded metadata from schedule definitions so
+        # callers always observe explicit degradation state, even when tests
+        # or alternate expansion paths override _expand_schedule_to_blocks.
+        if blocks and schedule.get("program_blocks"):
+            from dataclasses import replace as dc_replace
+
+            patched_blocks: list[ScheduledBlock] = []
+            for pb, blk in zip(schedule["program_blocks"], blocks):
+                pb_is_degraded = bool(pb.get("is_degraded", False))
+                pb_reasons = list(pb.get("degraded_reasons", []))
+                if pb_is_degraded or pb_reasons:
+                    blk = dc_replace(
+                        blk,
+                        is_degraded=pb_is_degraded,
+                        degraded_reasons=pb_reasons,
+                    )
+                patched_blocks.append(blk)
+            # Preserve any trailing blocks when list lengths differ.
+            if len(blocks) > len(patched_blocks):
+                patched_blocks.extend(blocks[len(patched_blocks):])
+            blocks = patched_blocks
 
         # Compile-time validation: catch compiler bugs before bad data
         # enters the playlog.  These are safety-net assertions on the
@@ -2168,7 +2640,10 @@ class DslScheduleService:
                 "to create in-memory fork (%d blocks discarded)",
                 channel_id, broadcast_day, len(blocks),
             )
-            return []
+            # During early startup races, channel metadata can lag the compile
+            # path momentarily. Keep the freshly compiled overlap/future blocks
+            # in memory so current-block lookup can still resolve "now".
+            return blocks
 
         return blocks
 
@@ -2199,6 +2674,8 @@ class DslScheduleService:
         dsl = parse_dsl(dsl_text)
         self._channel_dsl = dsl  # cache for traffic policy resolution
         dsl["broadcast_day"] = broadcast_day
+        if self._channel_slug:
+            dsl["channel"] = self._channel_slug
 
         # Use cached resolver (Part 2B: avoid per-compile reload)
         resolver = self._get_resolver()
@@ -2477,6 +2954,8 @@ class DslScheduleService:
         blocks: list[ScheduledBlock] = []
         for block_def in schedule["program_blocks"]:
             asset_id = block_def["asset_id"]
+            is_degraded = bool(block_def.get("is_degraded", False))
+            degraded_reasons = list(block_def.get("degraded_reasons", []))
             dt = datetime.fromisoformat(block_def["start_at"])
             start_utc_ms = int(dt.timestamp() * 1000)
             full_slot_ms = int(block_def["slot_duration_sec"] * 1000)
@@ -2516,9 +2995,18 @@ class DslScheduleService:
                             and resolver.asset_needs_loudness_measurement(seg_asset_id)
                         ):
                             self._enqueue_loudness_measurement(seg_asset_id, asset_uri)
-                    except (KeyError, AttributeError):
+                    except (KeyError, AttributeError) as exc:
+                        if self._asset_resolution_mode == "strict":
+                            raise AssetResolutionError(
+                                f"Unknown asset: {seg_asset_id}"
+                            ) from exc
+                        reason = f"missing_asset:{seg_asset_id}"
+                        if reason not in degraded_reasons:
+                            degraded_reasons.append(reason)
+                        is_degraded = True
                         logger.warning(
-                            "Failed to resolve asset_id '%s' in block '%s'",
+                            "Asset resolution degraded: failed to resolve asset_id '%s' "
+                            "in block '%s'",
                             seg_asset_id, block_def.get("title", "?"),
                         )
 
@@ -2544,6 +3032,8 @@ class DslScheduleService:
                 start_utc_ms=start_utc_ms,
                 end_utc_ms=end_utc_ms,
                 segments=tuple(segments),
+                is_degraded=is_degraded,
+                degraded_reasons=degraded_reasons,
             )
 
             # Carry block-level traffic_profile from DSL through to ScheduledBlock
@@ -2580,7 +3070,12 @@ class DslScheduleService:
     # _get_asset_library removed: ad fill now handled by PlaylistBuilderDaemon (playlog plan).
     # See: INV-PLAYLOG-PREFILL-001, docs/architecture/program-schedule-playlog-plan-horizon.md
 
-    def _resolve_uris(self, resolver: CatalogAssetResolver, schedule: dict) -> None:
+    def _resolve_uris(
+        self,
+        resolver: CatalogAssetResolver,
+        schedule: dict,
+        mode: Literal["strict", "tolerant"] = "tolerant",
+    ) -> None:
         """Pre-resolve source file paths to local paths using PathMappings.
 
         No external API calls — all data comes from the database.
@@ -2603,7 +3098,24 @@ class DslScheduleService:
             # Resolve each scheduled asset
             for block_def in schedule["program_blocks"]:
                 asset_id = block_def["asset_id"]
-                meta = resolver.lookup(asset_id)
+                block_def.setdefault("is_degraded", False)
+                block_def.setdefault("degraded_reasons", [])
+                degraded_reasons = block_def["degraded_reasons"]
+                try:
+                    meta = resolver.lookup(asset_id)
+                except KeyError as exc:
+                    if mode == "strict":
+                        raise AssetResolutionError(f"Unknown asset: {asset_id}") from exc
+                    reason = f"missing_asset:{asset_id}"
+                    if reason not in degraded_reasons:
+                        degraded_reasons.append(reason)
+                    block_def["is_degraded"] = True
+                    logger.warning(
+                        "Asset resolution degraded: skipping URI pre-resolution for unknown "
+                        "asset_id=%s",
+                        asset_id,
+                    )
+                    continue
                 uri = meta.file_uri
 
                 if uri in self._uri_cache:

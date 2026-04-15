@@ -185,6 +185,17 @@ class TestDefaultsFromConfig:
         assert cfg.schedule_config["filler_path"] == "/custom/filler.mp4"
         assert cfg.schedule_config["filler_duration_ms"] == 5000
 
+    def test_schedule_config_overrides_dsl_path(self, tmp_path: Path):
+        """Top-level schedule_config.dsl_path overrides the default (this YAML file)."""
+        _write_channel(tmp_path, "ch", (
+            "channel_id: ch\nnumber: 1\n"
+            "schedule_config:\n"
+            "  dsl_path: /opt/retrovue/config/channels/network.yaml\n"
+        ))
+        p = YamlChannelConfigProvider(tmp_path, resolved_config=TEST_RESOLVED_CONFIG)
+        cfg = p.get_channel_config("ch")
+        assert cfg.schedule_config["dsl_path"] == "/opt/retrovue/config/channels/network.yaml"
+
     def test_timezone_fallback_from_config(self, tmp_path: Path):
         """timezone comes from scheduling.default_timezone when absent."""
         _write_channel(tmp_path, "ch", "channel: ch\nnumber: 1\n")

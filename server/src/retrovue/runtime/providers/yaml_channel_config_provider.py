@@ -265,6 +265,11 @@ class YamlChannelConfigProvider:
             "channel_tz": channel_tz,
             "channel_type": channel_type,
         }
+        # Allow explicit schedule_config in YAML to override defaults (e.g. dsl_path
+        # pointing at a full V2 network DSL when this file is channel metadata only).
+        user_sc = data.get("schedule_config")
+        if isinstance(user_sc, dict):
+            schedule_config = {**schedule_config, **user_sc}
 
         config = ChannelConfig(
             channel_id=channel_id,

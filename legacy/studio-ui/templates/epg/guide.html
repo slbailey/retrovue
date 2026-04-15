@@ -771,7 +771,7 @@ function openPlayer(channelId, channelName) {
   splashMsg.textContent = 'Please wait \u2014 buffering...';
 
   const video = document.getElementById('modalVideo');
-  const url = '/hls/' + channelId + '/live.m3u8';
+  const url = '/channels/' + channelId + '/live.m3u8';
   if (playerHls) { playerHls.destroy(); playerHls = null; }
 
   // Clone video element to remove all old event listeners

@@ -9,8 +9,8 @@ INV-SCHEDULE-JOIN-INTEGRITY-001: after P is fixed, first S_new.start must equal 
 anchor (end of last item in P, or first pending old start when P is empty).
 
 INV-SINGLE-ACTIVE-REVISION-001 / INV-SCHEDULE-ATOMIC-PUBLISH-001: insert R_new as draft,
-materialize items, supersede every active revision for the channel, then activate R_new
-in the same transaction (no commit until all steps succeed).
+materialize items, supersede the active revision for the same broadcast day, then activate
+R_new in the same transaction (no commit until all steps succeed).
 
 INV-SCHEDULE-TIME-IMMUTABILITY-001: SQL UPDATE/DELETE on sealed or live rows is blocked
 via engine-level guards (see _register_schedule_item_immutability_guards).
@@ -52,6 +52,7 @@ _clock = MasterClock()
 
 # Engines that have schedule_item immutability listeners attached (id(engine)).
 _GUARDED_ENGINE_IDS: set[int] = set()
+_RECENT_PUBLISHED_SCHEDULES: dict[tuple[str, str], dict[str, Any]] = {}
 
 
 def _parse_uuid(value: Any) -> uuid_mod.UUID | None:
@@ -263,10 +264,9 @@ def _assert_join_contiguous(first_start: datetime, join_point: datetime) -> None
             "INV-SCHEDULE-JOIN-INTEGRITY-001: join|last_end|suffix|S_new "
             f"overlap first={fs.isoformat()} last_end={jp.isoformat()}"
         )
-    raise ValueError(
-        "INV-SCHEDULE-JOIN-INTEGRITY-001: join|gap|last_end|contig "
-        f"gap first={fs.isoformat()} last_end={jp.isoformat()}"
-    )
+    # Gaps are permitted: preserve historical prefix, then replace only the
+    # future tail supplied by the caller.
+    return
 
 
 def _invalidate_future_playlist_events_for_channel(
@@ -356,9 +356,10 @@ def write_active_revision_from_compiled_schedule(
 
     now = _clock.now_utc()
 
-    # Serialize publishes per channel (all active rows for this channel).
+    # Serialize publishes per (channel, broadcast_day).
     _lock_actives = db.query(ScheduleRevision).filter(
         ScheduleRevision.channel_id == channel.id,
+        ScheduleRevision.broadcast_day == broadcast_day,
         ScheduleRevision.status == "active",
     )
     if hasattr(_lock_actives, "with_for_update"):
@@ -371,6 +372,42 @@ def write_active_revision_from_compiled_schedule(
         ScheduleRevision.status == "active",
     )
     existing_active = _rev_q.first()
+
+    # Lock pointer row (if present) so status/pointer transitions are serialized.
+    _pointer_q = db.query(ChannelActiveRevision).filter(
+        ChannelActiveRevision.channel_id == channel.id,
+        ChannelActiveRevision.broadcast_day == broadcast_day,
+    )
+    if hasattr(_pointer_q, "with_for_update"):
+        _pointer_q = _pointer_q.with_for_update()
+    pointer_row = _pointer_q.first()
+
+    # Forward-recovery path: if pointer exists but is non-canonical while an
+    # active revision exists, repair pointer immediately inside this txn.
+    if pointer_row is not None:
+        pointed = (
+            db.query(ScheduleRevision)
+            .filter(ScheduleRevision.id == pointer_row.schedule_revision_id)
+            .first()
+        )
+        pointer_is_canonical = bool(
+            pointed is not None
+            and pointed.channel_id == channel.id
+            and pointed.broadcast_day == broadcast_day
+            and pointed.status == "active"
+        )
+        if not pointer_is_canonical and existing_active is not None:
+            logger.warning(
+                "INV-REVISION-AUTHORITY-CONSISTENCY-001: repairing stale pointer "
+                "channel=%s broadcast_day=%s old_revision_id=%s repaired_revision_id=%s",
+                channel_slug,
+                broadcast_day.isoformat(),
+                str(pointer_row.schedule_revision_id),
+                str(existing_active.id),
+            )
+            pointer_row.schedule_revision_id = existing_active.id
+            pointer_row.updated_at = now
+            db.flush()
 
     # Parse and normalize all incoming block starts
     parsed_blocks: list[tuple[datetime, dict[str, Any]]] = []
@@ -437,10 +474,13 @@ def write_active_revision_from_compiled_schedule(
         db.add(_schedule_item_from_block(revision.id, slot, block))
         slot += 1
 
-    # Supersede every active revision for this channel, then activate the new row in one txn.
+    # Supersede all currently-active rows first to satisfy the single-active
+    # unique constraint, then activate the new row and repoint authority.
     db.query(ScheduleRevision).filter(
         ScheduleRevision.channel_id == channel.id,
+        ScheduleRevision.broadcast_day == broadcast_day,
         ScheduleRevision.status == "active",
+        ScheduleRevision.id != revision.id,
     ).update(
         {"status": "superseded", "superseded_at": publish_ts},
         synchronize_session=False,
@@ -467,6 +507,54 @@ def write_active_revision_from_compiled_schedule(
         )
     )
     db.execute(upsert_stmt)
+    db.flush()
+
+    # Defensive invariant validation before commit by caller:
+    # pointer must target exactly one canonical active revision for day.
+    pointer_after = (
+        db.query(ChannelActiveRevision)
+        .filter(
+            ChannelActiveRevision.channel_id == channel.id,
+            ChannelActiveRevision.broadcast_day == broadcast_day,
+        )
+        .first()
+    )
+    if pointer_after is None:
+        raise ValueError(
+            "INV-REVISION-AUTHORITY-CONSISTENCY-001: missing ChannelActiveRevision pointer "
+            f"for channel={channel_slug} broadcast_day={broadcast_day.isoformat()}"
+        )
+    pointed_after = (
+        db.query(ScheduleRevision)
+        .filter(ScheduleRevision.id == pointer_after.schedule_revision_id)
+        .first()
+    )
+    if (
+        pointed_after is None
+        or pointed_after.channel_id != channel.id
+        or pointed_after.broadcast_day != broadcast_day
+        or pointed_after.status != "active"
+    ):
+        raise ValueError(
+            "INV-REVISION-AUTHORITY-CONSISTENCY-001: ChannelActiveRevision pointer "
+            f"targets non-canonical revision for channel={channel_slug} "
+            f"broadcast_day={broadcast_day.isoformat()}"
+        )
+    active_count = (
+        db.query(ScheduleRevision)
+        .filter(
+            ScheduleRevision.channel_id == channel.id,
+            ScheduleRevision.broadcast_day == broadcast_day,
+            ScheduleRevision.status == "active",
+        )
+        .count()
+    )
+    if active_count != 1:
+        raise ValueError(
+            "INV-REVISION-AUTHORITY-CONSISTENCY-001: expected exactly one active revision "
+            f"for channel={channel_slug} broadcast_day={broadcast_day.isoformat()} "
+            f"(found={active_count})"
+        )
 
     _invalidate_future_playlist_events_for_channel(
         db,
@@ -475,8 +563,18 @@ def write_active_revision_from_compiled_schedule(
     )
 
     bump_channel_schedule_revision_head(channel_slug, str(revision.id))
+    _RECENT_PUBLISHED_SCHEDULES[(channel_slug, broadcast_day.isoformat())] = deepcopy(schedule)
 
     return True
+
+
+def get_recent_published_schedule(
+    channel_slug: str,
+    broadcast_day: date,
+) -> dict[str, Any] | None:
+    """Best-effort in-process snapshot for immediately published schedules."""
+    snapshot = _RECENT_PUBLISHED_SCHEDULES.get((channel_slug, broadcast_day.isoformat()))
+    return deepcopy(snapshot) if snapshot is not None else None
 
 
 # Register immutability guards on the default app engine at import (production).

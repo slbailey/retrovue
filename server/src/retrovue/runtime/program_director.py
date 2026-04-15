@@ -1988,7 +1988,11 @@ class ProgramDirector:
             if channel:
                 channels = [c for c in channels if c["channel_id"] == channel]
 
-            broadcast_day = resolve_epg_broadcast_day(channels, date)
+            broadcast_day = resolve_epg_broadcast_day(
+                channels,
+                date,
+                now_utc=self._embedded_clock.now_utc(),
+            )
 
             with session() as db:
                 shared_resolver = CatalogAssetResolver(db)

@@ -8,16 +8,19 @@ from __future__ import annotations
 
 import logging
 from datetime import date as date_type
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from zoneinfo import ZoneInfo
 
 from retrovue.epg.duration import epg_display_duration
+from retrovue.runtime.broadcast_day import derive_broadcast_day_for_utc
 from retrovue.runtime.catalog_resolver import CatalogAssetResolver
+from retrovue.runtime.clock import MasterClock
 from retrovue.runtime.dsl_schedule_service import DslScheduleService
 
 logger = logging.getLogger(__name__)
+_clock = MasterClock()
 
 
 def build_epg_payload(
@@ -135,6 +138,7 @@ def build_epg_payload(
 def resolve_epg_broadcast_day(
     channels: list[dict[str, Any]],
     date_param: str | None,
+    now_utc: datetime | None = None,
 ) -> str:
     """Pick broadcast_day using the first channel's tz and day-start hour (matches /api/epg)."""
     default_tz_name = "UTC"
@@ -145,9 +149,15 @@ def resolve_epg_broadcast_day(
         default_day_start = sc.get("broadcast_day_start_hour", 6)
 
     if date_param is None:
-        tz = ZoneInfo(default_tz_name)
-        now = datetime.now(tz)
-        if now.hour < default_day_start:
-            return (now - timedelta(days=1)).strftime("%Y-%m-%d")
-        return now.strftime("%Y-%m-%d")
+        ref_utc = now_utc
+        if ref_utc is None:
+            ref_utc = _clock.now_utc()
+        if ref_utc.tzinfo is None:
+            ref_utc = ref_utc.replace(tzinfo=timezone.utc)
+        day = derive_broadcast_day_for_utc(
+            ref_utc,
+            tz_name=default_tz_name,
+            day_start_hour=default_day_start,
+        )
+        return day.strftime("%Y-%m-%d")
     return date_param

@@ -1,3 +1,8 @@
+# Legacy package local build artifacts
+legacy/pkg/air/build/
+legacy/pkg/air/out/
+legacy/pkg/core/test_tmp.db
+legacy/pkg/core/=1.60.0
 #========================================================================
 # General Ignores
 #========================================================================

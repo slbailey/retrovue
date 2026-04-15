@@ -97,6 +97,28 @@ int PipelineManager::ComputeVideoTimeMsGate(int video_depth_frames, RationalFps 
   return static_cast<int>((static_cast<int64_t>(vd) * 1000 * output_fps.den) / output_fps.num);
 }
 
+int64_t PipelineManager::ComputeExpectedAudioSamplesFromOutputClockNs(
+    int64_t output_clock_elapsed_ns,
+    int sample_rate) {
+  if (output_clock_elapsed_ns <= 0 || sample_rate <= 0) {
+    return 0;
+  }
+  const long double elapsed_s =
+      static_cast<long double>(output_clock_elapsed_ns) / 1'000'000'000.0L;
+  return static_cast<int64_t>(
+      std::llround(elapsed_s * static_cast<long double>(sample_rate)));
+}
+
+int PipelineManager::ComputeDueAudioSamples(
+    int64_t expected_audio_samples,
+    int64_t actual_audio_samples_emitted) {
+  const int64_t due = expected_audio_samples - actual_audio_samples_emitted;
+  if (due <= 0) {
+    return 0;
+  }
+  return static_cast<int>(due);
+}
+
 PipelineManager::BootstrapPhaseGateSnapshot PipelineManager::EvaluateBootstrapPhaseGate(
     int audio_depth_ms,
     int video_depth_frames,
@@ -990,10 +1012,14 @@ void PipelineManager::Run() {
   // INV-BROADCAST-DRC-001: Construct broadcast DRC processor for session lifetime.
   broadcast_audio_processor_ = std::make_unique<BroadcastAudioProcessor>();
 
-  // Track audio ticks and buffer-emitted samples separately from pad samples.
-  // Used for exact per-tick sample computation (drift-free rational arithmetic).
-  int64_t audio_ticks_emitted = 0;
-  int64_t audio_buffer_samples_emitted = 0;
+  // INV-AUDIO-CLOCK-AUTHORITY-001:
+  // Cumulative OutputClock-derived sample accounting.
+  // expected_audio_samples = round(output_clock_elapsed_seconds * sample_rate)
+  // samples_due_now = expected_audio_samples - actual_audio_samples_emitted
+  // Audio packetization and FIFO behavior are downstream; they do not define timing.
+  int64_t expected_audio_samples = 0;
+  int64_t audio_sample_error = 0;
+  int64_t output_clock_elapsed_ms = 0;
 
   // OUT-SEG-005b: Track consecutive fallback ticks for broadcast KPI.
   // Counts ticks in a row where decoded audio was NOT emitted from a real asset.
@@ -3737,6 +3763,16 @@ void PipelineManager::Run() {
         (current_segment_index_ < static_cast<int32_t>(live_parent_block_.segments.size()) &&
          live_parent_block_.segments[current_segment_index_].segment_type == SegmentType::kPad);
 
+    // INV-AUDIO-CLOCK-AUTHORITY-001: compute due samples from OutputClock elapsed time.
+    // Use elapsed deadline at end of this tick window (session_frame_index + 1) so tick 0
+    // emits the first frame-duration worth of audio and shares epoch with video.
+    const auto elapsed_ns = clock->DeadlineOffsetNs(session_frame_index + 1).count();
+    expected_audio_samples = ComputeExpectedAudioSamplesFromOutputClockNs(
+        elapsed_ns, buffer::kHouseAudioSampleRate);
+    const int due_samples = ComputeDueAudioSamples(
+        expected_audio_samples, audio_samples_emitted);
+    const int samples_this_tick = due_samples;
+
     // Diagnostic: did we push silence into a_src this tick (for FENCE_AUDIO_PAD analysis).
     bool silence_pushed_this_tick = false;
     switch (decision) {
@@ -3748,19 +3784,13 @@ void PipelineManager::Run() {
         // When a_src is null (PADDED_GAP / block fence), use audio_buffer_ (live) so PAD
         // silence is always enqueued and we never hit FENCE_AUDIO_PAD.
         AudioLookaheadBuffer* pad_dest = a_src ? a_src : audio_buffer_.get();
-        int64_t sr_pad = static_cast<int64_t>(buffer::kHouseAudioSampleRate);
-        int64_t next_total_pad =
-            ((audio_ticks_emitted + 1) * sr_pad * ctx_->fps.den) / ctx_->fps.num;
-        int pad_samples_this_tick =
-            static_cast<int>(next_total_pad - audio_buffer_samples_emitted);
-
         buffer::AudioFrame pad_audio_frame;
         pad_audio_frame.sample_rate = buffer::kHouseAudioSampleRate;
         pad_audio_frame.channels = buffer::kHouseAudioChannels;
-        pad_audio_frame.nb_samples = pad_samples_this_tick;
+        pad_audio_frame.nb_samples = samples_this_tick;
         pad_audio_frame.pts_us = audio_pts_90k * 1000 / 90;
         pad_audio_frame.data.resize(
-            static_cast<size_t>(pad_samples_this_tick) *
+            static_cast<size_t>(samples_this_tick) *
             static_cast<size_t>(buffer::kHouseAudioChannels) * sizeof(int16_t), 0);
         if (pad_dest) {
           pad_dest->Push(std::move(pad_audio_frame), 0);
@@ -3795,18 +3825,13 @@ void PipelineManager::Run() {
       { std::ostringstream oss; oss << "[PipelineManager] SEAM_ORDER tick=" << session_frame_index << " before_post_switch_pad_injection"; Logger::Debug(oss.str()); }
     }
     if (active_segment_is_pad && audio_buffer_ && !silence_pushed_this_tick) {
-      int64_t sr_pad = static_cast<int64_t>(buffer::kHouseAudioSampleRate);
-      int64_t next_total_pad =
-          ((audio_ticks_emitted + 1) * sr_pad * ctx_->fps.den) / ctx_->fps.num;
-      int pad_samples_this_tick =
-          static_cast<int>(next_total_pad - audio_buffer_samples_emitted);
       buffer::AudioFrame pad_audio_frame;
       pad_audio_frame.sample_rate = buffer::kHouseAudioSampleRate;
       pad_audio_frame.channels = buffer::kHouseAudioChannels;
-      pad_audio_frame.nb_samples = pad_samples_this_tick;
+      pad_audio_frame.nb_samples = samples_this_tick;
       pad_audio_frame.pts_us = audio_pts_90k * 1000 / 90;
       pad_audio_frame.data.resize(
-          static_cast<size_t>(pad_samples_this_tick) *
+          static_cast<size_t>(samples_this_tick) *
           static_cast<size_t>(buffer::kHouseAudioChannels) * sizeof(int16_t), 0);
       audio_buffer_->Push(std::move(pad_audio_frame), 0);
       silence_pushed_this_tick = true;
@@ -3821,7 +3846,8 @@ void PipelineManager::Run() {
     // On every tick (PAD and content), pop exactly one tick's worth of
     // samples from the AudioLookaheadBuffer and encode.  PAD ticks push
     // silence into the buffer above then fall through here; content ticks
-    // pop decoded audio.  Single path advances audio_ticks_emitted once per tick.
+    // pop decoded audio. Single path advances cumulative audio_samples_emitted
+    // using OutputClock-derived due-sample accounting.
     //
     // When PAD used a fallback (a_src null, pushed to audio_buffer_), pop
     // from that same buffer so we do not hit FENCE_AUDIO_PAD. Same for
@@ -3831,13 +3857,6 @@ void PipelineManager::Run() {
     if (!a_src && audio_buffer_ && (IsPadDecision(decision) || active_segment_is_pad)) {
       a_emit = audio_buffer_.get();
     }
-    // Exact per-tick sample count via rational arithmetic (drift-free).
-    int64_t sr = static_cast<int64_t>(buffer::kHouseAudioSampleRate);
-    int64_t next_total =
-        ((audio_ticks_emitted + 1) * sr * ctx_->fps.den) / ctx_->fps.num;
-    int samples_this_tick =
-        static_cast<int>(next_total - audio_buffer_samples_emitted);
-
 #ifdef RETROVUE_DEBUG_PAD_EMIT
     { std::ostringstream oss;
       oss << "[PipelineManager] AUDIO_EMIT_DIAG: tick=" << session_frame_index
@@ -3863,8 +3882,6 @@ void PipelineManager::Run() {
       session_encoder->encodeAudioFrame(silence, audio_pts_90k,
                                          /*is_silence_pad=*/true);
       audio_samples_emitted += samples_this_tick;
-      audio_buffer_samples_emitted += samples_this_tick;
-      audio_ticks_emitted++;
       audio_frames_this_tick = 1;
       current_consecutive_fallback_ticks++;
     } else if (a_emit && (a_emit->IsPrimed() || IsPadDecision(decision) || active_segment_is_pad)) {
@@ -3944,8 +3961,6 @@ void PipelineManager::Run() {
         }
         session_encoder->encodeAudioFrame(audio_out, audio_pts_90k, IsPadDecision(decision));
         audio_samples_emitted += samples_this_tick;
-        audio_buffer_samples_emitted += samples_this_tick;
-        audio_ticks_emitted++;
         audio_frames_this_tick = 1;
         if (!IsPadDecision(decision)) {
           // OUT-SEG-005b: Real decoded audio — reset fallback streak.
@@ -3984,8 +3999,6 @@ void PipelineManager::Run() {
           session_encoder->encodeAudioFrame(silence, audio_pts_90k,
                                              /*is_silence_pad=*/true);
           audio_samples_emitted += samples_this_tick;
-          audio_buffer_samples_emitted += samples_this_tick;
-          audio_ticks_emitted++;
           audio_frames_this_tick = 1;
           { std::lock_guard<std::mutex> lock(metrics_mutex_); metrics_.audio_silence_injected++; }
           // OUT-SEG-005b: Underflow silence = fallback tick.
@@ -4010,8 +4023,6 @@ void PipelineManager::Run() {
       session_encoder->encodeAudioFrame(silence, audio_pts_90k,
                                          /*is_silence_pad=*/true);
       audio_samples_emitted += samples_this_tick;
-      audio_buffer_samples_emitted += samples_this_tick;
-      audio_ticks_emitted++;
       audio_frames_this_tick = 1;
 
       { std::ostringstream oss;
@@ -4035,6 +4046,34 @@ void PipelineManager::Run() {
 #endif
       // OUT-SEG-005b: Fence pad silence = fallback tick.
       current_consecutive_fallback_ticks++;
+    }
+
+    // INV-AUDIO-CLOCK-AUTHORITY-001 observability at real emission boundary.
+    audio_sample_error = expected_audio_samples - audio_samples_emitted;
+    output_clock_elapsed_ms = elapsed_ns / 1'000'000;
+    if (session_frame_index < 3 || (session_frame_index % 300) == 0) {
+      const int64_t audio_time_emitted_ms =
+          (audio_samples_emitted * 1000) / buffer::kHouseAudioSampleRate;
+      const int64_t video_time_emitted_ms = output_clock_elapsed_ms;
+      const int64_t av_delta_ms = audio_time_emitted_ms - video_time_emitted_ms;
+      std::ostringstream oss;
+      oss << "[PipelineManager] AUDIO_CLOCK_AUTHORITY"
+          << " tick=" << session_frame_index
+          << " output_clock_elapsed_ms=" << output_clock_elapsed_ms
+          << " expected_audio_samples=" << expected_audio_samples
+          << " actual_audio_samples_emitted=" << audio_samples_emitted
+          << " due_samples=" << due_samples
+          << " samples_this_tick=" << samples_this_tick
+          << " audio_sample_error=" << audio_sample_error
+          << " audio_time_emitted_ms=" << audio_time_emitted_ms
+          << " video_time_emitted_ms=" << video_time_emitted_ms
+          << " av_delta_ms=" << av_delta_ms
+          << " clock_authority_mode=output_clock";
+      if (session_frame_index < 3) {
+        Logger::Info(oss.str());
+      } else {
+        Logger::Debug(oss.str());
+      }
     }
 
     // INV-MUX-CYCLE-FLUSH: Flush the internal interleaver after encoding both

@@ -498,6 +498,7 @@ add_executable(blockplan_contract_tests
   tests/contracts/BlockPlan/LastSegmentBlockBoundaryContractTests.cpp
   tests/contracts/BlockPlan/CadenceSeamAdvanceContractTests.cpp
   tests/contracts/BlockPlan/CadenceSourceSyncContractTests.cpp
+  tests/contracts/BlockPlan/AudioClockAuthorityContractTests.cpp
   tests/contracts/BlockPlan/TimeBasedResamplingContractTests.cpp
   tests/contracts/BlockPlan/AspectPreserveContractTests.cpp
   tests/contracts/BlockPlan/LoudnessGainContractTests.cpp

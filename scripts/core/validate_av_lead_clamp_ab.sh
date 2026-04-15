@@ -3,7 +3,8 @@
 #   Phase 1: RETROVUE_DISABLE_AV_LEAD_CLAMP=1 — clamp suppression off (ramp without clamp)
 #   Phase 2: clamp on + RETROVUE_AV_LEAD_CLAMP_LOG_ALL=1 — every clamp logged
 #
-# Requires: server/.venv, runtime/build/retrovue_air, assets SampleA/B, config/channels/test-1.yaml
+# Requires: server/.venv, runtime/build/retrovue_air, assets SampleA/B.
+# Uses --mock-schedule-ab (channel test-1 in-process); no channel YAML needed.
 #
 # Usage:
 #   ./scripts/core/validate_av_lead_clamp_ab.sh
