@@ -23,6 +23,7 @@ A cache consistency violation: a reader serves future editorial schedule from `R
 ## Required Tests
 
 - `server/tests/contracts/scheduling/test_inv_schedule_revision_monotonicity_001.py`
+- `server/tests/contracts/scheduling/test_scheduling_invariants_v1.py` (Group 10 — revision monotonicity)
 
 ## Enforcement Evidence
 
