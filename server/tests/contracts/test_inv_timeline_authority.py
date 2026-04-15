@@ -508,3 +508,55 @@ class TestTimelineCarryInPreserved:
         prior_day = date(2026, 4, 5)
         result = DslScheduleService._get_prior_day_end_ms([], prior_day)
         assert result == 0
+
+
+# ===========================================================================
+# Runtime timeline: reconcile + empty recovery (read path)
+# ===========================================================================
+
+
+class TestRuntimeTimelineReconcileAndRecovery:
+    """After scheduling refactor: bump head must not thrash; empty _blocks must reload."""
+
+    def test_reconcile_publish_bump_sets_timeline_revision_to_head(self):
+        """INV-SCHEDULE-REVISION-MONOTONICITY-001: After reload, _timeline_revision_id
+        must match the bumped head so get_block_at does not clear _blocks every call
+        when DB .first() active revision differs from publish head.
+        """
+        from retrovue.config.testing import TEST_RESOLVED_CONFIG
+
+        head_id = uuid.uuid4()
+        svc = DslScheduleService(
+            dsl_path="/dev/null",
+            filler_path="/opt/retrovue/assets/filler.mp4",
+            filler_duration_ms=3_650_000,
+            resolved_config=TEST_RESOLVED_CONFIG,
+            channel_slug="test-chan",
+        )
+        svc._timeline_revision_id = uuid.uuid4()
+
+        with patch(
+            "retrovue.runtime.schedule_cache_monotonicity.get_channel_schedule_revision_head",
+            return_value=str(head_id),
+        ), patch.object(svc, "_build_initial") as mock_build:
+            svc._reconcile_timeline_if_publish_bumped("test-chan")
+
+        mock_build.assert_called_once_with("test-chan")
+        assert svc._timeline_revision_id == head_id
+
+    def test_maybe_extend_horizon_calls_build_initial_when_blocks_empty(self):
+        """Empty _blocks must trigger _build_initial so horizon logic can run again."""
+        from retrovue.config.testing import TEST_RESOLVED_CONFIG
+
+        svc = DslScheduleService(
+            dsl_path="/dev/null",
+            filler_path="/opt/retrovue/assets/filler.mp4",
+            filler_duration_ms=3_650_000,
+            resolved_config=TEST_RESOLVED_CONFIG,
+            channel_slug="test-chan",
+        )
+        assert svc._blocks == []
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        with patch.object(svc, "_build_initial") as mock_build:
+            svc._maybe_extend_horizon("test-chan", now_ms)
+        mock_build.assert_called_once_with("test-chan")

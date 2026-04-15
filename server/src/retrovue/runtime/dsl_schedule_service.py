@@ -20,6 +20,7 @@ import threading
 import weakref
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures.thread import _worker, _threads_queues
+import uuid
 from datetime import datetime, timezone, timedelta, date
 from pathlib import Path
 from typing import Any
@@ -224,6 +225,9 @@ class DslScheduleService:
         # Track which broadcast days have been compiled (set of "YYYY-MM-DD")
         self._compiled_days: set[str] = set()
 
+        # INV-SCHEDULE-REVISION-MONOTONICITY-001: active ScheduleRevision id for
+        # loaded in-memory timeline; reconciled against bump_channel_schedule_revision_head.
+        self._timeline_revision_id: uuid.UUID | None = None
 
         # Recompile guard: prevent concurrent horizon extensions
         self._extending = False
@@ -412,6 +416,61 @@ class DslScheduleService:
             logger.error(f"Failed to load DSL schedule: {e}", exc_info=True)
             return (False, str(e))
 
+    def _query_active_revision_id_for_channel(self, channel_id: str) -> uuid.UUID | None:
+        """Return the sole active ScheduleRevision id for this channel, if any."""
+        from retrovue.domain.entities import Channel, ScheduleRevision
+
+        try:
+            with session() as db:
+                ch = db.query(Channel).filter(Channel.slug == channel_id).first()
+                if ch is None:
+                    return None
+                rev = (
+                    db.query(ScheduleRevision)
+                    .filter(
+                        ScheduleRevision.channel_id == ch.id,
+                        ScheduleRevision.status == "active",
+                    )
+                    .first()
+                )
+                return rev.id if rev else None
+        except Exception:
+            return None
+
+    def _reconcile_timeline_if_publish_bumped(self, channel_id: str) -> None:
+        """Drop in-memory timeline when a splice publish advanced the revision head in-process."""
+        from retrovue.runtime.schedule_cache_monotonicity import (
+            get_channel_schedule_revision_head,
+        )
+
+        head_s = get_channel_schedule_revision_head(channel_id)
+        if head_s is None:
+            return
+        try:
+            head_u = uuid.UUID(head_s)
+        except ValueError:
+            return
+        with self._lock:
+            if self._timeline_revision_id == head_u:
+                return
+            self._blocks = []
+            self._compiled_days = set()
+            self._timeline_revision_id = None
+        logger.info(
+            "INV-SCHEDULE-REVISION-MONOTONICITY-001: reloading timeline for channel=%s "
+            "after publish bump head=%s",
+            channel_id,
+            head_s,
+        )
+        self._build_initial(channel_id)
+        # Align cache marker with the bumped head. _build_initial sets
+        # _timeline_revision_id from _query_active_revision_id_for_channel().first(),
+        # which can disagree with the publish head when multiple rows are active
+        # (per broadcast_day). Mismatch would re-trigger reconcile on every
+        # get_block_at, clearing _blocks repeatedly and starving lookups.
+        with self._lock:
+            self._timeline_revision_id = head_u
+
     def get_block_at(self, channel_id: str, utc_ms: int) -> ScheduledBlock | None:
         """Return the ScheduledBlock covering the given wall-clock time.
 
@@ -424,6 +483,7 @@ class DslScheduleService:
 
         Also checks if the horizon needs extending.
         """
+        self._reconcile_timeline_if_publish_bumped(channel_id)
         # Check horizon before lookup
         self._maybe_extend_horizon(channel_id, utc_ms)
 
@@ -926,6 +986,19 @@ class DslScheduleService:
         with self._lock:
             if self._extending:
                 return  # another call is already extending
+            empty_timeline = not self._blocks
+        # Recover from empty _blocks (e.g. reconcile cleared cache, or first load
+        # failed transiently). Without this, the early return below prevented any
+        # horizon work — get_block_at could never recover while DB had rows.
+        if empty_timeline:
+            logger.info(
+                "DSL horizon: empty in-memory timeline — reloading from DB for channel=%s",
+                channel_id,
+            )
+            self._build_initial(channel_id)
+        with self._lock:
+            if self._extending:
+                return
             if not self._blocks:
                 return
             last_end_ms = self._blocks[-1].end_utc_ms
@@ -1271,9 +1344,11 @@ class DslScheduleService:
         # timeline.
         loaded_blocks = self._enforce_timeline_contiguity(loaded_blocks)
 
+        active_rid = self._query_active_revision_id_for_channel(channel_id)
         with self._lock:
             self._blocks = loaded_blocks
             self._compiled_days = loaded_days
+            self._timeline_revision_id = active_rid
 
         logger.info(
             "INV-TIMELINE-SINGLE-AUTHORITY-001: timeline loaded from DB — "
@@ -1766,7 +1841,10 @@ class DslScheduleService:
                     len(segmented_blocks), rev.id,
                 )
 
-                return {"segmented_blocks": segmented_blocks}
+                return {
+                    "segmented_blocks": segmented_blocks,
+                    "revision_id": str(rev.id),
+                }
 
         except Exception as e:
             logger.warning(
@@ -1817,7 +1895,9 @@ class DslScheduleService:
         For dates beyond the horizon, returns [].
 
         INV-EPG-READS-CANONICAL-SCHEDULE-001: DB is the preferred source.
-        Falls back to in-memory blocks only when DB has no data.
+        Falls back to in-memory blocks only when get_canonical_epg returns None
+        (canonical unavailable). An empty list from the DB is a valid empty window
+        and is returned as-is (no in-memory overlay).
 
         INV-SCHEDULE-PREWARM-001: MUST NOT trigger compilation.
         """
@@ -1958,10 +2038,11 @@ class DslScheduleService:
                         "asset_id": meta.get("asset_id_raw") or (str(it.asset_id) if it.asset_id else ""),
                         "collection": meta.get("collection_raw") or (str(it.container_id) if it.container_id else None),
                         "content_type": it.content_type,
+                        "schedule_revision_id": str(it.schedule_revision_id),
                     })
 
                 out.sort(key=lambda x: x["start_at"])
-                return out if out else None
+                return out
         except Exception as e:
             logger.warning("Failed to read canonical EPG for %s/%s: %s", channel_id, window_start, e)
         return None
@@ -1982,8 +2063,22 @@ class DslScheduleService:
         removed before persisting — they will never air because a
         prior-day block owns that time.
         """
+        from retrovue.runtime.schedule_cache_monotonicity import (
+            channel_timeline_cache_payload_is_stale,
+        )
+
         # DB-first: check cache
         cached = self._get_cached_schedule(channel_id, broadcast_day)
+        if cached is not None and channel_timeline_cache_payload_is_stale(
+            channel_id, cached
+        ):
+            logger.info(
+                "INV-SCHEDULE-REVISION-MONOTONICITY-001: ignoring stale compiled "
+                "schedule cache for %s/%s — revision head mismatch",
+                channel_id,
+                broadcast_day,
+            )
+            cached = None
         if cached is not None:
             logger.debug("Using cached schedule for %s/%s", channel_id, broadcast_day)
             blocks = self._hydrate_schedule(cached, channel_id, broadcast_day)
