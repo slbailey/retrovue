@@ -197,7 +197,7 @@ def rebuild_playlog_plan(
                     break_config=break_config,
                 )
 
-                row = PlaylistEvent(
+                pe_kwargs: dict = dict(
                     block_id=filled_block.block_id,
                     channel_slug=channel_slug,
                     broadcast_day=scan_date,
@@ -215,6 +215,14 @@ def rebuild_playlog_plan(
                     ],
                     window_uuid=sb_dict.get("window_uuid"),
                 )
+                srid = sb_dict.get("schedule_revision_id")
+                if srid:
+                    import uuid as uuid_mod
+
+                    pe_kwargs["schedule_revision_id"] = (
+                        uuid_mod.UUID(srid) if isinstance(srid, str) else srid
+                    )
+                row = PlaylistEvent(**pe_kwargs)
                 db.merge(row)
                 result.rebuilt += 1
             except Exception as e:

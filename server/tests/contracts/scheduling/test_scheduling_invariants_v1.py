@@ -27,6 +27,13 @@ from retrovue.domain.entities import (
 )
 from retrovue.infra import db as db_module
 from retrovue.runtime.clock import ControllableMasterClock
+from retrovue.runtime.dsl_schedule_service import DslScheduleService
+from retrovue.runtime.schedule_cache_monotonicity import (
+    bump_channel_schedule_revision_head,
+    channel_timeline_cache_payload_is_stale,
+    get_channel_schedule_revision_head,
+)
+from retrovue.runtime.schedule_items_reader import load_segmented_blocks_from_active_revision
 from retrovue.runtime.schedule_revision_writer import (
     write_active_revision_from_compiled_schedule,
 )
@@ -40,7 +47,8 @@ _ANCHOR = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
 
 
 def _slug(prefix: str = "inv") -> str:
-    return f"{prefix}_{uuid.uuid4().hex[:12]}"
+    # Must satisfy ck_channels_slug_kebab_lower: ^[a-z0-9]+(-[a-z0-9]+)*$
+    return f"{prefix}-{uuid.uuid4().hex[:12]}"
 
 
 def _make_channel(db: Session, slug: str) -> Channel:
@@ -149,14 +157,17 @@ class TestInvScheduleTimeImmutability001:
             assert clock.now_utc() > _item_end_utc(it)
 
             try:
-                pg_session.execute(
-                    update(ScheduleItem)
-                    .where(ScheduleItem.id == it.id)
-                    .values(
-                        duration_sec=7200,
-                        metadata_={"title": "tampered"},
+                with patch(
+                    "retrovue.runtime.schedule_revision_writer._clock", clock
+                ):
+                    pg_session.execute(
+                        update(ScheduleItem)
+                        .where(ScheduleItem.id == it.id)
+                        .values(
+                            duration_sec=7200,
+                            metadata_={"title": "tampered"},
+                        )
                     )
-                )
                 pg_session.commit()
             except Exception:
                 pg_session.rollback()
@@ -201,11 +212,14 @@ class TestInvScheduleTimeImmutability001:
             assert it.start_time <= clock.now_utc() < _item_end_utc(it)
 
             try:
-                pg_session.execute(
-                    update(ScheduleItem)
-                    .where(ScheduleItem.id == it.id)
-                    .values(metadata_={"title": "cut_live"})
-                )
+                with patch(
+                    "retrovue.runtime.schedule_revision_writer._clock", clock
+                ):
+                    pg_session.execute(
+                        update(ScheduleItem)
+                        .where(ScheduleItem.id == it.id)
+                        .values(metadata_={"title": "cut_live"})
+                    )
                 pg_session.commit()
             except Exception:
                 pg_session.rollback()
@@ -661,7 +675,8 @@ class TestInvScheduleJoinIntegrity001:
                 .all()
             )
             last_end = _item_end_utc(items[1])
-            clock.advance(5000.0)
+            # Advance so both g1/g2 are sealed, but now < gap_start (first S_new still future).
+            clock.advance(65 * 60.0)
             gap_start = last_end + timedelta(minutes=10)
             sched_gap = {
                 "version": "program-schedule.v2",
@@ -764,50 +779,111 @@ class TestInvPlaylogSupersededRevision001:
         slug = _slug("pl")
         try:
             ch = _make_channel(pg_session, slug)
-            old_rev = ScheduleRevision(
-                channel_id=ch.id,
+            clock = ControllableMasterClock(epoch=_ANCHOR)
+            b0 = _schedule_block(_ANCHOR, 1800, title="A")
+            b1 = _schedule_block(_ANCHOR + timedelta(minutes=30), 1800, title="B")
+            b2 = _schedule_block(_ANCHOR + timedelta(hours=1), 1800, title="C")
+            sched0 = {
+                "version": "program-schedule.v2",
+                "hash": "h0",
+                "program_blocks": [b0, b1, b2],
+            }
+            with patch(
+                "retrovue.runtime.schedule_revision_writer._clock", clock
+            ):
+                assert (
+                    write_active_revision_from_compiled_schedule(
+                        pg_session,
+                        channel_slug=slug,
+                        broadcast_day=_BDAY,
+                        schedule=sched0,
+                        created_by="test",
+                    )
+                    is True
+                )
+            pg_session.commit()
+
+            # Simulate Tier-2 materialization: one row starting before splice boundary, one after.
+            past_ms = int((_ANCHOR + timedelta(minutes=15)).timestamp() * 1000)
+            pe_past = PlaylistEvent(
+                block_id=f"{slug}-past",
+                channel_slug=slug,
                 broadcast_day=_BDAY,
-                status="superseded",
-                activated_at=_ANCHOR,
-                created_by="test",
+                start_utc_ms=past_ms,
+                end_utc_ms=past_ms + 600_000,
+                segments=[{"kind": "primary", "tag": "past"}],
             )
-            pg_session.add(old_rev)
-            pg_session.flush()
             future_ms = int((_ANCHOR + timedelta(hours=5)).timestamp() * 1000)
-            pe = PlaylistEvent(
-                block_id=f"{slug}_oldblk",
+            pe_future = PlaylistEvent(
+                block_id=f"{slug}-future",
                 channel_slug=slug,
                 broadcast_day=_BDAY,
                 start_utc_ms=future_ms,
                 end_utc_ms=future_ms + 1_800_000,
-                segments=[{"kind": "primary"}],
+                segments=[{"kind": "primary", "tag": "future"}],
             )
-            pg_session.add(pe)
+            pg_session.add(pe_past)
+            pg_session.add(pe_future)
             pg_session.commit()
 
-            # Simulate successful splice to new revision (not implemented): expect cleanup
-            new_rev = ScheduleRevision(
-                channel_id=ch.id,
-                broadcast_day=_BDAY,
-                status="active",
-                activated_at=_ANCHOR,
-                created_by="test2",
+            # 12:45: A sealed, B live, C pending — replace pending tail only.
+            clock.advance(45 * 60.0)
+            rev1 = (
+                pg_session.query(ScheduleRevision)
+                .filter(
+                    ScheduleRevision.channel_id == ch.id,
+                    ScheduleRevision.status == "active",
+                )
+                .one()
             )
-            pg_session.add(new_rev)
+            items = (
+                pg_session.query(ScheduleItem)
+                .filter(ScheduleItem.schedule_revision_id == rev1.id)
+                .order_by(ScheduleItem.slot_index)
+                .all()
+            )
+            last_end = _item_end_utc(items[1])
+            sched_splice = {
+                "version": "program-schedule.v2",
+                "hash": "h1",
+                "program_blocks": [
+                    _schedule_block(last_end, 1800, title="C2"),
+                ],
+            }
+            with patch(
+                "retrovue.runtime.schedule_revision_writer._clock", clock
+            ):
+                assert (
+                    write_active_revision_from_compiled_schedule(
+                        pg_session,
+                        channel_slug=slug,
+                        broadcast_day=_BDAY,
+                        schedule=sched_splice,
+                        created_by="test",
+                    )
+                    is True
+                )
             pg_session.commit()
 
-            stale = (
+            boundary_ms = int(clock.now_utc().timestamp() * 1000)
+            stale_future = (
                 pg_session.query(PlaylistEvent)
                 .filter(
                     PlaylistEvent.channel_slug == slug,
-                    PlaylistEvent.start_utc_ms >= int(_ANCHOR.timestamp() * 1000),
+                    PlaylistEvent.start_utc_ms >= boundary_ms,
                 )
                 .count()
             )
-            assert stale == 0, (
+            assert stale_future == 0, (
                 "INV-PLAYLOG-SUPERSEDED-REVISION-001: future playlog rows tied to "
                 "superseded editorial state must be deleted or invalidated on splice"
             )
+            assert (
+                pg_session.query(PlaylistEvent)
+                .filter(PlaylistEvent.block_id == f"{slug}-past")
+                .count()
+                == 1
+            ), "historical PlaylistEvent before splice boundary must remain"
         finally:
             _cleanup_channel_slug(pg_session, slug)
 
@@ -841,12 +917,66 @@ class TestInvScheduleCanonicalDerivation001:
                 schedule_revision_id=rev.id,
             )
             pg_session.add(ptr)
+            aid = str(uuid.uuid4())
+            slot_start = _ANCHOR + timedelta(hours=2)
+            item = ScheduleItem(
+                schedule_revision_id=rev.id,
+                start_time=slot_start,
+                duration_sec=1800,
+                asset_id=None,
+                container_id=None,
+                content_type="episode",
+                slot_index=0,
+                metadata_={
+                    "title": "Canon",
+                    "asset_id_raw": aid,
+                    "compiled_segments": [
+                        {
+                            "segment_type": "primary",
+                            "asset_id": aid,
+                            "duration_ms": 1800 * 1000,
+                        }
+                    ],
+                },
+            )
+            pg_session.add(item)
             pg_session.commit()
 
-            pytest.fail(
-                "INV-SCHEDULE-CANONICAL-DERIVATION-001: implement cross-read of "
-                "schedule_revision_id from EPG, playlog horizon, and runtime plan"
+            window_end = _ANCHOR + timedelta(days=1)
+            epg = DslScheduleService.get_canonical_epg(slug, _ANCHOR, window_end)
+            assert epg is not None and len(epg) >= 1
+            rid_epg = epg[0].get("schedule_revision_id")
+            assert rid_epg == str(rev.id), (
+                "INV-SCHEDULE-CANONICAL-DERIVATION-001: EPG must expose schedule_revision_id "
+                "from canonical ScheduleItem rows"
             )
+
+            blocks = load_segmented_blocks_from_active_revision(
+                pg_session,
+                channel_slug=slug,
+                broadcast_day=_BDAY,
+            )
+            assert blocks is not None and len(blocks) >= 1
+            assert blocks[0].get("schedule_revision_id") == str(rev.id), (
+                "INV-SCHEDULE-CANONICAL-DERIVATION-001: playout block dicts must carry "
+                "schedule_revision_id from the active revision"
+            )
+
+            future_ms = int((_ANCHOR + timedelta(hours=3)).timestamp() * 1000)
+            pe = PlaylistEvent(
+                block_id=f"{slug}-pl",
+                channel_slug=slug,
+                broadcast_day=_BDAY,
+                start_utc_ms=future_ms,
+                end_utc_ms=future_ms + 1_800_000,
+                segments=[{"kind": "primary"}],
+                schedule_revision_id=rev.id,
+            )
+            pg_session.add(pe)
+            pg_session.commit()
+            pg_session.refresh(pe)
+            assert pe.schedule_revision_id == rev.id
+            assert str(pe.schedule_revision_id) == rid_epg
         finally:
             _cleanup_channel_slug(pg_session, slug)
 
@@ -881,7 +1011,6 @@ class TestInvScheduleRevisionMonotonicity001:
             pg_session.add(r1)
             pg_session.add(r2)
             pg_session.flush()
-            fake_cache = {"channel": slug, "blocks": [{"id": "stale"}]}
             active_id = (
                 pg_session.execute(
                     select(ScheduleRevision.id).where(
@@ -891,10 +1020,34 @@ class TestInvScheduleRevisionMonotonicity001:
                 )
                 .scalar_one()
             )
-            assert "revision_id" in fake_cache or "revision_seq" in fake_cache, (
-                "INV-SCHEDULE-REVISION-MONOTONICITY-001: timeline cache must "
-                "carry revision identity; stale dict must not serve future tail"
+
+            bump_channel_schedule_revision_head(slug, str(active_id))
+            assert get_channel_schedule_revision_head(slug) == str(active_id)
+
+            stale_no_rid = {"channel": slug, "blocks": [{"id": "stale"}]}
+            assert channel_timeline_cache_payload_is_stale(slug, stale_no_rid), (
+                "INV-SCHEDULE-REVISION-MONOTONICITY-001: future-facing cache without "
+                "revision_id must not win after a publish bump"
             )
-            assert fake_cache.get("revision_id") == active_id
+
+            stale_old_rid = {
+                "channel": slug,
+                "revision_id": str(r1.id),
+                "blocks": [{"id": "stale"}],
+            }
+            assert channel_timeline_cache_payload_is_stale(slug, stale_old_rid), (
+                "INV-SCHEDULE-REVISION-MONOTONICITY-001: cache tied to superseded "
+                "revision must be stale vs active head"
+            )
+
+            fresh = {
+                "channel": slug,
+                "revision_id": str(active_id),
+                "blocks": [{"id": "ok"}],
+            }
+            assert not channel_timeline_cache_payload_is_stale(slug, fresh), (
+                "INV-SCHEDULE-REVISION-MONOTONICITY-001: cache matching bumped head "
+                "is authoritative for future visibility"
+            )
         finally:
             _cleanup_channel_slug(pg_session, slug)

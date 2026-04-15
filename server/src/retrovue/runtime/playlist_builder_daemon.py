@@ -542,6 +542,7 @@ class PlaylistBuilderDaemon:
                 self._write_to_txlog(
                     filled_block, scan_date,
                     window_uuid=sb_dict.get("window_uuid"),
+                    schedule_revision_id=sb_dict.get("schedule_revision_id"),
                     db=db,
                 )
 
@@ -864,6 +865,7 @@ class PlaylistBuilderDaemon:
             self._write_to_txlog(
                 filled_block, broadcast_day,
                 window_uuid=block.get("window_uuid"),
+                schedule_revision_id=block.get("schedule_revision_id"),
                 db=db,
             )
 
@@ -1049,6 +1051,7 @@ class PlaylistBuilderDaemon:
         broadcast_day: date,
         *,
         window_uuid: str | None = None,
+        schedule_revision_id: str | None = None,
         db=None,
     ) -> None:
         """Write a filled block to PlaylistEvent.
@@ -1112,6 +1115,14 @@ class PlaylistBuilderDaemon:
             segments=segments_data,
             window_uuid=window_uuid,
         )
+        if schedule_revision_id:
+            import uuid as uuid_mod
+
+            values["schedule_revision_id"] = (
+                uuid_mod.UUID(schedule_revision_id)
+                if isinstance(schedule_revision_id, str)
+                else schedule_revision_id
+            )
 
         try:
             if db is not None:

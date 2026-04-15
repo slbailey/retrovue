@@ -288,6 +288,7 @@ def load_segmented_blocks_from_active_revision(
         d = _serialize_scheduled_block(expanded)
         if item.window_uuid is not None:
             d["window_uuid"] = str(item.window_uuid)
+        d["schedule_revision_id"] = str(revision.id)
         out.append(d)
 
     return out

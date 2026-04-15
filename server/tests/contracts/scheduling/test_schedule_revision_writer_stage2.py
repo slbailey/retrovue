@@ -28,9 +28,15 @@ class _FakeQuery:
             return self._db.channel
         return None
 
+    def all(self):
+        return []
+
     def update(self, values, synchronize_session=False):
         self._db.update_calls.append(_UpdateCall(values=values))
         return 1
+
+    def delete(self, synchronize_session=False):
+        return 0
 
 
 class _FakeDB:
@@ -94,7 +100,7 @@ def test_stage2_dual_write_supersedes_then_writes_deterministic_slot_indices():
     )
 
     assert ok is True
-    assert len(db.update_calls) == 1, "Expected supersede update before insert"
+    assert len(db.update_calls) == 1, "Expected single supersede-all-actives update"
 
     revisions = [x for x in db.added if isinstance(x, ScheduleRevision)]
     items = [x for x in db.added if isinstance(x, ScheduleItem)]

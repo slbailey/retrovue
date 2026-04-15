@@ -1149,6 +1149,12 @@ class PlaylistEvent(Base):
     window_uuid: Mapped[uuid_module.UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), nullable=True,
     )
+    schedule_revision_id: Mapped[uuid_module.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("schedule_revisions.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="Active editorial revision this Tier-2 row was derived from",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=True
     )
@@ -1156,6 +1162,7 @@ class PlaylistEvent(Base):
     __table_args__ = (
         Index("ix_playlist_events_channel_day", "channel_slug", "broadcast_day"),
         Index("ix_playlist_events_window_uuid", "window_uuid"),
+        Index("ix_playlist_events_schedule_revision_id", "schedule_revision_id"),
     )
 
     def __repr__(self) -> str:

@@ -5,8 +5,19 @@ Time-splice authority (INV-SCHEDULE-SPLICE-001, INV-SCHEDULE-FUTURE-ONLY-MUTATIO
 - Replaces pending tail with S_new from program_blocks (all starts strictly > now).
 - Cold start (no active revision): persists all program_blocks (backfill-friendly).
 
+INV-SCHEDULE-JOIN-INTEGRITY-001: after P is fixed, first S_new.start must equal the join
+anchor (end of last item in P, or first pending old start when P is empty).
+
+INV-SINGLE-ACTIVE-REVISION-001 / INV-SCHEDULE-ATOMIC-PUBLISH-001: insert R_new as draft,
+materialize items, supersede every active revision for the channel, then activate R_new
+in the same transaction (no commit until all steps succeed).
+
 INV-SCHEDULE-TIME-IMMUTABILITY-001: SQL UPDATE/DELETE on sealed or live rows is blocked
 via engine-level guards (see _register_schedule_item_immutability_guards).
+
+INV-PLAYLOG-SUPERSEDED-REVISION-001: after publish, delete PlaylistEvent rows for this
+channel with start_utc_ms >= publish boundary so Tier-2 future tail cannot reference
+superseded editorial state.
 """
 
 from __future__ import annotations
@@ -25,10 +36,14 @@ from sqlalchemy.sql.dml import Delete, Update
 from retrovue.domain.entities import (
     Channel,
     ChannelActiveRevision,
+    PlaylistEvent,
     ScheduleItem,
     ScheduleRevision,
 )
 from retrovue.runtime.clock import MasterClock
+from retrovue.runtime.schedule_cache_monotonicity import (
+    bump_channel_schedule_revision_head,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +227,79 @@ def _schedule_item_from_block(
     )
 
 
+def _normalize_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _join_anchor_from_old_items(
+    old_items: list[ScheduleItem], now: datetime
+) -> datetime | None:
+    """Point in time (UTC) where the first S_new block must start when contiguity is required.
+
+    - If prefix P is non-empty: end time of the last item in P (start_time <= now).
+    - If P is empty but a pending tail exists: start_time of the first pending item.
+    - If there are no items: no anchor (cold tail within an empty revision).
+    """
+    prefix = [it for it in old_items if _normalize_utc(it.start_time) <= now]
+    pending = [it for it in old_items if _normalize_utc(it.start_time) > now]
+    if prefix:
+        last = prefix[-1]
+        return _item_end_utc(_normalize_utc(last.start_time), int(last.duration_sec))
+    if pending:
+        return _normalize_utc(pending[0].start_time)
+    return None
+
+
+def _assert_join_contiguous(first_start: datetime, join_point: datetime) -> None:
+    fs = _normalize_utc(first_start)
+    jp = _normalize_utc(join_point)
+    delta = (fs - jp).total_seconds()
+    if abs(delta) < 1e-6:
+        return
+    if delta < 0:
+        raise ValueError(
+            "INV-SCHEDULE-JOIN-INTEGRITY-001: join|last_end|suffix|S_new "
+            f"overlap first={fs.isoformat()} last_end={jp.isoformat()}"
+        )
+    raise ValueError(
+        "INV-SCHEDULE-JOIN-INTEGRITY-001: join|gap|last_end|contig "
+        f"gap first={fs.isoformat()} last_end={jp.isoformat()}"
+    )
+
+
+def _invalidate_future_playlist_events_for_channel(
+    db: Any,
+    *,
+    channel_slug: str,
+    boundary_utc: datetime,
+) -> int:
+    """Remove Tier-2 playlog plan rows from the publish instant forward (same transaction).
+
+    Rows with start_utc_ms strictly before the boundary are retained (sealed / historical
+    materialization). Rows starting at or after the boundary are removed so no future
+    instant can read a PlaylistEvent tied to a superseded revision's tail.
+    """
+    ms = int(_normalize_utc(boundary_utc).timestamp() * 1000)
+    deleted = (
+        db.query(PlaylistEvent)
+        .filter(
+            PlaylistEvent.channel_slug == channel_slug,
+            PlaylistEvent.start_utc_ms >= ms,
+        )
+        .delete(synchronize_session=False)
+    )
+    if deleted:
+        logger.debug(
+            "playlog_future_invalidate channel_slug=%s boundary_utc_ms=%s deleted=%s",
+            channel_slug,
+            ms,
+            deleted,
+        )
+    return int(deleted or 0)
+
+
 def _copy_preserved_item(
     src: ScheduleItem,
     revision_id: uuid_mod.UUID,
@@ -268,13 +356,20 @@ def write_active_revision_from_compiled_schedule(
 
     now = _clock.now_utc()
 
+    # Serialize publishes per channel (all active rows for this channel).
+    _lock_actives = db.query(ScheduleRevision).filter(
+        ScheduleRevision.channel_id == channel.id,
+        ScheduleRevision.status == "active",
+    )
+    if hasattr(_lock_actives, "with_for_update"):
+        _lock_actives = _lock_actives.with_for_update()
+    _lock_actives.all()
+
     _rev_q = db.query(ScheduleRevision).filter(
         ScheduleRevision.channel_id == channel.id,
         ScheduleRevision.broadcast_day == broadcast_day,
         ScheduleRevision.status == "active",
     )
-    if hasattr(_rev_q, "with_for_update"):
-        _rev_q = _rev_q.with_for_update()
     existing_active = _rev_q.first()
 
     # Parse and normalize all incoming block starts
@@ -309,25 +404,18 @@ def write_active_revision_from_compiled_schedule(
             .all()
         )
 
-    # Supersede prior active revision for this channel+day
-    boundary = now
-    db.query(ScheduleRevision).filter(
-        ScheduleRevision.channel_id == channel.id,
-        ScheduleRevision.broadcast_day == broadcast_day,
-        ScheduleRevision.status == "active",
-    ).update(
-        {"status": "superseded", "superseded_at": boundary},
-        synchronize_session=False,
-    )
-    db.flush()
+    if existing_active is not None and parsed_blocks:
+        join_point = _join_anchor_from_old_items(old_items_snapshot, now)
+        if join_point is not None:
+            _assert_join_contiguous(parsed_blocks[0][0], join_point)
 
-    activated_at = _clock.now_utc()
+    publish_ts = _clock.now_utc()
 
     revision = ScheduleRevision(
         channel_id=channel.id,
         broadcast_day=broadcast_day,
-        status="active",
-        activated_at=activated_at,
+        status="draft",
+        activated_at=None,
         created_by=created_by,
         metadata_={
             "source": schedule.get("source"),
@@ -340,7 +428,7 @@ def write_active_revision_from_compiled_schedule(
 
     slot = 0
     if existing_active is not None:
-        prefix = [it for it in old_items_snapshot if it.start_time <= now]
+        prefix = [it for it in old_items_snapshot if _normalize_utc(it.start_time) <= now]
         for src in prefix:
             db.add(_copy_preserved_item(src, revision.id, slot))
             slot += 1
@@ -349,23 +437,44 @@ def write_active_revision_from_compiled_schedule(
         db.add(_schedule_item_from_block(revision.id, slot, block))
         slot += 1
 
+    # Supersede every active revision for this channel, then activate the new row in one txn.
+    db.query(ScheduleRevision).filter(
+        ScheduleRevision.channel_id == channel.id,
+        ScheduleRevision.status == "active",
+    ).update(
+        {"status": "superseded", "superseded_at": publish_ts},
+        synchronize_session=False,
+    )
+
+    revision.status = "active"
+    revision.activated_at = publish_ts
+    db.flush()
+
     upsert_stmt = (
         pg_insert(ChannelActiveRevision.__table__)
         .values(
             channel_id=channel.id,
             broadcast_day=broadcast_day,
             schedule_revision_id=revision.id,
-            updated_at=activated_at,
+            updated_at=publish_ts,
         )
         .on_conflict_do_update(
             index_elements=["channel_id", "broadcast_day"],
             set_={
                 "schedule_revision_id": revision.id,
-                "updated_at": activated_at,
+                "updated_at": publish_ts,
             },
         )
     )
     db.execute(upsert_stmt)
+
+    _invalidate_future_playlist_events_for_channel(
+        db,
+        channel_slug=channel_slug,
+        boundary_utc=publish_ts,
+    )
+
+    bump_channel_schedule_revision_head(channel_slug, str(revision.id))
 
     return True
 

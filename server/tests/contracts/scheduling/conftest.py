@@ -6,6 +6,9 @@ import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
 from retrovue.infra import db as db_module
+from retrovue.runtime.schedule_revision_writer import (
+    _register_schedule_item_immutability_guards,
+)
 
 
 @pytest.fixture(scope="module")
@@ -17,6 +20,9 @@ def postgres_engine():
             "Scheduling invariant v1 tests require PostgreSQL "
             "(set TEST_DATABASE_URL to a Postgres URL, not SQLite)"
         )
+    # INV-SCHEDULE-TIME-IMMUTABILITY-001: same before_execute guard as production (test engine
+    # is distinct from retrovue.infra.db.engine, so import-time registration does not cover it).
+    _register_schedule_item_immutability_guards(engine)
     return engine
 
 
