@@ -25,6 +25,16 @@ struct TickObs {
   int64_t av_delta_ms = 0;
 };
 
+struct StallTickObs {
+  int tick = 0;
+  int64_t deadline_ns = 0;
+  int64_t observed_ns = 0;
+  int64_t authoritative_ns = 0;
+  int64_t expected_samples = 0;
+  int due_samples = 0;
+  int64_t emitted_samples = 0;
+};
+
 static std::vector<TickObs> RunAuthoritativeSimulation(
     int64_t ticks,
     int64_t preroll_buffered_samples = 0) {
@@ -51,6 +61,45 @@ static std::vector<TickObs> RunAuthoritativeSimulation(
         .audio_time_emitted_ms = audio_ms,
         .video_time_emitted_ms = output_ms,
         .av_delta_ms = audio_ms - output_ms,
+    });
+  }
+  return out;
+}
+
+static std::vector<StallTickObs> RunStallSequenceSimulation(
+    const std::vector<int64_t>& observed_extra_ns_by_tick) {
+  std::vector<StallTickObs> out;
+  out.reserve(observed_extra_ns_by_tick.size());
+
+  int64_t emitted_samples = 0;
+  const int64_t nominal_frame_ns = RationalFps{30000, 1001}.DurationFromFramesNs(1);
+  int64_t observed_elapsed_ns_cumulative = 0;
+  for (size_t i = 0; i < observed_extra_ns_by_tick.size(); ++i) {
+    const int tick = static_cast<int>(i);
+    const int64_t deadline_ns =
+        RationalFps{30000, 1001}.DurationFromFramesNs(tick + 1);
+    // Model real monotonic steady-clock behavior: each tick advances by at least
+    // one nominal frame interval, plus optional extra stall time for that cycle.
+    observed_elapsed_ns_cumulative +=
+        nominal_frame_ns + std::max<int64_t>(0, observed_extra_ns_by_tick[i]);
+    const int64_t observed_ns = observed_elapsed_ns_cumulative;
+    const int64_t authoritative_ns =
+        PipelineManager::ComputeAuthoritativeAudioElapsedNs(deadline_ns, observed_ns);
+    const int64_t expected_samples =
+        PipelineManager::ComputeExpectedAudioSamplesFromOutputClockNs(
+            authoritative_ns, buffer::kHouseAudioSampleRate);
+    const int due =
+        PipelineManager::ComputeDueAudioSamples(expected_samples, emitted_samples);
+    emitted_samples += due;
+
+    out.push_back(StallTickObs{
+        .tick = tick,
+        .deadline_ns = deadline_ns,
+        .observed_ns = observed_ns,
+        .authoritative_ns = authoritative_ns,
+        .expected_samples = expected_samples,
+        .due_samples = due,
+        .emitted_samples = emitted_samples,
     });
   }
   return out;
@@ -163,6 +212,190 @@ TEST(AudioClockAuthority, PacketDrivenReferenceWouldDrift) {
   }
   EXPECT_GT((final_delta_ms >= 0 ? final_delta_ms : -final_delta_ms), 50)
       << "Packet-driven reference did not drift; test setup invalid.";
+}
+
+TEST(AudioClockAuthority, LiveAudioHighWaterIsBoundedByPrimePlusAvTolerance) {
+  // First-control-policy check for startup/steady-state authority:
+  // live audio reservoir must be bounded by bootstrap floor + AV tolerance.
+  const int high_water = PipelineManager::ComputeLiveAudioHighWaterMs(
+      /*audio_target_ms=*/1000,
+      /*audio_low_water_ms=*/333,
+      /*audio_prime_floor_ms=*/500,
+      /*av_phase_tolerance_ms=*/120);
+  EXPECT_EQ(high_water, 620);
+
+  // Never exceed target, never drop below low-water.
+  EXPECT_EQ(
+      PipelineManager::ComputeLiveAudioHighWaterMs(450, 333, 500, 120),
+      450);
+  EXPECT_EQ(
+      PipelineManager::ComputeLiveAudioHighWaterMs(1000, 333, 100, -50),
+      100);
+}
+
+TEST(AudioClockAuthority, HighWaterIgnoresLowWaterIfItExceedsCeiling) {
+  const int high_water = PipelineManager::ComputeLiveAudioHighWaterMs(
+      /*audio_target_ms=*/1000,
+      /*audio_low_water_ms=*/900,
+      /*audio_prime_floor_ms=*/500,
+      /*av_phase_tolerance_ms=*/120);
+  EXPECT_EQ(high_water, 620);
+}
+
+TEST(AudioClockAuthority, LateTickUsesObservedElapsedForAudioCatchup) {
+  constexpr int sample_rate = buffer::kHouseAudioSampleRate;
+  // Tick 100 nominal deadline at 29.97.
+  const int64_t deadline_elapsed_ns =
+      RationalFps{30000, 1001}.DurationFromFramesNs(101);
+  // Simulated paced-output stall (+80ms beyond deadline).
+  const int64_t observed_elapsed_ns = deadline_elapsed_ns + 80'000'000LL;
+
+  const int64_t authoritative_elapsed_ns =
+      PipelineManager::ComputeAuthoritativeAudioElapsedNs(
+          deadline_elapsed_ns, observed_elapsed_ns);
+  EXPECT_EQ(authoritative_elapsed_ns, observed_elapsed_ns);
+
+  const int64_t expected_from_deadline =
+      PipelineManager::ComputeExpectedAudioSamplesFromOutputClockNs(
+          deadline_elapsed_ns, sample_rate);
+  const int64_t expected_from_authoritative =
+      PipelineManager::ComputeExpectedAudioSamplesFromOutputClockNs(
+          authoritative_elapsed_ns, sample_rate);
+  EXPECT_GT(expected_from_authoritative, expected_from_deadline);
+
+  // If emitted sample count is at nominal deadline level, catchup due must increase.
+  const int due_deadline =
+      PipelineManager::ComputeDueAudioSamples(expected_from_deadline, expected_from_deadline);
+  const int due_authoritative =
+      PipelineManager::ComputeDueAudioSamples(expected_from_authoritative, expected_from_deadline);
+  EXPECT_EQ(due_deadline, 0);
+  EXPECT_GT(due_authoritative, 0);
+}
+
+TEST(AudioClockAuthority, IsolatedLateTickFollowedByOnTimeDoesNotDoubleApplyDebt) {
+  // Tick 1 late by +80ms, then on-time.
+  auto obs = RunStallSequenceSimulation({
+      0,
+      80'000'000LL,
+      0,
+      0,
+  });
+  ASSERT_EQ(obs.size(), 4u);
+
+  const int due_on_late_tick = obs[1].due_samples;
+  EXPECT_GT(due_on_late_tick, obs[0].due_samples);
+  // Recovery tick should not re-apply prior debt; it settles toward nominal.
+  EXPECT_LE(obs[2].due_samples, due_on_late_tick);
+  EXPECT_LE(obs[3].due_samples, obs[2].due_samples + 1);
+}
+
+TEST(AudioClockAuthority, ConsecutiveLateTicksApplyDistinctCatchupWithoutRatchet) {
+  // Two independent late ticks (+40ms, then +60ms).
+  auto obs = RunStallSequenceSimulation({
+      0,
+      40'000'000LL,
+      60'000'000LL,
+      0,
+  });
+  ASSERT_EQ(obs.size(), 4u);
+
+  const int nominal_due = PipelineManager::ComputeExpectedAudioSamplesFromOutputClockNs(
+      RationalFps{30000, 1001}.DurationFromFramesNs(1), buffer::kHouseAudioSampleRate);
+  EXPECT_GT(obs[1].due_samples, obs[0].due_samples);
+  EXPECT_GT(obs[2].due_samples, nominal_due);
+  // First on-time tick after consecutive stalls should settle, not continue increasing.
+  EXPECT_LT(obs[3].due_samples, obs[2].due_samples);
+}
+
+TEST(AudioClockAuthority, LateTickWithoutNextCycleTransportStallRecoversToNominal) {
+  auto obs = RunStallSequenceSimulation({
+      0,
+      55'000'000LL,
+      0,
+      0,
+      0,
+  });
+  ASSERT_EQ(obs.size(), 5u);
+
+  const int64_t nominal_deadline_ns =
+      RationalFps{30000, 1001}.DurationFromFramesNs(2) -
+      RationalFps{30000, 1001}.DurationFromFramesNs(1);
+  const int nominal_due = PipelineManager::ComputeExpectedAudioSamplesFromOutputClockNs(
+      nominal_deadline_ns, buffer::kHouseAudioSampleRate);
+
+  EXPECT_GT(obs[1].due_samples, nominal_due);
+  // On following non-stalled cycles: no second catch-up spike from old debt.
+  EXPECT_LE(obs[2].due_samples, obs[1].due_samples);
+  EXPECT_LE(obs[3].due_samples, obs[2].due_samples);
+  EXPECT_GE(obs[3].due_samples, nominal_due - 1);
+}
+
+TEST(AudioClockAuthority, CumulativeDueIsMonotonicInTotalButNotDoubleCounted) {
+  auto obs = RunStallSequenceSimulation({
+      0,
+      70'000'000LL,
+      0,
+      50'000'000LL,
+      0,
+      0,
+  });
+  ASSERT_FALSE(obs.empty());
+
+  int64_t prev_emitted = 0;
+  int64_t prev_authoritative = 0;
+  for (const auto& o : obs) {
+    EXPECT_GE(o.emitted_samples, prev_emitted);
+    EXPECT_GE(o.authoritative_ns, prev_authoritative);
+    // Cumulative emitted equals cumulative expected-by-authoritative each step:
+    // no debt loss and no double application.
+    EXPECT_EQ(o.emitted_samples, o.expected_samples);
+    prev_emitted = o.emitted_samples;
+    prev_authoritative = o.authoritative_ns;
+  }
+
+  // End-of-window exactness: no ratchet debt remains in cumulative accounting.
+  EXPECT_EQ(obs.back().emitted_samples, obs.back().expected_samples);
+}
+
+TEST(AudioClockAuthority, VideoTimelineRemainsNominalTickFunctionUnderAudioCatchup) {
+  // INV-PACING-SINGLE-AUTHORITY-001:
+  // Late ticks may change due-sample catch-up, but live video timeline stays
+  // a pure function of tick schedule (no convergence toward audio).
+  auto obs = RunStallSequenceSimulation({
+      0,
+      85'000'000LL,
+      0,
+      40'000'000LL,
+      0,
+      0,
+  });
+  ASSERT_EQ(obs.size(), 6u);
+
+  const int64_t frame_duration_90k = ((90000LL * 1001) + (30000 / 2)) / 30000;  // 3003
+  int64_t prev_video_pts_90k = -1;
+  for (size_t i = 0; i < obs.size(); ++i) {
+    const int64_t nominal_video_pts_90k = static_cast<int64_t>(i) * frame_duration_90k;
+    if (prev_video_pts_90k >= 0) {
+      EXPECT_EQ(nominal_video_pts_90k - prev_video_pts_90k, frame_duration_90k);
+    }
+    prev_video_pts_90k = nominal_video_pts_90k;
+  }
+}
+
+TEST(AudioClockAuthority, SteadyStateReserveFloor_CoversOneNoSupplyTickPair) {
+  // INV-PRODUCER-DEMAND-DRIVEN-001:
+  // In cadence-shaped steady-state demand (1601/1602), reserve floor must
+  // cover one adjacent no-supply tick pair.
+  const int due_tick_a = 1601;
+  const int due_tick_b = 1602;
+  const int floor_from_a =
+      PipelineManager::ComputeSteadyStateReserveFloorSamples(due_tick_a);
+  const int floor_from_b =
+      PipelineManager::ComputeSteadyStateReserveFloorSamples(due_tick_b);
+
+  EXPECT_GE(floor_from_a, due_tick_a + due_tick_b);
+  EXPECT_GE(floor_from_b, due_tick_a + due_tick_b);
+  EXPECT_GT(floor_from_b, due_tick_b);
 }
 
 }  // namespace

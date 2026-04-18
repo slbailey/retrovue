@@ -5,6 +5,7 @@
 
 #include "retrovue/timing/TimelineController.h"
 #include "retrovue/timing/MasterClock.h"
+#include "retrovue/util/Logger.hpp"
 
 #include <cassert>
 #include <iostream>
@@ -224,6 +225,16 @@ AdmissionResult TimelineController::AdmitFrame(int64_t media_time_us,
   // BOTH CT and MT together. This ensures they describe the same instant.
   // ==========================================================================
   if (pending_segment_) {
+    // HARDEN-019 / INV-P8-SWITCH-ARMED: Runtime guard for release builds.
+    // Debug: assert crashes immediately. Release: reject with structured log.
+    if (pending_segment_->mode != PendingSegmentMode::AwaitPreviewFrame) {
+      retrovue::util::Logger::ErrorStructured(
+          "[TimelineController] INV-P8-SWITCH-ARMED: pending mode is not AwaitPreviewFrame",
+          "INV-P8-SWITCH-ARMED-VIOLATED",
+          {{"pending_mode", std::to_string(static_cast<int>(pending_segment_->mode))},
+           {"expected", "AwaitPreviewFrame"}});
+      return AdmissionResult::REJECTED_NO_MAPPING;
+    }
     assert(pending_segment_->mode == PendingSegmentMode::AwaitPreviewFrame &&
            "AbsoluteMapping segments should not reach AdmitFrame while pending");
 
@@ -349,7 +360,19 @@ AdmissionResult TimelineController::AdmitFrame(int64_t media_time_us,
   // Check if too early
   if (delta > config_.early_threshold_us) {
     stats_.frames_rejected_early++;
-    // Diagnostic moved to FileProducer (has producer identity and asset path)
+    if (stats_.frames_rejected_early <= 3) {
+      std::cout << "[TimelineController] ADMIT_EARLY_REJECT:"
+                << " mt_in=" << media_time_us
+                << " mt_start=" << segment_mapping_->mt_segment_start_us
+                << " ct_start=" << segment_mapping_->ct_segment_start_us
+                << " ct_frame=" << ct_frame_us
+                << " ct_expected=" << ct_expected_us
+                << " ct_cursor=" << ct_cursor_us_
+                << " delta=" << delta
+                << " early_threshold=" << config_.early_threshold_us
+                << " frame_period=" << config_.frame_period_us
+                << std::endl;
+    }
     return AdmissionResult::REJECTED_EARLY;
   }
 
@@ -400,6 +423,23 @@ void TimelineController::AdvanceCursorForPreBufferedFrames(size_t frame_count) {
   std::cout << "[TimelineController] INV-P8-SHADOW-PREROLL-SYNC: ct_cursor advanced by "
             << frame_count << " frames (" << advance_us << "us): "
             << old_cursor << "us -> " << ct_cursor_us_ << "us" << std::endl;
+}
+
+void TimelineController::AlignCursorToLastBufferedMT(int64_t last_buffered_mt_us) {
+  std::lock_guard<std::mutex> lock(mutex_);
+
+  if (!segment_mapping_) {
+    std::cerr << "[TimelineController] AlignCursorToLastBufferedMT: no segment mapping" << std::endl;
+    return;
+  }
+
+  int64_t old_cursor = ct_cursor_us_;
+  ct_cursor_us_ = segment_mapping_->MediaToChannel(last_buffered_mt_us);
+
+  std::cout << "[TimelineController] AlignCursorToLastBufferedMT: last_mt=" << last_buffered_mt_us
+            << " ct_cursor: " << old_cursor << " -> " << ct_cursor_us_
+            << " (mt_start=" << segment_mapping_->mt_segment_start_us
+            << " ct_start=" << segment_mapping_->ct_segment_start_us << ")" << std::endl;
 }
 
 int64_t TimelineController::GetWallClockDeadline(int64_t ct_us) const {

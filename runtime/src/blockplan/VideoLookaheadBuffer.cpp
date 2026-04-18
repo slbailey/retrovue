@@ -36,10 +36,23 @@ bool ValidationLogAllAvLeadClamp() {
 }
 
 // Validation-only: disable fill-domain lead clamp suppression for A/B log comparison.
-// Does not ship as default behavior; must be explicitly set in the environment.
+// HARDEN-009 / LAW-AIR-019: Production builds always clamp; env var honored in debug only.
 bool ValidationDisableAvLeadClamp() {
+#ifdef NDEBUG
+  return false;  // Production: clamp always enabled, env var ignored.
+#else
   const char* v = std::getenv("RETROVUE_DISABLE_AV_LEAD_CLAMP");
-  return v && v[0] == '1' && v[1] == '\0';
+  if (v && v[0] == '1' && v[1] == '\0') {
+    // One-shot warning (static local avoids repeated log).
+    static bool warned = false;
+    if (!warned) {
+      std::cerr << "[VideoLookaheadBuffer] RETROVUE_DISABLE_AV_LEAD_CLAMP is set (debug build only)" << std::endl;
+      warned = true;
+    }
+    return true;
+  }
+  return false;
+#endif
 }
 
 }  // namespace
@@ -567,6 +580,8 @@ void VideoLookaheadBuffer::FillLoop() {
           skip_wait = true;
         }
       } else if (is_bootstrap) {
+        const bool transition_drain_only =
+            transition_drain_only_.load(std::memory_order_relaxed);
         const int bootstrap_audio_ms = audio_buffer ? audio_buffer->DepthMs() : 0;
         const int bootstrap_video_ms = estimate_video_ms(gate_lookahead, gate_store_size);
         const int bootstrap_av_delta_ms = bootstrap_audio_ms - bootstrap_video_ms;
@@ -581,7 +596,7 @@ void VideoLookaheadBuffer::FillLoop() {
         const bool bootstrap_av_lead_too_high =
             bootstrap_av_delta_ms > av_phase_tolerance_ms_ &&
             gate_store_size < bootstrap_cap_frames_;
-        if (bootstrap_needs_more || bootstrap_av_lead_too_high) {
+        if (!transition_drain_only && (bootstrap_needs_more || bootstrap_av_lead_too_high)) {
           if (filling_now) skip_wait = true;
         }
       }
@@ -629,6 +644,11 @@ void VideoLookaheadBuffer::FillLoop() {
               if (stopping) {
                 wake_reason = "stop";
                 return true;
+              }
+              if (transition_drain_only_.load(std::memory_order_relaxed)) {
+                // Post-handoff transition drain exclusivity:
+                // hold decode admission while consumer drains queue toward target.
+                return false;
               }
               // Memory safety caps: always use store size.
               const int store_sz = static_cast<int>(frame_store_.Size());
@@ -1026,6 +1046,10 @@ void VideoLookaheadBuffer::FillLoop() {
         audio_suppression_reason == AudioSuppressionReason::kNone) {
       int push_lookahead = kLookaheadConsumerUnknown;
       int push_store_size = 0;
+      int64_t pending_audio_samples = 0;
+      for (const auto& af : pending_audio_frames) {
+        pending_audio_samples += af.nb_samples;
+      }
       {
         std::lock_guard<std::mutex> lock(mutex_);
         push_lookahead = ComputeLookaheadLocked();
@@ -1034,22 +1058,118 @@ void VideoLookaheadBuffer::FillLoop() {
       const int audio_ms = audio_buffer->DepthMs();
       const int video_ms = estimate_video_ms(push_lookahead, push_store_size);
       const int av_delta_ms = audio_ms - video_ms;
+      const int pending_audio_ms = static_cast<int>(
+          (pending_audio_samples * 1000LL) / buffer::kHouseAudioSampleRate);
+      const int projected_audio_ms = audio_ms + pending_audio_ms;
+      const int projected_av_delta_ms = (audio_ms + pending_audio_ms) - video_ms;
       const bool audio_high = audio_ms > audio_buffer->HighWaterMs();
+      const bool projected_audio_high =
+          projected_audio_ms > audio_buffer->HighWaterMs();
       const bool av_lead_too_high = av_delta_ms > av_phase_tolerance_ms_;
-      const bool want_clamp = !ValidationDisableAvLeadClamp() && (audio_high || av_lead_too_high);
+      const bool projected_av_lead_too_high =
+          projected_av_delta_ms > av_phase_tolerance_ms_;
+      const bool clamp_enabled = !ValidationDisableAvLeadClamp();
+      const bool want_clamp = clamp_enabled &&
+                              (audio_high || projected_audio_high ||
+                               av_lead_too_high ||
+                               projected_av_lead_too_high);
+
+      int64_t max_admissible_samples = pending_audio_samples;
+      if (clamp_enabled) {
+        if (audio_high || av_lead_too_high) {
+          max_admissible_samples = 0;
+        } else {
+          // INV-BUFFER-EQUILIBRIUM: keep one-frame operating headroom below
+          // high-water so steady state converges away from clamp boundary.
+          const int steady_headroom_ms =
+              (output_fps_.num > 0 && output_fps_.den > 0)
+                  ? static_cast<int>((1000LL * output_fps_.den) / output_fps_.num)
+                  : 0;
+          const int64_t high_budget_ms = std::max(
+              0, audio_buffer->HighWaterMs() - audio_ms - steady_headroom_ms);
+          const bool steady_state_active =
+              audio_buffer->TotalSamplesPopped() > 0;
+          int64_t target_budget_ms = high_budget_ms;
+          if (steady_state_active) {
+            const int64_t burst_headroom_ms =
+                std::max<int64_t>(steady_headroom_ms, pending_audio_ms);
+            const int64_t target_audio_ms = std::max<int64_t>(
+                0, audio_buffer->HighWaterMs() - burst_headroom_ms);
+            target_budget_ms =
+                std::max<int64_t>(0, target_audio_ms - audio_ms);
+          }
+          const int64_t av_budget_ms = std::max(0, (av_phase_tolerance_ms_ + video_ms) - audio_ms);
+          const int64_t high_budget_samples =
+              (high_budget_ms * buffer::kHouseAudioSampleRate) / 1000;
+          const int64_t target_budget_samples =
+              (target_budget_ms * buffer::kHouseAudioSampleRate) / 1000;
+          const int64_t av_budget_samples =
+              (av_budget_ms * buffer::kHouseAudioSampleRate) / 1000;
+          max_admissible_samples = std::min(
+              pending_audio_samples,
+              std::min(std::min(high_budget_samples, target_budget_samples),
+                       av_budget_samples));
+        }
+      }
+
+      int64_t suppressed_frame_count = 0;
+      if (clamp_enabled && max_admissible_samples < pending_audio_samples) {
+        std::vector<buffer::AudioFrame> admissible;
+        admissible.reserve(pending_audio_frames.size());
+        int64_t remaining = std::max<int64_t>(0, max_admissible_samples);
+        for (auto& af : pending_audio_frames) {
+          if (remaining <= 0) {
+            suppressed_frame_count++;
+            continue;
+          }
+          if (af.nb_samples <= remaining) {
+            remaining -= af.nb_samples;
+            admissible.push_back(std::move(af));
+            continue;
+          }
+          // Split an oversized packet so safe admission can still progress.
+          const int keep_samples = static_cast<int>(remaining);
+          const int drop_samples = af.nb_samples - keep_samples;
+          if (keep_samples > 0) {
+            buffer::AudioFrame keep = af;
+            keep.nb_samples = keep_samples;
+            const int bytes_per_sample =
+                std::max(1, af.channels * static_cast<int>(sizeof(int16_t)));
+            keep.data.resize(static_cast<size_t>(keep_samples * bytes_per_sample));
+            admissible.push_back(std::move(keep));
+          }
+          if (drop_samples > 0) suppressed_frame_count++;
+          remaining = 0;
+        }
+        pending_audio_frames = std::move(admissible);
+      }
+
       if (want_clamp) {
-        audio_suppression_reason = AudioSuppressionReason::kAvLeadClamp;
+        if (pending_audio_frames.empty()) {
+          audio_suppression_reason = AudioSuppressionReason::kAvLeadClamp;
+        }
+        if (suppressed_frame_count > 0) {
+          audio_frames_suppressed_non_generation_.fetch_add(
+              suppressed_frame_count, std::memory_order_relaxed);
+        }
         av_lead_clamp_events_.fetch_add(1, std::memory_order_relaxed);
         static int64_t clamp_count = 0;
         ++clamp_count;
         const bool log_all = ValidationLogAllAvLeadClamp();
         if (log_all || clamp_count <= 10 || clamp_count % 200 == 0) {
           std::ostringstream oss;
+          const bool av_reason = av_lead_too_high || projected_av_lead_too_high;
           oss << "[FillLoop:" << buffer_label_ << "] AV_LEAD_CLAMP"
-              << " reason=" << (av_lead_too_high ? "av_delta" : "audio_high_water")
+              << " reason="
+              << (av_reason ? "av_delta" : "audio_high_water")
               << " audio_ms=" << audio_ms
               << " video_ms=" << video_ms
               << " av_delta_ms=" << av_delta_ms
+              << " pending_audio_ms=" << pending_audio_ms
+              << " projected_audio_ms=" << projected_audio_ms
+              << " projected_av_delta_ms=" << projected_av_delta_ms
+              << " admitted_audio_ms=" << static_cast<int>(
+                     (max_admissible_samples * 1000LL) / buffer::kHouseAudioSampleRate)
               << " max_av_lead_ms=" << av_phase_tolerance_ms_
               << " high_water_ms=" << audio_buffer->HighWaterMs()
               << " lookahead=" << push_lookahead
@@ -1528,7 +1648,13 @@ void VideoLookaheadBuffer::EndBootstrap() {
     Logger::Info(oss.str()); }
   fill_phase_.store(static_cast<int>(FillPhase::kSteady),
                     std::memory_order_release);
+  transition_drain_only_.store(false, std::memory_order_release);
   // No wake needed — steady-state is more restrictive.
+}
+
+void VideoLookaheadBuffer::SetTransitionDrainOnly(bool enable) {
+  transition_drain_only_.store(enable, std::memory_order_release);
+  space_cv_.notify_all();
 }
 
 VideoLookaheadBuffer::FillPhase VideoLookaheadBuffer::GetFillPhase() const {

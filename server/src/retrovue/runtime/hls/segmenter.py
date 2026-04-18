@@ -26,6 +26,7 @@ import logging
 import threading
 from typing import Callable, Optional
 
+from ..clock import AuthoritativeClock
 from .segment_ring import LiveSegment, SegmentRing
 
 logger = logging.getLogger(__name__)
@@ -135,6 +136,8 @@ class HlsSegmenter:
         self,
         channel_id: str,
         segment_ring: SegmentRing,
+        *,
+        clock: AuthoritativeClock,
         target_duration_ms: int = 6000,
         max_gop_ms: int = 1000,
         starting_index: int = 0,
@@ -143,6 +146,7 @@ class HlsSegmenter:
     ) -> None:
         self._channel_id = channel_id
         self._ring = segment_ring
+        self._clock = clock
         self._target_duration_ms = target_duration_ms
         self._max_gop_ms = max_gop_ms
         self._log = log or logger
@@ -439,11 +443,9 @@ class HlsSegmenter:
         self._last_completed_index = index
         self._prev_segment_end_pcr = self._last_pcr
 
-        # INV-HLS-PRODUCER-SEGMENT-FLOW-001: record completion time
-        # Use a simple monotonic counter — actual monotonic clock injection
-        # happens at integration time. For now, just record that it happened.
-        import time
-        self._last_completed_monotonic_ms = int(time.monotonic() * 1000)
+        # INV-HLS-PRODUCER-SEGMENT-FLOW-001: record completion time via the
+        # authoritative monotonic clock (Phase 7E — clock injected at construction).
+        self._last_completed_monotonic_ms = self._clock.monotonic_ms()
 
         self._log.debug(
             "[HLS %s] Segment %d completed: %dms, %d bytes, disc=%s",

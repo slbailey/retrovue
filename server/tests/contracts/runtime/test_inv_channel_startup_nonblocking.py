@@ -13,6 +13,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from retrovue.config.testing import TEST_RESOLVED_CONFIG
+from retrovue.runtime.clock import SystemClock
+from retrovue.runtime.program_director import ExecutionReadinessSnapshot
 
 
 # ---------------------------------------------------------------------------
@@ -54,6 +56,7 @@ def _make_program_director(channel_id: str = "test-ch"):
     # Build PD in embedded mode with the config provider.
     # We don't actually start the HTTP server or pacing loop.
     pd = ProgramDirector(
+        clock=SystemClock(),
         channel_config_provider=provider,
         host="127.0.0.1",
         port=0,
@@ -70,6 +73,20 @@ def _make_program_director(channel_id: str = "test-ch"):
 
     # Mark startup as complete (tests bypass the background prewarm thread)
     pd._startup_complete.set()
+    pd._channel_execution_ready[channel_id] = ExecutionReadinessSnapshot(
+        channel_id=channel_id,
+        now_ms=0,
+        current_block_id="test-current",
+        next_block_id="test-next",
+        current_block_start_utc_ms=0,
+        current_block_end_utc_ms=30_000,
+        next_block_start_utc_ms=30_000,
+        next_block_end_utc_ms=60_000,
+        forward_depth_ms=60_000,
+        required_runtime_depth_ms=0,
+        current_playlist_event_present=True,
+        next_playlist_event_present=True,
+    )
 
     return pd, fake_svc
 
@@ -156,6 +173,7 @@ class TestInvChannelStartupNonblocking001:
             dsl_path="/dev/null",
             filler_path="/opt/retrovue/assets/filler.mp4",
             filler_duration_ms=3_650_000,
+            clock=SystemClock(),
             resolved_config=TEST_RESOLVED_CONFIG,
         )
 

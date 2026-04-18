@@ -1751,10 +1751,6 @@ bool EncoderPipeline::encodeAudioFrame(const retrovue::buffer::AudioFrame& audio
   // =========================================================================
   // INV-AUDIO-SAMPLE-CLOCK: Internal sample counter is sole PTS authority.
   // =========================================================================
-  // Ignore caller's PTS (which may be at video cadence). The internal counter
-  // advances by exactly frame_size (1024) per encoded chunk, producing the
-  // correct AAC PTS sequence: 0, 1920, 3840, 5760, ...
-  // =========================================================================
   current_pts90k = (audio_encode_sample_counter_ * 90000) / encoder_sample_rate;
 
   // INV-AUDIO-SAMPLE-CLOCK-DBG: Log first 20 audio chunk PTS values.

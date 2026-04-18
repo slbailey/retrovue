@@ -18,13 +18,16 @@ from retrovue.runtime.channel_stream import (
     RECV_GAP_WARN_THRESHOLD_MS,
     RECV_GAP_WARN_COUNT,
 )
+from retrovue.runtime.clock import SystemClock
 from tests.fixtures.channel_stream_fixtures import FakeTsSource
+
+_TEST_CLOCK = SystemClock()
 
 
 def test_channel_stream_multiple_subscribers_same_bytes():
     """Multiple subscribers get the same stream bytes (Phase 8.5 fan-out)."""
     source = FakeTsSource(chunk_size=188 * 10)
-    stream = ChannelStream("test", ts_source_factory=lambda _=None: source)
+    stream = ChannelStream("test", ts_source_factory=lambda _=None: source, clock=_TEST_CLOCK)
 
     try:
         q1 = stream.subscribe("c1")
@@ -74,7 +77,7 @@ def test_channel_stream_multiple_subscribers_same_bytes():
 
 def test_channel_stream_last_subscriber_does_not_stop_reader():
     """When last subscriber leaves, reader stays running (upstream survives for reconnect)."""
-    stream = ChannelStream("test", ts_source_factory=lambda _=None: FakeTsSource(chunk_size=188 * 5))
+    stream = ChannelStream("test", ts_source_factory=lambda _=None: FakeTsSource(chunk_size=188 * 5), clock=_TEST_CLOCK)
     q = stream.subscribe("only")
     assert stream.is_running()
 

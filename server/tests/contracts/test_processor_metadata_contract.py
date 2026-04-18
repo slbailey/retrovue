@@ -6,6 +6,8 @@ Contract: docs/contracts/core/ProcessorMetadataContract_v0.1.md
 
 from __future__ import annotations
 
+from retrovue.runtime.clock import SystemClock
+
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import patch
@@ -95,7 +97,7 @@ class TestProcessorMetadataContract:
         with patch("retrovue.catalog.processor_runtime.ENRICHERS", {"ffprobe": fake_ffprobe, "loudness": fake_ffprobe}):
             with session() as db:
                 job = db.get(ProcessorJob, job_id)
-                execute_job(db, job)
+                execute_job(db, job, clock=SystemClock())
 
         approved = None
         with session() as db:
@@ -134,7 +136,7 @@ class TestProcessorMetadataContract:
         with patch("retrovue.catalog.processor_runtime.ENRICHERS", {"ffprobe": fake_ffprobe, "loudness": fake_ffprobe}):
             with session() as db:
                 job = db.get(ProcessorJob, job_id)
-                execute_job(db, job)
+                execute_job(db, job, clock=SystemClock())
 
         dur = None
         with session() as db:
@@ -174,7 +176,7 @@ class TestProcessorMetadataContract:
         with patch("retrovue.catalog.processor_runtime.ENRICHERS", {"ffprobe": fake_ffprobe, "loudness": fake_ffprobe}):
             with session() as db:
                 job = db.get(ProcessorJob, job_id)
-                execute_job(db, job)
+                execute_job(db, job, clock=SystemClock())
 
         outputs = []
         with session() as db:
@@ -219,7 +221,7 @@ class TestProcessorMetadataContract:
         with patch("retrovue.catalog.processor_runtime.ENRICHERS", {"ffprobe": fake_ffprobe, "loudness": fake_ffprobe}):
             with session() as db:
                 job = db.get(ProcessorJob, job_id)
-                execute_job(db, job)
+                execute_job(db, job, clock=SystemClock())
 
         dur = None
         with session() as db:

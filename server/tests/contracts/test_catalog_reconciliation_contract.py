@@ -1,3 +1,4 @@
+from retrovue.runtime.clock import SystemClock
 """
 Contract tests for CatalogReconciliationContract.
 
@@ -85,7 +86,7 @@ class TestCatalogReconciliationContract:
         ), patch(
             "retrovue.workflows.container_ingest.enqueue_processor_jobs",
         ):
-            svc = ContainerIngestService(db)
+            svc = ContainerIngestService(db, clock=SystemClock())
             r1 = svc.ingest_container(container=collection, importer=importer)
             r2 = svc.ingest_container(container=collection, importer=importer)
         assert r1.stats.assets_ingested == 1
@@ -165,7 +166,7 @@ class TestCatalogReconciliationContract:
             "retrovue.workflows.container_ingest.load_catalog_state_for_container",
             return_value={"hash_gone": stale},
         ):
-            svc = ContainerIngestService(db)
+            svc = ContainerIngestService(db, clock=SystemClock())
             result = svc.ingest_container(container=collection, importer=importer)
         assert result.stats.assets_removed == 1
         assert stale.is_deleted is True

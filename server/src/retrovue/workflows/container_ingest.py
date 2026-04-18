@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 import structlog
@@ -44,6 +44,7 @@ from ..domain.entities import Asset, Container
 from ..infra.canonical import canonical_hash, canonical_key_for
 from ..infra.exceptions import IngestError
 from ..infra.settings import settings
+from ..runtime.clock import AuthoritativeClock
 from ..usecases.metadata_handler import handle_ingest
 from ..usecases.asset_path_resolver import AssetPathResolver
 
@@ -285,7 +286,7 @@ class ContainerIngestService:
     boundaries per ContainerIngestContract.md.
     """
 
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, *, clock: AuthoritativeClock):
         """
         Initialize the service.
 
@@ -293,6 +294,7 @@ class ContainerIngestService:
             db: Database session (must be within a transaction context)
         """
         self.db = db
+        self._clock = clock
 
     def ingest_container(
         self,
@@ -618,7 +620,7 @@ class ContainerIngestService:
             if outcome == ReconciliationOutcome.mark_unavailable and existing_asset is not None:
                 if not dry_run:
                     existing_asset.is_deleted = True
-                    existing_asset.deleted_at = datetime.now(UTC)
+                    existing_asset.deleted_at = self._clock.now_utc()
                     existing_asset.state = "retired"
                     existing_asset.approved_for_broadcast = False
                 stats.assets_removed += 1
@@ -932,7 +934,7 @@ class ContainerIngestService:
                 state=initial_state,
                 approved_for_broadcast=initial_approved,
                 operator_verified=False,
-                discovered_at=datetime.now(UTC),
+                discovered_at=self._clock.now_utc(),
                 file_size=file_size,
                 file_mtime=file_mtime,
             )
@@ -1003,17 +1005,21 @@ class ContainerIngestService:
             _val_store = ValidationResultStore()
             _val_store.persist(
                 asset_id=str(asset.uuid),
-                timestamp=datetime.now(UTC),
+                timestamp=self._clock.now_utc(),
                 result=_validation_result,
             )
             # Persist when not a dry run
             if not dry_run:
                 repo.create(asset)
-                # Persist tags from raw_labels (tag: prefix) into asset_tags table.
-                # INV-ASSET-TAG-PERSISTENCE-001: tags MUST live in asset_tags, not only JSONB.
+                # Persist tags from raw_labels (tag: prefix) into the
+                # asset tag table via the single-writer service.
+                # INV-ASSET-TAG-PERSISTENCE-001: tags MUST live in the
+                # asset tag table, not only JSONB.
+                # Phase 9 Step 5: writes route through AssetTagService
+                # (upsert preserves the pre-Phase-9 db.merge semantic).
                 try:
-                    from ..domain.entities import AssetTag
-                    from ..domain.tag_normalization import canonicalize_tag, normalize_tag_set
+                    from ..catalog import asset_tag_service
+                    from ..domain.tag_normalization import normalize_tag_set
                     tag_labels: list[str] = []
                     if labels:
                         tag_labels = [
@@ -1023,14 +1029,8 @@ class ContainerIngestService:
                         ]
                     if tag_labels:
                         for tag_val in normalize_tag_set(tag_labels):
-                            # INV-TAG-CANONICAL-FORM-001: tags stored as namespace.value
-                            canonical = canonicalize_tag(tag_val)
-                            self.db.merge(
-                                AssetTag(
-                                    asset_uuid=asset.uuid,
-                                    tag=canonical,
-                                    source="ingest",
-                                )
+                            asset_tag_service.upsert_tag(
+                                self.db, asset.uuid, tag_val, source="ingest"
                             )
                 except Exception as tag_exc:
                     stats.errors.append(f"tag persistence failed: {tag_exc}")
@@ -1108,6 +1108,8 @@ def refresh_container(
     db: Session,
     container: Container,
     importer: Any,
+    *,
+    clock: AuthoritativeClock,
     **kwargs: Any,
 ) -> ContainerIngestResult:
     """
@@ -1116,6 +1118,8 @@ def refresh_container(
     Pipeline: discover locators → determine_reconciliation_outcomes → apply (create/update/mark_unavailable) → enqueue processor jobs.
     Use this when the scheduler or a batch worker needs to refresh a single container before horizon expansion.
     """
-    return ContainerIngestService(db).ingest_container(container=container, importer=importer, **kwargs)
-
-
+    return ContainerIngestService(db, clock=clock).ingest_container(
+        container=container,
+        importer=importer,
+        **kwargs,
+    )

@@ -5,6 +5,7 @@ from __future__ import annotations
 import typer
 
 from ...infra.settings import settings
+from ...runtime.clock import SystemClock
 from ...runtime.processor_worker import run_once, run_loop
 
 app = typer.Typer(name="worker", help="Processor job queue worker")
@@ -18,12 +19,18 @@ def run(
     interval: int = typer.Option(30, "--interval", help="Seconds to sleep between poll cycles (default: 30)"),
 ):
     """Run the processor worker: claim jobs from the queue and execute them."""
+    clock = SystemClock()
     if once:
-        processed = run_once()
+        processed = run_once(clock=clock)
         if not processed:
             typer.echo("No job available.")
     else:
-        count = run_loop(iterations=iterations, poll=poll, interval=interval)
+        count = run_loop(
+            iterations=iterations,
+            clock=clock,
+            poll=poll,
+            interval=interval,
+        )
         typer.echo(f"Processed {count} job(s).")
 
 
@@ -41,9 +48,10 @@ def purge(
     from ...infra.uow import session
 
     days = retention_days if retention_days is not None else settings.processor_job_retention_days
+    clock = SystemClock()
     if days <= 0:
         typer.echo("Retention days must be > 0 (or set PROCESSOR_JOB_RETENTION_DAYS). Skipping purge.")
         raise typer.Exit(0)
     with session() as db:
-        deleted = purge_old_processor_jobs(db, days)
+        deleted = purge_old_processor_jobs(db, days, clock=clock)
     typer.echo(f"Purged {deleted} completed/failed processor job(s) older than {days} days.")

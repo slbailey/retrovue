@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid as _uuid
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -37,6 +37,7 @@ def update_asset_review_status(
     db: Session,
     *,
     asset_uuid: str,
+    now_utc: datetime,
     approved: bool | None = None,
     state: str | None = None,
 ) -> dict[str, Any]:
@@ -63,11 +64,10 @@ def update_asset_review_status(
     if state is not None:
         asset.state = state
 
-    asset.updated_at = datetime.now(UTC)
+    asset.updated_at = now_utc
 
     db.add(asset)  # no commit; UoW handles it
 
     return _serialize_asset(asset)
-
 
 

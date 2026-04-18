@@ -26,7 +26,7 @@ from retrovue.domain.entities import (
     ScheduleRevision,
 )
 from retrovue.infra import db as db_module
-from retrovue.runtime.clock import ControllableMasterClock
+from retrovue.runtime.clock import ControllableClock
 from retrovue.runtime.dsl_schedule_service import DslScheduleService
 from retrovue.runtime.schedule_cache_monotonicity import (
     bump_channel_schedule_revision_head,
@@ -129,7 +129,7 @@ class TestInvScheduleTimeImmutability001:
         slug = _slug("t1past")
         try:
             ch = _make_channel(pg_session, slug)
-            clock = ControllableMasterClock(epoch=_ANCHOR)
+            clock = ControllableClock(epoch=_ANCHOR)
             t_past = _ANCHOR - timedelta(hours=3)
             rev = ScheduleRevision(
                 channel_id=ch.id,
@@ -186,7 +186,7 @@ class TestInvScheduleTimeImmutability001:
         slug = _slug("t1live")
         try:
             ch = _make_channel(pg_session, slug)
-            clock = ControllableMasterClock(epoch=_ANCHOR)
+            clock = ControllableClock(epoch=_ANCHOR)
             t_live_start = _ANCHOR - timedelta(minutes=30)
             rev = ScheduleRevision(
                 channel_id=ch.id,
@@ -239,7 +239,7 @@ class TestInvScheduleTimeImmutability001:
         slug = _slug("t1fut")
         try:
             ch = _make_channel(pg_session, slug)
-            clock = ControllableMasterClock(epoch=_ANCHOR)
+            clock = ControllableClock(epoch=_ANCHOR)
             t_future = _ANCHOR + timedelta(hours=2)
             rev = ScheduleRevision(
                 channel_id=ch.id,
@@ -290,7 +290,7 @@ class TestInvScheduleSplice001:
         try:
             ch = _make_channel(pg_session, slug)
             # First write: all blocks start at/after anchor (future relative to boundary=anchor)
-            clock = ControllableMasterClock(epoch=_ANCHOR)
+            clock = ControllableClock(epoch=_ANCHOR)
             b0 = _schedule_block(_ANCHOR, 1800, title="A")
             b1 = _schedule_block(_ANCHOR + timedelta(minutes=30), 1800, title="B")
             b2 = _schedule_block(_ANCHOR + timedelta(hours=1), 1800, title="C")
@@ -566,7 +566,7 @@ class TestInvScheduleJoinIntegrity001:
         slug = _slug("join1")
         try:
             ch = _make_channel(pg_session, slug)
-            clock = ControllableMasterClock(epoch=_ANCHOR)
+            clock = ControllableClock(epoch=_ANCHOR)
             blocks = [
                 _schedule_block(_ANCHOR, 1800, title="j1"),
                 _schedule_block(_ANCHOR + timedelta(minutes=45), 1800, title="j2"),
@@ -637,7 +637,7 @@ class TestInvScheduleJoinIntegrity001:
         slug = _slug("join2")
         try:
             ch = _make_channel(pg_session, slug)
-            clock = ControllableMasterClock(epoch=_ANCHOR)
+            clock = ControllableClock(epoch=_ANCHOR)
             blocks = [
                 _schedule_block(_ANCHOR, 1800, title="g1"),
                 _schedule_block(_ANCHOR + timedelta(minutes=30), 1800, title="g2"),
@@ -716,7 +716,7 @@ class TestInvScheduleFutureOnlyMutation001:
         slug = _slug("futonly")
         try:
             ch = _make_channel(pg_session, slug)
-            clock = ControllableMasterClock(epoch=_ANCHOR)
+            clock = ControllableClock(epoch=_ANCHOR)
             # Cold publish: one block entirely in the future so we can splice next.
             seed = _schedule_block(_ANCHOR + timedelta(hours=2), 1800, title="seed")
             sched0 = {
@@ -779,7 +779,7 @@ class TestInvPlaylogSupersededRevision001:
         slug = _slug("pl")
         try:
             ch = _make_channel(pg_session, slug)
-            clock = ControllableMasterClock(epoch=_ANCHOR)
+            clock = ControllableClock(epoch=_ANCHOR)
             b0 = _schedule_block(_ANCHOR, 1800, title="A")
             b1 = _schedule_block(_ANCHOR + timedelta(minutes=30), 1800, title="B")
             b2 = _schedule_block(_ANCHOR + timedelta(hours=1), 1800, title="C")

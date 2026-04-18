@@ -10,7 +10,7 @@ Invariants: INV-SCHEDULEREVISION-IMMUTABLE-001, INV-PERSISTENCE-GUARD-NONEMPTY-0
 from __future__ import annotations
 
 import uuid as uuid_mod
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -108,6 +108,7 @@ def publish_revision(
     db: Session,
     *,
     revision_id: uuid_mod.UUID,
+    now: datetime,
 ) -> ScheduleRevision:
     """Publish a draft revision: draft → active with atomic supersession.
 
@@ -134,8 +135,6 @@ def publish_revision(
         raise RevisionEmptyError(
             f"Revision {revision_id} has no items — cannot publish empty revision"
         )
-
-    now = datetime.now(timezone.utc)
 
     # Supersede existing active revisions for same channel+day
     db.query(ScheduleRevision).filter(

@@ -15,9 +15,11 @@ R_new in the same transaction (no commit until all steps succeed).
 INV-SCHEDULE-TIME-IMMUTABILITY-001: SQL UPDATE/DELETE on sealed or live rows is blocked
 via engine-level guards (see _register_schedule_item_immutability_guards).
 
-INV-PLAYLOG-SUPERSEDED-REVISION-001: after publish, delete PlaylistEvent rows for this
-channel with start_utc_ms >= publish boundary so Tier-2 future tail cannot reference
-superseded editorial state.
+INV-PLAYLOG-SUPERSEDED-REVISION-001: after publish, future-tail playlog rows are
+invalidated via ``playlist_builder_daemon.invalidate_future_for_channel`` — the
+daemon module is the sole writer of those rows (Phase 9 Step 6). The invalidation
+runs in the same SA transaction as this module's revision publish, preserving
+atomicity.
 """
 
 from __future__ import annotations
@@ -36,11 +38,10 @@ from sqlalchemy.sql.dml import Delete, Update
 from retrovue.domain.entities import (
     Channel,
     ChannelActiveRevision,
-    PlaylistEvent,
     ScheduleItem,
     ScheduleRevision,
 )
-from retrovue.runtime.clock import MasterClock
+from retrovue.runtime.clock import SystemClock
 from retrovue.runtime.schedule_cache_monotonicity import (
     bump_channel_schedule_revision_head,
 )
@@ -48,7 +49,7 @@ from retrovue.runtime.schedule_cache_monotonicity import (
 logger = logging.getLogger(__name__)
 
 # LAW-CLOCK: Single time authority for all scheduling decisions.
-_clock = MasterClock()
+_clock = SystemClock()
 
 # Engines that have schedule_item immutability listeners attached (id(engine)).
 _GUARDED_ENGINE_IDS: set[int] = set()
@@ -267,37 +268,6 @@ def _assert_join_contiguous(first_start: datetime, join_point: datetime) -> None
     # Gaps are permitted: preserve historical prefix, then replace only the
     # future tail supplied by the caller.
     return
-
-
-def _invalidate_future_playlist_events_for_channel(
-    db: Any,
-    *,
-    channel_slug: str,
-    boundary_utc: datetime,
-) -> int:
-    """Remove Tier-2 playlog plan rows from the publish instant forward (same transaction).
-
-    Rows with start_utc_ms strictly before the boundary are retained (sealed / historical
-    materialization). Rows starting at or after the boundary are removed so no future
-    instant can read a PlaylistEvent tied to a superseded revision's tail.
-    """
-    ms = int(_normalize_utc(boundary_utc).timestamp() * 1000)
-    deleted = (
-        db.query(PlaylistEvent)
-        .filter(
-            PlaylistEvent.channel_slug == channel_slug,
-            PlaylistEvent.start_utc_ms >= ms,
-        )
-        .delete(synchronize_session=False)
-    )
-    if deleted:
-        logger.debug(
-            "playlog_future_invalidate channel_slug=%s boundary_utc_ms=%s deleted=%s",
-            channel_slug,
-            ms,
-            deleted,
-        )
-    return int(deleted or 0)
 
 
 def _copy_preserved_item(
@@ -556,7 +526,14 @@ def write_active_revision_from_compiled_schedule(
             f"(found={active_count})"
         )
 
-    _invalidate_future_playlist_events_for_channel(
+    # Phase 9 Step 6 Stage B1: the daemon module is the sole writer of
+    # PlaylistEvent rows. The invalidation runs in this module's SA
+    # transaction, so the future-tail delete commits atomically with the
+    # revision publish (INV-PLAYLOG-SUPERSEDED-REVISION-001).
+    from retrovue.runtime.playlist_builder_daemon import (
+        invalidate_future_for_channel,
+    )
+    invalidate_future_for_channel(
         db,
         channel_slug=channel_slug,
         boundary_utc=publish_ts,

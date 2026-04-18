@@ -14,12 +14,14 @@ from sqlalchemy.orm import Session
 
 from ...domain.entities import Container, Source
 from ...infra.uow import session as get_session
+from ...runtime.clock import AuthoritativeClock
 from ...workflows import (
     ContainerIngestService,
     SourceIngestService,
     resolve_container_selector,
     resolve_source_selector,
 )
+from ._clock import get_clock
 
 router = APIRouter(prefix="/api/ingest", tags=["ingest"])
 
@@ -58,6 +60,7 @@ def sync_source(
     selector: str,
     dry_run: bool = Query(False, description="Preview without persisting"),
     db: Session = Depends(get_db),
+    clock: AuthoritativeClock = Depends(get_clock),
 ):
     """Trigger ingest for all eligible containers in a source.
 
@@ -68,7 +71,7 @@ def sync_source(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
-    svc = SourceIngestService(db)
+    svc = SourceIngestService(db, clock=clock)
     result = svc.ingest_source(source, dry_run=dry_run)
     return result.to_dict()
 
@@ -119,6 +122,7 @@ def sync_container(
     selector: str,
     dry_run: bool = Query(False, description="Preview without persisting"),
     db: Session = Depends(get_db),
+    clock: AuthoritativeClock = Depends(get_clock),
 ):
     """Trigger ingest for a single container.
 
@@ -130,7 +134,7 @@ def sync_container(
         raise HTTPException(status_code=404, detail=str(exc))
 
     importer = _construct_importer(container, db)
-    svc = ContainerIngestService(db)
+    svc = ContainerIngestService(db, clock=clock)
     result = svc.ingest_container(
         container=container,
         importer=importer,

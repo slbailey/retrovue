@@ -64,6 +64,43 @@ enum class FrameAuthorityAction {
   kExtendActive  // Active empty, successor not seam-ready; extend active.
 };
 
+// LAW-AIR-005: TAKE cascade branch identifier.
+// Mirrors the exact if/else-if ordering in PipelineManager::Run().
+// Used by SelectCascadeBranch() for priority-order testing.
+enum class CascadeBranch {
+  kPadSeamOverride,          // Branch 1: pad_seam_this_tick
+  kContentSeamOverride,      // Branch 2: content_seam_override && pop succeeded
+  kCadenceRepeat,            // Branch 3: is_cadence_repeat
+  kNormalAdvance,            // Branch 4: should_advance_video && v_src
+  kBlockFence,               // Branch 5: take_b
+  kSegmentSeamHold,          // Branch 6: take_segment && has_last_good
+  kGenuineUnderflow,         // Branch 7: a_was_primed && live_has_decoder
+  kPrimedNoDecoder,          // Branch 8: a_was_primed
+  kNotPrimed,                // Branch 9: else (fallthrough)
+};
+
+// LAW-AIR-005: Pure branch-selection function.
+// Returns which cascade branch fires first given pre-computed conditions.
+// The boolean inputs are direct copies of variables computed in Run()
+// before the cascade. Effectful operations (buffer pops, member mutations,
+// logging) remain in Run(); this function has no side effects.
+//
+// content_seam_pop_succeeded: the result of segment_b_video_buffer_->TryPopFrame()
+//   attempted in Run() when content_seam_override_this_tick is true.
+//   Run() attempts the pop and passes the result here.
+CascadeBranch SelectCascadeBranch(
+    bool pad_seam_this_tick,
+    bool content_seam_override_this_tick,
+    bool content_seam_pop_succeeded,
+    bool is_cadence_repeat,
+    bool should_advance_video,
+    bool v_src_non_null,
+    bool take_b,
+    bool take_segment,
+    bool has_last_good_video_frame,
+    bool a_was_primed,
+    bool live_has_decoder);
+
 class PadProducer;
 class TickProducer;
 struct FrameData;
@@ -232,16 +269,42 @@ class PipelineManager : public IPlayoutExecutionEngine {
       int64_t expected_audio_samples,
       int64_t actual_audio_samples_emitted);
 
+  // INV-PRODUCER-DEMAND-DRIVEN-001:
+  // Minimum steady-state pre-pop reserve floor needed to survive a normal
+  // cadence-shaped one-pair no-supply gap without deterministic underflow.
+  static int ComputeSteadyStateReserveFloorSamples(
+      int due_samples_this_tick);
+
+  // INV-AUDIO-CLOCK-AUTHORITY-001:
+  // During paced-output stalls, audio due-sample accounting must use an
+  // elapsed basis that never lags real observed tick time.
+  static int64_t ComputeAuthoritativeAudioElapsedNs(
+      int64_t deadline_elapsed_ns,
+      int64_t observed_elapsed_ns);
+
+  // INV-PACING-SINGLE-AUTHORITY-001:
+  // Derive live audio high-water policy when OutputClock is sole pacer.
+  // Caps standing audio reservoir to bootstrap floor + AV lead tolerance.
+  static int ComputeLiveAudioHighWaterMs(
+      int audio_target_ms,
+      int audio_low_water_ms,
+      int audio_prime_floor_ms,
+      int av_phase_tolerance_ms);
+
   // INV-BOOTSTRAP-AV-PHASE-001 — pure gate math (single source with Run() bootstrap poll).
   static int ComputeVideoTimeMsGate(int video_depth_frames, RationalFps output_fps);
 
   struct BootstrapPhaseGateSnapshot {
     int audio_depth_ms = 0;
+    int prev_audio_depth_ms = -1;
     int video_time_ms_gate = 0;
     int gate_av_delta_ms = 0;
+    int steady_entry_max_ms = 0;
     bool audio_floor_met = false;
     bool audio_ceiling_met = false;
     bool av_phase_met = false;
+    bool steady_entry_band_met = false;
+    bool quantized_floor_crossing_met = false;
     bool phase_valid = false;
   };
   static BootstrapPhaseGateSnapshot EvaluateBootstrapPhaseGate(
@@ -250,7 +313,20 @@ class PipelineManager : public IPlayoutExecutionEngine {
       RationalFps output_fps,
       int audio_prime_floor_ms,
       int bootstrap_audio_ceiling_ms,
-      int av_phase_tolerance_ms);
+      int av_phase_tolerance_ms,
+      int prev_audio_depth_ms = -1);
+
+  // INV-BOOTSTRAP-AV-PHASE-001 post-handoff transition headroom policy.
+  // Computes the minimum transition target audio depth before normal steady
+  // fill control should be considered active under quantized bootstrap handoff.
+  static int ComputePostHandoffTransitionTargetAudioMs(
+      int bootstrap_audio_ceiling_ms,
+      int output_frame_ms,
+      int observed_bootstrap_quantum_ms);
+  static int ComputePostHandoffTransitionExitAudioMs(
+      int post_handoff_target_audio_ms,
+      int output_frame_ms,
+      int observed_bootstrap_quantum_ms);
 
  private:
   std::shared_ptr<ITimeSource> time_source_;
@@ -263,6 +339,7 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // Dequeue next block from ctx_->block_queue and assign to live_.
   // Called ONLY when live_ is EMPTY — outside the timed tick window.
   void TryLoadLiveProducer();
+  FedBlock MaterializeStartupJoinBlock(const FedBlock& block) const;
 
   // P3.1b: If SeamPreparer is idle and queue has a block, kick off block preload.
   // Called outside the tick window only.  Now allows preloading the
@@ -320,6 +397,7 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // ctx_->join_utc_ms (or system_clock fallback).  NEVER mutated after
   // initial capture.  Used for logging/diagnostics only.
   int64_t session_epoch_utc_ms_ = 0;
+  bool startup_join_applied_ = false;
 
   // INV-FENCE-WALLCLOCK-ANCHOR: Fence-specific epoch.  Set to
   // system_clock::now() at clock.Start() (after bootstrap completes).

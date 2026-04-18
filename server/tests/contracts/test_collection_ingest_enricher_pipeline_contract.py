@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from retrovue.runtime.clock import SystemClock
+
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -59,7 +61,7 @@ def test_ingest_enqueues_processor_type_not_enricher_id() -> None:
         patch("retrovue.workflows.path_validation.validate_paths_at_import", return_value=[]),
         patch("retrovue.workflows.container_ingest.enqueue_processor_jobs", side_effect=_capture_enqueue),
     ):
-        result = ContainerIngestService(db).ingest_container(container=container, importer=importer)
+        result = ContainerIngestService(db, clock=SystemClock()).ingest_container(container=container, importer=importer)
 
     assert result.stats.assets_updated == 1
     assert "ffprobe" in captured["processor_ids"]

@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from ..adapters.registry import ENRICHERS
 from ..domain.entities import Asset, Container
+from ..runtime.clock import SystemClock
 from .asset_enrich import EnrichResult, enrich_asset
 
 logger = logging.getLogger(__name__)
@@ -88,7 +89,12 @@ def reprobe_asset(
     pipeline = _build_pipeline_for_collection(db, collection)
 
     # Delegate to the unified lifecycle
-    result: EnrichResult = enrich_asset(db, asset, pipeline)
+    result: EnrichResult = enrich_asset(
+        db,
+        asset,
+        pipeline,
+        now_utc=SystemClock().now_utc(),
+    )
 
     return {
         "uuid": str(asset.uuid),

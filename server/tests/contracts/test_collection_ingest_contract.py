@@ -1,3 +1,4 @@
+from retrovue.runtime.clock import SystemClock
 """
 Contract tests for Collection Ingest command (Phase 1 - Asset-Independent).
 
@@ -1986,7 +1987,7 @@ class TestMilestone2CAssetPersistence:
             {"path_uri": "/media/TV/The Show/S01E02.mkv", "size": 234567},
         ])
 
-        service = ContainerIngestService(db)
+        service = ContainerIngestService(db, clock=SystemClock())
         result = service.ingest_container(container=collection, importer=importer)
 
         # Stats: 2 discovered, 2 ingested, 0 skipped, no errors
@@ -2017,7 +2018,7 @@ class TestMilestone2CAssetPersistence:
             {"path_uri": "/media/TV/The Show/S01E02.mkv", "size": 234567},  # new
         ])
 
-        service = ContainerIngestService(db)
+        service = ContainerIngestService(db, clock=SystemClock())
         result = service.ingest_container(container=collection, importer=importer)
 
         # Stats: 2 discovered, 1 ingested, 1 skipped

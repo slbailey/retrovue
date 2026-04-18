@@ -26,6 +26,9 @@ from retrovue.runtime.channel_stream import (
     ChannelStream,
     generate_ts_stream_async,
 )
+from retrovue.runtime.clock import SystemClock
+
+_TEST_CLOCK = SystemClock()
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +98,7 @@ class TestBackpressureDisconnectQueueBytes:
             ),
             client_buffer_max_bytes=small_buffer,
             backpressure_policy="disconnect",
+            clock=_TEST_CLOCK,
         )
 
         try:
@@ -143,8 +147,9 @@ class TestWriteTimeoutIncludesClientId:
 
         chunks_yielded = 0
         with caplog.at_level(logging.WARNING):
+            from retrovue.runtime.clock import SystemClock
             gen = generate_ts_stream_async(
-                q, write_timeout_s=0.0, client_id="timeout-client"
+                q, clock=SystemClock(), write_timeout_s=0.0, client_id="timeout-client"
             )
             async for chunk in gen:
                 chunks_yielded += 1
@@ -179,6 +184,7 @@ class TestClientConnectedStreamState:
             ts_source_factory=lambda stop_event: PacedTsSource(stop_event=stop_event),
             client_buffer_max_bytes=1024 * 1024,
             backpressure_policy="disconnect",
+            clock=_TEST_CLOCK,
         )
 
         try:
@@ -205,6 +211,7 @@ class TestClientConnectedStreamState:
             ts_source_factory=lambda stop_event: PacedTsSource(stop_event=stop_event),
             client_buffer_max_bytes=1024 * 1024,
             backpressure_policy="disconnect",
+            clock=_TEST_CLOCK,
         )
 
         try:
@@ -242,6 +249,7 @@ class TestClientDisconnectedQueueBytes:
             ts_source_factory=lambda stop_event: PacedTsSource(stop_event=stop_event),
             client_buffer_max_bytes=1024 * 1024,
             backpressure_policy="disconnect",
+            clock=_TEST_CLOCK,
         )
 
         try:

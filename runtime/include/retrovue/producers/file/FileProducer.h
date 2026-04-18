@@ -182,6 +182,8 @@ namespace retrovue::producers::file
     // Returns true if a frame was flushed, false if no cached frame exists.
     bool FlushCachedFrameToBuffer();
 
+    int64_t GetLastShadowVideoMT() const { return last_shadow_video_mt_us_; }
+
     // Gets the next PTS that will be used for the next frame (for PTS alignment).
     // Returns the PTS that the next decoded frame will have.
     int64_t GetNextPTS() const;
@@ -265,6 +267,7 @@ namespace retrovue::producers::file
     std::atomic<int64_t> frames_delivered_{0};  // Frames delivered to buffer (for early EOF detection)
     std::atomic<uint64_t> buffer_full_count_;
     std::atomic<uint64_t> decode_errors_;
+    int64_t last_shadow_video_mt_us_ = 0;
     std::chrono::steady_clock::time_point teardown_deadline_;
     std::chrono::milliseconds drain_timeout_;
 

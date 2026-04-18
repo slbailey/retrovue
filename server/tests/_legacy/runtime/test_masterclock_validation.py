@@ -9,7 +9,7 @@ import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from retrovue.runtime.clock import MasterClock
+from retrovue.runtime.clock import AuthoritativeClock
 
 
 def test_masterclock_monotonic(iterations: int = 1000) -> dict[str, Any]:

@@ -161,7 +161,7 @@ class ScheduleQueryService(Protocol):
     ScheduleQueryService provides playout instructions to ChannelManager.
     It answers: "What should be playing right now, and what comes next?"
 
-    All time parameters MUST come from MasterClock. Implementations
+    All time parameters MUST come from the AuthoritativeClock. Implementations
     MUST NOT access system clock directly.
     """
 
@@ -171,7 +171,7 @@ class ScheduleQueryService(Protocol):
 
         Args:
             channel_id: The channel identifier
-            at_time: The MasterClock-provided UTC time to query
+            at_time: The AuthoritativeClock-provided UTC time to query
 
         Returns:
             ProgramBlock where: block_start <= at_time < block_end
@@ -193,7 +193,7 @@ class ScheduleQueryService(Protocol):
 
         Args:
             channel_id: The channel identifier
-            after_time: The MasterClock-provided UTC time
+            after_time: The AuthoritativeClock-provided UTC time
 
         Returns:
             The next ProgramBlock where: block_start >= after_time

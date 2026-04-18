@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -51,6 +51,7 @@ def enrich_asset(
     asset: Asset,
     pipeline: list[tuple[int, str, Any]],
     *,
+    now_utc: datetime,
     pipeline_checksum: str | None = None,
 ) -> EnrichResult:
     """Prepare asset for re-enrichment and enqueue a processor job.
@@ -106,12 +107,12 @@ def enrich_asset(
     #    The normal state machine does not allow ready→new, but re-enrichment
     #    is a full lifecycle restart.
     asset.state = "new"
-    asset.updated_at = datetime.now(UTC)
+    asset.updated_at = now_utc
 
     # ── 7. Transition new → enriching ─────────────────────────────────────
     validate_state_transition("new", "enriching")
     asset.state = "enriching"
-    asset.updated_at = datetime.now(UTC)
+    asset.updated_at = now_utc
     db.flush()
 
     # ── 8. Enqueue processor job; worker will run pipeline and update state ─

@@ -307,6 +307,8 @@ class TimelineController {
   // ========================================================================
   void AdvanceCursorForPreBufferedFrames(size_t frame_count);
 
+  void AlignCursorToLastBufferedMT(int64_t last_buffered_mt_us);
+
   // ========================================================================
   // Statistics
   // ========================================================================

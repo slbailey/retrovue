@@ -33,6 +33,8 @@ Where:
 - Audio pull size per tick MUST be determined by `OutputClock` demand.
 - Encoder packetization MUST be downstream formatting and MUST NOT influence
   timing authority.
+- Live video PTS MUST remain the nominal `OutputClock`/tick-derived timeline;
+  it MUST NOT be corrected toward audio PTS as a recovery mechanism.
 - `video_time_emitted_ms` MUST mean cumulative output timeline emitted under
   `OutputClock`; it MUST NOT mean source PTS or decoder-native media time.
 - `audio_time_emitted_ms` MUST mean cumulative emitted audio time after
@@ -43,6 +45,9 @@ Where:
 - Startup preroll MUST NOT establish an independent audio timeline.
 - Priming, bootstrap, preroll, seam preparation, and segment prefill MUST only
   prepare buffered media and MUST NOT redefine timing authority.
+- Startup priming MUST be packetization-shape independent at the contract
+  outcome level: decoder-drain burst shape MUST NOT by itself determine whether
+  a channel enters deterministic bootstrap positive-lead clamp.
 - On first output tick after startup, emitted audio time and emitted video time
   MUST both anchor to the same `OutputClock` epoch.
 - Segment transitions and block transitions MUST preserve cumulative audio/video
@@ -64,6 +69,8 @@ The following behaviors are forbidden:
 - Allowing AAC frame size, encoder frame size, or mux packet cadence to
   determine emission timing.
 - Deriving audio clock from decoded sample arrival rate.
+- Mutating live video PTS as a function of audio PTS (bounded convergence,
+  clamp-forward, post-hoc recentering).
 - Any logic path that allows `audio_time` to diverge from `video_time` when both
   are defined from `OutputClock`.
 

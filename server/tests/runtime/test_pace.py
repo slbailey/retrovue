@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from retrovue.runtime.clock import RealTimeMasterClock, SteppedMasterClock
+from retrovue.runtime.clock import SystemClock, SteppedClock
 from retrovue.runtime.pace import PaceController, PaceParticipant
 
 
@@ -24,7 +24,7 @@ def test_pace_controller_real_time_smoke():
         sleep_calls.append(duration)
         time.sleep(duration)
 
-    clock = RealTimeMasterClock()
+    clock = SystemClock()
     controller = PaceController(clock=clock, target_hz=20.0, sleep_fn=fake_sleep)
     participant = RecordingParticipant()
     controller.add_participant(participant)
@@ -45,7 +45,7 @@ def test_pace_controller_real_time_smoke():
 
 
 def test_pace_controller_stepped_advances_and_clamps():
-    clock = SteppedMasterClock()
+    clock = SteppedClock()
     controller = PaceController(clock=clock, target_hz=10.0, sleep_fn=None)
     participant = RecordingParticipant()
     controller.add_participant(participant)
@@ -64,7 +64,7 @@ def test_pace_controller_stepped_advances_and_clamps():
 
 
 def test_participant_can_remove_itself_safely():
-    clock = SteppedMasterClock()
+    clock = SteppedClock()
     controller = PaceController(clock=clock, target_hz=10.0, sleep_fn=None)
 
     class SelfRemoving(PaceParticipant):
@@ -81,6 +81,5 @@ def test_participant_can_remove_itself_safely():
     # Second run should not call the participant because it removed itself.
     controller.run_once()
     assert participant.count == 1
-
 
 

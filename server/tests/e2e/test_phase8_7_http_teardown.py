@@ -150,8 +150,10 @@ def test_http_close_teardown_within_500ms_no_reconnect(caplog: pytest.LogCapture
     provider._producer_factory = lambda cid, mode, cfg, channel_config=None: FakeProducerWithSocket(
         cid, ProducerMode.NORMAL, cfg or {}
     )
+    from retrovue.runtime.clock import SystemClock
+    _e2e_clock = SystemClock()
     channel_stream_factory = lambda cid, path: ChannelStream(
-        cid, ts_source_factory=lambda _=None: FakeTsSource(chunk_size=188 * 10)
+        cid, ts_source_factory=lambda _=None: FakeTsSource(chunk_size=188 * 10), clock=_e2e_clock
     )
 
     director, base = _start_director_with_provider(provider, channel_stream_factory)

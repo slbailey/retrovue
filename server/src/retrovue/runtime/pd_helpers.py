@@ -19,6 +19,7 @@ from typing import Any, Callable, Protocol
 from fastapi import Response
 
 from retrovue.runtime.channel_stream import generate_ts_stream_async
+from retrovue.runtime.clock import AuthoritativeClock
 
 
 class _RawTSResponse(Response):
@@ -41,6 +42,7 @@ class _RawTSResponse(Response):
         cleanup_fn: Callable,
         disconnect_monitor: Callable,
         logger: logging.Logger,
+        clock: AuthoritativeClock,
     ) -> None:
         # Minimal init — avoid Response.__init__ which sets body/Content-Length
         # that conflicts with raw streaming.  Set attributes that FastAPI
@@ -53,6 +55,7 @@ class _RawTSResponse(Response):
         self._cleanup_fn = cleanup_fn
         self._disconnect_monitor = disconnect_monitor
         self._logger = logger
+        self._clock = clock
 
     async def __call__(self, scope, receive, send) -> None:
         # ── Disable uvicorn's chunked framing ────────────────────────────
@@ -127,7 +130,7 @@ class _RawTSResponse(Response):
 
         # ── 3. Stream raw TS packets ─────────────────────────────────────
         try:
-            async for chunk in generate_ts_stream_async(self._client_queue):
+            async for chunk in generate_ts_stream_async(self._client_queue, clock=self._clock):
                 await send({
                     "type": "http.response.body",
                     "body": chunk,

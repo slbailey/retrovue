@@ -24,12 +24,9 @@ import threading
 from concurrent import futures
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
-
 import grpc
 
-if TYPE_CHECKING:
-    from retrovue.runtime.clock import MasterClock as MasterClockType
+from retrovue.runtime.clock import AuthoritativeClock
 
 # Proto stubs live in server/src/retrovue/proto/; add to path for import.
 _PROTO_DIR = str(Path(__file__).resolve().parent.parent / "proto")
@@ -220,11 +217,8 @@ class DurableAckStore:
     Stores highest acked_sequence in memory and persists to disk.
     """
 
-    def __init__(self, ack_dir: str = DEFAULT_ACK_DIR, clock: MasterClockType | None = None):
+    def __init__(self, ack_dir: str = DEFAULT_ACK_DIR, *, clock: AuthoritativeClock):
         self._ack_dir = ack_dir
-        if clock is None:
-            from retrovue.runtime.clock import MasterClock
-            clock = MasterClock()
         self._clock = clock
         self._lock = threading.Lock()
         # (channel_id, playout_session_id) → acked_sequence
@@ -279,11 +273,8 @@ class AsRunWriter:
     sequentially.
     """
 
-    def __init__(self, channel_id: str, asrun_dir: str = DEFAULT_ASRUN_DIR, clock: MasterClockType | None = None):
+    def __init__(self, channel_id: str, asrun_dir: str = DEFAULT_ASRUN_DIR, *, clock: AuthoritativeClock):
         self._channel_id = channel_id
-        if clock is None:
-            from retrovue.runtime.clock import MasterClock
-            clock = MasterClock()
         self._clock = clock
         today = self._clock.now_utc().strftime("%Y-%m-%d")
         # Broadcast-day start (midnight UTC) for display-time computation.
@@ -371,10 +362,12 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
 
     def __init__(
         self,
-        ack_store: DurableAckStore | None = None,
+        clock: AuthoritativeClock,
+        ack_store: DurableAckStore,
         asrun_dir: str = DEFAULT_ASRUN_DIR,
     ):
-        self._ack_store = ack_store or DurableAckStore()
+        self._clock = clock
+        self._ack_store = ack_store
         self._asrun_dir = asrun_dir
 
     def EvidenceStream(self, request_iterator, context):
@@ -415,7 +408,7 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
 
                 # Initialize writer on first real message.
                 if writer is None and msg.channel_id:
-                    writer = AsRunWriter(msg.channel_id, self._asrun_dir)
+                    writer = AsRunWriter(msg.channel_id, self._asrun_dir, clock=self._clock)
                     # Load durable ack for this session to skip already-committed.
                     durable_ack_seq = self._ack_store.get(
                         msg.channel_id, msg.playout_session_id
@@ -799,12 +792,14 @@ class EvidenceServicer(pb2_grpc.ExecutionEvidenceServiceServicer):
 def serve(
     port: int = 50052,
     block: bool = True,
-    ack_store: DurableAckStore | None = None,
+    *,
+    clock: AuthoritativeClock,
+    ack_store: DurableAckStore,
     asrun_dir: str = DEFAULT_ASRUN_DIR,
 ) -> grpc.Server:
     """Start the evidence gRPC server on the given port."""
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
-    servicer = EvidenceServicer(ack_store=ack_store, asrun_dir=asrun_dir)
+    servicer = EvidenceServicer(clock=clock, ack_store=ack_store, asrun_dir=asrun_dir)
     pb2_grpc.add_ExecutionEvidenceServiceServicer_to_server(servicer, server)
     address = f"[::]:{port}"
     server.add_insecure_port(address)

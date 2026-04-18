@@ -13,7 +13,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from retrovue.runtime.clock import MasterClock
+from retrovue.runtime.clock import AuthoritativeClock
 from retrovue.runtime.schedule_types import ScheduledBlock, ScheduledSegment
 
 
@@ -26,7 +26,7 @@ class MockGridScheduleService:
 
     def __init__(
         self,
-        clock: MasterClock,
+        clock: AuthoritativeClock,
         program_asset_path: str,
         program_duration_seconds: float,
         filler_asset_path: str,
@@ -237,7 +237,7 @@ class MockAlternatingScheduleService:
 
     def __init__(
         self,
-        clock: MasterClock,
+        clock: AuthoritativeClock,
         asset_a_path: str,
         asset_b_path: str,
         segment_seconds: float = 10.0,

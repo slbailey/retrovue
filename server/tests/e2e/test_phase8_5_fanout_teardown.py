@@ -76,8 +76,10 @@ def _start_director_85(provider: _StubChannelManagerProvider85) -> tuple[Program
         port=port,
         resolved_config=TEST_RESOLVED_CONFIG,
     )
+    from retrovue.runtime.clock import SystemClock
+    _e2e_clock = SystemClock()
     director._channel_stream_factory = lambda cid, path: ChannelStream(
-        cid, ts_source_factory=lambda _=None: FakeTsSource(chunk_size=188 * 10)
+        cid, ts_source_factory=lambda _=None: FakeTsSource(chunk_size=188 * 10), clock=_e2e_clock
     )
     director.start()
     base = f"http://127.0.0.1:{port}"

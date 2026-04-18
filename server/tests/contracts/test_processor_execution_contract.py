@@ -6,6 +6,8 @@ Contract: docs/contracts/core/ProcessorExecutionContract_v0.1.md
 
 from __future__ import annotations
 
+from retrovue.runtime.clock import SystemClock
+
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import patch
@@ -87,7 +89,7 @@ class TestProcessorExecutionContract:
         try:
             with session() as db:
                 job = db.get(ProcessorJob, job_id)
-                execute_job(db, job)
+                execute_job(db, job, clock=SystemClock())
         except Exception:
             pass
         with session() as db:
@@ -124,7 +126,7 @@ class TestProcessorExecutionContract:
         with patch("retrovue.catalog.processor_runtime.ENRICHERS", {"ffprobe": fake_ffprobe, "loudness": fake_ffprobe}):
             with session() as db:
                 job = db.get(ProcessorJob, job_id)
-                execute_job(db, job)
+                execute_job(db, job, clock=SystemClock())
 
         dur = None
         run_count = 0
@@ -170,7 +172,7 @@ class TestProcessorExecutionContract:
         with patch("retrovue.catalog.processor_runtime.ENRICHERS", {"ffprobe": fake_ffprobe, "loudness": fake_ffprobe}):
             with session() as db:
                 job = db.get(ProcessorJob, job_id)
-                execute_job(db, job)
+                execute_job(db, job, clock=SystemClock())
 
         with session() as db:
             row = db.get(Asset, asset_id)
@@ -195,7 +197,7 @@ class TestProcessorExecutionContract:
         with session() as db:
             job = db.get(ProcessorJob, job_id)
             try:
-                execute_job(db, job)
+                execute_job(db, job, clock=SystemClock())
             except Exception:
                 pass
 
@@ -227,7 +229,7 @@ class TestProcessorExecutionContract:
         with session() as db:
             job = db.get(ProcessorJob, job_id)
             try:
-                execute_job(db, job)
+                execute_job(db, job, clock=SystemClock())
             except Exception:
                 pass
 
@@ -273,7 +275,7 @@ class TestProcessorExecutionContract:
         with session() as db:
             job = db.get(ProcessorJob, job_id)
             try:
-                execute_job(db, job)
+                execute_job(db, job, clock=SystemClock())
             except Exception:
                 pass
 
@@ -340,7 +342,7 @@ class TestProcessorExecutionContract:
 
             with session() as db:
                 job = db.get(ProcessorJob, job_id)
-                execute_job(db, job)
+                execute_job(db, job, clock=SystemClock())
 
         with session() as db:
             row = db.get(Asset, asset_id)

@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from retrovue.runtime.clock import MasterClock, TimePrecision
+from retrovue.runtime.clock import AuthoritativeClock, TimePrecision
 
 
 @pytest.fixture

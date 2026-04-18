@@ -17,6 +17,8 @@ Invariants: INV-SCHEDULEREVISION-IMMUTABLE-001, INV-PERSISTENCE-GUARD-NONEMPTY-0
 
 from __future__ import annotations
 
+from retrovue.runtime.clock import SystemClock
+
 import uuid as uuid_mod
 from datetime import date, datetime, timezone
 
@@ -89,6 +91,7 @@ def channel(db: Session) -> Channel:
 def client(db: Session):
     """FastAPI TestClient with dependency override for db session."""
     app = FastAPI()
+    app.state.clock = SystemClock()
     app.include_router(router)
 
     def override_get_db():
@@ -172,7 +175,7 @@ class TestPublishRevision:
         )
         assert rev.status == "draft"
 
-        published = publish_revision(db, revision_id=rev.id)
+        published = publish_revision(db, revision_id=rev.id, now=SystemClock().now_utc())
 
         assert published.status == "active"
         assert published.activated_at is not None
@@ -185,14 +188,14 @@ class TestPublishRevision:
             db, channel_id=channel.id, broadcast_day=day,
             items=_make_items(day), created_by="test",
         )
-        publish_revision(db, revision_id=rev1.id)
+        publish_revision(db, revision_id=rev1.id, now=SystemClock().now_utc())
 
         # Create and publish second revision — should supersede first
         rev2 = create_draft_revision(
             db, channel_id=channel.id, broadcast_day=day,
             items=_make_items(day, count=3), created_by="test",
         )
-        result = publish_revision(db, revision_id=rev2.id)
+        result = publish_revision(db, revision_id=rev2.id, now=SystemClock().now_utc())
 
         assert result.status == "active"
 
@@ -207,7 +210,7 @@ class TestPublishRevision:
             db, channel_id=channel.id, broadcast_day=day,
             items=_make_items(day), created_by="test",
         )
-        publish_revision(db, revision_id=rev.id)
+        publish_revision(db, revision_id=rev.id, now=SystemClock().now_utc())
 
         pointer = db.query(ChannelActiveRevision).filter(
             ChannelActiveRevision.channel_id == channel.id,
@@ -223,11 +226,11 @@ class TestPublishRevision:
             db, channel_id=channel.id, broadcast_day=day,
             items=_make_items(day), created_by="test",
         )
-        publish_revision(db, revision_id=rev.id)
+        publish_revision(db, revision_id=rev.id, now=SystemClock().now_utc())
 
         # Already active — cannot publish again
         with pytest.raises(RevisionNotDraftError):
-            publish_revision(db, revision_id=rev.id)
+            publish_revision(db, revision_id=rev.id, now=SystemClock().now_utc())
 
     def test_reject_publish_empty_revision(self, db: Session, channel: Channel):
         """A revision that somehow has items removed cannot be published."""
@@ -242,11 +245,11 @@ class TestPublishRevision:
         db.flush()
 
         with pytest.raises(RevisionEmptyError):
-            publish_revision(db, revision_id=rev.id)
+            publish_revision(db, revision_id=rev.id, now=SystemClock().now_utc())
 
     def test_reject_publish_nonexistent(self, db: Session):
         with pytest.raises(RevisionNotFoundError):
-            publish_revision(db, revision_id=uuid_mod.uuid4())
+            publish_revision(db, revision_id=uuid_mod.uuid4(), now=SystemClock().now_utc())
 
 
 class TestListRevisions:
@@ -288,7 +291,7 @@ class TestListRevisions:
             db, channel_id=channel.id, broadcast_day=day,
             items=_make_items(day), created_by="test",
         )
-        publish_revision(db, revision_id=rev.id)
+        publish_revision(db, revision_id=rev.id, now=SystemClock().now_utc())
 
         drafts = list_revisions(db, channel_id=channel.id, status="draft")
         assert len(drafts) == 0

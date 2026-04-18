@@ -7,7 +7,6 @@ These are pure unit tests — no DB, no AIR subprocess.
 from __future__ import annotations
 
 import pytest
-from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 from dataclasses import dataclass
 
@@ -46,25 +45,25 @@ def _make_scheduled_block(
     )
 
 
-# ── SingleBlockTestScheduleService ───────────────────────────────────────────
+# ── SingleBlockExecutionReader ───────────────────────────────────────────────
 
-class TestSingleBlockTestScheduleService:
+class TestSingleBlockExecutionReader:
     def test_inv_test_block_001_retimed_to_now(self):
         """INV-TEST-BLOCK-001: Block is re-timed to start_utc_ms."""
-        from retrovue.runtime.test_playout_endpoint import SingleBlockTestScheduleService
+        from retrovue.runtime.test_playout_endpoint import SingleBlockExecutionReader
         orig = _make_scheduled_block(start_utc_ms=1_000_000_000, duration_ms=60_000)
         now_ms = 1_700_000_000_000
-        svc = SingleBlockTestScheduleService(orig, now_ms)
+        svc = SingleBlockExecutionReader(orig, now_ms)
         assert svc.content_block.start_utc_ms == now_ms
         assert svc.content_block.end_utc_ms == now_ms + 60_000
 
     def test_inv_test_block_002_segments_preserved(self):
         """INV-TEST-BLOCK-002: Original segments are preserved verbatim."""
-        from retrovue.runtime.test_playout_endpoint import SingleBlockTestScheduleService
+        from retrovue.runtime.test_playout_endpoint import SingleBlockExecutionReader
         seg = _make_scheduled_segment(asset_uri="/foo/bar.mkv", asset_start_offset_ms=5000)
         orig = _make_scheduled_block(duration_ms=60_000, segments=(seg,))
         now_ms = 9_000_000_000
-        svc = SingleBlockTestScheduleService(orig, now_ms)
+        svc = SingleBlockExecutionReader(orig, now_ms)
         cb = svc.content_block
         assert len(cb.segments) == 1
         assert cb.segments[0].asset_uri == "/foo/bar.mkv"
@@ -72,13 +71,13 @@ class TestSingleBlockTestScheduleService:
         assert cb.segments[0].segment_duration_ms == seg.segment_duration_ms
 
     def test_inv_test_block_003_pad_block_suffix(self):
-        """INV-TEST-BLOCK-003: get_block_at returns pad block after content ends."""
-        from retrovue.runtime.test_playout_endpoint import SingleBlockTestScheduleService, _PAD_DURATION_MS
+        """INV-TEST-BLOCK-003: next-block lookup returns pad block after content ends."""
+        from retrovue.runtime.test_playout_endpoint import SingleBlockExecutionReader, _PAD_DURATION_MS
         orig = _make_scheduled_block(duration_ms=60_000)
         now_ms = 5_000_000
-        svc = SingleBlockTestScheduleService(orig, now_ms)
+        svc = SingleBlockExecutionReader(orig, now_ms)
         pad_start = now_ms + 60_000
-        pad_block = svc.get_block_at("test", pad_start)
+        pad_block = svc.get_next_execution_block("test", pad_start)
         assert pad_block is not None
         assert pad_block.block_id.endswith("__pad")
         assert pad_block.start_utc_ms == pad_start
@@ -87,38 +86,30 @@ class TestSingleBlockTestScheduleService:
         assert pad_block.segments[0].segment_type == "pad"
 
     def test_inv_test_block_004_none_past_pad(self):
-        """INV-TEST-BLOCK-004: get_block_at returns None past pad end."""
-        from retrovue.runtime.test_playout_endpoint import SingleBlockTestScheduleService, _PAD_DURATION_MS
+        """INV-TEST-BLOCK-004: execution lookup returns None past pad end."""
+        from retrovue.runtime.test_playout_endpoint import SingleBlockExecutionReader, _PAD_DURATION_MS
         orig = _make_scheduled_block(duration_ms=60_000)
         now_ms = 5_000_000
-        svc = SingleBlockTestScheduleService(orig, now_ms)
+        svc = SingleBlockExecutionReader(orig, now_ms)
         past_end = now_ms + 60_000 + _PAD_DURATION_MS
-        assert svc.get_block_at("test", past_end) is None
+        assert svc.get_next_execution_block("test", past_end) is None
 
     def test_content_block_returned_within_range(self):
-        """get_block_at returns content block when utc_ms within content range."""
-        from retrovue.runtime.test_playout_endpoint import SingleBlockTestScheduleService
+        """Current execution lookup returns content block when now_ms is within content range."""
+        from retrovue.runtime.test_playout_endpoint import SingleBlockExecutionReader
         orig = _make_scheduled_block(duration_ms=60_000)
         now_ms = 5_000_000
-        svc = SingleBlockTestScheduleService(orig, now_ms)
-        result = svc.get_block_at("test", now_ms + 1000)
+        svc = SingleBlockExecutionReader(orig, now_ms)
+        result = svc.get_current_execution_block("test", now_ms + 1000)
         assert result is not None
         assert result.block_id == orig.block_id
 
     def test_block_id_preserved(self):
         """Content block preserves the original block_id."""
-        from retrovue.runtime.test_playout_endpoint import SingleBlockTestScheduleService
+        from retrovue.runtime.test_playout_endpoint import SingleBlockExecutionReader
         orig = _make_scheduled_block(block_id="my-unique-block-id")
-        svc = SingleBlockTestScheduleService(orig, 1_000_000)
+        svc = SingleBlockExecutionReader(orig, 1_000_000)
         assert svc.content_block.block_id == "my-unique-block-id"
-
-    def test_get_playout_plan_now_returns_empty(self):
-        """get_playout_plan_now always returns empty list (not used by BlockPlanProducer)."""
-        from retrovue.runtime.test_playout_endpoint import SingleBlockTestScheduleService
-        orig = _make_scheduled_block()
-        svc = SingleBlockTestScheduleService(orig, 0)
-        result = svc.get_playout_plan_now("test", datetime.now(timezone.utc))
-        assert result == []
 
 
 # ── _load_block_from_db ───────────────────────────────────────────────────────

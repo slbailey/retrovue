@@ -11,6 +11,7 @@ import logging
 import os
 import typer
 from pathlib import Path
+from retrovue.runtime.clock import SystemClock
 from retrovue.runtime.program_director import ProgramDirector
 from retrovue.runtime.config import RuntimeConfig
 from retrovue.runtime.providers import YamlChannelConfigProvider
@@ -129,6 +130,7 @@ def start(
     # Create ProgramDirector with embedded ChannelManager registry (single component, single port)
     if mock_schedule_ab:
         program_director = ProgramDirector(
+            clock=SystemClock(),
             host="0.0.0.0",
             port=http_port,
             channel_config_provider=channel_config_provider,
@@ -140,6 +142,7 @@ def start(
         )
     elif mock_schedule_grid:
         program_director = ProgramDirector(
+            clock=SystemClock(),
             host="0.0.0.0",
             port=http_port,
             channel_config_provider=channel_config_provider,
@@ -152,6 +155,7 @@ def start(
         )
     else:
         program_director = ProgramDirector(
+            clock=SystemClock(),
             host="0.0.0.0",
             port=http_port,
             channel_config_provider=channel_config_provider,

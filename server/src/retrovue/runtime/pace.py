@@ -1,8 +1,8 @@
 """Pacing controller for runtime components.
 
 The `PaceController` owns the main playout cadence. It drives registered
-participants by emitting ticks at the requested frequency using the station
-time supplied by a :class:`MasterClock`.
+participants by emitting ticks at the requested frequency using monotonic time
+supplied by an :class:`AuthoritativeClock`.
 
 Key guarantees:
 
@@ -23,7 +23,7 @@ from typing import Callable, Protocol, runtime_checkable
 
 import time
 
-from .clock import MasterClock
+from .clock import AuthoritativeClock
 
 SleepFn = Callable[[float], None]
 
@@ -43,7 +43,7 @@ class PaceController:
     Parameters
     ----------
     clock:
-        Master clock that provides monotonically increasing station time.
+        Authoritative clock that provides monotonic elapsed time.
     target_hz:
         Desired cadence in hertz (frames per second). Must be positive.
     sleep_fn:
@@ -55,7 +55,7 @@ class PaceController:
         never tries to "catch up" more than three frames in a single tick.
     """
 
-    clock: MasterClock
+    clock: AuthoritativeClock
     target_hz: float = 30.0
     sleep_fn: SleepFn | None = time.sleep
     max_frame_multiplier: float = 3.0
@@ -87,7 +87,7 @@ class PaceController:
 
         self._stop_event.clear()
         self._last_time = None
-        next_wall_tick = time.perf_counter()
+        next_wall_tick = self.clock.monotonic()
 
         while not self._stop_event.is_set():
             tick_emitted = self.run_once()
@@ -95,19 +95,19 @@ class PaceController:
                 # Stepped/testing mode should not sleep.
                 continue
 
-            # Maintain cadence against wall clock with drift correction.
+            # Maintain cadence against monotonic clock with drift correction.
             next_wall_tick += self._frame_interval
-            remaining = next_wall_tick - time.perf_counter()
+            remaining = next_wall_tick - self.clock.monotonic()
             if remaining > 0:
                 self.sleep_fn(remaining)
             else:
                 # We are late; reset baseline to avoid negative spirals.
-                next_wall_tick = time.perf_counter()
+                next_wall_tick = self.clock.monotonic()
 
             # If we did not emit a tick (e.g., no participants or no time
-            # advance) keep baseline close to current wall time.
+            # advance) keep baseline close to current monotonic time.
             if not tick_emitted:
-                next_wall_tick = time.perf_counter()
+                next_wall_tick = self.clock.monotonic()
 
     def stop(self) -> None:
         """Signal the controller to stop."""
@@ -120,7 +120,7 @@ class PaceController:
         Returns ``True`` when participants received a tick, ``False`` otherwise.
         """
 
-        now = self.clock.now()
+        now = self.clock.monotonic()
         last_time = self._last_time
         if last_time is None:
             dt = self._frame_interval
@@ -138,4 +138,3 @@ class PaceController:
         for participant in participants_snapshot:
             participant.on_paced_tick(now, dt)
         return bool(participants_snapshot)
-

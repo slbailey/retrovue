@@ -7,6 +7,8 @@ Contract: enqueue_processor_jobs creates pending jobs; worker run processes them
 
 from __future__ import annotations
 
+from retrovue.runtime.clock import SystemClock
+
 import uuid
 
 import pytest
@@ -43,10 +45,10 @@ def test_worker_claim_execute_complete_cycle():
     # Drain so we only have our job
     for _ in range(100):
         with session() as db:
-            j = claim_next_job(db)
+            j = claim_next_job(db, clock=SystemClock())
             if j is None:
                 break
-            complete_job(db, j.id, True)
+            complete_job(db, j.id, True, clock=SystemClock())
 
     target_id = uuid.uuid4()
     job_id = None

@@ -23,12 +23,12 @@ from __future__ import annotations
 
 import structlog
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from ..domain.entities import Container, Source
+from ..runtime.clock import AuthoritativeClock
 from .container_ingest import ContainerIngestService
 from .source_type_registry import resolve_importer_class
 
@@ -131,8 +131,9 @@ class SourceIngestService:
     source, delegating each container to ``ContainerIngestService``.
     """
 
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, *, clock: AuthoritativeClock):
         self.db = db
+        self._clock = clock
 
     def ingest_source(
         self,
@@ -185,7 +186,7 @@ class SourceIngestService:
         for coll in eligible:
             try:
                 importer = _construct_importer(coll, self.db)
-                cis = ContainerIngestService(self.db)
+                cis = ContainerIngestService(self.db, clock=self._clock)
                 cis_result = cis.ingest_container(
                     container=coll,
                     importer=importer,

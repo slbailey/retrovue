@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "retrovue/blockplan/AudioLookaheadBuffer.hpp"
+#include "retrovue/blockplan/BlockPlanValidator.hpp"
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/BroadcastAudioProcessor.hpp"
@@ -74,6 +75,59 @@ static inline bool IsPadDecision(TakeDecision d) {
 
 using retrovue::util::Logger;
 
+// LAW-AIR-005: Pure branch-selection function.
+// 1:1 copy of the if/else-if condition chain from Run().
+// No side effects, no buffer reads, no state mutation, no logging.
+CascadeBranch SelectCascadeBranch(
+    bool pad_seam_this_tick,
+    bool content_seam_override_this_tick,
+    bool content_seam_pop_succeeded,
+    bool is_cadence_repeat,
+    bool should_advance_video,
+    bool v_src_non_null,
+    bool take_b,
+    bool take_segment,
+    bool has_last_good_video_frame,
+    bool a_was_primed,
+    bool live_has_decoder) {
+  // Branch 1
+  if (pad_seam_this_tick) {
+    return CascadeBranch::kPadSeamOverride;
+  }
+  // Branch 2
+  else if (content_seam_override_this_tick && content_seam_pop_succeeded) {
+    return CascadeBranch::kContentSeamOverride;
+  }
+  // Branch 3
+  else if (is_cadence_repeat) {
+    return CascadeBranch::kCadenceRepeat;
+  }
+  // Branch 4
+  else if (should_advance_video && v_src_non_null) {
+    return CascadeBranch::kNormalAdvance;
+  }
+  // Branch 5
+  else if (take_b) {
+    return CascadeBranch::kBlockFence;
+  }
+  // Branch 6
+  else if (take_segment && has_last_good_video_frame) {
+    return CascadeBranch::kSegmentSeamHold;
+  }
+  // Branch 7
+  else if (a_was_primed && live_has_decoder) {
+    return CascadeBranch::kGenuineUnderflow;
+  }
+  // Branch 8
+  else if (a_was_primed) {
+    return CascadeBranch::kPrimedNoDecoder;
+  }
+  // Branch 9
+  else {
+    return CascadeBranch::kNotPrimed;
+  }
+}
+
 // INV-AUDIO-PRIME-001: Minimum audio buffer depth (ms) required from
 // TickProducer::PrimeFirstTick.  The preloader worker thread calls
 // PrimeFirstTick which accumulates audio into the primed frame's audio
@@ -90,7 +144,6 @@ static constexpr int kMinSegmentSwapVideoFrames = 2;
 // B-chain fill: minimum lead time (frames/ms) so segment prep reaches target depth before seam.
 static constexpr int kMinSegmentPrepHeadroomMs = 250;
 static constexpr int kMinSegmentPrepHeadroomFrames = 8;
-
 int PipelineManager::ComputeVideoTimeMsGate(int video_depth_frames, RationalFps output_fps) {
   if (output_fps.num <= 0 || output_fps.den <= 0) return 0;
   const int vd = std::max(0, video_depth_frames);
@@ -103,10 +156,13 @@ int64_t PipelineManager::ComputeExpectedAudioSamplesFromOutputClockNs(
   if (output_clock_elapsed_ns <= 0 || sample_rate <= 0) {
     return 0;
   }
-  const long double elapsed_s =
-      static_cast<long double>(output_clock_elapsed_ns) / 1'000'000'000.0L;
-  return static_cast<int64_t>(
-      std::llround(elapsed_s * static_cast<long double>(sample_rate)));
+  // HARDEN-014 / LAW-AIR-001: Integer math only. 128-bit intermediate prevents
+  // overflow (max elapsed ~86400s * 1e9 * 48000 fits in 128 bits).
+  // Round-half-up: add half-denominator before division.
+  __int128 numerator = static_cast<__int128>(output_clock_elapsed_ns)
+                     * static_cast<__int128>(sample_rate)
+                     + 500'000'000LL;
+  return static_cast<int64_t>(numerator / 1'000'000'000LL);
 }
 
 int PipelineManager::ComputeDueAudioSamples(
@@ -119,22 +175,99 @@ int PipelineManager::ComputeDueAudioSamples(
   return static_cast<int>(due);
 }
 
+int PipelineManager::ComputeSteadyStateReserveFloorSamples(
+    int due_samples_this_tick) {
+  const int due = std::max(0, due_samples_this_tick);
+  // Two-tick floor (+1 sample margin) keeps one normal no-supply tick pair
+  // from deterministically forcing repeated underflow silence.
+  return (due * 2) + 1;
+}
+
+int64_t PipelineManager::ComputeAuthoritativeAudioElapsedNs(
+    int64_t deadline_elapsed_ns,
+    int64_t observed_elapsed_ns) {
+  return std::max<int64_t>(
+      std::max<int64_t>(0, deadline_elapsed_ns),
+      std::max<int64_t>(0, observed_elapsed_ns));
+}
+
+int PipelineManager::ComputeLiveAudioHighWaterMs(
+    int audio_target_ms,
+    int audio_low_water_ms,
+    int audio_prime_floor_ms,
+    int av_phase_tolerance_ms) {
+  const int target_ms = std::max(1, audio_target_ms);
+  const int floor_ms = std::max(1, audio_prime_floor_ms);
+  const int tol_ms = std::max(0, av_phase_tolerance_ms);
+  const int desired_ceiling_ms = floor_ms + tol_ms;
+  (void)audio_low_water_ms;  // ignored by authority policy
+  // INV-PACING-SINGLE-AUTHORITY-001:
+  // In OutputClock-authoritative mode, high-water is defined solely by
+  // bootstrap floor + AV tolerance (bounded by target). Low-water does not
+  // participate in the ceiling to avoid legacy reservoir creep.
+  return std::min(target_ms, desired_ceiling_ms);
+}
+
 PipelineManager::BootstrapPhaseGateSnapshot PipelineManager::EvaluateBootstrapPhaseGate(
     int audio_depth_ms,
     int video_depth_frames,
     RationalFps output_fps,
     int audio_prime_floor_ms,
     int bootstrap_audio_ceiling_ms,
-    int av_phase_tolerance_ms) {
+    int av_phase_tolerance_ms,
+    int prev_audio_depth_ms) {
   BootstrapPhaseGateSnapshot s;
   s.audio_depth_ms = audio_depth_ms;
+  s.prev_audio_depth_ms = prev_audio_depth_ms;
   s.video_time_ms_gate = ComputeVideoTimeMsGate(video_depth_frames, output_fps);
   s.gate_av_delta_ms = audio_depth_ms - s.video_time_ms_gate;
   s.audio_floor_met = audio_depth_ms >= audio_prime_floor_ms;
   s.audio_ceiling_met = audio_depth_ms <= bootstrap_audio_ceiling_ms;
-  s.av_phase_met = std::abs(s.gate_av_delta_ms) <= av_phase_tolerance_ms;
-  s.phase_valid = s.audio_floor_met && s.audio_ceiling_met && s.av_phase_met;
+  // INV-BOOTSTRAP-AV-PHASE-001 bootstrap→steady bridge:
+  // bootstrap gate must leave one output-frame guard for first steady fill
+  // estimator, so phase-valid bootstrap cannot deterministically clamp on the
+  // first post-bootstrap steady-state evaluation.
+  const int output_frame_ms = ComputeVideoTimeMsGate(1, output_fps);
+  const int handoff_projected_guard_ms = output_frame_ms;
+  const int max_positive_gate_delta_for_handoff =
+      av_phase_tolerance_ms - handoff_projected_guard_ms;
+  s.steady_entry_max_ms = std::min(
+      bootstrap_audio_ceiling_ms,
+      std::max(0, audio_prime_floor_ms + output_frame_ms));
+  s.av_phase_met =
+      s.gate_av_delta_ms <= max_positive_gate_delta_for_handoff;
+  s.steady_entry_band_met = audio_depth_ms <= s.steady_entry_max_ms;
+  s.quantized_floor_crossing_met =
+      prev_audio_depth_ms >= 0 &&
+      prev_audio_depth_ms < audio_prime_floor_ms &&
+      audio_depth_ms >= audio_prime_floor_ms;
+  s.phase_valid = s.audio_floor_met && s.audio_ceiling_met &&
+                  s.av_phase_met &&
+                  (s.steady_entry_band_met || s.quantized_floor_crossing_met);
   return s;
+}
+
+int PipelineManager::ComputePostHandoffTransitionTargetAudioMs(
+    int bootstrap_audio_ceiling_ms,
+    int output_frame_ms,
+    int observed_bootstrap_quantum_ms) {
+  const int burst_headroom_ms =
+      std::max(std::max(0, output_frame_ms), std::max(0, observed_bootstrap_quantum_ms));
+  return std::max(0, bootstrap_audio_ceiling_ms - burst_headroom_ms);
+}
+
+int PipelineManager::ComputePostHandoffTransitionExitAudioMs(
+    int post_handoff_target_audio_ms,
+    int output_frame_ms,
+    int observed_bootstrap_quantum_ms) {
+  // Transition re-entry hysteresis is bounded: keep extra margin below target,
+  // but cap it to avoid timeout-first exits on normal HBO cadence.
+  const int transition_headroom_ms =
+      std::max(std::max(0, output_frame_ms), std::max(0, observed_bootstrap_quantum_ms));
+  const int reentry_hysteresis_cap_ms = std::max(0, output_frame_ms * 3);
+  const int hysteresis_ms =
+      std::min(transition_headroom_ms, reentry_hysteresis_cap_ms);
+  return std::max(0, post_handoff_target_audio_ms - hysteresis_ms);
 }
 
 // Task 2: Format fence_tick for logging — sentinel INT64_MAX prints as "UNARMED".
@@ -522,11 +655,69 @@ void PipelineManager::TryLoadLiveProducer() {
     ctx_->block_queue.erase(ctx_->block_queue.begin());
   }
 
+  if (!startup_join_applied_) {
+    block = MaterializeStartupJoinBlock(block);
+    startup_join_applied_ = true;
+  }
+
   // AssignBlock is synchronous and may stall (probe + open + seek).
   // This is acceptable: it occurs only at block boundaries when no
   // content is playing.  The tick loop resumes on the next
   // WaitForFrame() absolute deadline.
   AsTickProducer(live_.get())->AssignBlock(block);
+}
+
+FedBlock PipelineManager::MaterializeStartupJoinBlock(const FedBlock& block) const {
+  if (ctx_->join_utc_ms <= 0) {
+    return block;
+  }
+
+  BlockPlan plan = FedBlockToBlockPlan(block);
+  auto asset_duration_fn = [](const std::string&) -> int64_t {
+    // Join computation uses validated segment boundaries only.
+    // Asset probing/offset validation still happens in TickProducer::AssignBlock.
+    return std::numeric_limits<int64_t>::max();
+  };
+  BlockPlanValidator validator(asset_duration_fn);
+  auto validation = validator.Validate(plan, 0);
+  if (!validation.valid) {
+    return block;
+  }
+
+  ValidatedBlockPlan validated;
+  validated.plan = std::move(plan);
+  validated.boundaries = std::move(validation.boundaries);
+  validated.validated_at_ms = 0;
+
+  auto join = JoinComputer::ComputeJoinParameters(validated, ctx_->join_utc_ms);
+  if (!join.valid || join.params.classification != JoinClassification::kMidBlock) {
+    return block;
+  }
+
+  const int32_t start_seg = join.params.start_segment_index;
+  if (start_seg < 0 || start_seg >= static_cast<int32_t>(block.segments.size())) {
+    return block;
+  }
+
+  FedBlock effective = block;
+  effective.start_utc_ms = ctx_->join_utc_ms;
+  effective.segments.clear();
+  effective.segments.reserve(block.segments.size() - start_seg);
+
+  for (int32_t i = start_seg; i < static_cast<int32_t>(block.segments.size()); ++i) {
+    auto seg = block.segments[static_cast<size_t>(i)];
+    if (i == start_seg) {
+      const auto& boundary = validated.boundaries[static_cast<size_t>(start_seg)];
+      const int64_t elapsed_in_segment_ms =
+          join.params.ct_start_ms - boundary.start_ct_ms;
+      seg.asset_start_offset_ms = join.params.effective_asset_offset_ms;
+      seg.segment_duration_ms -= elapsed_in_segment_ms;
+    }
+    seg.segment_index = static_cast<int32_t>(effective.segments.size());
+    effective.segments.push_back(std::move(seg));
+  }
+
+  return effective;
 }
 
 // =============================================================================
@@ -809,6 +1000,10 @@ void PipelineManager::Run() {
   // before SocketSink detaches on overflow. Previous 512KB overflowed in
   // ~400ms, causing a startup crash-loop.
   static constexpr size_t kSinkBufferCapacity = 8 * 1024 * 1024;
+  // HARDEN-008 / LAW-AIR-008: Compile-time guard on startup headroom.
+  static_assert(kSinkBufferCapacity >= 8 * 1024 * 1024,
+      "LAW-AIR-008: Sink buffer must be >= 8MB for startup headroom. "
+      "See air_truth_canonical_v2.md S3.7.");
   auto socket_sink = std::make_unique<output::SocketSink>(
       sink_fd, "pipeline-sink", kSinkBufferCapacity);
 
@@ -1005,9 +1200,16 @@ void PipelineManager::Run() {
   int audio_low = bcfg.audio_low_water_ms > 0
       ? bcfg.audio_low_water_ms
       : std::max(1, audio_target / 3);
+  // INV-PACING-SINGLE-AUTHORITY-001:
+  // With OutputClock as sole pacer, live audio enqueue must not build an
+  // independent deep reservoir. Cap live high-water to bootstrap floor +
+  // AV lead tolerance (e.g. 500ms + 120ms = 620ms) so producer-side audio
+  // backpressure respects the same authority window used by gate/clamp logic.
+  const int live_audio_high_water_ms = ComputeLiveAudioHighWaterMs(
+      audio_target, audio_low, kMinAudioPrimeMs, options_.av_phase_tolerance_ms);
   audio_buffer_ = std::make_unique<AudioLookaheadBuffer>(
       audio_target, buffer::kHouseAudioSampleRate,
-      buffer::kHouseAudioChannels, audio_low);
+      buffer::kHouseAudioChannels, audio_low, live_audio_high_water_ms);
 
   // INV-BROADCAST-DRC-001: Construct broadcast DRC processor for session lifetime.
   broadcast_audio_processor_ = std::make_unique<BroadcastAudioProcessor>();
@@ -1134,6 +1336,65 @@ void PipelineManager::Run() {
   // At normal startup both origins are 0, so this is identity.
   int64_t pts_origin_frame_index = 0;
   int64_t pts_origin_audio_samples = 0;
+  bool bootstrap_end_pending = false;
+  bool post_handoff_transition_pending = false;
+  bool post_handoff_transition_armed = false;
+  int64_t post_handoff_transition_arm_tick = -1;
+  int post_handoff_transition_target_audio_ms = 0;
+  int post_handoff_transition_exit_audio_ms = 0;
+  int observed_bootstrap_quantum_ms = 0;
+  int64_t bootstrap_epoch_ms_for_transition = 0;
+  int post_handoff_transition_bootstrap_cap_frames = 60;
+  constexpr int kPostHandoffTransitionMaxTicks = 12;
+
+  auto maybe_end_bootstrap_after_transition =
+      [&](int64_t session_tick, int64_t selected_src) {
+        if (!bootstrap_end_pending || selected_src < 0) return;
+        if (!post_handoff_transition_pending) {
+          video_buffer_->EndBootstrap();
+          bootstrap_end_pending = false;
+          return;
+        }
+        if (!post_handoff_transition_armed) {
+          post_handoff_transition_armed = true;
+          post_handoff_transition_arm_tick = session_tick;
+          // Transition drain mode: keep bootstrap phase active but park decode
+          // while consumer drains queue toward burst-aware transition target.
+          video_buffer_->EnterBootstrap(
+              /*bootstrap_target_frames=*/0,
+              /*bootstrap_cap_frames=*/post_handoff_transition_bootstrap_cap_frames,
+              /*min_audio_ms=*/0,
+              bootstrap_epoch_ms_for_transition);
+          video_buffer_->SetTransitionDrainOnly(true);
+          { std::ostringstream oss;
+            oss << "[PipelineManager] INV-BOOTSTRAP-AV-PHASE-001: transition_start"
+                << " tick=" << session_tick
+                << " audio_depth_ms=" << audio_buffer_->DepthMs()
+                << " transition_target_audio_ms=" << post_handoff_transition_target_audio_ms
+                << " transition_exit_audio_ms=" << post_handoff_transition_exit_audio_ms
+                << " observed_bootstrap_quantum_ms=" << observed_bootstrap_quantum_ms;
+            Logger::Info(oss.str()); }
+        }
+        const int current_audio_ms = audio_buffer_->DepthMs();
+        const int64_t ticks_elapsed = session_tick - post_handoff_transition_arm_tick;
+        const bool target_reached = current_audio_ms <= post_handoff_transition_exit_audio_ms;
+        const bool transition_timeout = ticks_elapsed >= kPostHandoffTransitionMaxTicks;
+        if (target_reached || transition_timeout) {
+          video_buffer_->SetTransitionDrainOnly(false);
+          video_buffer_->EndBootstrap();
+          bootstrap_end_pending = false;
+          post_handoff_transition_pending = false;
+          { std::ostringstream oss;
+            oss << "[PipelineManager] INV-BOOTSTRAP-AV-PHASE-001: transition_end"
+                << " tick=" << session_tick
+                << " ticks_elapsed=" << ticks_elapsed
+                << " audio_depth_ms=" << current_audio_ms
+                << " transition_target_audio_ms=" << post_handoff_transition_target_audio_ms
+                << " transition_exit_audio_ms=" << post_handoff_transition_exit_audio_ms
+                << " end_reason=" << (target_reached ? "target_reached" : "timeout");
+            Logger::Info(oss.str()); }
+        }
+      };
 
   // INV-PAD-PRODUCER-007: Content-before-pad gate.
   // Do not emit pad until at least one real content frame has been committed.
@@ -1206,6 +1467,7 @@ void PipelineManager::Run() {
     last_seam_invariant_violation_block_id_.clear();  // Allow one violation log per block after swap.
     live_boundaries_ = AsTickProducer(live_.get())->GetBoundaries();
     // INV-SEAM-BOUNDARY-COUNT-MATCH-001: boundaries must match segment count.
+    // HARDEN-005: abort on mismatch — downstream OOB access is worse than restart.
     if (live_boundaries_.size() != live_parent_block_.segments.size()) {
       std::ostringstream oss;
       oss << "[PipelineManager] INV-SEAM-BOUNDARY-COUNT-MATCH-001 VIOLATION"
@@ -1214,7 +1476,13 @@ void PipelineManager::Run() {
           << " parent_segments=" << live_parent_block_.segments.size()
           << " live_boundaries=" << live_boundaries_.size()
           << " tick=" << session_frame_index;
-      Logger::Error(oss.str());
+      Logger::ErrorStructured(oss.str(),
+          "INV-SEAM-BOUNDARY-COUNT-MATCH-001-VIOLATED",
+          {{"path", "session_first"},
+           {"block_id", live_parent_block_.block_id},
+           {"segments", std::to_string(live_parent_block_.segments.size())},
+           {"boundaries", std::to_string(live_boundaries_.size())}});
+      std::abort();
     }
     ComputeSegmentSeamFrames();
     EnforceNextSeamInvariant(session_frame_index, "block_activation_session_first");
@@ -1361,15 +1629,21 @@ void PipelineManager::Run() {
           bootstrap_epoch_ms);
 
       int gate_poll_count = 0;
+      int prev_gate_depth_ms = depth_ms;
+      observed_bootstrap_quantum_ms = 0;
       while (true) {
         depth_ms = audio_buffer_->DepthMs();
+        observed_bootstrap_quantum_ms = std::max(
+            observed_bootstrap_quantum_ms,
+            std::max(0, depth_ms - prev_gate_depth_ms));
         const auto gate_snap = EvaluateBootstrapPhaseGate(
             depth_ms,
             video_buffer_->DepthFrames(),
             ctx_->fps,
             kMinAudioPrimeMs,
             kMaxBootstrapAudioMs,
-            options_.av_phase_tolerance_ms);
+            options_.av_phase_tolerance_ms,
+            prev_gate_depth_ms);
         if (gate_snap.phase_valid) break;
 
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1382,6 +1656,7 @@ void PipelineManager::Run() {
                 << " depth_ms=" << depth_ms
                 << " required=" << kMinAudioPrimeMs
                 << " max_bootstrap_audio_ms=" << kMaxBootstrapAudioMs
+                << " steady_entry_max_ms=" << gate_snap.steady_entry_max_ms
                 << " av_delta_ms=" << gate_snap.gate_av_delta_ms
                 << " max_av_delta_ms=" << options_.av_phase_tolerance_ms
                 << " elapsed_ms=" << elapsed
@@ -1398,6 +1673,7 @@ void PipelineManager::Run() {
           return;
         }
         if (ctx_->stop_requested.load(std::memory_order_acquire)) break;
+        prev_gate_depth_ms = depth_ms;
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         gate_poll_count++;
         // Log every 100ms during gate wait
@@ -1417,8 +1693,24 @@ void PipelineManager::Run() {
         }
       }
 
-      // Restore steady-state fill policy.
-      video_buffer_->EndBootstrap();
+      // INV-BOOTSTRAP-AV-PHASE-001 atomic handoff:
+      // Defer EndBootstrap until first consumer position update in tick loop,
+      // so the validated bootstrap state is preserved across clock start.
+      bootstrap_end_pending = true;
+      post_handoff_transition_pending = true;
+      post_handoff_transition_armed = false;
+      post_handoff_transition_arm_tick = -1;
+      const int output_frame_ms = ComputeVideoTimeMsGate(1, ctx_->fps);
+      post_handoff_transition_target_audio_ms =
+          ComputePostHandoffTransitionTargetAudioMs(
+              kMaxBootstrapAudioMs, output_frame_ms, observed_bootstrap_quantum_ms);
+      post_handoff_transition_exit_audio_ms =
+          ComputePostHandoffTransitionExitAudioMs(
+              post_handoff_transition_target_audio_ms,
+              output_frame_ms,
+              observed_bootstrap_quantum_ms);
+      bootstrap_epoch_ms_for_transition = bootstrap_epoch_ms;
+      post_handoff_transition_bootstrap_cap_frames = kBootstrapCapFrames;
 
       auto gate_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
           std::chrono::steady_clock::now() - gate_start).count();
@@ -1431,6 +1723,9 @@ void PipelineManager::Run() {
             << " audio_depth_ms=" << end_audio_ms
             << " video_depth_ms=" << end_video_ms
             << " av_delta_ms=" << (end_audio_ms - end_video_ms)
+            << " observed_bootstrap_quantum_ms=" << observed_bootstrap_quantum_ms
+            << " post_handoff_target_audio_ms=" << post_handoff_transition_target_audio_ms
+            << " post_handoff_exit_audio_ms=" << post_handoff_transition_exit_audio_ms
             << " video_depth=" << video_buffer_->DepthFrames()
             << " steady_target=" << video_buffer_->TargetDepthFrames()
             << " gate_ms=" << gate_elapsed;
@@ -1541,7 +1836,6 @@ void PipelineManager::Run() {
   // video and audio encode to prove clock alignment.
   bool pacing_diag_first_video_logged = false;
   bool pacing_diag_first_audio_logged = false;
-
 #ifdef RETROVUE_VERBOSE_LOGS
   // INV-FPS-PACING-DIAG: delta_wall_us / delta_pts_us for first ~120 ticks (runbook validation).
   int64_t pacing_diag_prev_wall_us = -1;
@@ -1580,7 +1874,6 @@ void PipelineManager::Run() {
     int64_t audio_pts_90k =
         ((audio_samples_emitted - pts_origin_audio_samples) * 90000) /
         buffer::kHouseAudioSampleRate;
-
 #ifdef RETROVUE_VERBOSE_LOGS
     // INV-FPS-PACING-DIAG: First ~120 ticks — wall vs PTS deltas (29.97: expect ~33366 us).
     if (session_frame_index < 120) {
@@ -2063,6 +2356,7 @@ void PipelineManager::Run() {
       selected_src_this_tick = curr_src;
       // INV-FIVS-LOOKAHEAD-001: Communicate consumer position to fill thread.
       video_buffer_->UpdateConsumerPosition(selected_src_this_tick);
+      maybe_end_bootstrap_after_transition(session_frame_index, selected_src_this_tick);
       int64_t prev_src = (resample_tick_ > 0)
           ? SourceFrameForTick(resample_tick_ - 1,
                 resample_in_num_, resample_in_den_, resample_out_num_, resample_out_den_)
@@ -2098,13 +2392,39 @@ void PipelineManager::Run() {
     }
 
     // ==================================================================
+    // LAW-AIR-005: Pre-compute Branch 2 pop (effectful) before selector.
+    // The original condition was: content_seam_override_this_tick &&
+    //   segment_b_video_buffer_ && segment_b_video_buffer_->TryPopFrame(vbf)
+    // We attempt the pop here so SelectCascadeBranch receives a pure bool.
+    // If branch 2 is NOT selected, vbf is unused (overwritten by later branches).
+    // ==================================================================
+    bool content_seam_pop_succeeded = false;
+    if (content_seam_override_this_tick && segment_b_video_buffer_) {
+      content_seam_pop_succeeded = segment_b_video_buffer_->TryPopFrame(vbf);
+    }
+
+    // LAW-AIR-005: Branch selector — which cascade branch fires first?
+    const CascadeBranch cascade_branch = SelectCascadeBranch(
+        pad_seam_this_tick,
+        content_seam_override_this_tick,
+        content_seam_pop_succeeded,
+        is_cadence_repeat,
+        should_advance_video,
+        v_src != nullptr,
+        take_b,
+        take_segment,
+        has_last_good_video_frame_,
+        a_was_primed,
+        live_tp() ? live_tp()->HasDecoder() : false);
+
+    // ==================================================================
     // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001: PAD seam override.
     // Highest-priority branch — when authority is transferring to a PAD
     // segment THIS tick, force pad_producer_->VideoFrame() synchronously.
     // No hold, no repeat, no stale content frame.  This branch MUST
     // precede all other cascade paths so nothing can override it.
     // ==================================================================
-    if (pad_seam_this_tick) {
+    if (cascade_branch == CascadeBranch::kPadSeamOverride) {
       chosen_video = &pad_producer_->VideoFrame();
       decision = TakeDecision::kPad;
       pad_cause_tag = "segment_transition";
@@ -2125,8 +2445,7 @@ void PipelineManager::Run() {
     // through to the normal cascade; the POST-TAKE restamp safety net
     // handles that edge case.
     // ==================================================================
-    else if (content_seam_override_this_tick && segment_b_video_buffer_ &&
-             segment_b_video_buffer_->TryPopFrame(vbf)) {
+    else if (cascade_branch == CascadeBranch::kContentSeamOverride) {
       // INV-AIR-TAKE-PAD-CLASSIFICATION-EXPLICIT-001: buffer-resident pad detection.
       if (!vbf.was_decoded && vbf.asset_uri.empty()) {
         chosen_video = &pad_producer_->VideoFrame();
@@ -2168,7 +2487,7 @@ void PipelineManager::Run() {
     }
     // Explicit repeat path first: on repeat ticks we do NOT call TryPopFrame().
     // Selection only: set decision and chosen_video; single encodeFrame after cascade.
-    else if (is_cadence_repeat) {
+    else if (cascade_branch == CascadeBranch::kCadenceRepeat) {
       if (has_last_good_video_frame_) {
         chosen_video = &last_good_video_frame_;
         decision = TakeDecision::kRepeat;
@@ -2177,7 +2496,7 @@ void PipelineManager::Run() {
         decision = TakeDecision::kPad;
         pad_cause_tag = "startup_bootstrap";
       }
-    } else if (should_advance_video && v_src) {
+    } else if (cascade_branch == CascadeBranch::kNormalAdvance) {
       // FIVS: Pure indexed lookup for live video buffer with resample.
       // No deque-based alignment. FIVS is the sole source of truth for video retrieval.
       // Contract: frame_indexed_video_store.md
@@ -2329,6 +2648,7 @@ void PipelineManager::Run() {
         // reaches target depth — throttling audio production to starvation.
         if (!resample_enabled_ && v_src == video_buffer_.get() && vbf.source_frame_index >= 0) {
           video_buffer_->UpdateConsumerPosition(vbf.source_frame_index);
+          maybe_end_bootstrap_after_transition(session_frame_index, vbf.source_frame_index);
         }
         if (v_src == video_buffer_.get() && !first_live_pop_logged_) {
           std::ostringstream oss;
@@ -2379,7 +2699,7 @@ void PipelineManager::Run() {
           pad_cause_tag = "legacy_pop_miss";
         }
       }
-    } else if (take_b) {
+    } else if (cascade_branch == CascadeBranch::kBlockFence) {
       chosen_video = &pad_producer_->VideoFrame();  // default for all take_b pad paths
       pad_cause_tag = "block_transition";  // block fence; B not ready (preview/segment-b handoff miss)
       // B not primed or empty at fence — PADDED_GAP.
@@ -2464,7 +2784,7 @@ void PipelineManager::Run() {
             << " decoder_returned_empty=" << (preview_ && AsTickProducer(preview_.get())->HasDecoder() && v_src && !v_src_primed ? "likely" : "n/a");
         Logger::Info(oss.str()); }
       }
-    } else if (take_segment && has_last_good_video_frame_) {
+    } else if (cascade_branch == CascadeBranch::kSegmentSeamHold) {
       // Segment seam: segment B buffer temporarily empty (e.g. single frame drained).
       // INV-TRANSITION-005 / ADR-014: When transitioning FROM PAD to a CONTENT
       // segment with transition_in=kFade, the first emitted frame must satisfy
@@ -2488,7 +2808,7 @@ void PipelineManager::Run() {
         chosen_video = &last_good_video_frame_;
         decision = TakeDecision::kHold;  // Hold at segment seam
       }
-    } else if (a_was_primed && live_tp()->HasDecoder()) {
+    } else if (cascade_branch == CascadeBranch::kGenuineUnderflow) {
       // A was primed before TryPopFrame, but pop still failed → genuine underflow.
       // Only treat as hard fault when live has a decoder (expects content). Pad-only
       // / probe-failed blocks never prime the buffer; empty is expected → pad path.
@@ -2501,17 +2821,49 @@ void PipelineManager::Run() {
             << " total_pushed=" << v_src->TotalFramesPushed()
             << " total_popped=" << v_src->TotalFramesPopped();
         Logger::Error(oss.str()); }
-      { std::lock_guard<std::mutex> lock(metrics_mutex_); metrics_.detach_count++; }
+
+      // LAW-AIR-015 / HARDEN-003: Structured log for post-primed decoder underflow.
+      // This path terminates the session — the structured log provides operational
+      // visibility into why sessions die.
+      {
+        const std::string block_id = live_tp()
+            ? live_tp()->GetBlock().block_id : std::string("(no_live)");
+        const std::string decoder_ok = live_tp()
+            ? (live_tp()->HasDecoder() ? "true" : "false") : "no_live";
+        const int64_t audio_depth = audio_buffer_
+            ? audio_buffer_->DepthMs() : -1;
+        std::ostringstream msg;
+        msg << "[PipelineManager] AIR_SESSION_FATAL"
+            << " reason=post_primed_decoder_underflow"
+            << " tick=" << session_frame_index
+            << " block_id=" << block_id
+            << " decoder_ok=" << decoder_ok
+            << " video_depth=" << v_src_depth
+            << " audio_depth_ms=" << audio_depth;
+        Logger::ErrorStructured(msg.str(),
+            "AIR_SESSION_FATAL",
+            {{"reason", "post_primed_decoder_underflow"},
+             {"tick", std::to_string(session_frame_index)},
+             {"block_id", block_id},
+             {"decoder_ok", decoder_ok},
+             {"video_depth", std::to_string(v_src_depth)},
+             {"audio_depth_ms", std::to_string(audio_depth)}});
+      }
+
+      { std::lock_guard<std::mutex> lock(metrics_mutex_);
+        metrics_.detach_count++;
+        metrics_.session_fatal_post_primed_underflow++;
+      }
       ctx_->stop_requested.store(true, std::memory_order_release);
       break;
-    } else if (a_was_primed) {
+    } else if (cascade_branch == CascadeBranch::kPrimedNoDecoder) {
       // Buffer reported primed but live has no decoder (e.g. probe failed). Expected
       // empty; use pad instead of stopping.
       chosen_video = &pad_producer_->VideoFrame();
       decision = TakeDecision::kPad;
       pad_cause_tag = "startup_bootstrap";
     } else {
-      // A not primed (no block loaded yet or buffer warming up) — pad.
+      // Branch 9 (kNotPrimed): A not primed — pad.
       chosen_video = &pad_producer_->VideoFrame();
       pad_cause_tag = (session_frame_index <= 1) ? "startup_bootstrap" : "live_buffer_empty";
     }
@@ -2716,6 +3068,11 @@ void PipelineManager::Run() {
         frame_origin_segment_id == current_segment_index_ + 1;
 
     // INV-PAD-PRODUCER-007: Content-before-pad gate (decision phase only).
+    // LAW-AIR-009A: This gate is NOT retired. The encoder's first IDR must come from
+    // real content (not pad). Removing this gate causes VLC decode failure at session start.
+    // See air_truth_canonical_v2.md §1.8 and LAW-AIR-009.
+    // Contract test: TakeCascadePriority.FirstIdrFromContent (HARDEN-016)
+    //
     // If we would emit pad and decoder might produce content soon, skip this tick.
     // Decision stays kPad; we do not re-check readiness elsewhere.
     // Never skip when live has no decoder (pad-only / probe-failed): no content will arrive.
@@ -2745,9 +3102,13 @@ void PipelineManager::Run() {
 
     // Single video encode after decision is final (no encodeFrame in cascade).
     decision_finalized_pre_encode = true;
+
+    // LAW-AIR-013A / INV-TICK-GUARANTEED-OUTPUT: Null chosen_video handling.
+    // Debug: crash immediately to surface the cascade bug.
+    // Release: survive by falling back to pad frame + structured error log.
 #ifndef NDEBUG
     assert(decision_finalized_pre_encode && "encodeFrame only after decision/chosen_video set");
-    assert(chosen_video != nullptr && "encodeFrame only after chosen_video set");
+    assert(chosen_video != nullptr && "TAKE cascade produced null chosen_video");
     switch (decision) {
       case TakeDecision::kPad:
       case TakeDecision::kStandby:
@@ -2761,6 +3122,15 @@ void PipelineManager::Run() {
       case TakeDecision::kContentB:
         assert(chosen_video == &vbf.video && "content must use frame popped this tick");
         break;
+    }
+#else
+    if (!chosen_video) {
+        chosen_video = &pad_producer_->VideoFrame();
+        Logger::ErrorStructured(
+            "TAKE cascade null chosen_video — pad fallback",
+            "INV-TICK-GUARANTEED-OUTPUT-VIOLATED",
+            {{"tick", std::to_string(session_frame_index)},
+             {"reason", "cascade_null_fallback"}});
     }
 #endif
     // INV-FPS-TICK-PTS: Emitted PTS must come from session tick clock, not decoder.
@@ -2911,6 +3281,18 @@ void PipelineManager::Run() {
         committed_b_frame_this_tick ||
         (fence_fired_b_missing && (!preview_ || block_take_ready));
     if (take_b && !take_rotated && may_rotate) {
+      // HARDEN-004 / LAW-AIR-002: Fence budget cross-check.
+      // remaining_block_frames_ should be 0 at the fence tick by arithmetic identity.
+      // This is diagnostic only — the fence still fires regardless.
+      if (remaining_block_frames_ != 0) {
+        Logger::ErrorStructured(
+            "[PipelineManager] INV-BLOCK-FRAME-BUDGET-AUTHORITY: budget != 0 at fence",
+            "INV-BLOCK-FRAME-BUDGET-AUTHORITY-VIOLATED",
+            {{"remaining", std::to_string(remaining_block_frames_)},
+             {"fence", std::to_string(block_fence_frame_)},
+             {"session_frame_index", std::to_string(session_frame_index)}});
+      }
+
       take_rotated = true;
 
       // Step 1: Request cleanup of previous fence's deferred fill (reaper performs join).
@@ -3171,6 +3553,7 @@ void PipelineManager::Run() {
         last_seam_invariant_violation_block_id_.clear();  // Allow one violation log per block after swap.
         live_boundaries_ = AsTickProducer(live_.get())->GetBoundaries();
         // INV-SEAM-BOUNDARY-COUNT-MATCH-001: boundaries must match segment count.
+        // HARDEN-005: abort on mismatch — downstream OOB access is worse than restart.
         if (live_boundaries_.size() != live_parent_block_.segments.size()) {
           std::ostringstream oss;
           oss << "[PipelineManager] INV-SEAM-BOUNDARY-COUNT-MATCH-001 VIOLATION"
@@ -3179,9 +3562,20 @@ void PipelineManager::Run() {
               << " parent_segments=" << live_parent_block_.segments.size()
               << " live_boundaries=" << live_boundaries_.size()
               << " tick=" << session_frame_index;
-          Logger::Error(oss.str());
+          Logger::ErrorStructured(oss.str(),
+              "INV-SEAM-BOUNDARY-COUNT-MATCH-001-VIOLATED",
+              {{"path", "fence_take"},
+               {"block_id", live_parent_block_.block_id},
+               {"segments", std::to_string(live_parent_block_.segments.size())},
+               {"boundaries", std::to_string(live_boundaries_.size())}});
+          std::abort();
         }
         ComputeSegmentSeamFrames();
+        // INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001:
+        // Block fence take re-bases segment authority index space to the new block.
+        // Re-base hold/repeat origin cache immediately so first post-fence tick
+        // cannot carry stale previous-block segment origin.
+        last_good_origin_segment_ = current_segment_index_;
         EnforceNextSeamInvariant(session_frame_index, "block_activation_fence_take");
         ArmSegmentPrep(session_frame_index);
 
@@ -3766,7 +4160,11 @@ void PipelineManager::Run() {
     // INV-AUDIO-CLOCK-AUTHORITY-001: compute due samples from OutputClock elapsed time.
     // Use elapsed deadline at end of this tick window (session_frame_index + 1) so tick 0
     // emits the first frame-duration worth of audio and shares epoch with video.
-    const auto elapsed_ns = clock->DeadlineOffsetNs(session_frame_index + 1).count();
+    const auto deadline_elapsed_ns = clock->DeadlineOffsetNs(session_frame_index + 1).count();
+    const auto observed_elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        wake_time - clock->SessionStartTime()).count();
+    const auto elapsed_ns = ComputeAuthoritativeAudioElapsedNs(
+        deadline_elapsed_ns, observed_elapsed_ns);
     expected_audio_samples = ComputeExpectedAudioSamplesFromOutputClockNs(
         elapsed_ns, buffer::kHouseAudioSampleRate);
     const int due_samples = ComputeDueAudioSamples(
@@ -3911,7 +4309,27 @@ void PipelineManager::Run() {
         Logger::Debug(oss.str());
       }
       buffer::AudioFrame audio_out;
-      if (a_emit->TryPopSamples(samples_this_tick, audio_out)) {
+      bool popped = a_emit->TryPopSamples(samples_this_tick, audio_out);
+      bool low_reserve_retry_attempted = false;
+      bool low_reserve_retry_succeeded = false;
+      int64_t reserve_samples_before_pop =
+          a_emit->TotalSamplesPushed() - a_emit->TotalSamplesPopped();
+      const bool steady_content_tick =
+          !IsPadDecision(decision) && !active_segment_is_pad;
+      const int reserve_floor_samples =
+          ComputeSteadyStateReserveFloorSamples(samples_this_tick);
+      if (!popped && steady_content_tick &&
+          reserve_samples_before_pop > 0 &&
+          reserve_samples_before_pop < reserve_floor_samples) {
+        // Producer-boundary liveness bridge: when reserve is below the safe
+        // floor, allow one short service window for cadence-shaped decoder
+        // readiness before declaring underflow and injecting silence.
+        low_reserve_retry_attempted = true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        popped = a_emit->TryPopSamples(samples_this_tick, audio_out);
+        low_reserve_retry_succeeded = popped;
+      }
+      if (popped) {
         if (seam_tick_pad_this_tick && active_segment_is_pad) {
           { std::ostringstream oss; oss << "[PipelineManager] SEAM_ORDER tick=" << session_frame_index << " TryPopSamples_success"; Logger::Debug(oss.str()); }
         }
@@ -3976,6 +4394,10 @@ void PipelineManager::Run() {
                 << " frame=" << session_frame_index
                 << " buffer_depth_ms=" << a_emit->DepthMs()
                 << " needed=" << samples_this_tick
+                << " reserve_samples=" << reserve_samples_before_pop
+                << " reserve_floor_samples=" << reserve_floor_samples
+                << " low_reserve_retry_attempted=" << (low_reserve_retry_attempted ? 1 : 0)
+                << " low_reserve_retry_succeeded=" << (low_reserve_retry_succeeded ? 1 : 0)
                 << " total_pushed=" << a_emit->TotalSamplesPushed()
                 << " total_popped=" << a_emit->TotalSamplesPopped();
             Logger::Warn(oss.str()); }
@@ -4507,6 +4929,7 @@ void PipelineManager::Run() {
         last_seam_invariant_violation_block_id_.clear();  // Allow one violation log per block after swap.
         live_boundaries_ = AsTickProducer(live_.get())->GetBoundaries();
         // INV-SEAM-BOUNDARY-COUNT-MATCH-001: boundaries must match segment count.
+        // HARDEN-005: abort on mismatch — downstream OOB access is worse than restart.
         if (live_boundaries_.size() != live_parent_block_.segments.size()) {
           std::ostringstream oss;
           oss << "[PipelineManager] INV-SEAM-BOUNDARY-COUNT-MATCH-001 VIOLATION"
@@ -4515,7 +4938,13 @@ void PipelineManager::Run() {
               << " parent_segments=" << live_parent_block_.segments.size()
               << " live_boundaries=" << live_boundaries_.size()
               << " tick=" << session_frame_index;
-          Logger::Error(oss.str());
+          Logger::ErrorStructured(oss.str(),
+              "INV-SEAM-BOUNDARY-COUNT-MATCH-001-VIOLATED",
+              {{"path", "padded_gap_exit"},
+               {"block_id", live_parent_block_.block_id},
+               {"segments", std::to_string(live_parent_block_.segments.size())},
+               {"boundaries", std::to_string(live_boundaries_.size())}});
+          std::abort();
         }
         ComputeSegmentSeamFrames();
         EnforceNextSeamInvariant(session_frame_index, "block_activation_padded_gap_exit");

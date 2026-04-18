@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from ...domain.entities import Asset, AssetEditorial
 from ...infra.uow import session as get_session
+from ...runtime.clock import AuthoritativeClock
 from ...usecases.schedule_revision_lifecycle import (
     create_draft_revision,
     get_revision,
@@ -27,6 +28,7 @@ from ...usecases.schedule_revision_lifecycle import (
     RevisionNotDraftError,
     RevisionNotFoundError,
 )
+from ._clock import get_clock
 
 router = APIRouter(prefix="/api/scheduling", tags=["scheduling"])
 
@@ -306,6 +308,7 @@ def get_revision_endpoint(
 def publish_revision_endpoint(
     revision_id: str,
     db: Session = Depends(get_db),
+    clock: AuthoritativeClock = Depends(get_clock),
 ):
     """Publish a draft revision (draft -> active)."""
     try:
@@ -314,7 +317,7 @@ def publish_revision_endpoint(
         raise HTTPException(status_code=400, detail="Invalid revision_id format")
 
     try:
-        rev = publish_revision(db, revision_id=rev_uuid)
+        rev = publish_revision(db, revision_id=rev_uuid, now=clock.now_utc())
         db.commit()
         return {
             "id": str(rev.id),

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Protocol
 
-from retrovue.runtime.clock import MasterClock
+from retrovue.runtime.clock import AuthoritativeClock
 from retrovue.runtime.pace import PaceController, PaceParticipant
 
 
@@ -34,7 +34,7 @@ class MetricsPublisher(PaceParticipant):
 
     def __init__(
         self,
-        clock: MasterClock,
+        clock: AuthoritativeClock,
         pace: PaceController,
         source: MetricsSource,
         *,
@@ -74,7 +74,7 @@ class MetricsPublisher(PaceParticipant):
         if self._elapsed + 1e-6 < self._interval:
             return
         self._elapsed = 0.0
-        station_time = self._clock.now()
+        station_time = self._clock.monotonic()
         with self._lock:
             sample = self._sample
             sample.station_time = station_time
@@ -87,7 +87,7 @@ class MetricsPublisher(PaceParticipant):
 
     def is_sample_fresh(self) -> bool:
         with self._lock:
-            station_now = self._clock.now()
+            station_now = self._clock.monotonic()
             return (station_now - self._last_publish_station) <= self._aggregation_window
 
 
@@ -186,4 +186,3 @@ except ImportError:
     feed_error_backoff_total = None
     feed_queue_depth_current = None
     feed_credits_current = None
-

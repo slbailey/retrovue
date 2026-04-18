@@ -431,12 +431,14 @@ def add_enricher(
 
         # Create enricher instance using domain entity for validation
         from ...domain.enricher import Enricher as EnricherDomain
+        from ...runtime.clock import SystemClock
 
         enricher_domain = EnricherDomain.create(
             enricher_type=type,  # Use the --type parameter as the actual enricher type
             name=name,  # Use the --name parameter as the human-readable label
             config=config,
             scope="ingest",  # For now, assume all enrichers are ingest-scoped
+            clock=SystemClock(),
         )
 
         # Validate enrichment parameters before creating enricher

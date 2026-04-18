@@ -17,6 +17,11 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from retrovue.domain.entities import PlaylistEvent
+from retrovue.runtime.clock import SystemClock
+from retrovue.runtime.playlist_builder_daemon import (
+    purge_window_for_channel,
+    upsert_block_merge,
+)
 from retrovue.runtime.schedule_items_reader import (
     expand_editorial_block,
     load_segmented_blocks_from_active_revision,
@@ -122,12 +127,14 @@ def rebuild_playlog_plan(
         ).count()
         return result
 
-    # Step 2: delete existing playlog plan rows that overlap the window
-    result.deleted = db.query(PlaylistEvent).filter(
-        PlaylistEvent.channel_slug == channel_slug,
-        PlaylistEvent.start_utc_ms < end_utc_ms,
-        PlaylistEvent.end_utc_ms > start_utc_ms,
-    ).delete(synchronize_session=False)
+    # Step 2: delete existing playlog plan rows that overlap the window.
+    # Phase 9 Step 6 follow-up: routes through the daemon module's API.
+    result.deleted = purge_window_for_channel(
+        db,
+        channel_slug=channel_slug,
+        start_utc_ms=start_utc_ms,
+        end_utc_ms=end_utc_ms,
+    )
 
     # Step 3: determine broadcast days to scan
     start_dt = datetime.fromtimestamp(start_utc_ms / 1000, tz=timezone.utc)
@@ -139,7 +146,11 @@ def rebuild_playlog_plan(
     # INV-TIER2-EXPANSION-CANONICAL-001: all playlog plan writers MUST pass asset_library
     try:
         from retrovue.catalog.db_asset_library import DatabaseAssetLibrary
-        asset_library = DatabaseAssetLibrary(db, channel_slug=channel_slug)
+        asset_library = DatabaseAssetLibrary(
+            db,
+            clock=SystemClock(),
+            channel_slug=channel_slug,
+        )
     except Exception as e:
         logger.warning(
             "rebuild_playlog_plan[%s]: could not create asset library, "
@@ -197,33 +208,34 @@ def rebuild_playlog_plan(
                     break_config=break_config,
                 )
 
-                pe_kwargs: dict = dict(
+                segments_json = [
+                    {
+                        "segment_index": i,
+                        "segment_type": seg.segment_type,
+                        "asset_uri": seg.asset_uri,
+                        "asset_start_offset_ms": seg.asset_start_offset_ms,
+                        "segment_duration_ms": seg.segment_duration_ms,
+                    }
+                    for i, seg in enumerate(filled_block.segments)
+                ]
+                srid = sb_dict.get("schedule_revision_id")
+                if srid and isinstance(srid, str):
+                    import uuid as uuid_mod
+                    srid = uuid_mod.UUID(srid)
+                # Phase 9 Step 6 follow-up: routes through the daemon
+                # module's ``upsert_block_merge`` (preserves the prior
+                # ``db.merge`` semantic: insert or update-all-fields).
+                upsert_block_merge(
+                    db,
                     block_id=filled_block.block_id,
                     channel_slug=channel_slug,
                     broadcast_day=scan_date,
                     start_utc_ms=filled_block.start_utc_ms,
                     end_utc_ms=filled_block.end_utc_ms,
-                    segments=[
-                        {
-                            "segment_index": i,
-                            "segment_type": seg.segment_type,
-                            "asset_uri": seg.asset_uri,
-                            "asset_start_offset_ms": seg.asset_start_offset_ms,
-                            "segment_duration_ms": seg.segment_duration_ms,
-                        }
-                        for i, seg in enumerate(filled_block.segments)
-                    ],
+                    segments=segments_json,
+                    schedule_revision_id=srid,
                     window_uuid=sb_dict.get("window_uuid"),
                 )
-                srid = sb_dict.get("schedule_revision_id")
-                if srid:
-                    import uuid as uuid_mod
-
-                    pe_kwargs["schedule_revision_id"] = (
-                        uuid_mod.UUID(srid) if isinstance(srid, str) else srid
-                    )
-                row = PlaylistEvent(**pe_kwargs)
-                db.merge(row)
                 result.rebuilt += 1
             except Exception as e:
                 msg = f"Failed to rebuild block {sb_dict.get('block_id', '?')}: {e}"

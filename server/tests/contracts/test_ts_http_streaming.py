@@ -107,8 +107,9 @@ def _build_test_app():
         client_queue = fake_fanout.subscribe(session_id)
 
         async def generate_stream():
+            from retrovue.runtime.clock import SystemClock
             try:
-                async for chunk in generate_ts_stream_async(client_queue):
+                async for chunk in generate_ts_stream_async(client_queue, clock=SystemClock()):
                     yield chunk
             except (GeneratorExit, asyncio.CancelledError):
                 pass

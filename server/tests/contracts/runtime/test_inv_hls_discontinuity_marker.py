@@ -19,9 +19,12 @@ from __future__ import annotations
 
 import pytest
 
+from retrovue.runtime.clock import SystemClock
 from retrovue.runtime.hls.segment_ring import LiveSegment, SegmentRing
 from retrovue.runtime.hls.segmenter import HlsSegmenter, TS_PACKET_SIZE, TS_SYNC_BYTE
 from retrovue.runtime.hls.manifest_generator import ManifestGenerator
+
+_TEST_CLOCK = SystemClock()
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +216,7 @@ class TestRestartDiscontinuity:
         seg = HlsSegmenter(
             channel_id="test-ch",
             segment_ring=ring,
+            clock=_TEST_CLOCK,
             target_duration_ms=200,
         )
         # Feed enough keyframe packets to trigger at least one segment
@@ -231,6 +235,7 @@ class TestRestartDiscontinuity:
         seg = HlsSegmenter(
             channel_id="test-ch",
             segment_ring=ring,
+            clock=_TEST_CLOCK,
             target_duration_ms=200,
         )
 
@@ -263,6 +268,7 @@ class TestRestartDiscontinuity:
         seg = HlsSegmenter(
             channel_id="test-ch",
             segment_ring=ring,
+            clock=_TEST_CLOCK,
             target_duration_ms=200,
         )
 
@@ -297,6 +303,7 @@ class TestRestartDiscontinuity:
         seg = HlsSegmenter(
             channel_id="test-ch",
             segment_ring=ring,
+            clock=_TEST_CLOCK,
             target_duration_ms=200,
         )
 
@@ -329,6 +336,7 @@ class TestRestartDiscontinuity:
         seg = HlsSegmenter(
             channel_id="test-ch",
             segment_ring=ring,
+            clock=_TEST_CLOCK,
             target_duration_ms=200,
         )
 

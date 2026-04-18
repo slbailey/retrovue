@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from retrovue.runtime.schedule_types import ScheduledBlock, ScheduledSegment
-from retrovue.runtime.clock import MasterClock
+from retrovue.runtime.clock import AuthoritativeClock
 from retrovue.runtime.broadcast_day import derive_broadcast_day_for_utc
 from retrovue.runtime.schedule_compiler import compile_schedule, parse_dsl
 from retrovue.runtime.playout_log_expander import expand_program_block
@@ -59,10 +59,10 @@ class _DaemonThreadPoolExecutor(ThreadPoolExecutor):
             t.start()
             self._threads.add(t)
             _threads_queues[t] = self._work_queue
-from retrovue.runtime.traffic_manager import fill_ad_blocks
 from retrovue.runtime.catalog_resolver import CatalogAssetResolver
 from retrovue.adapters.enrichers.loudness_enricher import needs_loudness_measurement
 from retrovue.infra.uow import session
+from retrovue.runtime.channel_manager import NoScheduleDataError
 
 import hashlib
 import json as json_mod
@@ -200,12 +200,12 @@ class DslScheduleService:
         dsl_path: str,
         filler_path: str,
         filler_duration_ms: int,
+        clock: AuthoritativeClock,
         broadcast_day: str | None = None,
         programming_day_start_hour: int = 6,
         channel_slug: str | None = None,
         channel_type: str = "network",
         resolved_config: dict | None = None,
-        clock: MasterClock | None = None,
     ) -> None:
         if resolved_config is None:
             raise RuntimeError(
@@ -213,7 +213,7 @@ class DslScheduleService:
                 "fallback defaults are no longer supported"
             )
         self._resolved_config = resolved_config
-        self._clock = clock or MasterClock()
+        self._clock = clock
         _sched = resolved_config["scheduling"]
         self._horizon_days: int = _sched["horizon"]["days"]
         self._recompile_threshold_hours: int = _sched["horizon"]["recompile_threshold_hours"]
@@ -553,51 +553,20 @@ class DslScheduleService:
     def get_block_at(self, channel_id: str, utc_ms: int) -> ScheduledBlock | None:
         """Return the ScheduledBlock covering the given wall-clock time.
 
-        INV-TIER2-COMPILATION-CONSISTENCY-001: Time resolution uses the current
-        in-memory compilation exclusively. PlaylistEvent is queried by block_id
-        only — never by time range.
-
-        INV-CHANNEL-NO-COMPILE-001: If playlog plan has no row for this block, compiles
-        it synchronously via ensure_block_compiled().
-
-        Also checks if the horizon needs extending.
+        Runtime contract: strict read-only lookup over prebuilt execution data.
+        This method MUST NOT reconcile, compile, extend the horizon, or fill blocks.
         """
-        self._reconcile_timeline_if_publish_bumped(channel_id)
-        # Check horizon before lookup
-        self._maybe_extend_horizon(channel_id, utc_ms)
-
-        # Step 1: In-memory time resolution (current compilation)
-        # INV-TIER2-COMPILATION-CONSISTENCY-001: Time-to-block mapping is
-        # a pure in-memory concern — always uses the current compilation.
         block = self._find_in_memory_block(utc_ms)
         if block is None:
-            # Recovery path: stale/empty cache can happen around restart or
-            # publish boundary transitions; rebuild once before failing lookup.
-            with self._lock:
-                has_blocks = bool(self._blocks)
-            if has_blocks:
-                with self._lock:
-                    self._blocks = []
-                    self._compiled_days = set()
-                    self._timeline_revision_id = None
-                self._build_initial(channel_id)
-                self._maybe_extend_horizon(channel_id, utc_ms)
-                block = self._find_in_memory_block(utc_ms)
-            if block is None:
-                logger.warning(
-                    "No DSL block covers utc_ms=%d for channel=%s after cache rebuild",
-                    utc_ms,
-                    channel_id,
-                )
-                return None
+            logger.error(
+                "Execution plan incomplete: no precomputed block covers utc_ms=%d for channel=%s",
+                utc_ms,
+                channel_id,
+            )
+            raise NoScheduleDataError("Execution plan incomplete")
 
-        # Step 2: Check PlaylistEvent for filled version BY BLOCK_ID
         filled = self._get_filled_block_by_id(block.block_id)
         if filled is not None:
-            # INV-CROSS-DAY-CARRY-IN-SURVIVES-RESTART-001: PlaylistEvent may
-            # store original grid times.  The in-memory timeline has pushed
-            # times (contiguity-enforced).  Return filled segments with
-            # in-memory timing so blocks remain contiguous.
             if filled.start_utc_ms != block.start_utc_ms or filled.end_utc_ms != block.end_utc_ms:
                 from dataclasses import replace as dc_replace
                 filled = dc_replace(
@@ -607,12 +576,18 @@ class DslScheduleService:
                 )
             return filled
 
-        # Step 3: Fill synchronously
-        # INV-TIER2-AUTHORITY-001: Compilation is synchronous at ownership time.
-        return self.ensure_block_compiled(channel_id, block)
+        logger.error(
+            "Execution plan incomplete: block_id=%s has no precomputed filled execution plan "
+            "for channel=%s",
+            block.block_id,
+            channel_id,
+        )
+        raise NoScheduleDataError("Execution plan incomplete")
 
     def ensure_block_compiled(self, channel_id: str, block: ScheduledBlock) -> ScheduledBlock | None:
         """Ensure a single block has a playlog plan (PlaylistEvent) entry.
+
+        Planner-only helper. Runtime read paths must not call this method.
 
         INV-TIER2-AUTHORITY-001: Synchronous, idempotent playlog plan compilation.
         INV-PLAYOUT-AUTHORITY-001: Returns a block ONLY if it is persisted in
@@ -624,8 +599,16 @@ class DslScheduleService:
           - If not compiled → fills ads, writes to PlaylistEvent, returns filled block
           - If write fails → returns None (caller must handle as schedule gap)
           - Safe to call concurrently: uses INSERT ... ON CONFLICT DO NOTHING pattern
+
+        Phase 9 Step 6 follow-up: every write path routes through the
+        daemon-module API (``delete_block`` / ``upsert_block_if_missing``).
+        ``PlaylistEvent`` is still queried for read-only checks.
         """
         from retrovue.domain.entities import PlaylistEvent
+        from retrovue.runtime.playlist_builder_daemon import (
+            delete_block,
+            upsert_block_if_missing,
+        )
         from retrovue.runtime.traffic_manager import fill_ad_blocks
 
         canonical_revision_id = self._query_active_revision_id_for_channel(
@@ -660,7 +643,7 @@ class DslScheduleService:
                             block.block_id,
                             channel_id,
                         )
-                        db.delete(row)
+                        delete_block(db, block_id=row.block_id)
                         db.commit()
                     elif enforce_revision_provenance and row.schedule_revision_id != canonical_revision_id:
                         if row.segments:
@@ -673,7 +656,7 @@ class DslScheduleService:
                             row.schedule_revision_id,
                             canonical_revision_id,
                         )
-                        db.delete(row)
+                        delete_block(db, block_id=row.block_id)
                         db.commit()
                     else:
                     # Already compiled — deserialize and return
@@ -714,7 +697,7 @@ class DslScheduleService:
                                 block.block_id, cached_sum, cached_dur,
                                 cached_sum - cached_dur, len(cached.segments),
                             )
-                            db.delete(row)
+                            delete_block(db, block_id=row.block_id)
                             db.commit()
                             # Fall through to recompile below
                         else:
@@ -740,7 +723,11 @@ class DslScheduleService:
         try:
             from retrovue.catalog.db_asset_library import DatabaseAssetLibrary
             with session() as db:
-                asset_lib = DatabaseAssetLibrary(db, channel_slug=channel_id)
+                asset_lib = DatabaseAssetLibrary(
+                    db,
+                    clock=self._clock,
+                    channel_slug=channel_id,
+                )
         except Exception as e:
             logger.warning(
                 "INV-TIER2-AUTHORITY-001: Could not create asset library for %s: %s",
@@ -847,10 +834,10 @@ class DslScheduleService:
             # so an existing PlaylistEvent row is never overwritten.  If a row
             # already exists (written by daemon or a concurrent compile), it is
             # the authoritative fill and MUST be preserved.
-            from sqlalchemy.dialects.postgresql import insert as pg_insert
-
+            # Phase 9 Step 6 follow-up: routes through the daemon module.
             with session() as db:
-                stmt = pg_insert(PlaylistEvent.__table__).values(
+                inserted = upsert_block_if_missing(
+                    db,
                     block_id=filled_block.block_id,
                     channel_slug=channel_id,
                     broadcast_day=broadcast_day,
@@ -858,10 +845,9 @@ class DslScheduleService:
                     end_utc_ms=filled_block.end_utc_ms,
                     segments=segments_data,
                     schedule_revision_id=canonical_revision_id if enforce_revision_provenance else None,
-                ).on_conflict_do_nothing(index_elements=["block_id"])
-                result = db.execute(stmt)
+                )
 
-                if result.rowcount == 0:
+                if not inserted:
                     # Row already existed — our fill is discarded; use the
                     # persisted version so playout matches the DB authority.
                     logger.info(
@@ -883,9 +869,10 @@ class DslScheduleService:
                                 filled_block.block_id,
                                 channel_id,
                             )
-                            db.delete(existing)
+                            delete_block(db, block_id=existing.block_id)
                             db.commit()
-                            stmt_retry = pg_insert(PlaylistEvent.__table__).values(
+                            upsert_block_if_missing(
+                                db,
                                 block_id=filled_block.block_id,
                                 channel_slug=channel_id,
                                 broadcast_day=broadcast_day,
@@ -893,8 +880,7 @@ class DslScheduleService:
                                 end_utc_ms=filled_block.end_utc_ms,
                                 segments=segments_data,
                                 schedule_revision_id=canonical_revision_id,
-                            ).on_conflict_do_nothing(index_elements=["block_id"])
-                            db.execute(stmt_retry)
+                            )
                             return filled_block
                         if enforce_revision_provenance and existing.schedule_revision_id != canonical_revision_id:
                             if existing.segments:
@@ -907,9 +893,10 @@ class DslScheduleService:
                                 existing.schedule_revision_id,
                                 canonical_revision_id,
                             )
-                            db.delete(existing)
+                            delete_block(db, block_id=existing.block_id)
                             db.commit()
-                            stmt_retry = pg_insert(PlaylistEvent.__table__).values(
+                            upsert_block_if_missing(
+                                db,
                                 block_id=filled_block.block_id,
                                 channel_slug=channel_id,
                                 broadcast_day=broadcast_day,
@@ -917,8 +904,7 @@ class DslScheduleService:
                                 end_utc_ms=filled_block.end_utc_ms,
                                 segments=segments_data,
                                 schedule_revision_id=canonical_revision_id,
-                            ).on_conflict_do_nothing(index_elements=["block_id"])
-                            db.execute(stmt_retry)
+                            )
                             return filled_block
                         segments = []
                         for s in existing.segments:

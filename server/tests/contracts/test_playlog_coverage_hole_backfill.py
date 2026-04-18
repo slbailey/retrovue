@@ -9,12 +9,14 @@ never missing from Tier-2.
 
 import pytest
 from unittest.mock import patch, MagicMock
+from retrovue.runtime.clock import SystemClock
 
 
 def _make_daemon():
     from retrovue.runtime.playlist_builder_daemon import PlaylistBuilderDaemon
     return PlaylistBuilderDaemon(
         channel_id="test-ch",
+        clock=SystemClock(),
         min_hours=2,
         programming_day_start_hour=6,
         channel_tz="UTC",

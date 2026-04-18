@@ -7,11 +7,11 @@ from datetime import datetime, timezone
 import pytest
 
 from retrovue.dev.mock_schedule_services import MockAlternatingScheduleService
-from retrovue.runtime.clock import MasterClock
+from retrovue.runtime.clock import SystemClock
 
 
 def test_mock_alternating_get_block_at_covers_utc_ms() -> None:
-    clock = MasterClock()
+    clock = SystemClock()
     svc = MockAlternatingScheduleService(
         clock=clock,
         asset_a_path="/opt/retrovue/assets/SampleA.mp4",
@@ -38,7 +38,7 @@ def test_mock_alternating_get_block_at_covers_utc_ms() -> None:
 
 
 def test_mock_alternating_get_block_at_wrong_channel_returns_none() -> None:
-    clock = MasterClock()
+    clock = SystemClock()
     svc = MockAlternatingScheduleService(
         clock=clock,
         asset_a_path="/a.mp4",

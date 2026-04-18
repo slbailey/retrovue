@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <iterator>
 #include <sstream>
 
 #include "retrovue/blockplan/BlockPlanValidator.hpp"
@@ -55,6 +56,35 @@ int64_t TickProducer::InputFramePeriodMs() const {
   // Avoids truncation bias for fractional FPS (e.g. 60000/1001 → 16683 µs → 17 ms rounded).
   const int64_t period_us = (1'000'000LL * input_fps_den_) / input_fps_num_;
   return (period_us + 500) / 1000;
+}
+
+// =============================================================================
+// HARDEN-017 / INV-PTS-DISCONTINUITY-ABSORB-001: Shared PTS correction.
+// 1:1 copy of the logic previously duplicated in PrimeFirstFrame and
+// DecodeNextFrameRaw.  Single implementation prevents divergence.
+// =============================================================================
+int64_t TickProducer::AbsorbPtsDiscontinuity(int64_t decoded_pts_ms) {
+  // INV-PTS-ANCHOR-RESET: capture first PTS of the segment.
+  if (seg_first_pts_ms_ < 0) {
+    seg_first_pts_ms_ = decoded_pts_ms;
+  }
+
+  // INV-PTS-DISCONTINUITY-ABSORB-001: detect and absorb intra-segment PTS jumps.
+  // If decoded PTS jumps by more than 2x the expected frame period, accumulate
+  // the excess into pts_correction_ms_ so CT remains continuous at playout rate.
+  if (prev_decoded_pts_ms_ >= 0) {
+    const int64_t expected_ms = InputFramePeriodMs();
+    const int64_t delta_ms = decoded_pts_ms - prev_decoded_pts_ms_;
+    const int64_t threshold_ms = expected_ms * 2;
+    if (std::abs(delta_ms) > threshold_ms && expected_ms > 0) {
+      const int64_t correction = delta_ms - expected_ms;
+      pts_correction_ms_ += correction;
+    }
+  }
+  prev_decoded_pts_ms_ = decoded_pts_ms;
+
+  // Apply accumulated correction to get continuous content-time.
+  return decoded_pts_ms - pts_correction_ms_;
 }
 
 // =============================================================================
@@ -400,27 +430,8 @@ void TickProducer::PrimeFirstFrame() {
   // PTS-anchored CT — same logic as TryGetFrame (INV-BLOCK-PRIME-007)
   int64_t decoded_pts_ms = video_frame.metadata.pts / 1000;
 
-  // INV-PTS-ANCHOR-RESET: Capture PTS origin on first decode of segment.
-  if (seg_first_pts_ms_ < 0) {
-    seg_first_pts_ms_ = decoded_pts_ms;
-  }
-
-  // INV-PTS-DISCONTINUITY-ABSORB-001: Detect and absorb intra-segment PTS jumps.
-  // If decoded PTS jumps by more than 2x the expected frame period, accumulate
-  // the excess into pts_correction_ms_ so CT remains continuous at playout rate.
-  if (prev_decoded_pts_ms_ >= 0) {
-    const int64_t expected_ms = InputFramePeriodMs();
-    const int64_t delta_ms = decoded_pts_ms - prev_decoded_pts_ms_;
-    const int64_t threshold_ms = expected_ms * 2;
-    if (std::abs(delta_ms) > threshold_ms && expected_ms > 0) {
-      const int64_t correction = delta_ms - expected_ms;
-      pts_correction_ms_ += correction;
-    }
-  }
-  prev_decoded_pts_ms_ = decoded_pts_ms;
-
-  // Apply accumulated correction to get continuous content-time.
-  int64_t corrected_pts_ms = decoded_pts_ms - pts_correction_ms_;
+  // HARDEN-017: Shared PTS correction (anchor + discontinuity absorption).
+  int64_t corrected_pts_ms = AbsorbPtsDiscontinuity(decoded_pts_ms);
 
   int64_t seg_start_ct = 0;
   if (current_segment_index_ < static_cast<int32_t>(boundaries_.size())) {
@@ -562,6 +573,46 @@ TickProducer::PrimeResult TickProducer::PrimeFirstTick(int min_audio_prime_ms) {
       !buffered_frames_.front().audio.empty()) {
     primed_frame_->audio.push_back(std::move(buffered_frames_.front().audio.front()));
     buffered_frames_.front().audio.erase(buffered_frames_.front().audio.begin());
+  }
+
+  // INV-BOOTSTRAP-AV-PHASE-001 startup primed-audio semantics:
+  // Priming may decode/drain bursty audio, but the effective pre-consumer
+  // primed-frame contribution must remain bounded by one output frame.
+  if (primed_frame_.has_value() && !buffered_frames_.empty()) {
+    const int64_t max_primed_samples =
+        (FramePeriodMs() * buffer::kHouseAudioSampleRate) / 1000;
+    if (max_primed_samples > 0) {
+      int64_t kept_samples = 0;
+      size_t keep_count = 0;
+      const auto& audio = primed_frame_->audio;
+      for (size_t i = 0; i < audio.size(); ++i) {
+        const int64_t next = kept_samples + audio[i].nb_samples;
+        if (next <= max_primed_samples || (keep_count == 0 && kept_samples == 0)) {
+          kept_samples = next;
+          keep_count++;
+        } else {
+          break;
+        }
+      }
+
+      if (keep_count < primed_frame_->audio.size()) {
+        std::vector<buffer::AudioFrame> overflow;
+        overflow.reserve(primed_frame_->audio.size() - keep_count);
+        for (size_t i = keep_count; i < primed_frame_->audio.size(); ++i) {
+          overflow.push_back(std::move(primed_frame_->audio[i]));
+        }
+        primed_frame_->audio.erase(
+            primed_frame_->audio.begin() + static_cast<std::ptrdiff_t>(keep_count),
+            primed_frame_->audio.end());
+        // Preserve decode-time order by prepending overflow audio onto the first
+        // buffered frame (which is emitted immediately after the primed frame).
+        auto& dst_audio = buffered_frames_.front().audio;
+        dst_audio.insert(
+            dst_audio.begin(),
+            std::make_move_iterator(overflow.begin()),
+            std::make_move_iterator(overflow.end()));
+      }
+    }
   }
 
   bool met = depth_ms >= min_audio_prime_ms;
@@ -971,23 +1022,9 @@ DecodeResult TickProducer::DecodeNextFrameRaw(bool advance_output_state) {
   }
 
   int64_t decoded_pts_ms = video_frame.metadata.pts / 1000;
-  if (seg_first_pts_ms_ < 0) {
-    seg_first_pts_ms_ = decoded_pts_ms;
-  }
 
-  // INV-PTS-DISCONTINUITY-ABSORB-001: Detect and absorb intra-segment PTS jumps.
-  if (prev_decoded_pts_ms_ >= 0) {
-    const int64_t expected_ms = InputFramePeriodMs();
-    const int64_t delta_ms = decoded_pts_ms - prev_decoded_pts_ms_;
-    const int64_t threshold_ms = expected_ms * 2;
-    if (std::abs(delta_ms) > threshold_ms && expected_ms > 0) {
-      const int64_t correction = delta_ms - expected_ms;
-      pts_correction_ms_ += correction;
-    }
-  }
-  prev_decoded_pts_ms_ = decoded_pts_ms;
-
-  int64_t corrected_pts_ms = decoded_pts_ms - pts_correction_ms_;
+  // HARDEN-017: Shared PTS correction (anchor + discontinuity absorption).
+  int64_t corrected_pts_ms = AbsorbPtsDiscontinuity(decoded_pts_ms);
 
   int64_t seg_start_ct = 0;
   if (current_segment_index_ < static_cast<int32_t>(boundaries_.size())) {

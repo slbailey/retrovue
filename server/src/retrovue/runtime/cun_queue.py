@@ -13,13 +13,13 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from datetime import UTC, datetime
 
 import structlog
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..domain.entities import CunRenderRequest
+from .clock import AuthoritativeClock
 
 logger = structlog.get_logger(__name__)
 
@@ -55,7 +55,7 @@ def find_completed_by_hash(db: Session, hash_value: str) -> CunRenderRequest | N
     return db.execute(stmt).scalars().first()
 
 
-def claim_next(db: Session) -> CunRenderRequest | None:
+def claim_next(db: Session, *, clock: AuthoritativeClock) -> CunRenderRequest | None:
     """Claim one pending CUN render request (lowest priority number = soonest playout).
 
     Uses SELECT FOR UPDATE SKIP LOCKED so only one worker claims a given request.
@@ -72,7 +72,7 @@ def claim_next(db: Session) -> CunRenderRequest | None:
     if req is None:
         return None
     req.status = STATUS_RUNNING
-    req.started_at = datetime.now(UTC)
+    req.started_at = clock.now_utc()
     return req
 
 
@@ -81,6 +81,8 @@ def complete(
     request_id: uuid.UUID,
     rendered_path: str,
     hash_value: str,
+    *,
+    clock: AuthoritativeClock,
 ) -> None:
     """Mark a CUN render request as completed with the rendered file path."""
     req = db.get(CunRenderRequest, request_id)
@@ -89,10 +91,16 @@ def complete(
     req.status = STATUS_COMPLETED
     req.rendered_asset_path = rendered_path
     req.content_hash = hash_value
-    req.completed_at = datetime.now(UTC)
+    req.completed_at = clock.now_utc()
 
 
-def skip(db: Session, request_id: uuid.UUID, reason: str) -> None:
+def skip(
+    db: Session,
+    request_id: uuid.UUID,
+    reason: str,
+    *,
+    clock: AuthoritativeClock,
+) -> None:
     """Mark a CUN render request as skipped (e.g. past deadline).
 
     INV-CUN-RENDER-DEADLINE-001.
@@ -102,14 +110,20 @@ def skip(db: Session, request_id: uuid.UUID, reason: str) -> None:
         return
     req.status = STATUS_SKIPPED
     req.error_message = reason
-    req.completed_at = datetime.now(UTC)
+    req.completed_at = clock.now_utc()
 
 
-def fail(db: Session, request_id: uuid.UUID, error: str) -> None:
+def fail(
+    db: Session,
+    request_id: uuid.UUID,
+    error: str,
+    *,
+    clock: AuthoritativeClock,
+) -> None:
     """Mark a CUN render request as failed."""
     req = db.get(CunRenderRequest, request_id)
     if req is None:
         return
     req.status = STATUS_FAILED
     req.error_message = error
-    req.completed_at = datetime.now(UTC)
+    req.completed_at = clock.now_utc()

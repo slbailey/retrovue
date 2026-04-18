@@ -5,9 +5,10 @@ Represents a configured enricher instance with type, configuration, and metadata
 """
 
 import hashlib
-import time
 from dataclasses import dataclass
 from typing import Any
+
+from ..runtime.clock import AuthoritativeClock
 
 
 @dataclass
@@ -49,6 +50,8 @@ class Enricher:
         name: str,
         config: dict[str, Any] | None = None,
         scope: str | None = None,
+        *,
+        clock: AuthoritativeClock,
     ) -> "Enricher":
         """
         Create a new enricher instance with generated ID.
@@ -58,13 +61,14 @@ class Enricher:
             name: Human-readable name
             config: Configuration dictionary
             scope: Enricher scope (auto-detected if not provided)
+            clock: AuthoritativeClock used to salt the generated ID.
+                No wall-clock fallback.
 
         Returns:
             New Enricher instance
         """
-        # Generate unique ID with timestamp to avoid collisions
-        timestamp = int(time.time())
-        id_hash = hashlib.md5(f"{enricher_type}-{name}-{timestamp}".encode()).hexdigest()[:8]
+        timestamp_ms = clock.now_utc_ms()
+        id_hash = hashlib.md5(f"{enricher_type}-{name}-{timestamp_ms}".encode()).hexdigest()[:8]
         enricher_id = f"enricher-{enricher_type}-{id_hash}"
 
         # Auto-detect scope if not provided

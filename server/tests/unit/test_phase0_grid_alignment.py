@@ -15,7 +15,7 @@ from retrovue.runtime.channel_manager import (
     ChannelManager,
 )
 from retrovue.dev.mock_schedule_services import MockGridScheduleService
-from retrovue.runtime.clock import MasterClock
+from retrovue.runtime.clock import SystemClock
 from retrovue.config.testing import TEST_RESOLVED_CONFIG
 
 
@@ -31,17 +31,16 @@ class TestMockGridAlignment:
 
     def setup_method(self):
         """Set up test fixtures."""
-        self.clock = MasterClock()
+        self.clock = SystemClock()
         self.program_director = _StubProgramDirector()
-        # Create a minimal ScheduleService stub for ChannelManager
+        # Create a minimal execution reader stub for ChannelManager
         # We'll test the grid methods directly
         self.channel_manager = ChannelManager(
             channel_id="test-1",
             clock=self.clock,
-            schedule_service=None,  # Will be set per test
+            execution_reader=None,  # Not used by these tests
             program_director=self.program_director,
             resolved_config=TEST_RESOLVED_CONFIG,
-        on_linger_expired=lambda: None,
         )
         self.channel_manager._mock_grid_block_minutes = 30
         self.channel_manager._mock_grid_program_asset_path = "/path/to/program.mp4"
@@ -241,7 +240,7 @@ class TestMockGridScheduleService:
 
     def setup_method(self):
         """Set up test fixtures."""
-        self.clock = MasterClock()
+        self.clock = SystemClock()
         self.program_asset_path = "/path/to/program.mp4"
         self.program_duration = 1200.0  # 20 minutes
         self.filler_asset_path = "/path/to/filler.mp4"

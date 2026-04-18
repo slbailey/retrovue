@@ -147,6 +147,8 @@ class MpegTSOutputSink : public IOutputSink {
 
   // Worker thread
   std::atomic<bool> stop_requested_;
+  // HARDEN-006: INV-SINK-NO-IMPLICIT-EOF recovery counter.
+  std::atomic<uint64_t> implicit_eof_recovery_count_{0};
   std::thread mux_thread_;
 
   // =========================================================================

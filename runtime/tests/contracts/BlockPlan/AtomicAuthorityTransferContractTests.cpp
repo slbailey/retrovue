@@ -359,4 +359,32 @@ TEST_F(AtomicAuthorityTransferTest, ContentSeamOverrideWithoutSwapViolates) {
   EXPECT_NE(captured_errors_[0].find("reason=stale_frame_bleed"), std::string::npos);
 }
 
+// Block boundary carry-over regression:
+// previous-block origin id leaks into first post-fence tick after authority rebases
+// to the new block segment index space (active=0).
+TEST_F(AtomicAuthorityTransferTest, BlockBoundaryCarryoverOriginFromPreviousBlockViolates) {
+  bool ok = PipelineManager::EmittedFrameMatchesAuthority(
+      /*tick=*/1000,
+      /*active_segment_id=*/0,      // new block authority after fence take
+      /*frame_origin_segment_id=*/6  // stale carry-over from prior block
+  );
+
+  EXPECT_FALSE(ok);
+  EXPECT_TRUE(HasViolationTag());
+  ASSERT_EQ(captured_errors_.size(), 1u);
+  EXPECT_NE(captured_errors_[0].find("reason=stale_frame_bleed"), std::string::npos);
+}
+
+// Positive counterpart for block-boundary rebase:
+// first post-fence emission must carry re-based origin matching active authority.
+TEST_F(AtomicAuthorityTransferTest, BlockBoundaryRebasedOriginMatchesNewAuthority) {
+  bool ok = PipelineManager::EmittedFrameMatchesAuthority(
+      /*tick=*/1001,
+      /*active_segment_id=*/0,
+      /*frame_origin_segment_id=*/0);
+
+  EXPECT_TRUE(ok);
+  EXPECT_FALSE(HasViolationTag());
+}
+
 }  // namespace

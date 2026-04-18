@@ -23,6 +23,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
 import pytest
+from retrovue.runtime.clock import SystemClock
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +68,7 @@ class TestTrafficPolicyPassthrough:
 
             daemon = PlaylistBuilderDaemon(
                 "test-channel",
+                clock=SystemClock(),
                 dsl_path=str(dsl_file),
             )
 
@@ -84,7 +86,7 @@ class TestNoTrafficDefaults:
     def test_no_dsl_path_gives_none(self):
         from retrovue.runtime.playlist_builder_daemon import PlaylistBuilderDaemon
 
-        daemon = PlaylistBuilderDaemon("test-channel")
+        daemon = PlaylistBuilderDaemon("test-channel", clock=SystemClock())
         assert daemon._traffic_policy is None
         assert daemon._break_config is None
 
@@ -98,7 +100,11 @@ class TestNoTrafficDefaults:
         ):
             from retrovue.runtime.playlist_builder_daemon import PlaylistBuilderDaemon
 
-            daemon = PlaylistBuilderDaemon("bare", dsl_path=str(dsl_file))
+            daemon = PlaylistBuilderDaemon(
+                "bare",
+                clock=SystemClock(),
+                dsl_path=str(dsl_file),
+            )
             assert daemon._traffic_policy is None
             assert daemon._break_config is None
 
@@ -143,7 +149,7 @@ class TestExtendForwardsTraffic:
         sentinel_policy = {"type": "sentinel_policy"}
         sentinel_break_config = {"type": "sentinel_break_config"}
 
-        daemon = PlaylistBuilderDaemon("test-channel")
+        daemon = PlaylistBuilderDaemon("test-channel", clock=SystemClock())
         daemon._traffic_policy = sentinel_policy
         daemon._break_config = sentinel_break_config
 

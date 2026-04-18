@@ -1,19 +1,24 @@
 """
-INV-NO-GHOST-METHODS-001 + INV-LIFECYCLE-PD-SOLE-TEARDOWN-001
+Phase 8 Step 4 — post-migration: the linger-expired callback slot on
+ChannelManager is gone.
 
-Contract: ChannelManager must be constructed WITH on_linger_expired callback.
-Construction without a callback is forbidden — the callback is how PD maintains
-sole teardown authority (INV-LIFECYCLE-PD-SOLE-TEARDOWN-001).
+Prior contract (pre-Step-4): ChannelManager required an
+``on_linger_expired`` callback at construction time; this preserved
+INV-LIFECYCLE-PD-SOLE-TEARDOWN-001 in the presence of the callback-
+inversion path. Phase 8 Step 4 removed the inversion: the linger timer
+lives on ProgramDirector, which fires its own expiry handler directly.
 
-This test ensures the error is raised eagerly at construction time, not lazily
-when linger fires, so misuse is caught immediately.
+This file keeps a single residual check: ChannelManager must NOT accept
+an ``on_linger_expired`` kwarg any longer. The teardown authority
+invariant is now enforced by PD owning the timer (see
+``tests/runtime/test_phase8_step4_linger_ownership.py``).
 """
 
 import pytest
 from unittest.mock import MagicMock
 
 from retrovue.runtime.channel_manager import ChannelManager
-from tests.contracts.runtime.test_channel_manager_clock_authority import TEST_RESOLVED_CONFIG
+from retrovue.config.testing import TEST_RESOLVED_CONFIG
 
 
 pytestmark = pytest.mark.contract
@@ -24,24 +29,24 @@ def minimal_deps():
     clock = MagicMock()
     clock.now_utc.return_value = MagicMock()
     return {
-        "channel_id": "test-callback-required",
+        "channel_id": "test-step4-no-callback",
         "clock": clock,
-        "schedule_service": MagicMock(),
+        "execution_reader": MagicMock(),
         "program_director": MagicMock(),
         "resolved_config": TEST_RESOLVED_CONFIG,
     }
 
 
-def test_channel_manager_requires_on_linger_expired_callback(minimal_deps):
-    """
-    INV-LIFECYCLE-PD-SOLE-TEARDOWN-001: ChannelManager must be constructed with
-    on_linger_expired callback. Omitting it violates the teardown authority boundary.
-    """
-    with pytest.raises((AssertionError, TypeError, ValueError)):
-        ChannelManager(**minimal_deps)  # no on_linger_expired
+def test_channel_manager_rejects_on_linger_expired_kwarg(minimal_deps):
+    """Phase 8 Step 4: passing ``on_linger_expired=`` must raise TypeError —
+    the kwarg has been removed from the constructor signature."""
+    with pytest.raises(TypeError):
+        ChannelManager(**minimal_deps, on_linger_expired=lambda: None)
 
 
-def test_channel_manager_with_callback_constructs_ok(minimal_deps):
-    """Baseline: providing the callback allows construction."""
-    cm = ChannelManager(**minimal_deps, on_linger_expired=lambda: None)
+def test_channel_manager_constructs_without_any_linger_callback(minimal_deps):
+    """Baseline: construction succeeds without a linger-expired callback.
+    Linger policy is PD's job now; CM is a pure command executor."""
+    cm = ChannelManager(**minimal_deps)
     assert cm is not None
+    assert not hasattr(cm, "on_linger_expired")

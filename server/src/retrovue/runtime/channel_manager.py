@@ -38,7 +38,7 @@ from fastapi import FastAPI, Request, Response, status
 from fastapi.responses import StreamingResponse
 from uvicorn import Config, Server
 
-from .clock import MasterClock
+from .clock import AuthoritativeClock
 from .schedule_types import ScheduledBlock, ScheduledSegment
 from .producer.base import Producer, ProducerMode, ProducerStatus, ContentSegment, ProducerState
 from .channel_stream import ChannelStream, SocketTsSource, generate_ts_stream
@@ -57,15 +57,12 @@ import os
 import threading
 
 # =============================================================================
-# PLAYOUT AUTHORITY: BlockPlan only
+# PLAYOUT AUTHORITY: Model A (launch_air + LoadPreview + SwitchToLive)
 # =============================================================================
-# The only runtime playout path is BlockPlanProducer + PlayoutSession.
+# The only runtime playout path is BlockPlanProducer driving AIR through the
+# Model A RPC surface in retrovue.usecases.channel_manager_launch.
 # =============================================================================
 PLAYOUT_AUTHORITY: str = "blockplan"
-
-# BlockPlan imports (lazy to avoid circular imports)
-if TYPE_CHECKING:
-    from .playout_session import PlayoutSession, BlockPlan
 
 if TYPE_CHECKING:
     from retrovue.runtime.metrics import ChannelMetricsSample, MetricsPublisher
@@ -87,14 +84,11 @@ from .metrics import (
     feed_credits_current,
 )
 
-from .playout_session import FeedResult
-
-
 # ----------------------------------------------------------------------
 # Protocols — canonical definitions live in retrovue/runtime/protocols.py
 # Re-exported here for backward compatibility.
 # ----------------------------------------------------------------------
-from .protocols import ScheduleService, ProgramDirectorProtocol as ProgramDirector  # noqa: F401
+from .protocols import ExecutionRuntimeReader, ProgramDirectorProtocol as ProgramDirector  # noqa: F401
 
 
 # ----------------------------------------------------------------------
@@ -214,7 +208,7 @@ class ProducerStartupError(ChannelManagerError):
 
 class NoScheduleDataError(ChannelManagerError):
     """
-    Raised if ScheduleService returns nothing for "right now".
+    Raised if execution data is missing for "right now".
 
     This is considered an upstream scheduling failure, NOT permission for
     ChannelManager to improvise content.
@@ -298,7 +292,7 @@ class ChannelManager:
     ChannelManager is how a RetroVue channel actually goes on-air.
 
     Responsibilities (enforced here):
-    - Ask ScheduleService what should be airing 'right now', using MasterClock for authoritative time
+    - Ask ExecutionRuntimeReader what should be airing 'right now', using AuthoritativeClock for authoritative time
     - Start/stop the Producer based on viewer fanout rules (first viewer starts, last viewer stops)
     - Swap Producers when ProgramDirector changes global mode (normal/emergency/guide)
     - Expose the Producer's stream endpoint so viewers can attach
@@ -314,27 +308,29 @@ class ChannelManager:
     def __init__(
         self,
         channel_id: str,
-        clock: MasterClock,
-        schedule_service: ScheduleService,
+        clock: AuthoritativeClock,
+        execution_reader: ExecutionRuntimeReader | None,
         program_director: ProgramDirector,
+        *,
         event_loop: asyncio.AbstractEventLoop | None = None,
         evidence_endpoint: str = "",
         resolved_config: Any = None,
-        on_linger_expired: Callable[[], None] | None = None,
     ):
         """
         Initialize the ChannelManager for a specific channel.
 
         Args:
             channel_id: Channel this manager controls
-            clock: MasterClock for authoritative time
-            schedule_service: ScheduleService for read-only access to current playout plan
+            clock: AuthoritativeClock for authoritative time
+            execution_reader: ExecutionRuntimeReader for read-only access to execution data
             program_director: ProgramDirector for global policy/mode
             event_loop: Optional event loop for P11F-005; when set, switch issuance uses call_later instead of threading.Timer
             evidence_endpoint: host:port for evidence gRPC, empty = disabled
             resolved_config: Frozen resolved config from config resolver (REQUIRED)
-            on_linger_expired: Callback invoked when linger timer fires and no viewers remain.
-                               Must be provided; PD is the sole teardown authority (INV-LIFECYCLE-PD-SOLE-TEARDOWN-001).
+
+        Phase 8 Step 4: the linger timer lives on ProgramDirector. This
+        constructor no longer accepts a linger-seconds value or a
+        linger-expired callback; PD owns both.
         """
         if resolved_config is None:
             raise RuntimeError(
@@ -343,15 +339,9 @@ class ChannelManager:
             )
         self.channel_id = channel_id
         self.clock = clock
-        assert self.clock is not None, "ChannelManager requires a MasterClock"
-        self.schedule_service = schedule_service
+        assert self.clock is not None, "ChannelManager requires an AuthoritativeClock"
+        self.execution_reader = execution_reader
         self.program_director = program_director
-        assert on_linger_expired is not None, (
-            "INV-LIFECYCLE-PD-SOLE-TEARDOWN-001 violated: "
-            "ChannelManager must be constructed with on_linger_expired callback. "
-            "PD is the sole teardown authority — omitting this callback is forbidden."
-        )
-        self.on_linger_expired: Callable[[], None] = on_linger_expired
         self._loop: asyncio.AbstractEventLoop | None = event_loop
         self._evidence_endpoint = evidence_endpoint
         # P11F-005: asyncio handle when using event loop (cancel on teardown)
@@ -391,22 +381,21 @@ class ChannelManager:
         # Channel lifecycle: RUNNING (on-air or idle with viewers) or STOPPED (last viewer left).
         # When STOPPED, health/reconnect logic does nothing; ProgramDirector calls stop_channel on last viewer.
         self._channel_state: str = "RUNNING"  # "RUNNING" | "STOPPED"
-        # Reason for stop_channel; passed to Producer/AIR for accurate StopBlockPlanSession logging.
+        # Reason for stop_channel; passed to Producer.stop(reason=...) for accurate teardown logging.
         self._stop_reason: str = "channel_stop"
 
-        # Linger: grace period before tearing down producer after last viewer leaves.
-        self.LINGER_SECONDS: int = _ch["linger_seconds"]
-        # INV-CHANNEL-LIVENESS-RECOVERY-001: Recovery constants
-        _rec = _ch["recovery"]
-        self._RECOVERY_BASE_DELAY_S: float = _rec["base_delay_seconds"]
-        self._RECOVERY_MAX_ATTEMPTS: int = _rec["max_attempts"]
-        self._linger_handle: asyncio.TimerHandle | None = None
-        self._linger_deadline: float | None = None
+        # Phase 8 Step 4: linger timer and its deadline moved to
+        # ProgramDirector; ChannelManager no longer holds any linger state.
+        # Phase 8 Step 5: recovery policy (retry budget, backoff, max
+        # attempts) moved to ProgramDirector as well. CM no longer reads
+        # the recovery section of resolved_config.
 
         # INV-VIEWER-LIFECYCLE: Thread-safe viewer count transitions
         self._viewer_lock: threading.Lock = threading.Lock()
         # INV-LIFECYCLE-OBSERVABILITY-001: session that triggered current channel activation
         self._trigger_session_id: str | None = None
+        # Phase 8 Step 5: recovery state (attempts counter, retry timer)
+        # is owned by ProgramDirector. ChannelManager holds none of it.
 
         # BlockPlan only
         self._blockplan_mode: bool = True
@@ -420,9 +409,6 @@ class ChannelManager:
         self._hls_segment_counter: int = 0  # persists across producer restarts
         self._init_hls_state()
 
-        # INV-CHANNEL-LIVENESS-RECOVERY-001: Recovery state
-        self._recovery_attempts: int = 0
-        self._recovery_timer: threading.Timer | None = None
         # Phase 8.5a: track first segment so we emit the lifecycle event once.
         self._first_segment_logged: bool = False
 
@@ -454,6 +440,7 @@ class ChannelManager:
             self._hls_segmenter = HlsSegmenter(
                 channel_id=self.channel_id,
                 segment_ring=self._hls_segment_ring,
+                clock=self.clock,
                 target_duration_ms=_hls_seg["target_duration_ms"],
                 max_gop_ms=_hls_seg["max_gop_ms"],
                 starting_index=self._hls_segment_counter,
@@ -556,7 +543,7 @@ class ChannelManager:
         Called by ProgramDirector when the last viewer disconnects (StopChannel(channel_id))
         or on explicit stop. Explicit stop bypasses linger — teardown is immediate.
 
-        reason: Passed to AIR StopBlockPlanSession for accurate logging. Use
+        reason: Passed to Producer.stop(reason=...) for accurate teardown logging. Use
         "last_viewer_left" only when stopping due to viewer count 1→0; use
         "channel_stop" for admin/explicit stop.
         """
@@ -565,12 +552,9 @@ class ChannelManager:
             "[teardown] stopping producer for channel %s (reason=%s)", self.channel_id, reason
         )
         self._stop_reason = reason
-        self._cancel_linger()
-        # INV-CHANNEL-LIVENESS-RECOVERY-001: Cancel any pending recovery
-        self._recovery_attempts = 0
-        if self._recovery_timer is not None:
-            self._recovery_timer.cancel()
-            self._recovery_timer = None
+        # Phase 8 Step 4: PD cancels the linger timer before this method runs.
+        # Phase 8 Step 5: PD also cancels any pending recovery timer in
+        # ``_stop_channel_internal`` — CM no longer holds recovery state.
         self._channel_state = "STOPPED"
         self._teardown_reason = None
         self._pending_fatal = None
@@ -597,18 +581,6 @@ class ChannelManager:
         mode = self.program_director.get_channel_mode(self.channel_id)
         self.runtime_state.current_mode = mode
         return mode
-
-    def _get_playout_plan(self) -> list[dict[str, Any]]:
-        """Ask ScheduleService what should be airing right now for this channel."""
-        station_time = self.clock.now_utc()
-        playout_plan = self.schedule_service.get_playout_plan_now(self.channel_id, station_time)
-
-        if not playout_plan:
-            raise NoScheduleDataError(
-                f"No schedule data for channel {self.channel_id} at {station_time}"
-            )
-
-        return playout_plan
 
     # Mock grid: alignment & offset calculation — compatibility shims restored from main
     # These were deleted by the refactor but are required by contract tests.
@@ -665,13 +637,25 @@ class ChannelManager:
             )
         return (content_type, asset_path, start_pts_ms)
 
-    def viewer_join(self, session_id: str, session_info: dict[str, Any]) -> None:
+    def viewer_join(
+        self, session_id: str, session_info: dict[str, Any]
+    ) -> tuple[int, int]:
         """
-        Called when a viewer starts watching this channel.
+        Record a viewer starting to watch this channel, and return the
+        transition as ``(old_count, new_count)``.
+
+        Phase 8 Step 2: this method is a *pure state update*. It must not
+        autonomously dispatch ``on_first_viewer``; ProgramDirector observes
+        the returned transition (via ``tune_in`` → ``observe_viewer_transition``)
+        and is the sole caller of the lifecycle callback.
 
         INV-VIEWER-LIFECYCLE-001: Thread-safe viewer count transitions.
-        Concurrent viewer joins are serialized via _viewer_lock.
-        First viewer (0→1) triggers on_first_viewer() exactly once.
+        Concurrent viewer joins are serialized via ``_viewer_lock``.
+
+        Linger-state maintenance (cancel an in-flight linger timer and flip
+        channel_state back to RUNNING on 0→1) stays inline under the lock in
+        this step. Phase 8 Step 4 moves the linger timer itself to PD, at
+        which point these lines become PD's responsibility too.
         """
         with self._viewer_lock:
             now = self.clock.now_utc()
@@ -689,7 +673,6 @@ class ChannelManager:
 
             old_count = self.runtime_state.viewer_count
             self.runtime_state.viewer_count = len(self.viewer_sessions)
-            # Log for debugging "who" was counted as a viewer (e.g. phantom vs real TS client).
             self._emit_lifecycle_event(
                 "viewer_join",
                 event_scope="session",
@@ -701,33 +684,26 @@ class ChannelManager:
                 self.channel_id, session_id, self.runtime_state.viewer_count,
             )
 
-            # Cancel linger if a viewer reconnects during the grace period.
             if old_count == 0 and self.runtime_state.viewer_count == 1:
-                self._cancel_linger()
-
-            # When first viewer joins after STOPPED, re-enter RUNNING so producer can start.
-            if old_count == 0 and self.runtime_state.viewer_count == 1:
+                # Re-enter RUNNING so the producer can restart. Any pending
+                # grace-period timer is cancelled by PD (Phase 8 Step 4)
+                # before it invokes start_producer.
                 self._channel_state = "RUNNING"
-            # Fanout rule: first viewer starts Producer.
-            # INV-VIEWER-LIFECYCLE-001: AIR starts exactly once on 0→1 transition
-            if old_count == 0 and self.runtime_state.viewer_count == 1:
-                self._logger.info(
-                    "INV-VIEWER-LIFECYCLE-001: First viewer joined channel %s, starting AIR",
-                    self.channel_id
-                )
-                self.on_first_viewer(trigger_session_id=session_id)
 
-            # If we have an active producer, surface its endpoint for new viewers.
             if self.active_producer:
                 self.runtime_state.stream_endpoint = self.active_producer.get_stream_endpoint()
 
-    def viewer_leave(self, session_id: str) -> None:
+            return (old_count, self.runtime_state.viewer_count)
+
+    def viewer_leave(self, session_id: str) -> tuple[int, int]:
         """
-        Called when a viewer stops watching.
+        Record a viewer stopping watching, and return the transition as
+        ``(old_count, new_count)``.
+
+        Phase 8 Step 2: pure state update. PD observes the transition (via
+        ``tune_out``) and dispatches ``on_last_viewer`` if needed.
 
         INV-VIEWER-LIFECYCLE-002: Thread-safe viewer count transitions.
-        Concurrent viewer leaves are serialized via _viewer_lock.
-        Last viewer (1→0) triggers on_last_viewer() exactly once.
         """
         with self._viewer_lock:
             if session_id in self.viewer_sessions:
@@ -735,7 +711,6 @@ class ChannelManager:
 
             old_count = self.runtime_state.viewer_count
             self.runtime_state.viewer_count = len(self.viewer_sessions)
-            # Log for debugging "who" was counted as a viewer when they left.
             self._emit_lifecycle_event(
                 "viewer_leave",
                 event_scope="session",
@@ -747,176 +722,99 @@ class ChannelManager:
                 self.channel_id, session_id, self.runtime_state.viewer_count, old_count,
             )
 
-            # Fanout rule: last viewer stops Producer.
-            # INV-VIEWER-LIFECYCLE-002: AIR stops exactly once on 1→0 transition
-            if old_count == 1 and self.runtime_state.viewer_count == 0:
-                self._logger.info(
-                    "INV-VIEWER-LIFECYCLE-002: Last viewer left channel %s, stopping AIR",
-                    self.channel_id
-                )
-                self.on_last_viewer(trigger_session_id=session_id)
+            return (old_count, self.runtime_state.viewer_count)
 
-    # Phase 0 Contract Methods
+    # Phase 0 Contract Methods — external entry points.
+    # Phase 8 Step 2: tune_in/tune_out update viewer state and then ask
+    # ProgramDirector to observe the transition. PD is the sole place that
+    # decides whether the transition warrants on_first_viewer / on_last_viewer.
     def tune_in(self, session_id: str, session_info: dict[str, Any] | None = None) -> None:
-        """
-        Phase 0 contract: Called when a viewer tunes in to this channel.
-        
-        Args:
-            session_id: Unique identifier for this viewer session
-            session_info: Optional metadata about the viewer session
-        """
+        """External entry point: a viewer tunes in to this channel."""
         if session_info is None:
             session_info = {}
-        self.viewer_join(session_id, session_info)
+        old_count, new_count = self.viewer_join(session_id, session_info)
+        self.program_director.observe_viewer_transition(
+            self, session_id, old_count, new_count
+        )
 
     def tune_out(self, session_id: str) -> None:
-        """
-        Phase 0 contract: Called when a viewer tunes out from this channel.
-        
-        Args:
-            session_id: Unique identifier for this viewer session
-        """
-        self.viewer_leave(session_id)
-
-    def on_first_viewer(self, trigger_session_id: str | None = None) -> None:
-        """
-        Phase 0 contract: Called when the first viewer connects (viewer count goes 0 -> 1).
-
-        This ensures the Producer is started when the first viewer arrives.
-        """
-        if self.runtime_state.viewer_count == 0:
-            return  # Not actually first viewer
-
-        # Store trigger_session_id for channel_activated event in _ensure_producer_running
-        self._trigger_session_id = trigger_session_id
-        # Ensure producer is running for first viewer
-        if self.runtime_state.viewer_count == 1:
-            self._ensure_producer_running()
-
-    def on_last_viewer(self, trigger_session_id: str | None = None) -> None:
-        """
-        Phase 0 contract: Called when the last viewer disconnects (viewer count goes 1 -> 0).
-
-        Starts a linger grace period instead of immediately stopping the producer.
-        If no viewer reconnects within LINGER_SECONDS, the producer is stopped.
-        """
-        if self.runtime_state.viewer_count != 0:
-            return  # Not actually last viewer
-        self._start_linger(trigger_session_id=trigger_session_id)
-
-    def _start_linger(self, trigger_session_id: str | None = None) -> None:
-        """Start linger grace period. Producer stays alive until timeout."""
-        if self._linger_handle is not None:
-            return  # already lingering
-        linger_fields: dict[str, object] = {
-            "linger_seconds": self.LINGER_SECONDS,
-            "viewer_count": self.runtime_state.viewer_count,
-        }
-        if trigger_session_id is not None:
-            linger_fields["trigger_session_id"] = trigger_session_id
-        self._emit_lifecycle_event("linger_start", event_scope="channel", **linger_fields)
-        self._logger.debug(
-            "[channel %s] LINGER_STARTED %ds", self.channel_id, self.LINGER_SECONDS
+        """External entry point: a viewer tunes out from this channel."""
+        old_count, new_count = self.viewer_leave(session_id)
+        self.program_director.observe_viewer_transition(
+            self, session_id, old_count, new_count
         )
-        if self._loop is not None:
-            self._linger_deadline = self._loop.time() + self.LINGER_SECONDS
-            self._linger_handle = self._loop.call_later(
-                self.LINGER_SECONDS, self._linger_expire
-            )
-        else:
-            # No event loop — do full teardown immediately (same as _linger_expire)
-            # so producer.stop() runs and AIR process is terminated.
-            self._logger.info(
-                "[channel %s] LINGER_SKIP (no event loop); stopping producer and tearing down",
-                self.channel_id,
-            )
-            self.on_linger_expired()
 
-    def _linger_expire(self) -> None:
-        """Linger timer fired. If still no viewers, stop producer and tear down (AIR exits after linger)."""
-        self._linger_handle = None
-        self._linger_deadline = None
+    # ------------------------------------------------------------------
+    # Phase 8 Step 3 — explicit command surface.
+    # ChannelManager is a command executor. ProgramDirector is the sole
+    # caller of these commands from viewer-transition dispatch. The old
+    # lifecycle-callback names are gone: on_first_viewer was inlined into
+    # start_producer (Phase 8 Step 3); the transitional 1→0 method was
+    # deleted in Phase 8 Step 4 when the linger timer moved to PD.
+    # ------------------------------------------------------------------
+
+    def start_producer(self, *, trigger_session_id: str | None = None) -> None:
+        """Idempotent command: ensure the producer is running for this channel.
+
+        Phase 8 Step 3: explicit public command surface, called by
+        ProgramDirector on a 0→1 viewer transition (via
+        ``observe_viewer_transition``). Reuses the existing
+        ``_ensure_producer_running`` body; that method is already idempotent
+        (it returns early if the active producer is healthy in the required
+        mode).
+
+        If the viewer count is zero (e.g. a race where a viewer_leave fired
+        between the transition and this call), skip the start — there is
+        nothing to deliver.
+        """
         if self.runtime_state.viewer_count == 0:
-            self._emit_lifecycle_event("linger_expire", event_scope="channel", viewer_count=0)
-            self._logger.info(
-                "[channel %s] LINGER_EXPIRED (0 viewers); stopping producer and tearing down",
-                self.channel_id,
-            )
-            # Full teardown: notify ProgramDirector so channel is removed and AIR is stopped.
-            # Pass reason so AIR logs "last_viewer_left" only when stop was due to viewer leave.
-            self.on_linger_expired()
-
-    def _cancel_linger(self) -> None:
-        """Cancel any pending linger timer."""
-        if self._linger_handle is not None:
-            self._linger_handle.cancel()
-            self._linger_handle = None
-            self._linger_deadline = None
-            self._emit_lifecycle_event("linger_cancel", event_scope="channel", viewer_count=self.runtime_state.viewer_count)
-            self._logger.info(
-                "[channel %s] LINGER_CANCELLED viewer_reconnected", self.channel_id
-            )
-
-    def _on_producer_session_end(self, reason: str) -> None:
-        """INV-CHANNEL-LIVENESS-RECOVERY-001: Handle producer failure.
-        ChannelManager owns the liveness recovery decision."""
-        if reason not in ("stopped", "error"):
-            return  # Not recoverable (last_viewer_left, lookahead_exhausted)
-
-        viewer_count = self.runtime_state.viewer_count
-        if viewer_count == 0:
-            return  # No viewers to serve
-
-        self._recovery_attempts += 1
-        if self._recovery_attempts > self._RECOVERY_MAX_ATTEMPTS:
-            self._logger.error(
-                "INV-CHANNEL-LIVENESS-RECOVERY-001: Channel %s: "
-                "max recovery attempts (%d) exceeded; entering error state",
-                self.channel_id, self._RECOVERY_MAX_ATTEMPTS,
-            )
             return
+        self._trigger_session_id = trigger_session_id
+        self._ensure_producer_running()
 
-        # Idempotent: cancel any existing recovery timer
-        if self._recovery_timer is not None:
-            self._recovery_timer.cancel()
-            self._recovery_timer = None
+    def stop_producer(self, *, reason: str = "stop_producer_command") -> None:
+        """Command: stop the producer for this channel.
 
-        delay = min(
-            self._RECOVERY_BASE_DELAY_S * (2 ** (self._recovery_attempts - 1)),
-            30.0,
-        )
-        self._logger.warning(
-            "INV-CHANNEL-LIVENESS-RECOVERY-001: Channel %s: "
-            "scheduling recovery attempt %d/%d in %.1fs "
-            "(reason=%s, viewers=%d)",
-            self.channel_id, self._recovery_attempts,
-            self._RECOVERY_MAX_ATTEMPTS, delay, reason, viewer_count,
-        )
+        Phase 8 Step 3: thin wrapper over the existing ``stop_channel`` path.
+        This is the named command surface ProgramDirector uses for teardown;
+        Phase 8 Step 4 routes the linger-expired stop through this method
+        (replacing the earlier callback-inversion path on ChannelManager).
+        """
+        self.stop_channel(reason=reason)
 
-        self._recovery_timer = threading.Timer(delay, self._attempt_recovery)
-        self._recovery_timer.daemon = True
-        self._recovery_timer.start()
+    def clear_active_producer(self) -> None:
+        """Command: null the ``active_producer`` reference.
 
-    def _attempt_recovery(self) -> None:
-        """INV-CHANNEL-LIVENESS-RECOVERY-001: Execute deferred recovery."""
-        self._recovery_timer = None  # Timer fired, clear reference
+        Phase 9 Step 2: ChannelManager is the sole writer of
+        ``active_producer``. ProgramDirector formerly did
+        ``manager.active_producer = None`` directly; with this command
+        the field stays private to CM. Behavior-preserving: the method
+        does only what the bare assignment did.
+        """
+        self.active_producer = None
 
-        if self.runtime_state.viewer_count == 0:
-            self._recovery_attempts = 0
-            return  # Viewers left during backoff
+    def mark_idle(self) -> None:
+        """Command: transition ``_channel_state`` from STOPPED to IDLE.
 
-        # INV-HLS-RESTART-DISCONTINUITY-001: Reset segmenter before producer restart
-        self._update_hls_segment_counter()
-        self._reset_hls_segmenter_for_restart()
+        Phase 9 Step 3: ChannelManager is the sole writer of
+        ``_channel_state``. ProgramDirector formerly flipped the field
+        directly under a ``state == "STOPPED"`` guard; the guard moves
+        inside this method, so PD calls it unconditionally. Any other
+        current state is a silent no-op — preserving the pre-Phase-9
+        behavior where PD simply did nothing on non-STOPPED states.
+        """
+        if self._channel_state == "STOPPED":
+            self._channel_state = "IDLE"
 
-        try:
-            self._ensure_producer_running()
-        except Exception as e:
-            self._logger.error(
-                "INV-CHANNEL-LIVENESS-RECOVERY-001: Channel %s: "
-                "recovery attempt %d failed: %s",
-                self.channel_id, self._recovery_attempts, e,
-            )
+    # Phase 8 Step 4: linger scheduling, cancellation, and expiry are all
+    # owned by ProgramDirector. See ProgramDirector.observe_viewer_transition
+    # and the PD-side timer helpers. On expiry, PD invokes
+    # manager.stop_producer(reason="last_viewer_left").
+
+    # Phase 8 Step 5: producer recovery (retry budget, backoff, decision
+    # to give up) is ProgramDirector's responsibility. BlockPlanProducer
+    # notifies PD directly via the on_producer_failure hook wired at
+    # construction time in _build_producer_for_mode — see that method.
 
     def _ensure_producer_running(self) -> None:
         """Enforce 'channel goes on-air' (BlockPlan path only)."""
@@ -930,10 +828,16 @@ class ChannelManager:
         ):
             return
 
-        # Otherwise we need to (re)start.
+        # Otherwise we need to (re)start. On restart we also reset the
+        # HLS segmenter so the next segment carries discontinuity
+        # (INV-HLS-RESTART-DISCONTINUITY-001). Pre-Phase-8-Step-5 this
+        # reset was done in the CM-side recovery path; we keep it inline
+        # so PD-driven restarts via start_producer preserve the marker.
         if self.active_producer:
             self.active_producer.stop()
             self.active_producer = None
+            self._update_hls_segment_counter()
+            self._reset_hls_segmenter_for_restart()
 
         producer = self._build_producer_for_mode(required_mode)
         if producer is None:
@@ -948,14 +852,23 @@ class ChannelManager:
         station_time = self.clock.now_utc()
 
         # INV-EXEC-NO-BOUNDARY-001: No grid math here.
-        # INV-EXEC-NO-STRUCTURE-001: Block timing from schedule service.
+        # INV-EXEC-NO-STRUCTURE-001: Block timing from execution reader.
         now_utc_ms = int(station_time.timestamp() * 1000)
-        current_block = self.schedule_service.get_block_at(self.channel_id, now_utc_ms)
+        if self.execution_reader is None:
+            self.runtime_state.producer_status = "error"
+            self.active_producer = None
+            raise RuntimeError(
+                f"ExecutionRuntimeReader not configured for channel {self.channel_id}"
+            )
+
+        current_block = self.execution_reader.get_current_execution_block(
+            self.channel_id, now_utc_ms
+        )
         if not current_block:
             self.runtime_state.producer_status = "error"
             self.active_producer = None
-            raise NoScheduleDataError(
-                f"No block for channel {self.channel_id} at {now_utc_ms}"
+            raise RuntimeError(
+                f"Missing current execution block for channel {self.channel_id} at {now_utc_ms}"
             )
 
         # INV-EXEC-OFFSET-001: offset within block is allowed
@@ -1000,8 +913,9 @@ class ChannelManager:
         self.runtime_state.producer_started_at = station_time
         self.runtime_state.stream_endpoint = self.active_producer.get_stream_endpoint()
 
-        # INV-CHANNEL-LIVENESS-RECOVERY-001: Reset recovery budget on successful start
-        self._recovery_attempts = 0
+        # Phase 8 Step 5: recovery-attempt bookkeeping lives on PD. When
+        # PD's retry timer fires ``manager.start_producer()`` and this
+        # path completes successfully, PD resets its own attempts counter.
 
         # P12-CORE-010 INV-SESSION-CREATION-UNGATED-001: Session created for viewer.
         self._logger.debug(
@@ -1050,7 +964,7 @@ class ChannelManager:
         return self.active_producer.status == ProducerStatus.RUNNING
 
     def tick(self) -> None:
-        """Clock-driven health/state update. BlockPlan path: no LoadPreview/SwitchToLive; producer owns execution."""
+        """Clock-driven health/state update. BlockPlan path: producer owns per-segment LoadPreview/SwitchToLive."""
         self._check_teardown_completion()
         if self._pending_fatal is not None:
             e = self._pending_fatal
@@ -1090,7 +1004,7 @@ class ChannelManager:
         # Keep upstream (AIR) running even with zero viewers so VLC reconnect does not restart AIR.
         viewer_count = len(self.viewer_sessions)
         self.runtime_state.viewer_count = viewer_count
-        if viewer_count == 0 and self._linger_handle is None:
+        if viewer_count == 0 and not self.program_director.is_channel_in_linger(self.channel_id):
             # Do NOT stop producer when 0 viewers; upstream stays connected for reconnect.
             if self._channel_state == "STOPPED":
                 return
@@ -1234,10 +1148,15 @@ class ChannelManager:
             channel_id=self.channel_id,
             configuration={},
             channel_config=self._get_channel_config(),
-            schedule_service=self.schedule_service,
+            execution_reader=self.execution_reader,
             clock=self.clock,
             evidence_endpoint=self._evidence_endpoint,
-            on_producer_failure=self._on_producer_session_end,
+            # Phase 8 Step 5: report producer session-end directly to PD;
+            # CM no longer owns recovery policy. The lambda captures the
+            # channel id once at producer-construction time.
+            on_producer_failure=lambda reason, _cid=self.channel_id: (
+                self.program_director.on_producer_failure(_cid, reason)
+            ),
         )
         # Wire HLS segmenter for BlockPlan timebase updates
         producer._hls_segmenter_ref = self._hls_segmenter
@@ -1284,5 +1203,3 @@ from .cm_helpers import _FeedState, _AsRunAnnotation, TracedSocket  # noqa: F401
 # INV-PLAYOUT-MODULE-EXTRACTION-001: BlockPlanProducer extracted to block_plan_producer.py.
 # Re-exported here for backward compatibility.
 from .block_plan_producer import BlockPlanProducer  # noqa: F401
-
-

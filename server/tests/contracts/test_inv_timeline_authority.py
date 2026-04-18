@@ -18,6 +18,7 @@ from datetime import date, datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
+from retrovue.runtime.clock import SystemClock
 
 try:
     from retrovue.runtime.dsl_schedule_service import DslScheduleService
@@ -530,6 +531,7 @@ class TestRuntimeTimelineReconcileAndRecovery:
             dsl_path="/dev/null",
             filler_path="/opt/retrovue/assets/filler.mp4",
             filler_duration_ms=3_650_000,
+            clock=SystemClock(),
             resolved_config=TEST_RESOLVED_CONFIG,
             channel_slug="test-chan",
         )
@@ -552,6 +554,7 @@ class TestRuntimeTimelineReconcileAndRecovery:
             dsl_path="/dev/null",
             filler_path="/opt/retrovue/assets/filler.mp4",
             filler_duration_ms=3_650_000,
+            clock=SystemClock(),
             resolved_config=TEST_RESOLVED_CONFIG,
             channel_slug="test-chan",
         )

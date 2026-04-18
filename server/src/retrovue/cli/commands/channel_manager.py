@@ -10,6 +10,7 @@ import logging
 import time
 import typer
 from pathlib import Path
+from retrovue.runtime.clock import SystemClock
 from retrovue.runtime.program_director import ProgramDirector
 from retrovue.runtime.providers import YamlChannelConfigProvider
 
@@ -66,6 +67,7 @@ def start(
         raise typer.Exit(1)
 
     program_director = ProgramDirector(
+        clock=SystemClock(),
         host="0.0.0.0",
         port=port,
         schedule_dir=Path(schedule_dir) if schedule_dir else None,
@@ -126,6 +128,7 @@ def start_channel_cmd(
         raise typer.Exit(1)
 
     program_director = ProgramDirector(
+        clock=SystemClock(),
         host="0.0.0.0",
         port=port,
         schedule_dir=Path(schedule_dir) if schedule_dir else None,

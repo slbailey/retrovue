@@ -234,10 +234,13 @@ def _start_director_with_deficit_source(
     )
 
     # Factory that creates ContentDeficitTsSource for the channel
+    from retrovue.runtime.clock import SystemClock
+    _resilience_clock = SystemClock()
     def channel_stream_factory(cid: str, path: str) -> ChannelStream:
         return ChannelStream(
             cid,
             ts_source_factory=lambda _=None: ContentDeficitTsSource(),
+            clock=_resilience_clock,
         )
 
     director._channel_stream_factory = channel_stream_factory

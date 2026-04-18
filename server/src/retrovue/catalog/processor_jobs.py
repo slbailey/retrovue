@@ -12,7 +12,7 @@ Set PROCESSOR_JOB_RETENTION_DAYS=0 to disable. processor_runs are cascade-delete
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..domain.entities import ProcessorJob
+from ..runtime.clock import AuthoritativeClock
 
 if TYPE_CHECKING:
     pass
@@ -74,7 +75,7 @@ def enqueue(
     return job
 
 
-def claim_next_job(db: Session) -> ProcessorJob | None:
+def claim_next_job(db: Session, *, clock: AuthoritativeClock) -> ProcessorJob | None:
     """
     Select one pending job (highest priority, then oldest), set status=running, started_at=now.
 
@@ -91,7 +92,7 @@ def claim_next_job(db: Session) -> ProcessorJob | None:
     if job is None:
         return None
     job.status = STATUS_RUNNING
-    job.started_at = datetime.now(UTC)
+    job.started_at = clock.now_utc()
     return job
 
 
@@ -99,6 +100,8 @@ def complete_job(
     db: Session,
     job_id: uuid.UUID,
     success: bool,
+    *,
+    clock: AuthoritativeClock,
     error_message: str | None = None,
 ) -> None:
     """Set status to completed or failed, set completed_at and optionally error_message."""
@@ -106,7 +109,7 @@ def complete_job(
     if job is None:
         return
     job.status = STATUS_COMPLETED if success else STATUS_FAILED
-    job.completed_at = datetime.now(UTC)
+    job.completed_at = clock.now_utc()
     job.error_message = error_message
 
 
@@ -124,6 +127,8 @@ def retry_job(db: Session, job_id: uuid.UUID) -> None:
 def purge_old_processor_jobs(
     db: Session,
     retention_days: int,
+    *,
+    clock: AuthoritativeClock,
 ) -> int:
     """
     Delete completed/failed processor jobs whose completed_at is older than retention_days.
@@ -134,9 +139,7 @@ def purge_old_processor_jobs(
     """
     if retention_days <= 0:
         return 0
-    from datetime import timedelta
-
-    cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+    cutoff = clock.now_utc() - timedelta(days=retention_days)
     # Delete in a subquery to avoid loading rows; CASCADE removes processor_runs
     deleted = (
         db.query(ProcessorJob)

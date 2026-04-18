@@ -5,8 +5,9 @@ Implements INV-TEST-BLOCK-* invariants.
 Provides the /test/block/{block_id}.ts endpoint.
 
 Architecture:
-  - SingleBlockTestScheduleService: serves exactly one block (re-timed to NOW),
-    followed by a short silence pad so BlockPlanProducer can seed 2 blocks.
+  - SingleBlockExecutionReader: serves exactly one execution block (re-timed to NOW),
+    followed by a short silence pad so the driver has a subsequent block to advance
+    into before lookahead_exhausted fires.
   - EphemeralTestSession: thin wrapper that owns BlockPlanProducer + ChannelStream
     for a single test request; fully torn down on disconnect.
 
@@ -23,6 +24,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from retrovue.runtime.clock import AuthoritativeClock
+
 logger = logging.getLogger(__name__)
 
 # ── Pad block constants ───────────────────────────────────────────────────────
@@ -31,15 +34,15 @@ logger = logging.getLogger(__name__)
 _PAD_DURATION_MS: int = 10_000   # 10 seconds
 
 
-# ── INV-TEST-BLOCK-001: ScheduleService contract for test sessions ─────────────
+# ── INV-TEST-BLOCK-001: execution reader for test sessions ────────────────────
 
-class SingleBlockTestScheduleService:
-    """ScheduleService that presents a single block starting at a given wall-clock time.
+class SingleBlockExecutionReader:
+    """Execution reader that presents a single block starting at a given wall-clock time.
 
     INV-TEST-BLOCK-001: Block timing is re-timed to start_utc_ms (now at session start).
     INV-TEST-BLOCK-002: Original segments are replayed verbatim (asset_uri, offsets).
-    INV-TEST-BLOCK-003: A trailing pad block is served so BlockPlanProducer can seed 2 blocks.
-    INV-TEST-BLOCK-004: get_block_at returns None past pad end, causing lookahead_exhausted.
+    INV-TEST-BLOCK-003: A trailing pad block is served so the driver has a next block to advance into.
+    INV-TEST-BLOCK-004: lookup returns None past pad end, causing lookahead_exhausted.
     """
 
     def __init__(
@@ -83,7 +86,7 @@ class SingleBlockTestScheduleService:
     def content_block(self) -> "ScheduledBlock":
         return self._content_block
 
-    def get_block_at(self, channel_id: str, utc_ms: int) -> "ScheduledBlock | None":
+    def _lookup_execution_block(self, utc_ms: int) -> "ScheduledBlock | None":
         """Return content block if utc_ms is within content range, pad block if in pad range."""
         cb = self._content_block
         if cb.start_utc_ms <= utc_ms < cb.end_utc_ms:
@@ -93,28 +96,39 @@ class SingleBlockTestScheduleService:
         # Past end → None → triggers lookahead_exhausted in BlockPlanProducer
         return None
 
-    def get_playout_plan_now(self, channel_id: str, at_station_time: datetime) -> list[dict[str, Any]]:
-        """Not used by BlockPlanProducer; required by ScheduleService protocol."""
-        return []
+    def get_current_execution_block(self, channel_id: str, now_ms: int) -> "ScheduledBlock | None":
+        return self._lookup_execution_block(now_ms)
 
+    def get_next_execution_block(self, channel_id: str, after_utc_ms: int) -> "ScheduledBlock | None":
+        return self._lookup_execution_block(after_utc_ms)
+
+    def get_execution_depth_ms(self, channel_id: str, now_ms: int) -> int:
+        return max(0, self._pad_end_utc_ms - now_ms)
+
+    def get_playlist_event_by_block_id(self, channel_id: str, block_id: str) -> "ScheduledBlock | None":
+        if self._content_block.block_id == block_id:
+            return self._content_block
+        if self._pad_block.block_id == block_id:
+            return self._pad_block
+        return None
 
 # ── EphemeralTestSession ───────────────────────────────────────────────────────
 
 class EphemeralTestSession:
     """Owns one BlockPlanProducer + ChannelStream for a single test request.
 
-    INV-TEST-BLOCK-005: Session uses the same BlockPlanProducer, PlayoutSession, AIR binary.
+    INV-TEST-BLOCK-005: Session uses the same BlockPlanProducer and AIR binary as production.
     INV-TEST-BLOCK-006: Session is fully torn down on disconnect or error.
     INV-TEST-BLOCK-007: Session ID is unique per request; no state shared between requests.
     """
 
-    def __init__(self, block_id: str, session_id: str):
+    def __init__(self, block_id: str, session_id: str, clock: AuthoritativeClock):
         self.block_id = block_id
         self.session_id = session_id
         self._channel_id = f"test__{session_id[:8]}"
         self._producer: Any = None
         self._fanout: Any = None
-        self._clock: Any = None
+        self._clock = clock
         self._started = False
         self._lock = threading.Lock()
 
@@ -123,16 +137,15 @@ class EphemeralTestSession:
         Start the ephemeral test session.
 
         1. Looks up block from DB (PlaylistEvent)
-        2. Creates SingleBlockTestScheduleService
+        2. Creates SingleBlockExecutionReader
         3. Creates BlockPlanProducer
-        4. Starts it (seeds 2 blocks into AIR)
+        4. Starts it (launch_air + per-segment LoadPreview/SwitchToLive driver)
         5. Creates ChannelStream
 
         Returns the channel_id for stream subscription.
 
         Raises RuntimeError on failure.
         """
-        from retrovue.runtime.clock import MasterClock
         from retrovue.runtime.channel_manager import BlockPlanProducer
         from retrovue.runtime.channel_stream import ChannelStream
         from retrovue.runtime.config import ChannelConfig, ProgramFormat
@@ -146,31 +159,28 @@ class EphemeralTestSession:
             if block is None:
                 raise RuntimeError(f"Block not found: {self.block_id}")
 
-            # 2. Build schedule service re-timed to now
-            now_utc_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-            schedule_svc = SingleBlockTestScheduleService(block, now_utc_ms)
+            # 2. Build execution reader re-timed to now
+            now_utc_ms = self._clock.now_utc_ms()
+            execution_reader = SingleBlockExecutionReader(block, now_utc_ms)
 
-            # 3. Build clock
-            self._clock = MasterClock()
-
-            # 4. Build producer
+            # 3. Build producer
             self._producer = BlockPlanProducer(
                 channel_id=self._channel_id,
+                clock=self._clock,
                 configuration={},
                 channel_config=channel_config,
-                schedule_service=schedule_svc,
-                clock=self._clock,
+                execution_reader=execution_reader,
                 evidence_endpoint="",
                 on_producer_failure=self._on_failure,
             )
 
-            # 5. Start producer
-            start_time = datetime.now(timezone.utc)
+            # 4. Start producer
+            start_time = self._clock.now_utc()
             ok = self._producer.start(start_time, jip_offset_ms=0)
             if not ok:
                 raise RuntimeError(f"BlockPlanProducer.start() failed for block {self.block_id}")
 
-            # 6. Create ChannelStream backed by producer's reader_socket_queue
+            # 5. Create ChannelStream backed by producer's reader_socket_queue
             channel_id = self._channel_id
             producer_ref = self._producer
 
@@ -188,6 +198,7 @@ class EphemeralTestSession:
             self._fanout = ChannelStream(
                 channel_id=channel_id,
                 ts_source_factory=ts_source_factory,
+                clock=self._clock,
             )
 
             self._started = True

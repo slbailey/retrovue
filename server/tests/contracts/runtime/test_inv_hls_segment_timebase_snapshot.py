@@ -117,9 +117,11 @@ def ring() -> SegmentRing:
 
 @pytest.fixture
 def segmenter(ring: SegmentRing) -> HlsSegmenter:
+    from retrovue.runtime.clock import SystemClock
     return HlsSegmenter(
         channel_id="test-ch",
         segment_ring=ring,
+        clock=SystemClock(),
         target_duration_ms=6000,
         max_gop_ms=1000,
         starting_index=0,

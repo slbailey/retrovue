@@ -18,23 +18,29 @@
 
 #include "retrovue/buffer/FrameRingBuffer.h"
 #include "retrovue/playout_sinks/mpegts/EncoderPipeline.hpp"
+#include "retrovue/util/Logger.hpp"
 #include "retrovue/playout_sinks/mpegts/MuxInterleaver.hpp"
 #include "retrovue/telemetry/MetricsExporter.h"
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
 #include "retrovue/blockplan/RationalFps.hpp"
 
+// HARDEN-009 / INV-P10-PCR-PACED-MUX: Production builds always pace; env var honored in debug only.
 static bool NoPcrPacing() {
+#ifdef NDEBUG
+  return false;  // Production: pacing always enabled, env var ignored.
+#else
   static bool checked = false;
   static bool value = false;
   if (!checked) {
     const char* env = std::getenv("RETROVUE_NO_PCR_PACING");
     value = (env && env[0] == '1');
     if (value) {
-      std::cout << "[DBG-PACING] RETROVUE_NO_PCR_PACING=1: pacing DISABLED" << std::endl;
+      std::cerr << "[MpegTSOutputSink] RETROVUE_NO_PCR_PACING is set (debug build only)" << std::endl;
     }
     checked = true;
   }
   return value;
+#endif
 }
 
 
@@ -516,7 +522,28 @@ void MpegTSOutputSink::MuxLoop() {
   std::cout << "[MpegTSOutputSink] INV-TICK-GUARANTEED-OUTPUT: Unconditional emission enabled" << std::endl;
   std::cout << "[MpegTSOutputSink] INV-P10-PCR-PACED-MUX: Time-driven emission enabled" << std::endl;
 
-  while (!stop_requested_.load(std::memory_order_acquire) && fd_ >= 0) {
+  // HARDEN-006 / INV-SINK-NO-IMPLICIT-EOF: Loop exits ONLY on explicit stop.
+  // fd_ < 0 no longer exits — it triggers recovery (sleep + continue).
+  while (!stop_requested_.load(std::memory_order_acquire)) {
+
+    // HARDEN-006: If fd became invalid without explicit stop, enter recovery.
+    // Sleep briefly and continue — do NOT exit. The transport is dead but the
+    // loop must stay alive so stop_requested_ is the sole exit trigger.
+    if (fd_ < 0) {
+      uint64_t prev = implicit_eof_recovery_count_.fetch_add(1, std::memory_order_relaxed);
+      if (prev == 0) {
+        // Log structured violation on first occurrence only.
+        retrovue::util::Logger::ErrorStructured(
+            "[MpegTSOutputSink] INV-SINK-NO-IMPLICIT-EOF: fd invalid, entering recovery",
+            "INV-SINK-NO-IMPLICIT-EOF-VIOLATED",
+            {{"reason", "implicit_eof_recovered"},
+             {"fd", std::to_string(fd_)},
+             {"recovery_count", std::to_string(prev + 1)}});
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      continue;
+    }
+
     // =========================================================================
     // INV-BOOT-FAST-EMIT: Check and update boot window state
     // =========================================================================
@@ -1323,42 +1350,18 @@ void MpegTSOutputSink::MuxLoop() {
   // =========================================================================
   // INV-SINK-NO-IMPLICIT-EOF: Exit reason logging
   // =========================================================================
-  // Determine why MuxLoop is exiting and log appropriately.
-  // Allowed exits: stop_requested_ set (explicit Stop/Detach)
-  // Violation: fd_ < 0 without stop_requested_ (implicit termination)
+  // HARDEN-006: The loop now exits ONLY on stop_requested_. The fd_invalid
+  // path is handled by recovery (sleep + continue) inside the loop. If we
+  // reach here, it must be an explicit stop. Log recovery count if any.
   // =========================================================================
-  const bool explicit_stop = stop_requested_.load(std::memory_order_acquire);
-  const bool fd_invalid = (fd_ < 0);
-
-  if (explicit_stop) {
-    std::cout << "[MpegTSOutputSink] MuxLoop exiting (explicit stop), video_emitted=" << video_emit_count
+  {
+    uint64_t recoveries = implicit_eof_recovery_count_.load(std::memory_order_relaxed);
+    std::cout << "[MpegTSOutputSink] MuxLoop exiting (explicit stop)"
+              << " video_emitted=" << video_emit_count
               << " audio_emitted=" << audio_emit_count
               << " fallback_frames=" << fallback_frame_count
-              << " null_packets=" << null_packets_emitted_.load(std::memory_order_relaxed) << std::endl;
-  } else if (fd_invalid) {
-    {
-      ShutdownContext sctx;
-      sctx.channel_id = channel_id_;
-      sctx.details = "implicit_eof_fd_invalid";
-      LogAirShutdown(ShutdownReason::kOutputWriteFailure, sctx);
-    }
-    std::cerr << "[MpegTSOutputSink] INV-SINK-NO-IMPLICIT-EOF VIOLATION: "
-              << "mux loop exiting without explicit stop (reason=fd_invalid), "
-              << "video_emitted=" << video_emit_count
-              << " audio_emitted=" << audio_emit_count
-              << " fallback_frames=" << fallback_frame_count << std::endl;
-  } else {
-    {
-      ShutdownContext sctx;
-      sctx.channel_id = channel_id_;
-      sctx.details = "implicit_eof_unknown";
-      LogAirShutdown(ShutdownReason::kOutputWriteFailure, sctx);
-    }
-    std::cerr << "[MpegTSOutputSink] INV-SINK-NO-IMPLICIT-EOF VIOLATION: "
-              << "mux loop exiting without explicit stop (reason=unknown), "
-              << "video_emitted=" << video_emit_count
-              << " audio_emitted=" << audio_emit_count
-              << " fallback_frames=" << fallback_frame_count << std::endl;
+              << " null_packets=" << null_packets_emitted_.load(std::memory_order_relaxed)
+              << " implicit_eof_recoveries=" << recoveries << std::endl;
   }
 }
 

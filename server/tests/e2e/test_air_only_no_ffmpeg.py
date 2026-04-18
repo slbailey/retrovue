@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from retrovue.runtime.clock import SystemClock
 
 pytestmark = pytest.mark.skip(reason="E2E test requires Air binary and runtime environment")
 
@@ -30,6 +31,7 @@ def test_launch_air_raises_when_air_not_found():
                     "asset_path": "/nonexistent/sample.mp4",
                     "start_pts": 0,
                 },
+                clock=SystemClock(),
             )
         assert "Air playout engine unavailable" in str(exc_info.value)
         assert "retrovue_air" in str(exc_info.value) or "RETROVUE_AIR_EXE" in str(exc_info.value)
@@ -127,6 +129,7 @@ def test_ffmpeg_never_launched_in_playout_path():
                     "asset_path": str(air_bin.parent / "nonexistent.mp4"),
                     "start_pts": 0,
                 },
+                clock=SystemClock(),
             )
         except Exception:
             pass

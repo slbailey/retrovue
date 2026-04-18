@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..adapters.importers.base import DiscoveredItem
 from ..adapters.registry import ENRICHERS
+from ..runtime.clock import SystemClock
 from .asset_enrich import enrich_asset
 from .asset_path_resolver import AssetPathResolver
 from ..domain.entities import Asset, Container, Enricher
@@ -354,6 +355,7 @@ def apply_enrichers_to_collection(
                 db,
                 asset,
                 pipeline,
+                now_utc=SystemClock().now_utc(),
                 pipeline_checksum=pipeline_checksum,
             )
 
@@ -372,4 +374,3 @@ def apply_enrichers_to_collection(
         "pipeline_checksum": pipeline_checksum,
         "stats": stats,
     }
-

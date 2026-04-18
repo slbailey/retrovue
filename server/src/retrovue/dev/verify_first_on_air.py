@@ -70,6 +70,7 @@ def run_server():
     """
     import uvicorn
     from retrovue.runtime.program_director import ProgramDirector
+    from retrovue.runtime.clock import SystemClock
     from retrovue.runtime.config import (
         ChannelConfig,
         ProgramFormat,
@@ -106,6 +107,7 @@ def run_server():
     # Create ProgramDirector in embedded mode with mock schedule
     # This uses the internal ChannelManager registry
     director = ProgramDirector(
+        clock=SystemClock(),
         channel_manager_provider=None,  # Embedded mode
         host=SERVER_HOST,
         port=SERVER_PORT,
@@ -118,27 +120,47 @@ def run_server():
 
     original_get_or_create = director._get_or_create_manager
 
-    # Schedule service returning two assets for mid-asset seek verification:
+    # Execution reader returning two assets for mid-asset seek verification:
     #   Block 0 (even): SampleA.mp4 from the start (offset=0)
     #   Block 1 (odd):  SampleB.mp4 starting 12 seconds in (offset=12000)
-    class SimpleScheduleService:
-        def get_playout_plan_now(self, channel_id: str, at_station_time):
-            return [
-                {
-                    "asset_path": str(REPO_ROOT / "assets" / "SampleA.mp4"),
-                    "asset_start_offset_ms": 0,
-                    "segment_type": "content",
-                },
-                {
-                    "asset_path": str(REPO_ROOT / "assets" / "SampleB.mp4"),
-                    "asset_start_offset_ms": 12000,
-                    "segment_type": "content",
-                },
-            ]
+    class SimpleExecutionReader:
+        _BLOCK_MS = 5_000
+
+        def _block_for(self, utc_ms: int):
+            from retrovue.runtime.schedule_types import ScheduledBlock, ScheduledSegment
+
+            block_index = utc_ms // self._BLOCK_MS
+            block_start_ms = block_index * self._BLOCK_MS
+            block_end_ms = block_start_ms + self._BLOCK_MS
+            use_a = (block_index % 2) == 0
+            asset_uri = str(TEST_ASSET_A if use_a else TEST_ASSET_B)
+            asset_offset_ms = 0 if use_a else 12_000
+            return ScheduledBlock(
+                block_id=f"verify-first-on-air-{block_index}",
+                start_utc_ms=block_start_ms,
+                end_utc_ms=block_end_ms,
+                segments=(
+                    ScheduledSegment(
+                        segment_type="content",
+                        asset_uri=asset_uri,
+                        asset_start_offset_ms=asset_offset_ms,
+                        segment_duration_ms=self._BLOCK_MS,
+                    ),
+                ),
+            )
+
         def load_schedule(self, channel_id: str):
             return True, None
+        def get_current_execution_block(self, channel_id: str, now_ms: int):
+            return self._block_for(now_ms)
+        def get_next_execution_block(self, channel_id: str, after_utc_ms: int):
+            return self._block_for(after_utc_ms)
+        def get_execution_depth_ms(self, channel_id: str, now_ms: int) -> int:
+            return self._BLOCK_MS * 2
+        def get_playlist_event_by_block_id(self, channel_id: str, block_id: str):
+            return None
 
-    simple_schedule = SimpleScheduleService()
+    simple_schedule = SimpleExecutionReader()
 
     def get_or_create_with_blockplan(channel_id: str):
         manager = original_get_or_create(channel_id)
@@ -146,8 +168,8 @@ def run_server():
         if hasattr(manager, 'set_blockplan_mode') and not getattr(manager, '_blockplan_mode', False):
             manager.set_blockplan_mode(True)
 
-            # Override schedule service to use SampleA.mp4
-            manager.schedule_service = simple_schedule
+            # Override execution reader to use SampleA.mp4
+            manager.execution_reader = simple_schedule
 
             # Also need to override _build_producer_for_mode because ProgramDirector
             # overwrote it with a factory that uses BlockPlanProducer
@@ -157,7 +179,7 @@ def run_server():
                     channel_id=channel_id,
                     configuration={"block_duration_ms": 5000},  # 5 second blocks
                     channel_config=ch_config,
-                    schedule_service=simple_schedule,
+                    execution_reader=simple_schedule,
                     clock=mgr.clock,
                 )
 

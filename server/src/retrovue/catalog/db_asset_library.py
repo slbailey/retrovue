@@ -8,7 +8,8 @@ State (what has aired) lives in the database.
 
 Usage:
     from retrovue.catalog.db_asset_library import DatabaseAssetLibrary
-    lib = DatabaseAssetLibrary(db, channel_slug="retro-prime")
+    from retrovue.runtime.clock import SystemClock
+    lib = DatabaseAssetLibrary(db, clock=SystemClock(), channel_slug="retro-prime")
     fillers = lib.get_filler_assets(max_duration_ms=120000, count=10)
 """
 
@@ -25,6 +26,8 @@ from uuid import UUID
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
+
+from ..runtime.clock import AuthoritativeClock
 
 logger = logging.getLogger(__name__)
 
@@ -232,11 +235,14 @@ class DatabaseAssetLibrary:
     def __init__(
         self,
         db: Session,
+        *,
+        clock: AuthoritativeClock,
         channel_slug: str | None = None,
         interstitial_collection_name: str = "Interstitials",
         config_dir: Path | str | None = None,
     ) -> None:
         self._db = db
+        self._clock = clock
         self._channel_slug = channel_slug
         self._interstitial_collection_name = interstitial_collection_name
         self._config_dir = Path(config_dir) if config_dir else CHANNEL_CONFIG_DIR
@@ -288,7 +294,7 @@ class DatabaseAssetLibrary:
         if max_cooldown <= 0:
             return set(), set()
 
-        cutoff = datetime.now(timezone.utc) - timedelta(seconds=max_cooldown)
+        cutoff = self._clock.now_utc() - timedelta(seconds=max_cooldown)
 
         recent_plays = self._db.query(
             TrafficPlayLog.asset_uri,
@@ -302,7 +308,7 @@ class DatabaseAssetLibrary:
 
         cooled_uris: set[str] = set()
         cooled_groups: set[str] = set()
-        now = datetime.now(timezone.utc)
+        now = self._clock.now_utc()
         type_cooldowns = policy.get("type_cooldowns_seconds") or {}
         default_cd = policy.get("default_cooldown_seconds", 3600)
 
@@ -328,7 +334,7 @@ class DatabaseAssetLibrary:
 
         from retrovue.domain.entities import TrafficPlayLog
 
-        today_start = datetime.now(timezone.utc).replace(
+        today_start = self._clock.now_utc().replace(
             hour=0, minute=0, second=0, microsecond=0
         )
 
@@ -505,7 +511,7 @@ class DatabaseAssetLibrary:
             asset_uuid=UUID(asset_uuid) if isinstance(asset_uuid, str) else asset_uuid,
             asset_uri=asset_uri,
             asset_type=asset_type,
-            played_at=played_at or datetime.now(timezone.utc),
+            played_at=played_at or self._clock.now_utc(),
             break_index=break_index,
             block_id=block_id,
             duration_ms=duration_ms,

@@ -14,6 +14,8 @@ code path.
 
 from __future__ import annotations
 
+from retrovue.runtime.clock import SystemClock
+
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -140,7 +142,7 @@ class TestAssetReachesReadyWhenRequirementsMet:
         job = _FakeJob(target_id=asset.uuid, target_type="ASSET")
 
         try:
-            execute_job(db, job)
+            execute_job(db, job, clock=SystemClock())
         except Exception:
             pass  # enricher may fail, but state should still transition
 
@@ -179,7 +181,7 @@ class TestAssetTransitionsOnProcessorFailure:
 
         with patch.object(InterstitialTypeEnricher, "enrich", _raise_on_enrich):
             with pytest.raises(RuntimeError, match="simulated processor crash"):
-                execute_job(db, job)
+                execute_job(db, job, clock=SystemClock())
 
         # INVARIANT: state must NOT be "enriching" after exception
         assert asset.state != "enriching", (
@@ -204,7 +206,7 @@ class TestAssetTransitionsOnProcessorFailure:
 
         with patch.object(InterstitialTypeEnricher, "enrich", _raise_on_enrich):
             with pytest.raises(RuntimeError):
-                execute_job(db, job)
+                execute_job(db, job, clock=SystemClock())
 
         assert asset.state == "ready", (
             f"Asset with duration_ms=5000 should reach 'ready' even after "
@@ -229,7 +231,7 @@ class TestAssetDoesNotRemainEnrichingAfterCompletion:
         job = _FakeJob(target_id=asset.uuid, target_type="ASSET")
 
         try:
-            execute_job(db, job)
+            execute_job(db, job, clock=SystemClock())
         except Exception:
             pass
 
@@ -247,7 +249,7 @@ class TestAssetDoesNotRemainEnrichingAfterCompletion:
         job = _FakeJob(target_id=asset.uuid, target_type="ASSET")
 
         try:
-            execute_job(db, job)
+            execute_job(db, job, clock=SystemClock())
         except Exception:
             pass
 
@@ -271,7 +273,7 @@ class TestMissingDataPreventsReadyNotStuck:
         job = _FakeJob(target_id=asset.uuid, target_type="ASSET")
 
         try:
-            execute_job(db, job)
+            execute_job(db, job, clock=SystemClock())
         except Exception:
             pass
 
@@ -297,7 +299,7 @@ class TestStateTransitionIdempotent:
         job = _FakeJob(target_id=asset.uuid, target_type="ASSET")
 
         try:
-            execute_job(db, job)
+            execute_job(db, job, clock=SystemClock())
         except Exception:
             pass
 
@@ -312,7 +314,7 @@ class TestStateTransitionIdempotent:
         job = _FakeJob(target_id=asset.uuid, target_type="ASSET")
 
         try:
-            execute_job(db, job)
+            execute_job(db, job, clock=SystemClock())
         except Exception:
             pass
 

@@ -72,10 +72,10 @@ def reconcile_channels(
             text("DELETE FROM traffic_play_log WHERE channel_slug = ANY(:slugs)"),
             {"slugs": slug_list},
         )
-        db.execute(
-            text("DELETE FROM playlist_events WHERE channel_slug = ANY(:slugs)"),
-            {"slugs": slug_list},
-        )
+        # Phase 9 Step 6 Stage B2: playlist_events is owned by the daemon
+        # module. Route the delete through its public API; no behavior change.
+        from retrovue.runtime.playlist_builder_daemon import purge_for_channels
+        purge_for_channels(db, slug_list)
 
         # FK CASCADE handles programs, schedule_plans, zones,
         # schedule_plan_labels, schedule_revisions, schedule_items,

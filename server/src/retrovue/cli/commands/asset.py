@@ -14,6 +14,7 @@ import typer
 
 from ...domain.entities import Asset, AssetTag
 from ...domain.tag_normalization import canonicalize_tag, normalize_tag_set
+from ...runtime.clock import SystemClock
 from ...infra.uow import session
 from ...usecases import asset_attention as _uc_asset_attention
 from ...usecases import asset_inspect as _uc_asset_inspect
@@ -189,6 +190,7 @@ def resolve_asset(
             result = _uc_asset_update.update_asset_review_status(
                 db,
                 asset_uuid=asset_uuid,
+                now_utc=SystemClock().now_utc(),
                 approved=True if approve else None,
                 state=new_state,
             )
@@ -303,11 +305,13 @@ def update_asset(
             changed = old_tag_set != new_tag_set
 
             if not dry_run and changed:
-                # D-3: single Unit of Work — delete then insert
-                db.query(AssetTag).filter_by(asset_uuid=asset.uuid).delete()
-                for tag_val in new_tag_set:
-                    canonical = canonicalize_tag(tag_val)
-                    db.add(AssetTag(asset_uuid=asset.uuid, tag=canonical, source="operator"))
+                # Phase 9 Step 5: route writes through AssetTagService.
+                # set_tags encapsulates the delete-then-insert unit of work
+                # (D-3) that the CLI previously inlined.
+                from retrovue.catalog import asset_tag_service
+                asset_tag_service.set_tags(
+                    db, asset.uuid, new_tag_set, source="operator"
+                )
                 db.commit()
 
             status = "changed" if changed else "no_change"

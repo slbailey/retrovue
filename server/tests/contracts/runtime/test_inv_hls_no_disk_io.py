@@ -287,10 +287,12 @@ def test_live_segment_data_is_immutable():
 @pytest.mark.contract
 def test_hls_segmenter_produces_bytes_not_paths():
     """INV-HLS-NO-DISK-IO-001: Segments produced by HlsSegmenter have bytes data."""
+    from retrovue.runtime.clock import SystemClock
     ring = SegmentRing(capacity=5, manifest_window=3)
     seg = HlsSegmenter(
         channel_id="ch-disk-io-test",
         segment_ring=ring,
+        clock=SystemClock(),
         target_duration_ms=2000,
     )
     # Feed two keyframes to flush a segment

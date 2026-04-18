@@ -16,14 +16,14 @@ from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 
 from retrovue.epg.read_path import build_epg_payload, resolve_epg_broadcast_day
-from retrovue.runtime.clock import MasterClock
+from retrovue.runtime.clock import SystemClock
 from retrovue.runtime.catalog_resolver import CatalogAssetResolver
 from retrovue.infra.uow import session
 
 router = APIRouter(prefix="/api", tags=["epg"])
 
 YAML_CHANNELS_DIR = __import__("pathlib").Path("/opt/retrovue/config/channels")
-_clock = MasterClock()
+_clock = SystemClock()
 
 
 def _load_channels() -> list[dict[str, Any]]:

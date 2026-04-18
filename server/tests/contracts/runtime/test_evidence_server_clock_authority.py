@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 import pytest
 
-from retrovue.runtime.clock import ControllableMasterClock
+from retrovue.runtime.clock import ControllableClock
 from retrovue.runtime.evidence_server import AsRunWriter, DurableAckStore
 
 
@@ -27,7 +27,7 @@ class TestDurableAckStoreClockAuthority:
     def test_persist_uses_injected_clock(self, tmp_path: Path) -> None:
         """Ack file updated_utc must reflect injected clock, not wall clock."""
         # Controlled clock pinned to a known time far from wall clock.
-        clock = ControllableMasterClock(
+        clock = ControllableClock(
             epoch=datetime(2000, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
         )
         store = DurableAckStore(ack_dir=str(tmp_path), clock=clock)
@@ -43,7 +43,7 @@ class TestDurableAckStoreClockAuthority:
 
     def test_persist_does_not_call_datetime_now(self, tmp_path: Path) -> None:
         """datetime.now must not be called from _persist_to_disk."""
-        clock = ControllableMasterClock(
+        clock = ControllableClock(
             epoch=datetime(2000, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
         )
         store = DurableAckStore(ack_dir=str(tmp_path), clock=clock)
@@ -62,7 +62,7 @@ class TestAsRunWriterClockAuthority:
 
     def test_init_uses_injected_clock_for_date(self, tmp_path: Path) -> None:
         """AsRunWriter must derive 'today' from the injected clock."""
-        clock = ControllableMasterClock(
+        clock = ControllableClock(
             epoch=datetime(2000, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
         )
         writer = AsRunWriter("ch1", asrun_dir=str(tmp_path), clock=clock)
@@ -79,7 +79,7 @@ class TestAsRunWriterClockAuthority:
 
     def test_header_uses_injected_clock(self, tmp_path: Path) -> None:
         """AsRunWriter header OPENED_UTC must reflect the injected clock."""
-        clock = ControllableMasterClock(
+        clock = ControllableClock(
             epoch=datetime(2000, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
         )
         writer = AsRunWriter("ch1", asrun_dir=str(tmp_path), clock=clock)

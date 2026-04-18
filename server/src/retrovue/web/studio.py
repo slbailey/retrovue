@@ -150,25 +150,33 @@ def del_tag(body: DelTag):
 
 @router.post("/api/assets/tags")
 def apply_tags(body: ApplyTags):
+    """Phase 9 Step 5: writes route through AssetTagService."""
+    from ..catalog import asset_tag_service
+    from ..infra.uow import session
     canonical = canonicalize_tag(f"{body.category}:{body.tag}")
-    with _pg() as conn:
-        with conn.cursor() as cur:
-            for aid in body.asset_ids:
-                cur.execute("INSERT INTO asset_tags(asset_uuid,tag,source) VALUES(%s,%s,'operator') ON CONFLICT DO NOTHING", (aid, canonical))
-        conn.commit()
+    with session() as db:
+        for aid in body.asset_ids:
+            asset_tag_service.add_tag(db, aid, canonical, source="operator")
     return jr({"ok": True, "applied": len(body.asset_ids)})
 
 @router.delete("/api/assets/tags")
 def remove_tags(body: ApplyTags):
+    """Phase 9 Step 5: writes route through AssetTagService.
+
+    Backward-compatible tag matching preserved: we attempt removal
+    against the canonical form, the legacy COLON form, and the raw
+    lowercase form. Each attempt is idempotent in the service; a
+    missing tag for a given asset is not an error.
+    """
+    from ..catalog import asset_tag_service
+    from ..infra.uow import session
     canonical = canonicalize_tag(f"{body.category}:{body.tag}")
-    # Backward-compatible: match canonical, legacy colon, and raw forms
     legacy_str = f"{body.category.upper()}:{body.tag.lower()}"
     raw_str = body.tag.lower()
-    with _pg() as conn:
-        with conn.cursor() as cur:
-            for aid in body.asset_ids:
-                cur.execute("DELETE FROM asset_tags WHERE asset_uuid=%s AND tag = ANY(%s)", (aid, [canonical, legacy_str, raw_str]))
-        conn.commit()
+    with session() as db:
+        for aid in body.asset_ids:
+            for form in (canonical, legacy_str, raw_str):
+                asset_tag_service.remove_tag(db, aid, form)
     return jr({"ok": True})
 
 
@@ -227,34 +235,40 @@ def _build_tag_summary(pg_conn, sqlite_path: Optional[str] = None) -> dict:
     return {"namespaces": namespaces, "orphaned": orphaned}
 
 
-def _execute_tag_rename(pg_conn, old_canonical: str, new_canonical: str, sqlite_path: Optional[str] = None) -> dict:
-    """Rename a tag across all assets in a single transaction. INV-TAG-RENAME-ATOMIC-001."""
-    with pg_conn.cursor() as cur:
-        # Assets that already have the new tag — these need dedup (delete old row)
-        cur.execute(
-            "SELECT asset_uuid FROM asset_tags WHERE tag = %s AND asset_uuid IN "
-            "(SELECT asset_uuid FROM asset_tags WHERE tag = %s)",
-            (old_canonical, new_canonical),
+def _assets_with_both_tags(db, a_tag: str, b_tag: str) -> list:
+    """Return asset_uuids that currently have both tags. Used by the
+    rename/merge flows to identify rows that would conflict with a
+    global rename and must be deleted first.
+    """
+    from ..domain.entities import AssetTag
+    sub = db.query(AssetTag.asset_uuid).filter(AssetTag.tag == b_tag).subquery()
+    rows = (
+        db.query(AssetTag.asset_uuid)
+        .filter(AssetTag.tag == a_tag, AssetTag.asset_uuid.in_(sub.select()))
+        .all()
+    )
+    return [r[0] for r in rows]
+
+
+def _execute_tag_rename(old_canonical: str, new_canonical: str, sqlite_path: Optional[str] = None) -> dict:
+    """Rename a tag across all assets in a single transaction. INV-TAG-RENAME-ATOMIC-001.
+
+    Phase 9 Step 5: all ``asset_tags`` mutations route through
+    AssetTagService.
+    """
+    from ..catalog import asset_tag_service
+    from ..infra.uow import session
+
+    with session() as db:
+        dedup_uuids = _assets_with_both_tags(db, old_canonical, new_canonical)
+        deduped = (
+            asset_tag_service.remove_tag_for_assets(db, old_canonical, dedup_uuids)
+            if dedup_uuids
+            else 0
         )
-        dedup_uuids = {r[0] for r in cur.fetchall()}
+        updated = asset_tag_service.rename_tag_globally(db, old_canonical, new_canonical)
 
-        # Delete old tag for assets that already have new tag
-        if dedup_uuids:
-            cur.execute(
-                "DELETE FROM asset_tags WHERE tag = %s AND asset_uuid = ANY(%s)",
-                (old_canonical, list(dedup_uuids)),
-            )
-
-        # Update remaining old→new
-        cur.execute(
-            "UPDATE asset_tags SET tag = %s WHERE tag = %s",
-            (new_canonical, old_canonical),
-        )
-        updated = cur.rowcount
-
-    pg_conn.commit()
-
-    # Update SQLite palette
+    # Update SQLite palette (separate DB; unchanged)
     db_path = sqlite_path or SQLITE
     if os.path.exists(db_path):
         old_ns, old_val = (old_canonical.split(".", 1) + [""])[:2] if "." in old_canonical else ("tag", old_canonical)
@@ -265,37 +279,28 @@ def _execute_tag_rename(pg_conn, old_canonical: str, new_canonical: str, sqlite_
         c.commit()
         c.close()
 
-    return {"ok": True, "affected_assets": updated + len(dedup_uuids), "deduped": len(dedup_uuids)}
+    return {"ok": True, "affected_assets": updated + deduped, "deduped": deduped}
 
 
-def _execute_tag_merge(pg_conn, source_canonical: str, target_canonical: str, sqlite_path: Optional[str] = None) -> dict:
-    """Merge source tag into target tag. INV-TAG-RENAME-ATOMIC-001."""
-    with pg_conn.cursor() as cur:
-        # Find assets that have both source and target
-        cur.execute(
-            "SELECT asset_uuid FROM asset_tags WHERE tag = %s AND asset_uuid IN "
-            "(SELECT asset_uuid FROM asset_tags WHERE tag = %s)",
-            (source_canonical, target_canonical),
+def _execute_tag_merge(source_canonical: str, target_canonical: str, sqlite_path: Optional[str] = None) -> dict:
+    """Merge source tag into target tag. INV-TAG-RENAME-ATOMIC-001.
+
+    Phase 9 Step 5: all ``asset_tags`` mutations route through
+    AssetTagService.
+    """
+    from ..catalog import asset_tag_service
+    from ..infra.uow import session
+
+    with session() as db:
+        overlap_uuids = _assets_with_both_tags(db, source_canonical, target_canonical)
+        already_had_target = (
+            asset_tag_service.remove_tag_for_assets(db, source_canonical, overlap_uuids)
+            if overlap_uuids
+            else 0
         )
-        overlap_uuids = {r[0] for r in cur.fetchall()}
+        moved = asset_tag_service.rename_tag_globally(db, source_canonical, target_canonical)
 
-        # Delete source tag for assets that already have target
-        if overlap_uuids:
-            cur.execute(
-                "DELETE FROM asset_tags WHERE tag = %s AND asset_uuid = ANY(%s)",
-                (source_canonical, list(overlap_uuids)),
-            )
-
-        # Update remaining source→target
-        cur.execute(
-            "UPDATE asset_tags SET tag = %s WHERE tag = %s",
-            (target_canonical, source_canonical),
-        )
-        moved = cur.rowcount
-
-    pg_conn.commit()
-
-    # Remove source from SQLite palette
+    # Remove source from SQLite palette (separate DB; unchanged)
     db_path = sqlite_path or SQLITE
     if os.path.exists(db_path):
         src_ns, src_val = (source_canonical.split(".", 1) + [""])[:2] if "." in source_canonical else ("tag", source_canonical)
@@ -304,15 +309,19 @@ def _execute_tag_merge(pg_conn, source_canonical: str, target_canonical: str, sq
         c.commit()
         c.close()
 
-    return {"ok": True, "affected_assets": moved + len(overlap_uuids), "already_had_target": len(overlap_uuids)}
+    return {"ok": True, "affected_assets": moved + already_had_target, "already_had_target": already_had_target}
 
 
-def _execute_tag_bulk_remove(pg_conn, canonical: str) -> dict:
-    """Delete a tag from all assets in a single transaction."""
-    with pg_conn.cursor() as cur:
-        cur.execute("DELETE FROM asset_tags WHERE tag = %s", (canonical,))
-        affected = cur.rowcount
-    pg_conn.commit()
+def _execute_tag_bulk_remove(canonical: str) -> dict:
+    """Delete a tag from all assets.
+
+    Phase 9 Step 5: routes through ``AssetTagService.delete_tag_globally``.
+    """
+    from ..catalog import asset_tag_service
+    from ..infra.uow import session
+
+    with session() as db:
+        affected = asset_tag_service.delete_tag_globally(db, canonical)
     return {"ok": True, "affected_assets": affected}
 
 
@@ -365,8 +374,7 @@ def tag_summary():
 def tag_rename(body: TagRenameRequest):
     old_c = canonicalize_tag(body.old_tag)
     new_c = canonicalize_tag(body.new_tag)
-    with _pg() as conn:
-        result = _execute_tag_rename(conn, old_c, new_c)
+    result = _execute_tag_rename(old_c, new_c)
     return jr(result)
 
 
@@ -374,16 +382,14 @@ def tag_rename(body: TagRenameRequest):
 def tag_merge(body: TagMergeRequest):
     src_c = canonicalize_tag(body.source_tag)
     tgt_c = canonicalize_tag(body.target_tag)
-    with _pg() as conn:
-        result = _execute_tag_merge(conn, src_c, tgt_c)
+    result = _execute_tag_merge(src_c, tgt_c)
     return jr(result)
 
 
 @router.post("/api/tags/bulk-remove")
 def tag_bulk_remove(body: TagBulkRemoveRequest):
     canonical = canonicalize_tag(body.tag)
-    with _pg() as conn:
-        result = _execute_tag_bulk_remove(conn, canonical)
+    result = _execute_tag_bulk_remove(canonical)
     return jr(result)
 
 

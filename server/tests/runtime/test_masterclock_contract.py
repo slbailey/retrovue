@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from retrovue.runtime.clock import MasterClock, SteppedMasterClock
+from retrovue.runtime.clock import SystemClock, SteppedClock
 
 # -----------------------------------------------------------------------------
 # Phase 0: Clock contract — deterministic under test, injectable and mockable
@@ -15,19 +15,19 @@ from retrovue.runtime.clock import MasterClock, SteppedMasterClock
 
 def test_stepped_clock_deterministic():
     """Phase 0: Clock returns deterministic value under test (injected/stepped clock)."""
-    clock = SteppedMasterClock(start=100.0)
-    assert clock.now() == 100.0
+    clock = SteppedClock(start=100.0)
+    assert clock.monotonic() == 100.0
     clock.advance(10.0)
-    assert clock.now() == 110.0
+    assert clock.monotonic() == 110.0
     clock.advance(0.5)
-    assert clock.now() == 110.5
+    assert clock.monotonic() == 110.5
     # Same time until advance
-    assert clock.now() == 110.5
+    assert clock.monotonic() == 110.5
 
 
 def test_mc_001_timezone_awareness():
     """MC-001: now_* and conversion helpers must return timezone-aware datetimes."""
-    clock = MasterClock()
+    clock = SystemClock()
 
     utc_now = clock.now_utc()
     local_now = clock.now_local()
@@ -41,7 +41,7 @@ def test_mc_001_timezone_awareness():
 
 def test_mc_002_monotonic_non_decreasing():
     """MC-002: Sequential now_utc() calls must be monotonic (non-decreasing)."""
-    clock = MasterClock()
+    clock = SystemClock()
     samples = [clock.now_utc() for _ in range(5)]
     for earlier, later in zip(samples, samples[1:]):
         assert later >= earlier
@@ -49,7 +49,7 @@ def test_mc_002_monotonic_non_decreasing():
 
 def test_mc_003_seconds_since_future_clamps_to_zero():
     """MC-003: seconds_since() clamps future timestamps to zero."""
-    clock = MasterClock()
+    clock = SystemClock()
     now = clock.now_utc()
     past = now - timedelta(seconds=2)
     future = now + timedelta(seconds=10)
@@ -60,7 +60,7 @@ def test_mc_003_seconds_since_future_clamps_to_zero():
 
 def test_mc_004_naive_datetime_rejected():
     """MC-004: Naive datetimes must raise ValueError."""
-    clock = MasterClock()
+    clock = SystemClock()
     naive = datetime.now()
 
     with pytest.raises(ValueError):
@@ -73,7 +73,7 @@ def test_mc_004_naive_datetime_rejected():
 
 def test_mc_005_round_trip_conversion_precision():
     """MC-005: Round-trip UTC -> local -> UTC stays within microseconds."""
-    clock = MasterClock()
+    clock = SystemClock()
     utc_now = clock.now_utc()
     for tz in ("America/New_York", "Europe/London", "Asia/Tokyo", None):
         local = clock.to_local(utc_now, tz)
@@ -83,8 +83,8 @@ def test_mc_005_round_trip_conversion_precision():
 
 
 def test_mc_006_no_eventing_state():
-    """MC-006: MasterClock exposes no eventing/ticking attributes."""
-    clock = MasterClock()
+    """MC-006: SystemClock exposes no eventing/ticking attributes."""
+    clock = SystemClock()
     prohibited_attrs = ["_subscribers", "_step", "_tick", "_thread", "advance", "step"]
     for attr in prohibited_attrs:
         assert not hasattr(clock, attr)
@@ -107,11 +107,11 @@ def test_mc_007_single_source_of_truth(monkeypatch):
 
     monkeypatch.setattr(module, "datetime", PatchedDateTime)
 
-    clock = MasterClock()
+    clock = SystemClock()
     clock.now_utc()
     clock.now_local()
 
-    source = inspect.getsource(MasterClock)
+    source = inspect.getsource(SystemClock)
     tree = ast.parse(source)
 
     class UtcnowFinder(ast.NodeVisitor):
@@ -125,5 +125,4 @@ def test_mc_007_single_source_of_truth(monkeypatch):
 
     finder = UtcnowFinder()
     finder.visit(tree)
-    assert not finder.found, "MasterClock implementation should not reference datetime.utcnow()"
-
+    assert not finder.found, "SystemClock implementation should not reference datetime.utcnow()"

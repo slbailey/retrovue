@@ -534,6 +534,11 @@ add_executable(blockplan_contract_tests
   tests/contracts/BlockPlan/DecodeResultModelContractTests.cpp
   tests/contracts/BlockPlan/EofPadRealSystemContractTests.cpp
   tests/contracts/BlockPlan/BootstrapAvPhaseContractTests.cpp
+  tests/contracts/BlockPlan/TakeCascadePriorityContractTests.cpp
+  tests/contracts/BlockPlan/FirstIdrFromContentContractTests.cpp
+  tests/contracts/BlockPlan/TransportContinuityContractTests.cpp
+  tests/contracts/BlockPlan/BlockPlanQuarantineContractTests.cpp
+  tests/contracts/BlockPlan/AudioSampleIntegerMathContractTests.cpp
 )
 
 target_link_libraries(blockplan_contract_tests

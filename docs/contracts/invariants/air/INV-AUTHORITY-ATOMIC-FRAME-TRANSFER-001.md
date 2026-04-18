@@ -48,6 +48,8 @@ The PipelineManager emission path is the sole enforcement point. Frame origin is
 - When `CONTENT_SEAM_OVERRIDE` fires (a genuine content frame was popped from segment B), `PerformSegmentSwap` MUST execute on the same tick. If the override fires but the swap does not, the emitted frame and the authority diverge — this MUST be logged as `INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001-VIOLATED` with `reason=content_seam_override_without_swap`.
 - A segment swap MUST NOT commit at tick T if the frame emitted at tick T originates from the outgoing segment and no override path (`PAD_SEAM_OVERRIDE`, `CONTENT_SEAM_OVERRIDE`, `FORCE_EXECUTE`) is active. The swap MUST defer until a tick where the emitted frame originates from the incoming segment. This prevents a race where the incoming segment becomes eligible between v_src selection and POST-TAKE while the emitted frame still carries outgoing origin.
 - The origin re-stamp safety net (`FORCE_EXECUTE_ORIGIN_RESTAMP_SAFETY_NET`) is permitted ONLY when ALL of the following hold: (1) `FORCE_EXECUTE_DUE_TO_FRAME_AUTHORITY` fired (active video depth is 0 and successor has video frames), (2) `CONTENT_SEAM_OVERRIDE` did NOT pop a content frame on this tick (segment B was empty at frame-selection time), (3) `PerformSegmentSwap` executed on this tick. The safety net MUST log at WARN level with tick, old origin, new origin, and `content_seam_override_attempted`. Any firing outside these conditions MUST be treated as a bug, not a feature.
+- **Block-boundary authority rebase is atomic.** At block fence take (B→A rotation), segment authority index space is re-based for the new block (`current_segment_index_ = 0`). Any cached frame-origin state used by repeat/hold paths (for example `last_good_origin_segment_`) MUST be re-based to the new active authority before the first post-fence emission tick. Carrying a prior block segment origin across the fence is forbidden.
+- **First post-fence emission constraint.** If the first post-fence tick emits from hold/repeat state, `origin(T_first_after_fence)` MUST equal the re-based `active(T_first_after_fence)`. Emitting a frame tagged with a prior-block segment id after block authority has transferred is operational stale-frame bleed.
 
 ## Violation Condition
 
@@ -57,6 +59,7 @@ Any of the following constitutes a violation:
 - Authority transfers from A to B at tick T, but the emitted frame at tick T originates from A.
 - The frame origin segment ID is unset or invalid at any emission tick.
 - The encoder re-emits the last decoded frame of segment A during the first tick where segment B is authoritative.
+- After block fence authority transfer, the first post-fence emitted frame carries an origin id from the previous block's segment index space (`origin(T_first_after_fence)` from old block while `active(T_first_after_fence)` is in new block index space).
 
 Violations MUST be logged with tag `INV-AUTHORITY-ATOMIC-FRAME-TRANSFER-001-VIOLATED`.
 
@@ -87,6 +90,7 @@ In broadcast television, a routing switcher crosspoint change is instantaneous: 
 ## Required Tests
 
 - `runtime/tests/contracts/BlockPlan/AtomicAuthorityTransferContractTests.cpp` (AtomicAuthorityTransferTest: NoViolationWhenFrameMatchesAuthority, ViolationWhenFrameFromPreviousSegmentAfterSwap, ViolationWhenFrameOriginIsNull, ViolationWhenFrameOriginIsOldSegmentDespiteActiveChanged, ContentToPadSeamDoesNotEmitStaleContentFrame, ContentToPadSeamForcesPadEvenWhenOldBufferHasFrames, ContentToContentSeamMayUseHoldIfAllowed, PadSeamWithStaleBBuffersMustNotDeferSwap, PadSeamDeferredSwapCausesStaleFrameBleed, SafetyNetRaceWithoutRestampViolates, SafetyNetRestampCorrectionPassesAuthorityCheck, ContentSeamOverrideSuccessMatchesAuthority, ContentSeamOverrideWithoutSwapViolates)
+- `runtime/tests/contracts/BlockPlan/AtomicAuthorityTransferContractTests.cpp` (AtomicAuthorityTransferTest: BlockBoundaryCarryoverOriginFromPreviousBlockViolates, BlockBoundaryRebasedOriginMatchesNewAuthority)
 - `runtime/tests/contracts/BlockPlan/ForceExecutePadToContentBleedContractTests.cpp` (ForceExecutePadToContentBleedTest: PadToContentSeamMustNotEmitStaleFrame)
 - `runtime/tests/contracts/BlockPlan/NormalCascadeSeamBleedContractTests.cpp` (NormalCascadeSeamBleedTest: PadToContentSeamWithBufferedPadMustNotBleed)
 

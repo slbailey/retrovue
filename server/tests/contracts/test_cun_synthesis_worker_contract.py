@@ -20,6 +20,7 @@ import pytest
 
 from retrovue.domain.entities import Channel, CunRenderRequest
 from retrovue.infra.uow import session
+from retrovue.runtime.clock import SystemClock
 from retrovue.runtime.cun_queue import (
     STATUS_COMPLETED,
     STATUS_FAILED,
@@ -36,6 +37,8 @@ from retrovue.runtime.cun_synthesis_worker import (
     CunTemplateConfig,
     run_once,
 )
+
+_TEST_CLOCK = SystemClock()
 
 
 _test_channel_id: uuid.UUID | None = None
@@ -101,10 +104,10 @@ class TestCunQueueContract:
         """Drain all pending CUN requests so tests see a clean queue."""
         for _ in range(max_jobs):
             with session() as db:
-                req = claim_next(db)
+                req = claim_next(db, clock=_TEST_CLOCK)
                 if req is None:
                     return
-                skip(db, req.id, "test drain")
+                skip(db, req.id, "test drain", clock=_TEST_CLOCK)
 
     def test_claim_returns_lowest_priority_first(self):
         """INV-CUN-PRIORITY-PLAYOUT-001: soonest playout (lowest priority number) claimed first."""
@@ -117,16 +120,16 @@ class TestCunQueueContract:
                          segment_start_utc=now + timedelta(hours=1))
 
         with session() as db:
-            first = claim_next(db)
+            first = claim_next(db, clock=_TEST_CLOCK)
             assert first is not None
             assert first.priority == 10
             assert first.next_program_title == "Sooner"
 
         # cleanup
         with session() as db:
-            second = claim_next(db)
+            second = claim_next(db, clock=_TEST_CLOCK)
             if second:
-                skip(db, second.id, "cleanup")
+                skip(db, second.id, "cleanup", clock=_TEST_CLOCK)
 
     def test_claim_transitions_pending_to_running(self):
         """Claim must set status=running and started_at."""
@@ -137,7 +140,7 @@ class TestCunQueueContract:
             req_id = req.id
 
         with session() as db:
-            claimed = claim_next(db)
+            claimed = claim_next(db, clock=_TEST_CLOCK)
             assert claimed is not None
             assert claimed.id == req_id
             assert claimed.status == STATUS_RUNNING
@@ -152,12 +155,12 @@ class TestCunQueueContract:
             req_id = req.id
 
         with session() as db:
-            claimed = claim_next(db)
+            claimed = claim_next(db, clock=_TEST_CLOCK)
             assert claimed is not None
 
         h = content_hash_for("default", "Next Show")
         with session() as db:
-            complete(db, req_id, "/cache/test.mp4", h)
+            complete(db, req_id, "/cache/test.mp4", h, clock=_TEST_CLOCK)
 
         with session() as db:
             row = db.get(CunRenderRequest, req_id)
@@ -214,11 +217,11 @@ class TestCunQueueContract:
             req_id = req.id
 
         with session() as db:
-            claimed = claim_next(db)
+            claimed = claim_next(db, clock=_TEST_CLOCK)
             assert claimed is not None
 
         with session() as db:
-            skip(db, req_id, "past render deadline")
+            skip(db, req_id, "past render deadline", clock=_TEST_CLOCK)
 
         with session() as db:
             row = db.get(CunRenderRequest, req_id)
@@ -236,19 +239,19 @@ class TestCunQueueContract:
 
         first_id = None
         with session() as db:
-            first = claim_next(db)
+            first = claim_next(db, clock=_TEST_CLOCK)
             assert first is not None
             first_id = first.id
 
         with session() as db:
-            second = claim_next(db)
+            second = claim_next(db, clock=_TEST_CLOCK)
             if second is not None:
                 assert second.id != first_id
-                skip(db, second.id, "cleanup")
+                skip(db, second.id, "cleanup", clock=_TEST_CLOCK)
 
         # cleanup first
         with session() as db:
-            skip(db, first_id, "cleanup")
+            skip(db, first_id, "cleanup", clock=_TEST_CLOCK)
 
 
 # ---------------------------------------------------------------------------
@@ -286,10 +289,10 @@ class TestCunSynthesisWorkerContract:
     def _drain_pending(self, max_jobs: int = 500):
         for _ in range(max_jobs):
             with session() as db:
-                req = claim_next(db)
+                req = claim_next(db, clock=_TEST_CLOCK)
                 if req is None:
                     return
-                skip(db, req.id, "test drain")
+                skip(db, req.id, "test drain", clock=_TEST_CLOCK)
 
     def test_run_once_renders_and_completes(self, tmp_path):
         """Happy path: run_once claims, renders (mock), and completes."""
@@ -303,6 +306,7 @@ class TestCunSynthesisWorkerContract:
         result = run_once(
             cache_dir=str(tmp_path),
             template_resolver=_mock_template_resolver,
+            clock=_TEST_CLOCK,
             render_fn=_noop_render,
         )
         assert result is True
@@ -336,6 +340,7 @@ class TestCunSynthesisWorkerContract:
         result = run_once(
             cache_dir=str(tmp_path),
             template_resolver=_mock_template_resolver,
+            clock=_TEST_CLOCK,
             deadline_margin_ms=30_000,
             render_fn=_tracking_render,
         )
@@ -385,6 +390,7 @@ class TestCunSynthesisWorkerContract:
         result = run_once(
             cache_dir=str(tmp_path),
             template_resolver=_mock_template_resolver,
+            clock=_TEST_CLOCK,
             render_fn=_tracking_render,
         )
         assert result is True
@@ -402,6 +408,7 @@ class TestCunSynthesisWorkerContract:
         result = run_once(
             cache_dir=str(tmp_path),
             template_resolver=_mock_template_resolver,
+            clock=_TEST_CLOCK,
             render_fn=_noop_render,
         )
         assert result is False
@@ -421,6 +428,7 @@ class TestCunSynthesisWorkerContract:
         result = run_once(
             cache_dir=str(tmp_path),
             template_resolver=_mock_template_resolver,
+            clock=_TEST_CLOCK,
             render_fn=_failing_render,
         )
         assert result is True
@@ -446,6 +454,7 @@ class TestCunSynthesisWorkerContract:
         result = run_once(
             cache_dir=str(tmp_path),
             template_resolver=_none_resolver,
+            clock=_TEST_CLOCK,
             render_fn=_noop_render,
         )
         assert result is True

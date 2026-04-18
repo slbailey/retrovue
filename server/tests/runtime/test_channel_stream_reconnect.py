@@ -145,7 +145,8 @@ def test_channel_stream_stop_interrupts_blocking_factory():
             time.sleep(10.0)
         raise RuntimeError("Factory cancelled or timed out")
 
-    stream = ChannelStream(channel_id="shutdown-test", ts_source_factory=ts_source_factory)
+    from retrovue.runtime.clock import SystemClock
+    stream = ChannelStream(channel_id="shutdown-test", ts_source_factory=ts_source_factory, clock=SystemClock())
 
     try:
         q = stream.subscribe("viewer-1")
@@ -197,10 +198,12 @@ def test_channel_stream_reconnect_on_eof():
         return SocketTsSource(sock)
 
     # --- Phase 1: First AIR session ---
+    from retrovue.runtime.clock import SystemClock
     air.start()
     stream = ChannelStream(
         channel_id="reconnect-test",
         ts_source_factory=ts_source_factory,
+        clock=SystemClock(),
     )
 
     try:
@@ -272,10 +275,12 @@ def test_channel_stream_reconnect_factory_transient_failure():
         air.read_socket = None
         return SocketTsSource(sock)
 
+    from retrovue.runtime.clock import SystemClock
     air.start()
     stream = ChannelStream(
         channel_id="reconnect-transient-test",
         ts_source_factory=ts_source_factory,
+        clock=SystemClock(),
     )
 
     try:

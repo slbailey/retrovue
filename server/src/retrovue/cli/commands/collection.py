@@ -17,6 +17,7 @@ from ...infra.db import get_sessionmaker
 from ...infra.exceptions import ValidationError
 from ...infra.settings import settings
 from ...infra.uow import session
+from ...runtime.clock import SystemClock
 from ...infra.validation import (
     validate_collection_exists,
     validate_collection_preserved,
@@ -1436,13 +1437,19 @@ def collection_ingest(
                 if hasattr(ContainerIngestService, "return_value") or hasattr(
                     ContainerIngestService, "assert_called"
                 ):
-                    service = ContainerIngestService(db)
+                    service = ContainerIngestService(db, clock=SystemClock())
                 elif hasattr(
                     collection_ingest_service.ContainerIngestService, "return_value"
                 ) or hasattr(collection_ingest_service.ContainerIngestService, "assert_called"):
-                    service = collection_ingest_service.ContainerIngestService(db)
+                    service = collection_ingest_service.ContainerIngestService(
+                        db,
+                        clock=SystemClock(),
+                    )
                 else:
-                    service = collection_ingest_service.ContainerIngestService(db)
+                    service = collection_ingest_service.ContainerIngestService(
+                        db,
+                        clock=SystemClock(),
+                    )
 
                 # Resolve collection (handled by service, but we need it to get source for importer)
                 # We'll pass the selector string to service, which will resolve it
@@ -1741,7 +1748,10 @@ def collection_sync(
             else:
                 try:
                     importer = construct_importer_for_container(collection, db)
-                    svc = collection_ingest_service.ContainerIngestService(db)
+                    svc = collection_ingest_service.ContainerIngestService(
+                        db,
+                        clock=SystemClock(),
+                    )
                     ingest_result = svc.ingest_container(
                         container=collection,
                         importer=importer,

@@ -8,7 +8,7 @@ particularly timezone caching and conversion efficiency.
 import time
 from datetime import UTC, datetime, timedelta
 
-from retrovue.runtime.clock import MasterClock, TimePrecision
+from retrovue.runtime.clock import AuthoritativeClock, TimePrecision
 
 
 class TestMasterClockPerformance:

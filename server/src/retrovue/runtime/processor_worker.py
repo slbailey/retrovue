@@ -16,11 +16,12 @@ from ..catalog.processor_runtime import execute_job
 from ..domain.entities import ProcessorJob
 from ..infra.settings import settings
 from ..infra.uow import session
+from .clock import AuthoritativeClock
 
 logger = structlog.get_logger(__name__)
 
 
-def run_once() -> bool:
+def run_once(*, clock: AuthoritativeClock) -> bool:
     """
     Claim one job, execute it, mark completed or failed. Returns True if a job was processed.
     """
@@ -28,7 +29,7 @@ def run_once() -> bool:
     target_type = None
     target_id = None
     with session() as db:
-        job = claim_next_job(db)
+        job = claim_next_job(db, clock=clock)
         if job is not None:
             job_id = job.id
             target_type = job.target_type
@@ -39,8 +40,8 @@ def run_once() -> bool:
         with session() as db:
             job = db.get(ProcessorJob, job_id)
             if job is not None:
-                execute_job(db, job)
-            complete_job(db, job_id, True)
+                execute_job(db, job, clock=clock)
+            complete_job(db, job_id, True, clock=clock)
         logger.info(
             "processor_job_completed",
             job_id=str(job_id),
@@ -51,11 +52,17 @@ def run_once() -> bool:
     except Exception as e:
         logger.exception("processor_job_failed", job_id=str(job_id), error=str(e))
         with session() as db:
-            complete_job(db, job_id, False, error_message=str(e))
+            complete_job(db, job_id, False, clock=clock, error_message=str(e))
         return True
 
 
-def run_loop(iterations: int | None = None, *, poll: bool = False, interval: int = 30) -> int:
+def run_loop(
+    iterations: int | None = None,
+    *,
+    clock: AuthoritativeClock,
+    poll: bool = False,
+    interval: int = 30,
+) -> int:
     """
     Process jobs until the queue is empty or iterations is reached.
     Runs a purge of old completed/failed jobs once at start if processor_job_retention_days > 0.
@@ -70,14 +77,18 @@ def run_loop(iterations: int | None = None, *, poll: bool = False, interval: int
     if settings.processor_job_retention_days > 0:
         try:
             with session() as db:
-                purge_old_processor_jobs(db, settings.processor_job_retention_days)
+                purge_old_processor_jobs(
+                    db,
+                    settings.processor_job_retention_days,
+                    clock=clock,
+                )
         except Exception as e:
             logger.warning("processor_job_purge_skipped", error=str(e))
     count = 0
     while True:
         if iterations is not None and count >= iterations:
             break
-        if not run_once():
+        if not run_once(clock=clock):
             if poll:
                 logger.debug("worker_poll_sleeping", interval=interval)
                 time.sleep(interval)

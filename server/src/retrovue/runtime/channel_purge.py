@@ -26,7 +26,10 @@ def purge_all_channels(db: Session) -> None:
     # These use string channel identifiers without FK constraints.
     db.execute(text("DELETE FROM program_log_days"))
     db.execute(text("DELETE FROM traffic_play_log"))
-    db.execute(text("DELETE FROM playlist_events"))
+    # Phase 9 Step 6 Stage B3: playlist_events is owned by the daemon
+    # module. Route the delete through its public API; no behavior change.
+    from retrovue.runtime.playlist_builder_daemon import purge_all
+    purge_all(db)
 
     # INV-CHANNEL-PURGE-001: Cascade handles programs, schedule_plans,
     # zones, schedule_plan_labels, schedule_revisions, schedule_items,

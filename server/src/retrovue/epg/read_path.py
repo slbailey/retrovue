@@ -16,11 +16,11 @@ from zoneinfo import ZoneInfo
 from retrovue.epg.duration import epg_display_duration
 from retrovue.runtime.broadcast_day import derive_broadcast_day_for_utc
 from retrovue.runtime.catalog_resolver import CatalogAssetResolver
-from retrovue.runtime.clock import MasterClock
+from retrovue.runtime.clock import SystemClock
 from retrovue.runtime.dsl_schedule_service import DslScheduleService
 
 logger = logging.getLogger(__name__)
-_clock = MasterClock()
+_clock = SystemClock()
 
 
 def build_epg_payload(

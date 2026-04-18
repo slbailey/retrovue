@@ -88,6 +88,50 @@ namespace retrovue
       constexpr char kPhase80Payload[] = "HELLO\n";
       constexpr size_t kPhase80PayloadLen = 6;
 
+      bool ValidateBlockPlanProto(
+          const BlockPlan& block,
+          std::string* error_message = nullptr)
+      {
+        if (block.block_id().empty()) {
+          if (error_message) *error_message = "Invalid block: block_id is required";
+          return false;
+        }
+        if (block.segments_size() <= 0) {
+          if (error_message) *error_message = "Invalid block: at least one segment is required";
+          return false;
+        }
+        if (block.end_utc_ms() <= block.start_utc_ms()) {
+          if (error_message) *error_message = "Invalid block: end_utc_ms must be greater than start_utc_ms";
+          return false;
+        }
+
+        int64_t sum_segment_duration_ms = 0;
+        for (int i = 0; i < block.segments_size(); ++i) {
+          const auto& seg = block.segments(i);
+          if (seg.segment_duration_ms() <= 0) {
+            if (error_message) *error_message = "Invalid block: segment_duration_ms must be positive";
+            return false;
+          }
+          if (seg.asset_start_offset_ms() < 0) {
+            if (error_message) *error_message = "Invalid block: asset_start_offset_ms must be non-negative";
+            return false;
+          }
+          sum_segment_duration_ms += seg.segment_duration_ms();
+        }
+
+        const int64_t block_duration_ms = block.end_utc_ms() - block.start_utc_ms();
+        if (sum_segment_duration_ms != block_duration_ms) {
+          if (error_message) {
+            std::ostringstream oss;
+            oss << "Invalid block: segment durations sum to " << sum_segment_duration_ms
+                << " but block duration is " << block_duration_ms;
+            *error_message = oss.str();
+          }
+          return false;
+        }
+        return true;
+      }
+
       // INV-BLOCKPLAN-QUARANTINE: Process-lifetime counters.
       // Observable in core dumps and via /metrics (when wired).
       // A non-zero value proves the legacy path was called during a
@@ -373,6 +417,16 @@ namespace retrovue
         response->set_result_code(RESULT_CODE_PROTOCOL_VIOLATION);
         { std::ostringstream oss;
           oss << "[LoadPreview] Rejected: fps_denominator=" << fps_denominator;
+          Logger::Info(oss.str()); }
+        return grpc::Status::OK;
+      }
+      if (frame_count < 0) {
+        response->set_success(false);
+        response->set_message("INV-AIR-NO-ADHOC-SWITCHING-001 violation: frame_count must be explicit");
+        response->set_result_code(RESULT_CODE_PROTOCOL_VIOLATION);
+        { std::ostringstream oss;
+          oss << "[LoadPreview] Rejected: frame_count=" << frame_count
+              << " (explicit ownership required)";
           Logger::Info(oss.str()); }
         return grpc::Status::OK;
       }
@@ -698,8 +752,9 @@ namespace retrovue
 
       stream_states_[channel_id] = std::move(state);
 
-      // INV-FINALIZE-LIVE: Late attach path — if channel is already live, wire sink now
-      TryAttachSinkForChannel(channel_id);
+      // BlockPlan mode owns the session encoder and socket sink directly.
+      // AttachStream stores transport only; legacy output attachment remains
+      // bound to SwitchToLive and must not be auto-armed here.
 
       response->set_success(true);
       response->set_message("Attached");
@@ -782,9 +837,36 @@ namespace retrovue
         }
       }
 
+      // Hybrid transport is forbidden: BlockPlan owns the egress path.
+      if (interface_->IsOutputSinkAttached(channel_id)) {
+        response->set_success(false);
+        response->set_message("Legacy output sink already attached; BlockPlan requires exclusive transport ownership");
+        response->set_result_code(BLOCKPLAN_RESULT_ALREADY_ACTIVE);
+        return grpc::Status::OK;
+      }
+
       // Validate blocks are contiguous
       const auto& block_a = request->block_a();
       const auto& block_b = request->block_b();
+      if (request->join_utc_ms() <= 0) {
+        response->set_success(false);
+        response->set_message("join_utc_ms is required");
+        response->set_result_code(BLOCKPLAN_RESULT_INVALID_BLOCK);
+        return grpc::Status::OK;
+      }
+      std::string block_error;
+      if (!ValidateBlockPlanProto(block_a, &block_error)) {
+        response->set_success(false);
+        response->set_message(block_error);
+        response->set_result_code(BLOCKPLAN_RESULT_INVALID_BLOCK);
+        return grpc::Status::OK;
+      }
+      if (!ValidateBlockPlanProto(block_b, &block_error)) {
+        response->set_success(false);
+        response->set_message(block_error);
+        response->set_result_code(BLOCKPLAN_RESULT_INVALID_BLOCK);
+        return grpc::Status::OK;
+      }
       if (block_a.end_utc_ms() != block_b.start_utc_ms()) {
         response->set_success(false);
         response->set_message("Blocks not contiguous: block_a.end != block_b.start");
@@ -976,7 +1058,7 @@ namespace retrovue
         };
         callbacks.on_block_started = [this](const blockplan::FedBlock& block,
                                             const blockplan::BlockActivationContext& ctx) {
-          // INV-EVIDENCE-SWAP-FENCE-MATCH: swap_tick(B) must equal fence_tick(A).
+          // HARDEN-018 / INV-EVIDENCE-SWAP-FENCE-MATCH: swap_tick(B) must equal fence_tick(A).
           // live_block_activation_ still holds block A's context here (overwritten below).
 #ifndef NDEBUG
           if (previous_block_fence_tick_ != 0) {
@@ -992,7 +1074,12 @@ namespace retrovue
                 << " swap_tick=" << ctx.timeline_frame_index
                 << " prev_fence_tick=" << previous_block_fence_tick_
                 << " drift=" << (ctx.timeline_frame_index - previous_block_fence_tick_);
-            Logger::Warn(oss.str());
+            Logger::ErrorStructured(oss.str(),
+                "INV-EVIDENCE-SWAP-FENCE-MATCH-VIOLATED",
+                {{"block_id", block.block_id},
+                 {"swap_tick", std::to_string(ctx.timeline_frame_index)},
+                 {"fence_tick", std::to_string(previous_block_fence_tick_)},
+                 {"drift", std::to_string(ctx.timeline_frame_index - previous_block_fence_tick_)}});
           }
           live_block_activation_ = ctx;
           EmitBlockStarted(blockplan_session_.get(), block);
@@ -1147,6 +1234,15 @@ namespace retrovue
         response->set_success(false);
         response->set_message("Channel ID mismatch");
         response->set_result_code(BLOCKPLAN_RESULT_NO_SESSION);
+        return grpc::Status::OK;
+      }
+
+      std::string block_error;
+      if (!ValidateBlockPlanProto(block, &block_error)) {
+        response->set_success(false);
+        response->set_message(block_error);
+        response->set_result_code(BLOCKPLAN_RESULT_INVALID_BLOCK);
+        response->set_queue_full(false);
         return grpc::Status::OK;
       }
 

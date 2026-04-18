@@ -11,7 +11,6 @@ Invariant: INV-API-NO-BUSINESS-LOGIC-001
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -22,6 +21,8 @@ from sqlalchemy.orm import Session
 from ...domain.entities import Asset, AssetTag
 from ...domain.tag_normalization import canonicalize_tag
 from ...infra.uow import session as get_session
+from ...runtime.clock import AuthoritativeClock
+from ._clock import get_clock
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +159,7 @@ def patch_asset(
     asset_uuid: str,
     body: AssetPatchRequest,
     db: Session = Depends(get_db),
+    clock: AuthoritativeClock = Depends(get_clock),
 ) -> dict[str, Any]:
     """Update asset fields."""
     asset = _resolve_asset(db, asset_uuid)
@@ -168,7 +170,7 @@ def patch_asset(
     if body.state is not None:
         asset.state = body.state
 
-    asset.updated_at = datetime.now(UTC)
+    asset.updated_at = clock.now_utc()
     db.add(asset)
     db.flush()
 
@@ -186,21 +188,16 @@ def add_tags(
     body: TagsRequest,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Add tags to an asset. Tags are normalized per INV-ASSET-TAG-PERSISTENCE-001."""
+    """Add tags to an asset. Tags are normalized per INV-ASSET-TAG-PERSISTENCE-001.
+
+    Phase 9 Step 5: routes through AssetTagService; the endpoint itself
+    performs no ``asset_tags`` mutation.
+    """
+    from retrovue.catalog import asset_tag_service
+
     asset = _resolve_asset(db, asset_uuid)
-
-    existing = set(_get_asset_tags(db, asset.uuid))
-
     for raw_tag in body.tags:
-        normalized = canonicalize_tag(raw_tag)
-        if not normalized or normalized in existing:
-            continue
-        db.add(AssetTag(
-            asset_uuid=asset.uuid,
-            tag=normalized,
-            source="operator",
-        ))
-        existing.add(normalized)
+        asset_tag_service.add_tag(db, asset.uuid, raw_tag, source="operator")
 
     db.flush()
 
@@ -218,16 +215,14 @@ def remove_tag(
     tag: str,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Remove a single tag from an asset. Idempotent."""
-    asset = _resolve_asset(db, asset_uuid)
+    """Remove a single tag from an asset. Idempotent.
 
-    existing = (
-        db.query(AssetTag)
-        .filter(AssetTag.asset_uuid == asset.uuid, AssetTag.tag == tag)
-        .first()
-    )
-    if existing:
-        db.delete(existing)
+    Phase 9 Step 5: routes through AssetTagService.
+    """
+    from retrovue.catalog import asset_tag_service
+
+    asset = _resolve_asset(db, asset_uuid)
+    if asset_tag_service.remove_tag(db, asset.uuid, tag):
         db.flush()
 
     tags = _get_asset_tags(db, asset.uuid)

@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient
 
 from retrovue.domain.entities import Asset, AssetTag, Container, Source
 from retrovue.infra import db as db_module
+from retrovue.runtime.clock import SystemClock
 from retrovue.web.api.console import router, get_db
 
 
@@ -49,6 +50,7 @@ def db():
 def client(db):
     """FastAPI TestClient with console router mounted."""
     app = FastAPI()
+    app.state.clock = SystemClock()
     app.include_router(router)
 
     def override_get_db():

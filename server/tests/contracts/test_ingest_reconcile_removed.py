@@ -17,6 +17,8 @@ Rules covered:
 
 from __future__ import annotations
 
+from retrovue.runtime.clock import SystemClock
+
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
@@ -115,7 +117,7 @@ class TestFullIngestReconciliation:
             # Make scalar return None (no existing asset for the discovered item)
             db.scalar.return_value = None
 
-            svc = ContainerIngestService(db)
+            svc = ContainerIngestService(db, clock=SystemClock())
             result = svc.ingest_container(
                 container=collection,
                 importer=importer,
@@ -173,7 +175,7 @@ class TestFullIngestReconciliation:
         ):
             db.scalar.return_value = None
 
-            svc = ContainerIngestService(db)
+            svc = ContainerIngestService(db, clock=SystemClock())
             result = svc.ingest_container(
                 container=collection,
                 importer=importer,
@@ -227,7 +229,7 @@ class TestScopedIngestNoDelete:
         ):
             db.scalar.return_value = None
 
-            svc = ContainerIngestService(db)
+            svc = ContainerIngestService(db, clock=SystemClock())
             result = svc.ingest_container(
                 container=collection,
                 importer=importer,
@@ -279,7 +281,7 @@ class TestDryRunReconciliation:
         ):
             db.scalar.return_value = None
 
-            svc = ContainerIngestService(db)
+            svc = ContainerIngestService(db, clock=SystemClock())
             result = svc.ingest_container(
                 container=collection,
                 importer=importer,
@@ -313,7 +315,7 @@ class TestEmptyDiscoverySafety:
         importer.discover.return_value = []
         importer.name = "test"
 
-        svc = ContainerIngestService(db)
+        svc = ContainerIngestService(db, clock=SystemClock())
         result = svc.ingest_container(
             container=collection,
             importer=importer,
@@ -382,7 +384,7 @@ class TestReAddRestoresAsset:
             # Repo finds the soft-deleted row when checking duplicate by canonical_key_hash
             db.scalar.return_value = soft_deleted_asset
 
-            svc = ContainerIngestService(db)
+            svc = ContainerIngestService(db, clock=SystemClock())
             result = svc.ingest_container(
                 container=collection,
                 importer=importer,
@@ -447,7 +449,7 @@ class TestReAddRestoresAsset:
         ):
             db.scalar.return_value = soft_deleted_asset
 
-            svc = ContainerIngestService(db)
+            svc = ContainerIngestService(db, clock=SystemClock())
             result = svc.ingest_container(
                 container=collection,
                 importer=importer,

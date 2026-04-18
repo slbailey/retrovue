@@ -19,12 +19,12 @@ from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
 
 from ..infra.uow import session
+from .clock import AuthoritativeClock
 from .cun_queue import (
     claim_next,
     complete,
@@ -122,6 +122,8 @@ def _render_ffmpeg(cmd: list[str]) -> None:
 def run_once(
     cache_dir: str,
     template_resolver: callable,
+    *,
+    clock: AuthoritativeClock,
     duration_ms: int = 10_000,
     deadline_margin_ms: int = 30_000,
     render_fn: callable = _render_ffmpeg,
@@ -133,6 +135,8 @@ def run_once(
         template_resolver: Callable(channel_id, template_id) -> CunTemplateConfig.
             Resolves template config from channel YAML. Provided by caller
             so the worker stays decoupled from config loading.
+        clock: AuthoritativeClock used for the deadline check and all queue
+            timestamp mutations. No wall-clock fallback.
         duration_ms: CUN segment duration in milliseconds.
         deadline_margin_ms: Safety margin before segment_start_utc.
             INV-CUN-RENDER-DEADLINE-001.
@@ -143,7 +147,6 @@ def run_once(
         True if a request was processed (completed, skipped, or failed).
         False if the queue is empty.
     """
-    # Step 1: Claim next pending request
     req_id = None
     channel_id = None
     title = None
@@ -151,7 +154,7 @@ def run_once(
     segment_start = None
 
     with session() as db:
-        req = claim_next(db)
+        req = claim_next(db, clock=clock)
         if req is None:
             return False
         req_id = req.id
@@ -167,8 +170,8 @@ def run_once(
         template_id=template_id,
     )
 
-    # Step 2: Deadline check — INV-CUN-RENDER-DEADLINE-001
-    now = datetime.now(UTC)
+    # INV-CUN-RENDER-DEADLINE-001: deadline check reads from AuthoritativeClock.
+    now = clock.now_utc()
     deadline = segment_start - _ms_to_timedelta(deadline_margin_ms)
     if now >= deadline:
         log.info(
@@ -177,10 +180,14 @@ def run_once(
             deadline=deadline.isoformat(),
         )
         with session() as db:
-            skip(db, req_id, f"past render deadline: now={now.isoformat()} >= deadline={deadline.isoformat()}")
+            skip(
+                db,
+                req_id,
+                f"past render deadline: now={now.isoformat()} >= deadline={deadline.isoformat()}",
+                clock=clock,
+            )
         return True
 
-    # Step 3: Pre-render dedup — INV-CUN-DEDUP-BEFORE-RENDER-001
     h = content_hash_for(template_id, title)
     cache_path = str(Path(cache_dir) / f"{h}.mp4")
 
@@ -192,15 +199,14 @@ def run_once(
                 content_hash=h,
                 reused_path=existing.rendered_asset_path,
             )
-            complete(db, req_id, existing.rendered_asset_path, h)
+            complete(db, req_id, existing.rendered_asset_path, h, clock=clock)
             return True
 
-    # Step 4: Render — ffmpeg drawtext on looped background
     try:
         template = template_resolver(channel_id, template_id)
         if template is None:
             with session() as db:
-                fail(db, req_id, f"template not found: {template_id}")
+                fail(db, req_id, f"template not found: {template_id}", clock=clock)
             log.error("cun_render_template_not_found", template_id=template_id)
             return True
 
@@ -211,12 +217,11 @@ def run_once(
     except Exception as e:
         log.exception("cun_render_failed", error=str(e))
         with session() as db:
-            fail(db, req_id, str(e)[:500])
+            fail(db, req_id, str(e)[:500], clock=clock)
         return True
 
-    # Step 5: Complete — mark done with path and hash
     with session() as db:
-        complete(db, req_id, cache_path, h)
+        complete(db, req_id, cache_path, h, clock=clock)
 
     log.info("cun_render_completed", content_hash=h, path=cache_path)
     return True
@@ -225,6 +230,8 @@ def run_once(
 def run_loop(
     cache_dir: str,
     template_resolver: callable,
+    *,
+    clock: AuthoritativeClock,
     duration_ms: int = 10_000,
     deadline_margin_ms: int = 30_000,
     iterations: int | None = None,
@@ -241,6 +248,7 @@ def run_loop(
         if not run_once(
             cache_dir=cache_dir,
             template_resolver=template_resolver,
+            clock=clock,
             duration_ms=duration_ms,
             deadline_margin_ms=deadline_margin_ms,
             render_fn=render_fn,

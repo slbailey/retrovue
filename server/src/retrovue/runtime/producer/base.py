@@ -146,7 +146,7 @@ class Producer(ABC):
 
         Args:
             playout_plan: The resolved segment sequence that should air
-            start_at_station_time: From MasterClock, allows us to join mid-program instead of always starting at frame 0
+            start_at_station_time: From the authoritative clock, allows us to join mid-program instead of always starting at frame 0
 
         Returns:
             True if producer started successfully
@@ -228,7 +228,7 @@ class Producer(ABC):
         Advance the producer using the pace loop.
 
         Args:
-            t_now: Current station time supplied by MasterClock.
+            t_now: Current station time supplied by the authoritative clock.
             dt: Seconds elapsed since the previous tick (already clamped by PaceController).
         """
         pass

@@ -230,6 +230,12 @@ class TickProducer : public producers::IProducer,
   // REMOVED: AdvanceToNextSegment() — reactive segment advancement replaced by
   // eager overlap via SeamPreparer.  See INV-SEAM-SEG-001..006.
 
+  // HARDEN-017 / INV-PTS-DISCONTINUITY-ABSORB-001: Shared PTS correction logic.
+  // Called from both PrimeFirstFrame and DecodeNextFrameRaw.
+  // Anchors seg_first_pts_ms_, detects intra-segment PTS jumps, accumulates
+  // correction, updates prev_decoded_pts_ms_, returns corrected PTS.
+  int64_t AbsorbPtsDiscontinuity(int64_t decoded_pts_ms);
+
   // INV-PTS-ANCHOR-RESET: First decoded PTS (ms) of the current segment.
   // Set to -1 on segment switch / reset; captured from the first decoded
   // frame.  PTS anchoring uses (decoded_pts_ms - seg_first_pts_ms_) as the

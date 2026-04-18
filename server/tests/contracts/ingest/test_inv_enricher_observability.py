@@ -10,6 +10,8 @@ Tests are deterministic (no wall-clock sleep, no network).
 
 from __future__ import annotations
 
+from retrovue.runtime.clock import SystemClock
+
 import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -207,7 +209,7 @@ class TestInvEnricherObservability001:
         ), patch(
             "retrovue.catalog.processor_runtime.persist_asset_metadata",
         ):
-            execute_job(db, job)
+            execute_job(db, job, clock=SystemClock())
 
         # Assert that at least one EnricherRun was added
         enricher_runs = [obj for obj in added_objects if isinstance(obj, EnricherRun)]

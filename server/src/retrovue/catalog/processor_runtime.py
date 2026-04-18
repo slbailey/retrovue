@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 import structlog
@@ -29,6 +29,7 @@ from ..domain.entities import (
     Source,
 )
 from ..infra.metadata.persistence import persist_asset_metadata
+from ..runtime.clock import AuthoritativeClock
 from ..usecases.asset_path_resolver import AssetPathResolver
 from ..workflows.path_mapping import resolve_effective_mappings
 
@@ -312,7 +313,7 @@ def _finalize_asset_state(asset: Any) -> None:
         asset.state = "new"
 
 
-def execute_job(db: Session, job: Any) -> None:
+def execute_job(db: Session, job: Any, *, clock: AuthoritativeClock) -> None:
     """
     Load target once, build ProcessingContext, run processors (no DB per processor),
     then persist asset + processor_runs in a single transaction.
@@ -393,7 +394,7 @@ def execute_job(db: Session, job: Any) -> None:
         try:
             enricher = _enricher_instance(processor_id, collection_name)
         except EnricherConstructionError as exc:
-            _started = datetime.now(UTC)
+            _started = clock.now_utc()
             _run_id = uuid.uuid4()
             logger.error(
                 "enricher_construction_failed",
@@ -433,7 +434,7 @@ def execute_job(db: Session, job: Any) -> None:
             # (e.g. processor handled by a different subsystem).
             continue
 
-        started_at = datetime.now(UTC)
+        started_at = clock.now_utc()
         run_id = uuid.uuid4()
         run_record: dict[str, Any] = {
             "run_id": run_id,
@@ -481,7 +482,7 @@ def execute_job(db: Session, job: Any) -> None:
                     ctx.mutable_editorial[k] = v
             if result.flexible:
                 flexible_outputs.append((processor_id, dict(result.flexible)))
-            completed_at = datetime.now(UTC)
+            completed_at = clock.now_utc()
             run_record["completed_at"] = completed_at
             duration_ms = (completed_at - started_at).total_seconds() * 1000
             logger.info(
@@ -506,7 +507,7 @@ def execute_job(db: Session, job: Any) -> None:
                 result_payload=dict(result.metadata) if result.metadata else None,
             ))
         except Exception as e:
-            completed_at = datetime.now(UTC)
+            completed_at = clock.now_utc()
             run_record["status"] = RUN_STATUS_FAILED
             run_record["completed_at"] = completed_at
             run_record["error_message"] = str(e)

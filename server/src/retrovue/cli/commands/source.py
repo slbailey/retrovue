@@ -20,6 +20,7 @@ from ...adapters.registry import (
     list_importers,
 )
 from ...domain.entities import Container, Source
+from ...runtime.clock import SystemClock
 from ...infra.uow import session
 from ...usecases.source_add import add_source as usecase_add_source
 from ...usecases.source_discover import discover_containers as usecase_discover_containers
@@ -1625,7 +1626,7 @@ def source_ingest(
                 typer.echo("Configure path mappings and ensure local paths are accessible")
                 return
 
-            svc = SourceIngestService(db)
+            svc = SourceIngestService(db, clock=SystemClock())
             result = svc.ingest_source(source, dry_run=dry_run)
             result_dict = result.to_dict()
 

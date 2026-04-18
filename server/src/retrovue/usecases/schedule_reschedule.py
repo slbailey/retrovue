@@ -6,12 +6,16 @@ Stage 4: program_schedule authority is ScheduleRevision + ScheduleItems.
 from __future__ import annotations
 
 import uuid as uuid_module
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from ..domain.entities import PlaylistEvent, ScheduleItem, ScheduleRevision
+from ..runtime.playlist_builder_daemon import (
+    delete_block as _daemon_delete_block,
+    purge_future_in_broadcast_day_for_channel,
+)
 
 
 class RescheduleRejectedError(ValueError):
@@ -147,14 +151,14 @@ def _reschedule_program_schedule(
 
     # Supersede current active revision
     row.status = "superseded"
-    row.superseded_at = datetime.now(timezone.utc)
+    row.superseded_at = now
 
     # Create new active revision (copy items) for deterministic regeneration trigger
     new_rev = ScheduleRevision(
         channel_id=row.channel_id,
         broadcast_day=row.broadcast_day,
         status="active",
-        activated_at=datetime.now(timezone.utc),
+        activated_at=now,
         created_by="schedule_reschedule",
         metadata_=row.metadata_ or {},
     )
@@ -183,11 +187,13 @@ def _reschedule_program_schedule(
         )
 
     channel_slug = row.channel.slug if row.channel else ""
-    cpl_deleted = db.query(PlaylistEvent).filter(
-        PlaylistEvent.channel_slug == channel_slug,
-        PlaylistEvent.broadcast_day == row.broadcast_day,
-        PlaylistEvent.start_utc_ms > now_utc_ms,
-    ).delete(synchronize_session=False)
+    # Phase 9 Step 6 follow-up: routes through the daemon module's API.
+    cpl_deleted = purge_future_in_broadcast_day_for_channel(
+        db,
+        channel_slug=channel_slug,
+        broadcast_day=row.broadcast_day,
+        after_utc_ms=now_utc_ms,
+    )
 
     return {
         "status": "ok",
@@ -201,6 +207,8 @@ def _reschedule_program_schedule(
 
 
 def _reschedule_playlog_plan(db: Session, block_id: str, *, now_utc_ms: int) -> dict[str, Any]:
+    # Read-only lookup to enforce the future-guard and report payload
+    # fields. The actual delete is routed through the daemon module.
     row = db.query(PlaylistEvent).filter(PlaylistEvent.block_id == block_id).first()
     if row is None:
         raise ValueError(f"PlaylistEvent block_id={block_id!r} not found.")
@@ -208,13 +216,16 @@ def _reschedule_playlog_plan(db: Session, block_id: str, *, now_utc_ms: int) -> 
         raise RescheduleRejectedError(
             f"INV-RESCHEDULE-FUTURE-GUARD-001: PlaylistEvent block_id={block_id!r} is not in the future"
         )
-    db.delete(row)
+    channel_slug = row.channel_slug
+    broadcast_day_iso = row.broadcast_day.isoformat()
+    # Phase 9 Step 6 follow-up: routes through the daemon module's API.
+    _daemon_delete_block(db, block_id=block_id)
     return {
         "status": "ok",
         "layer": "playlog_plan",
         "block_id": block_id,
-        "channel_slug": row.channel_slug,
-        "broadcast_day": row.broadcast_day.isoformat(),
+        "channel_slug": channel_slug,
+        "broadcast_day": broadcast_day_iso,
         "deleted_program_schedule": 0,
         "deleted_playlog_plan": 1,
     }

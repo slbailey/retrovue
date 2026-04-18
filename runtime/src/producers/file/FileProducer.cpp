@@ -295,7 +295,7 @@ namespace retrovue::producers::file
     // This prevents any in-flight frames from being pushed after this point
     writes_disabled_.store(true, std::memory_order_release);
     stop_requested_.store(true, std::memory_order_release);
-    std::cout << "[FileProducer] Request stop (writes disabled)" << std::endl;
+    std::cout << "[FileProducer] Request stop this=" << static_cast<void*>(this) << std::endl;
     EmitEvent("request_stop", "");
   }
 
@@ -311,7 +311,7 @@ namespace retrovue::producers::file
     // Used when switching segments to prevent old producer from affecting
     // the TimelineController's segment mapping.
     writes_disabled_.store(true, std::memory_order_release);
-    std::cout << "[FileProducer] Write barrier set (producer continues decoding)" << std::endl;
+    std::cout << "[FileProducer] Write barrier set this=" << static_cast<void*>(this) << std::endl;
     EmitEvent("write_barrier", "");
   }
 
@@ -417,6 +417,17 @@ namespace retrovue::producers::file
     //   → Smooth: decode one, push one, block only when truly full
 
     // Check termination conditions first
+    {
+      static thread_local bool wfdr_post_shadow_logged = false;
+      if (!shadow_decode_mode_.load(std::memory_order_acquire) && !wfdr_post_shadow_logged) {
+        wfdr_post_shadow_logged = true;
+        std::cout << "[FileProducer] WFDR_POST_SHADOW: stop=" << stop_requested_.load(std::memory_order_acquire)
+                  << " writes=" << writes_disabled_.load(std::memory_order_acquire)
+                  << " video=" << output_buffer_.Size() << "/" << output_buffer_.Capacity()
+                  << " audio=" << output_buffer_.AudioSize() << "/" << output_buffer_.AudioCapacity()
+                  << std::endl;
+      }
+    }
     if (stop_requested_.load(std::memory_order_acquire)) return false;
     if (writes_disabled_.load(std::memory_order_acquire)) return false;
 
@@ -472,7 +483,21 @@ namespace retrovue::producers::file
 
     // Wait until ONE slot frees in the full buffer(s)
     // No low-water mark - resume immediately when space available
+    uint64_t wait_loop_iters = 0;
     while (true) {
+      if (wait_loop_iters == 0 || (wait_loop_iters % 1000) == 0) {
+        std::cout << "[FileProducer] DECODE_WAIT_POLL: asset=" << config_.asset_uri
+                  << " iter=" << wait_loop_iters
+                  << " video=" << output_buffer_.Size() << "/" << video_capacity
+                  << " audio=" << output_buffer_.AudioSize() << "/" << audio_capacity
+                  << " stop=" << stop_requested_.load(std::memory_order_acquire)
+                  << " writes=" << writes_disabled_.load(std::memory_order_acquire)
+                  << " state=" << static_cast<int>(state_.load(std::memory_order_acquire))
+                  << " shadow=" << shadow_decode_mode_.load(std::memory_order_acquire)
+                  << std::endl;
+      }
+      wait_loop_iters++;
+
       if (stop_requested_.load(std::memory_order_acquire)) return false;
       if (writes_disabled_.load(std::memory_order_acquire)) return false;
 
@@ -613,7 +638,7 @@ namespace retrovue::producers::file
       }
       else
       {
-        std::cout << "[FileProducer] Internal decoder initialized successfully" << std::endl;
+        std::cout << "[FileProducer] Internal decoder initialized this=" << static_cast<void*>(this) << std::endl;
         EmitEvent("ready", "");
       }
     }
@@ -621,6 +646,24 @@ namespace retrovue::producers::file
     // Main production loop
     while (!stop_requested_.load(std::memory_order_acquire))
     {
+      {
+        static thread_local uint64_t loop_iter = 0;
+        static thread_local bool post_shadow_logged = false;
+        loop_iter++;
+        if (!shadow_decode_mode_.load(std::memory_order_acquire) && !post_shadow_logged) {
+          post_shadow_logged = true;
+          std::cout << "[FileProducer] MAINLOOP_POST_SHADOW: iter=" << loop_iter
+                    << " stop=" << stop_requested_.load(std::memory_order_acquire)
+                    << " state=" << static_cast<int>(state_.load(std::memory_order_acquire))
+                    << " eof=" << eof_reached_
+                    << " writes=" << writes_disabled_.load(std::memory_order_acquire)
+                    << " frame_count=" << config_.frame_count
+                    << " planned=" << planned_frame_count_
+                    << " teardown=" << teardown_requested_.load(std::memory_order_acquire)
+                    << std::endl;
+        }
+      }
+
       ProducerState current_state = state_.load(std::memory_order_acquire);
       if (current_state != ProducerState::RUNNING)
       {
@@ -788,7 +831,15 @@ namespace retrovue::producers::file
     }
 
     SetState(ProducerState::STOPPED);
-    std::cout << "[FileProducer] Decode loop exited" << std::endl;
+    std::cout << "[FileProducer] Decode loop exited"
+              << " this=" << static_cast<void*>(this)
+              << " stop=" << stop_requested_.load(std::memory_order_acquire)
+              << " eof=" << eof_reached_
+              << " writes=" << writes_disabled_.load(std::memory_order_acquire)
+              << " teardown=" << teardown_requested_.load(std::memory_order_acquire)
+              << " state=" << static_cast<int>(state_.load(std::memory_order_acquire))
+              << " produced=" << frames_produced_.load(std::memory_order_acquire)
+              << std::endl;
     EmitEvent("decode_loop_exited", "");
   }
 
@@ -1298,6 +1349,20 @@ namespace retrovue::producers::file
 
   bool FileProducer::ProduceRealFrame()
   {
+    {
+      static thread_local uint64_t prf_call_count = 0;
+      if (prf_call_count % 100 == 0) {
+        std::cout << "[FileProducer] PRF_ENTER: asset=" << config_.asset_uri
+                  << " call=" << prf_call_count
+                  << " shadow=" << shadow_decode_mode_.load(std::memory_order_acquire)
+                  << " writes=" << writes_disabled_.load(std::memory_order_acquire)
+                  << " eof=" << eof_reached_
+                  << " produced=" << frames_produced_.load(std::memory_order_acquire)
+                  << std::endl;
+      }
+      prf_call_count++;
+    }
+
     if (!decoder_initialized_)
     {
       return false;
@@ -1306,8 +1371,21 @@ namespace retrovue::producers::file
     // INV-BACKPRESSURE-SYMMETRIC: Decode-level gate
     // Exception: Shadow mode bypasses for ONE frame (then waits via INV-P8-SHADOW-PACE)
     bool in_shadow = shadow_decode_mode_.load(std::memory_order_acquire);
-    if (!in_shadow && !WaitForDecodeReady()) {
-      return true;  // Stop or write barrier - continue loop to check termination
+    if (!in_shadow) {
+      bool decode_ready = WaitForDecodeReady();
+      if (!decode_ready) {
+        static thread_local uint64_t gate_reject_count = 0;
+        gate_reject_count++;
+        if (gate_reject_count % 1000 == 1) {
+          std::cout << "[FileProducer] DECODE_GATE_REJECTED: count=" << gate_reject_count
+                    << " stop=" << stop_requested_.load(std::memory_order_acquire)
+                    << " writes=" << writes_disabled_.load(std::memory_order_acquire)
+                    << " video=" << output_buffer_.Size() << "/" << output_buffer_.Capacity()
+                    << " audio=" << output_buffer_.AudioSize() << "/" << output_buffer_.AudioCapacity()
+                    << std::endl;
+        }
+        return true;
+      }
     }
 
     // INV-FPS-RESAMPLE: Check for pending frame repeats (one per call max)
@@ -1325,6 +1403,17 @@ namespace retrovue::producers::file
     // Read packet
     int ret = av_read_frame(format_ctx_, packet_);
 
+    {
+      static thread_local bool prf_post_shadow_logged = false;
+      if (!shadow_decode_mode_.load(std::memory_order_acquire) && !prf_post_shadow_logged) {
+        prf_post_shadow_logged = true;
+        std::cout << "[FileProducer] PRF_POST_SHADOW_READ: ret=" << ret
+                  << " eof_flag=" << (ret == AVERROR_EOF)
+                  << " format_ctx=" << (format_ctx_ ? "ok" : "null")
+                  << std::endl;
+      }
+    }
+
     if (ret == AVERROR_EOF)
     {
       eof_reached_ = true;
@@ -1339,6 +1428,21 @@ namespace retrovue::producers::file
     }
 
     // Phase 8.9: Dispatch packet based on stream index
+    {
+      static thread_local uint64_t pkt_log_count = 0;
+      if (pkt_log_count % 1000 == 0) {
+        std::cout << "[FileProducer] PKT_DISPATCH: asset=" << config_.asset_uri
+                  << " pkt=" << pkt_log_count
+                  << " stream_idx=" << packet_->stream_index
+                  << " pts=" << packet_->pts
+                  << " dts=" << packet_->dts
+                  << " pos=" << packet_->pos
+                  << " video_idx=" << video_stream_index_
+                  << " audio_idx=" << audio_stream_index_
+                  << std::endl;
+      }
+      pkt_log_count++;
+    }
     // If it's an audio packet, send to audio decoder and continue reading
     if (packet_->stream_index == audio_stream_index_ && audio_codec_ctx_ != nullptr)
     {
@@ -1381,6 +1485,18 @@ namespace retrovue::producers::file
 
     // Receive decoded frame
     ret = avcodec_receive_frame(codec_ctx_, frame_);
+
+    {
+      static thread_local uint64_t recv_log = 0;
+      if (recv_log % 100 == 0) {
+        std::cout << "[FileProducer] RECV_FRAME: call=" << recv_log
+                  << " ret=" << ret
+                  << " eagain=" << (ret == AVERROR(EAGAIN) ? 1 : 0)
+                  << " produced=" << frames_produced_.load(std::memory_order_acquire)
+                  << std::endl;
+      }
+      recv_log++;
+    }
 
     if (ret == AVERROR(EAGAIN))
     {
@@ -1557,10 +1673,16 @@ namespace retrovue::producers::file
              !stop_requested_.load(std::memory_order_acquire) &&
              !teardown_requested_.load(std::memory_order_acquire)) {
 
-        // Check if BOTH buffers are full - if so, yield and retry
-        if (output_buffer_.IsAudioFull() && output_buffer_.IsFull()) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(1));
-          continue;
+        // Video buffer full — stop reading entirely, wait for shadow disable.
+        // Continuing to read advances the demuxer past buffered content,
+        // causing REJECTED_EARLY on the first post-preroll frame.
+        if (video_preroll_complete) {
+          while (shadow_decode_mode_.load(std::memory_order_acquire) &&
+                 !stop_requested_.load(std::memory_order_acquire) &&
+                 !teardown_requested_.load(std::memory_order_acquire)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+          }
+          break;
         }
 
         // Read next packet from demuxer
@@ -1611,8 +1733,6 @@ namespace retrovue::producers::file
           // buffered content, which would cause REJECTED_EARLY after the switch.
           // =======================================================================
           if (video_preroll_complete) {
-            // Video buffer already full - discard packet without decoding
-            // This prevents frame_ from advancing past buffered content
             av_packet_unref(packet_);
             continue;
           }
@@ -1651,6 +1771,7 @@ namespace retrovue::producers::file
               // Push to buffer (MT-based PTS, transformed at switch via TimelineController)
               if (output_buffer_.Push(output_frame)) {
                 shadow_video_buffered++;
+                last_shadow_video_mt_us_ = output_frame.metadata.pts;
               }
             }
           }
@@ -1670,6 +1791,7 @@ namespace retrovue::producers::file
                 << ", video_depth=" << video_depth_at_exit
                 << ", audio_buffered=" << shadow_audio_buffered
                 << ", video_buffered=" << shadow_video_buffered << ")" << std::endl;
+
 
       // INV-P8-SHADOW-FLUSH: Check if frame was already flushed by PlayoutEngine
       if (cached_frame_flushed_.load(std::memory_order_acquire)) {

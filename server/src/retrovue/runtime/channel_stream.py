@@ -25,6 +25,7 @@ from pathlib import Path
 from queue import Empty, Full, Queue
 from typing import Any, Callable, Literal, Optional, Protocol
 
+from .clock import AuthoritativeClock
 from .ts_ring_buffer import TsRingBuffer
 
 
@@ -419,6 +420,7 @@ class ChannelStream:
         ts_source_factory: Callable[..., TsSource] | None = None,
         hls_segmenter: Any | None = None,
         *,
+        clock: AuthoritativeClock,
         ring_buffer_max_bytes: int | None = None,
         client_buffer_max_bytes: int | None = None,
         backpressure_policy: BackpressurePolicy = DEFAULT_BACKPRESSURE_POLICY,
@@ -452,6 +454,7 @@ class ChannelStream:
         self.socket_path = Path(socket_path) if socket_path else None
         self.ts_source_factory = ts_source_factory
         self.hls_segmenter = hls_segmenter
+        self._clock = clock
         self._backpressure_policy = backpressure_policy
         self._client_buffer_max_bytes = (
             client_buffer_max_bytes
@@ -622,7 +625,7 @@ class ChannelStream:
         # Only log spike when truly slow: > 3× poll timeout, or did read and > 50 ms
         spike_threshold_long_ms = 3 * (UPSTREAM_POLL_TIMEOUT_S * 1000)
         while not self._stop_event.is_set():
-            t_start = time.monotonic_ns()
+            t_start = self._clock.monotonic_ns()
             bytes_read_this_iter = 0
             t_after_select = t_start
             t_after_recv = t_start
@@ -646,7 +649,7 @@ class ChannelStream:
                         r, _, _ = select.select(
                             [sock], [], [], UPSTREAM_POLL_TIMEOUT_S
                         )
-                        t_after_select = time.monotonic_ns()
+                        t_after_select = self._clock.monotonic_ns()
                         if not r:
                             continue
                     except (OSError, ValueError):
@@ -656,7 +659,7 @@ class ChannelStream:
                 if not self.ts_source:
                     break
                 chunk = self.ts_source.read(chunk_size)
-                t_after_recv = time.monotonic_ns()
+                t_after_recv = self._clock.monotonic_ns()
                 bytes_read_this_iter = len(chunk)
                 if not chunk:
                     # INV-CHANNEL-STREAM-RECONNECT-001: EOF from upstream
@@ -693,7 +696,7 @@ class ChannelStream:
                     except OSError:
                         _capture_fd = None
                 self._ring_buffer.put(chunk)
-                t_after_put = time.monotonic_ns()
+                t_after_put = self._clock.monotonic_ns()
                 # CORE_TRANSPORT_DIAG: UDS recv timing
                 if _DIAG_ENABLED and bytes_read_this_iter > 0:
                     _diag_recv_count += 1
@@ -730,7 +733,7 @@ class ChannelStream:
                 self._first_chunk_logged = False
                 continue  # reconnect via _connect_with_backoff
             finally:
-                duration_ms = (time.monotonic_ns() - t_start) / 1e6
+                duration_ms = (self._clock.monotonic_ns() - t_start) / 1e6
                 self._logger.debug(
                     "[HTTP] UPSTREAM_LOOP channel=%s loop_duration_ms=%.2f",
                     self.channel_id, duration_ms,
@@ -796,7 +799,7 @@ class ChannelStream:
                 _diag_fanout_cumulative_bytes += len(chunk)
                 if (_diag_fanout_count <= _DIAG_STARTUP_EVENTS or
                         _diag_fanout_count % _DIAG_STEADY_INTERVAL == 0):
-                    wall_us = time.monotonic_ns() // 1000
+                    wall_us = self._clock.monotonic_ns() // 1000
                     self._logger.info(
                         "CORE_FANOUT_DIAG: fanout_seq=%d wall_us=%d bytes=%d "
                         "cumulative_bytes=%d ring_bytes=%d subscribers=%d channel=%s",
@@ -818,7 +821,7 @@ class ChannelStream:
             for client_id, client_queue in subscribers_snapshot:
                 had_eviction = client_queue.put_nowait(chunk)
                 if had_eviction:
-                    now = time.monotonic()
+                    now = self._clock.monotonic()
                     do_log = False
                     with self._backpressure_log_lock:
                         last = self._backpressure_log_last.get(client_id, 0.0)
@@ -871,7 +874,7 @@ class ChannelStream:
         self._stopped = False
 
         with _AUDIT_LOCK:
-            _AUDIT_T0 = time.monotonic_ns()
+            _AUDIT_T0 = self._clock.monotonic_ns()
             _AUDIT_T1 = None
             _AUDIT_T2 = None
             _AUDIT_FIRST_RECV_DONE = False
@@ -1059,6 +1062,7 @@ WRITE_TIMEOUT_S: float = 10.0  # INV-SLOW-CONSUMER-DISCONNECT-001
 async def generate_ts_stream_async(
     client_queue: Queue[bytes],
     *,
+    clock: AuthoritativeClock,
     write_timeout_s: float = WRITE_TIMEOUT_S,
     client_id: str = "unknown",
 ) -> Any:
@@ -1074,6 +1078,9 @@ async def generate_ts_stream_async(
 
     Args:
         client_queue: BytesBoundedQueue receiving TS chunks from ChannelStream
+        clock: AuthoritativeClock used for all elapsed-time measurements
+            (drain timing, stall detection, yield write-timeout). No
+            wall-clock fallback.
         write_timeout_s: Max seconds a yield/TCP-write may block before
             the connection is severed (default: 10s).
 
@@ -1093,7 +1100,7 @@ async def generate_ts_stream_async(
     _exit_reason = "normal"
 
     # TS liveness tracking — zero steady-state logging
-    _ts_session_start_mono = time.monotonic()
+    _ts_session_start_mono = clock.monotonic()
     _ts_last_write_mono = _ts_session_start_mono
     _ts_max_gap_ms: float = 0.0
     _ts_stall_count = 0
@@ -1113,12 +1120,12 @@ async def generate_ts_stream_async(
 
     while True:
         try:
-            t_drain_start = time.monotonic_ns()
+            t_drain_start = clock.monotonic_ns()
             batch = await loop.run_in_executor(
                 None,
                 lambda: client_queue.drain_many(262144)
             )
-            t_drain_end = time.monotonic_ns()
+            t_drain_end = clock.monotonic_ns()
             consecutive_timeouts = 0
             if not batch:  # EOF signal (b"") or closed (None)
                 _exit_reason = "eof_or_closed"
@@ -1127,7 +1134,7 @@ async def generate_ts_stream_async(
             _diag_yield_cumulative_bytes += len(batch)
 
             # TS liveness: track write gap
-            now_mono = time.monotonic()
+            now_mono = clock.monotonic()
             gap_ms = (now_mono - _ts_last_write_mono) * 1000.0
             if gap_ms > _ts_max_gap_ms:
                 _ts_max_gap_ms = gap_ms
@@ -1194,10 +1201,10 @@ async def generate_ts_stream_async(
                     )
             # INV-SLOW-CONSUMER-DISCONNECT-001: detect dead clients via write timeout.
             # yield transfers to the ASGI write path; if the client's TCP window
-            # is closed the write stalls. Measure pre/post yield wall time.
-            _t_pre_yield = time.monotonic()
+            # is closed the write stalls. Measure pre/post yield monotonic time.
+            _t_pre_yield = clock.monotonic()
             yield batch
-            _yield_elapsed = time.monotonic() - _t_pre_yield
+            _yield_elapsed = clock.monotonic() - _t_pre_yield
             if _yield_elapsed > write_timeout_s:
                 _logger.warning(
                     "WRITE_TIMEOUT: yield_elapsed_s=%.1f threshold_s=%.1f "
@@ -1229,7 +1236,7 @@ async def generate_ts_stream_async(
             raise
 
     # TS_SESSION_SUMMARY: once on disconnect, always emitted
-    session_duration_s = time.monotonic() - _ts_session_start_mono
+    session_duration_s = clock.monotonic() - _ts_session_start_mono
     total_writes = sum(_cadence_buckets)
     avg_ms = (_cadence_sum_ms / total_writes) if total_writes > 0 else 0.0
 

@@ -13,9 +13,7 @@ Air logging (stdout/stderr):
 
 from __future__ import annotations
 
-import collections
 import importlib.util
-import json
 import logging
 import os
 import queue
@@ -25,9 +23,9 @@ import sys
 import threading
 import time
 import types
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 # Type alias for subprocess.Process
 ProcessHandle = subprocess.Popen[bytes]
@@ -43,6 +41,7 @@ def _air_log_path(channel_id: str) -> Path:
 
 # Import ChannelConfig for type hints
 from retrovue.runtime.config import ChannelConfig, MOCK_CHANNEL_CONFIG
+from retrovue.runtime.schedule_types import ScheduledBlock, ScheduledSegment
 
 
 def _rotate_air_log(log_path: Path) -> None:
@@ -180,6 +179,96 @@ class SwitchProtocolError(Exception):
     pass
 
 
+def _sum_segment_duration_ms(block: ScheduledBlock) -> int:
+    return sum(int(seg.segment_duration_ms) for seg in block.segments)
+
+
+def _broadcast_date_for(utc_ms: int, day_start_hour: int = 6) -> date:
+    dt = datetime.fromtimestamp(utc_ms / 1000.0, tz=timezone.utc)
+    if dt.hour < day_start_hour:
+        dt -= timedelta(days=1)
+    return dt.date()
+
+
+def _validate_block_for_air(block: ScheduledBlock, *, context: str) -> None:
+    if not block.segments:
+        raise RuntimeError(f"{context}: block {block.block_id} has no segments")
+
+    block_duration_ms = int(block.end_utc_ms) - int(block.start_utc_ms)
+    if block_duration_ms <= 0:
+        raise RuntimeError(
+            f"{context}: block {block.block_id} has invalid timing "
+            f"start_utc_ms={block.start_utc_ms} end_utc_ms={block.end_utc_ms}"
+        )
+
+    segment_sum_ms = _sum_segment_duration_ms(block)
+    if segment_sum_ms != block_duration_ms:
+        raise RuntimeError(
+            f"{context}: block {block.block_id} segment duration mismatch "
+            f"sum_segment_ms={segment_sum_ms} block_duration_ms={block_duration_ms}"
+        )
+
+    for idx, seg in enumerate(block.segments):
+        if int(seg.segment_duration_ms) <= 0:
+            raise RuntimeError(
+                f"{context}: block {block.block_id} segment {idx} has invalid "
+                f"segment_duration_ms={seg.segment_duration_ms}"
+            )
+        if int(seg.asset_start_offset_ms) < 0:
+            raise RuntimeError(
+                f"{context}: block {block.block_id} segment {idx} has invalid "
+                f"asset_start_offset_ms={seg.asset_start_offset_ms}"
+            )
+
+
+def _segment_type_enum(playout_pb2: types.ModuleType, segment: ScheduledSegment) -> int:
+    segment_type = str(segment.segment_type).lower()
+    if segment_type in {"pad", "padding"}:
+        return playout_pb2.SEGMENT_TYPE_PAD
+    if segment_type == "filler":
+        return playout_pb2.SEGMENT_TYPE_FILLER
+    return playout_pb2.SEGMENT_TYPE_CONTENT
+
+
+def _transition_type_enum(playout_pb2: types.ModuleType, value: str) -> int:
+    if str(value).upper() == "TRANSITION_FADE":
+        return playout_pb2.TRANSITION_FADE
+    return playout_pb2.TRANSITION_NONE
+
+
+def _scheduled_block_to_proto(
+    playout_pb2: types.ModuleType,
+    channel_id_int: int,
+    block: ScheduledBlock,
+) -> Any:
+    _validate_block_for_air(block, context="Core→AIR BlockPlan contract")
+
+    proto = playout_pb2.BlockPlan(
+        block_id=block.block_id,
+        channel_id=channel_id_int,
+        start_utc_ms=int(block.start_utc_ms),
+        end_utc_ms=int(block.end_utc_ms),
+        broadcast_date=_broadcast_date_for(int(block.start_utc_ms)).isoformat(),
+        broadcast_day_anchor_utc_ms=0,
+    )
+    for idx, seg in enumerate(block.segments):
+        proto.segments.append(
+            playout_pb2.BlockSegment(
+                segment_index=idx,
+                asset_uri=seg.asset_uri,
+                asset_start_offset_ms=int(seg.asset_start_offset_ms),
+                segment_duration_ms=int(seg.segment_duration_ms),
+                segment_type=_segment_type_enum(playout_pb2, seg),
+                transition_in=_transition_type_enum(playout_pb2, seg.transition_in),
+                transition_in_duration_ms=int(seg.transition_in_duration_ms),
+                transition_out=_transition_type_enum(playout_pb2, seg.transition_out),
+                transition_out_duration_ms=int(seg.transition_out_duration_ms),
+                gain_db=float(seg.gain_db),
+            )
+        )
+    return proto
+
+
 def log_core_intent_frame_range(
     *,
     channel_id: str,
@@ -206,6 +295,109 @@ def log_core_intent_frame_range(
             f.write("[Core] " + msg + "\n")
     except OSError:
         pass  # Do not fail hand-off if log write fails
+
+
+def start_blockplan_session(
+    grpc_addr: str,
+    *,
+    channel_id: str,
+    channel_id_int: int,
+    join_utc_ms: int,
+    current_block: ScheduledBlock,
+    next_block: ScheduledBlock,
+    channel_config: ChannelConfig,
+    timeout_s: int = 30,
+) -> bool:
+    import grpc
+
+    if join_utc_ms <= 0:
+        raise RuntimeError("Core→AIR BlockPlan contract: join_utc_ms is required")
+    if int(current_block.end_utc_ms) != int(next_block.start_utc_ms):
+        raise RuntimeError(
+            "Core→AIR BlockPlan contract: startup blocks must be contiguous "
+            f"current_end={current_block.end_utc_ms} next_start={next_block.start_utc_ms}"
+        )
+
+    playout_pb2, playout_pb2_grpc = _get_playout_stubs()
+    block_a = _scheduled_block_to_proto(playout_pb2, channel_id_int, current_block)
+    block_b = _scheduled_block_to_proto(playout_pb2, channel_id_int, next_block)
+
+    with grpc.insecure_channel(grpc_addr) as ch:
+        stub = playout_pb2_grpc.PlayoutControlStub(ch)
+        response = stub.StartBlockPlanSession(
+            playout_pb2.StartBlockPlanSessionRequest(
+                channel_id=channel_id_int,
+                block_a=block_a,
+                block_b=block_b,
+                join_utc_ms=int(join_utc_ms),
+                program_format_json=channel_config.program_format.to_json(),
+                channel_id_str=channel_id,
+            ),
+            timeout=timeout_s,
+        )
+    if not response.success:
+        raise RuntimeError(f"StartBlockPlanSession failed: {response.message}")
+    logging.getLogger(__name__).info(
+        "Core→AIR BlockPlan startup: channel_id=%s join_utc_ms=%d block_a=%s "
+        "start_utc_ms=%d end_utc_ms=%d block_b=%s start_utc_ms=%d end_utc_ms=%d",
+        channel_id,
+        join_utc_ms,
+        current_block.block_id,
+        int(current_block.start_utc_ms),
+        int(current_block.end_utc_ms),
+        next_block.block_id,
+        int(next_block.start_utc_ms),
+        int(next_block.end_utc_ms),
+    )
+    return True
+
+
+def feed_blockplan(
+    grpc_addr: str,
+    *,
+    channel_id_int: int,
+    block: ScheduledBlock,
+    timeout_s: int = 30,
+) -> bool:
+    import grpc
+
+    playout_pb2, playout_pb2_grpc = _get_playout_stubs()
+    block_proto = _scheduled_block_to_proto(playout_pb2, channel_id_int, block)
+
+    with grpc.insecure_channel(grpc_addr) as ch:
+        stub = playout_pb2_grpc.PlayoutControlStub(ch)
+        response = stub.FeedBlockPlan(
+            playout_pb2.FeedBlockPlanRequest(
+                channel_id=channel_id_int,
+                block=block_proto,
+            ),
+            timeout=timeout_s,
+        )
+    if not response.success:
+        raise RuntimeError(f"FeedBlockPlan failed: {response.message}")
+    return True
+
+
+def iter_blockplan_events(
+    grpc_addr: str,
+    *,
+    channel_id_int: int,
+    timeout_s: int = 3600,
+) -> Iterator[Any]:
+    import grpc
+
+    playout_pb2, playout_pb2_grpc = _get_playout_stubs()
+    channel = grpc.insecure_channel(grpc_addr)
+    try:
+        stub = playout_pb2_grpc.PlayoutControlStub(channel)
+        stream = stub.SubscribeBlockEvents(
+            playout_pb2.SubscribeBlockEventsRequest(channel_id=channel_id_int),
+            timeout=timeout_s,
+        )
+        for event in stream:
+            yield event
+    finally:
+        channel.close()
 
 
 def air_load_preview(
@@ -247,6 +439,12 @@ def air_load_preview(
     if fps_denominator <= 0:
         logger.error("INV-FRAME-003 violation: fps_denominator must be > 0 (got %d)", fps_denominator)
         return False
+    if frame_count < 0:
+        logger.error(
+            "INV-AIR-NO-ADHOC-SWITCHING-001 violation: frame_count must be explicit (got %d)",
+            frame_count,
+        )
+        return False
 
     playout_pb2, playout_pb2_grpc = _get_playout_stubs()
     with grpc.insecure_channel(grpc_addr) as ch:
@@ -276,11 +474,14 @@ def air_load_preview(
 
 # P11E-001: Single source for MIN_PREFEED_LEAD_TIME_MS (env RETROVUE_MIN_PREFEED_LEAD_TIME_MS).
 from retrovue.runtime.constants import MIN_PREFEED_LEAD_TIME_MS
+from retrovue.runtime.clock import AuthoritativeClock
 
 
 def air_switch_to_live(
     grpc_addr: str,
     channel_id_int: int,
+    *,
+    clock: AuthoritativeClock,
     timeout_s: int = 30,
     target_boundary_time_ms: int = 0,
 ) -> tuple[bool, int, str]:
@@ -293,7 +494,7 @@ def air_switch_to_live(
     import grpc
 
     # P11D-012: INV-LEADTIME-MEASUREMENT-001 — issued_at_time_ms for lead-time evaluation
-    issued_at_time_ms = int(time.time() * 1000)
+    issued_at_time_ms = clock.now_utc_ms()
 
     if target_boundary_time_ms > 0:
         lead_time_ms = target_boundary_time_ms - issued_at_time_ms
@@ -320,7 +521,7 @@ def air_switch_to_live(
     violation_reason = getattr(r, 'violation_reason', '') or ''
     if r.success:
         # AUDIT: TP - Producer switch completed
-        _AUDIT_TP = time.monotonic_ns()
+        _AUDIT_TP = clock.monotonic_ns()
         logging.getLogger(__name__).info(
             "[AUDIT-TP] SwitchToLive completed at %d ns for channel_id=%d",
             _AUDIT_TP, channel_id_int
@@ -337,22 +538,32 @@ def air_switch_to_live(
 def _launch_air_binary(
     *,
     air_bin: Path,
-    asset_path: str,
-    start_pts_ms: int,
     socket_path: Path,
     channel_id: str,
     channel_config: ChannelConfig,
-    segment_id: str = "",
-    segment_start_time_utc: str | None = None,
+    join_utc_ms: int,
+    current_block: ScheduledBlock,
+    next_block: ScheduledBlock,
+    evidence_endpoint: str = "",
     stdout: Any = subprocess.PIPE,
     stderr: Any = subprocess.PIPE,
+    reader_socket_queue: queue.Queue[Any] | None = None,
 ) -> tuple[ProcessHandle, Path, queue.Queue[Any], str]:
-    """Start retrovue_air, drive gRPC (StartChannel, LoadPreview, SwitchToLive, AttachStream), return process, socket path, reader queue, and grpc_addr."""
+    """Start retrovue_air and bootstrap a BlockPlan session.
+
+    INV-EARLY-DRAIN: caller may supply its own ``reader_socket_queue`` so a
+    pre-wired ChannelStream's upstream reader can already be polling that
+    exact queue before AIR connects.  When the accept thread lands AIR's
+    socket in the queue, the pre-wired reader picks it up instantly — the
+    AttachStream→StartBlockPlanSession window no longer leaves the UDS
+    orphaned.
+    """
     import grpc
 
     playout_pb2, playout_pb2_grpc = _get_playout_stubs()
 
-    reader_socket_queue: queue.Queue[Any] = queue.Queue()
+    if reader_socket_queue is None:
+        reader_socket_queue = queue.Queue()
 
     if socket_path.exists():
         socket_path.unlink()
@@ -405,7 +616,7 @@ def _launch_air_binary(
     _GRPC_READY_WAIT_S = _timeout_s("GRPC_READY_WAIT", 45)
     _GRPC_READY_POLL_S = _timeout_s("GRPC_READY_POLL", 5)
     _RPC_CONTROL_S = _timeout_s("RPC_CONTROL", 30)
-    _RPC_LOAD_PREVIEW_S = _timeout_s("RPC_LOAD_PREVIEW", 90)
+    _RPC_BLOCKPLAN_S = _timeout_s("RPC_BLOCKPLAN", 90)
     _UDS_ACCEPT_S = _timeout_s("UDS_ACCEPT", 20)
 
     def _rpc(step: str, fn, timeout: int):
@@ -436,17 +647,16 @@ def _launch_air_binary(
         raise RuntimeError("Air gRPC server did not become ready")
 
     channel_id_int = channel_config.channel_id_int
-    program_format_json = channel_config.program_format.to_json()
-    # Air uses plan_handle as the initial asset URI (file path) for the producer; pass resolved path.
-    plan_handle = asset_path if asset_path else "mock"
     with grpc.insecure_channel(grpc_addr) as ch:
         stub = playout_pb2_grpc.PlayoutControlStub(ch)
         r = _rpc(
             "StartChannel",
             lambda timeout: stub.StartChannel(
                 playout_pb2.StartChannelRequest(
-                    channel_id=channel_id_int, plan_handle=plan_handle, port=0,
-                    program_format_json=program_format_json
+                    channel_id=channel_id_int,
+                    plan_handle=current_block.block_id,
+                    port=0,
+                    program_format_json=channel_config.program_format.to_json(),
                 ),
                 timeout=timeout,
             ),
@@ -454,55 +664,8 @@ def _launch_air_binary(
         )
         if not r.success:
             raise RuntimeError(f"StartChannel failed: {r.message}")
-        # Frame-indexed execution (INV-FRAME-001/002/003)
-        # Convert start_pts_ms to start_frame using channel fps
-        # Default to 30fps if not specified; channel_config provides authoritative fps
-        fps_num = getattr(channel_config.program_format, 'frame_rate_num', 30)
-        fps_den = getattr(channel_config.program_format, 'frame_rate_den', 1)
-        fps = fps_num / fps_den if fps_den > 0 else 30.0
-        start_frame = int((start_pts_ms / 1000.0) * fps) if fps > 0 else 0
-        # frame_count = -1 means play until EOF (initial segment has no predetermined end)
-        frame_count = -1
-        r = _rpc(
-            "LoadPreview",
-            lambda timeout: stub.LoadPreview(
-                playout_pb2.LoadPreviewRequest(
-                    channel_id=channel_id_int,
-                    asset_path=asset_path,
-                    start_frame=start_frame,
-                    frame_count=frame_count,
-                    fps_numerator=fps_num,
-                    fps_denominator=fps_den,
-                ),
-                timeout=timeout,
-            ),
-            _RPC_LOAD_PREVIEW_S,
-        )
-        if not r.success:
-            raise RuntimeError(f"LoadPreview failed: {r.message}")
-        # Contract-level observability: CORE_INTENT_FRAME_RANGE (once per segment)
-        end_frame = start_frame + frame_count - 1 if frame_count >= 0 else -1
-        MT_start_us = 0
-        if segment_start_time_utc:
-            try:
-                dt = datetime.fromisoformat(segment_start_time_utc.replace("Z", "+00:00"))
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                MT_start_us = int(dt.timestamp() * 1_000_000)
-            except (ValueError, TypeError):
-                pass
-        log_core_intent_frame_range(
-            channel_id=channel_id,
-            segment_id=segment_id or "",
-            asset_path=asset_path,
-            start_frame=start_frame,
-            end_frame=end_frame,
-            fps=fps,
-            CT_start_us=0,
-            MT_start_us=MT_start_us,
-        )
-        # AttachStream before SwitchToLive: Air must have the UDS fd in stream_writers_
-        # so that SwitchToLive can start FfmpegLoop and write TS to that fd.
+        # AttachStream before StartBlockPlanSession: AIR must have the UDS fd in
+        # stream_writers_ so continuous output can begin immediately.
         r = _rpc(
             "AttachStream",
             lambda timeout: stub.AttachStream(
@@ -518,44 +681,24 @@ def _launch_air_binary(
         )
         if not r.success:
             raise RuntimeError(f"AttachStream failed: {r.message}")
-        # P11D-005/006: Single SwitchToLive call, no retry. Use deadline path so AIR never returns NOT_READY.
-        # Launch: target = now + 6s so AIR waits then ExecuteSwitchAtDeadline.
-        # We use 6s (not 5s) to provide margin for RPC latency; kMinPrefeedLeadTimeMs = 5000.
-        # P11D-012: INV-LEADTIME-MEASUREMENT-001 — issued_at_time_ms for lead-time evaluation
-        issued_at_time_ms = int(time.time() * 1000)
-        launch_target_ms = issued_at_time_ms + 6000
-        lead_time_ms = launch_target_ms - issued_at_time_ms
-        logging.getLogger(__name__).info(
-            "[SwitchToLive] Core issuing (launch): issued_at_ms=%d target_boundary_ms=%d lead_time_ms=%d MIN_PREFEED_LEAD_TIME_MS=%d",
-            issued_at_time_ms, launch_target_ms, lead_time_ms, MIN_PREFEED_LEAD_TIME_MS,
-        )
         r = _rpc(
-            "SwitchToLive",
-            lambda timeout: stub.SwitchToLive(
-                playout_pb2.SwitchToLiveRequest(
+            "StartBlockPlanSession",
+            lambda timeout: stub.StartBlockPlanSession(
+                playout_pb2.StartBlockPlanSessionRequest(
                     channel_id=channel_id_int,
-                    target_boundary_time_ms=launch_target_ms,
-                    issued_at_time_ms=issued_at_time_ms,
+                    block_a=_scheduled_block_to_proto(playout_pb2, channel_id_int, current_block),
+                    block_b=_scheduled_block_to_proto(playout_pb2, channel_id_int, next_block),
+                    join_utc_ms=int(join_utc_ms),
+                    program_format_json=channel_config.program_format.to_json(),
+                    evidence_endpoint=evidence_endpoint,
+                    channel_id_str=channel_id,
                 ),
                 timeout=timeout,
             ),
-            _RPC_CONTROL_S,
+            _RPC_BLOCKPLAN_S,
         )
         if not r.success:
-            result_code = getattr(r, 'result_code', RESULT_CODE_UNSPECIFIED)
-            violation_reason = getattr(r, 'violation_reason', '') or ''
-            if result_code == RESULT_CODE_PROTOCOL_VIOLATION:
-                raise SwitchTimingError(violation_reason or "Insufficient prefeed lead time")
-            if result_code == RESULT_CODE_NOT_READY:
-                raise SwitchProtocolError("Unexpected NOT_READY in deadline-authoritative mode")
-            raise RuntimeError(f"SwitchToLive failed: {r.message}")
-
-        # AUDIT: TP - Producer starts writing NOW (SwitchToLive completed)
-        _AUDIT_TP = time.monotonic_ns()
-        logging.getLogger(__name__).info(
-            "[AUDIT-TP] SwitchToLive completed at %d ns - PRODUCER NOW WRITING for channel %s",
-            _AUDIT_TP, channel_id
-        )
+            raise RuntimeError(f"StartBlockPlanSession failed: {r.message}")
 
     try:
         conn = reader_socket_queue.get(timeout=_UDS_ACCEPT_S)
@@ -575,27 +718,47 @@ def launch_air(
     stdout: Any = subprocess.PIPE,
     stderr: Any = subprocess.PIPE,
     ts_socket_path: str | Path | None = None,
+    reader_socket_queue: queue.Queue[Any] | None = None,
 ) -> tuple[ProcessHandle, Path, queue.Queue[Any], str]:
     """
-    Launch the Air (C++) playout engine process for a channel.
+    Launch AIR and start a deterministic BlockPlan session for a channel.
 
     Air is the only playout engine. There is no ffmpeg fallback. If Air cannot be
     found, started, or attached, this function raises and the caller must return
     HTTP 503 (e.g. "Air playout engine unavailable").
 
+    Args:
+        reader_socket_queue: optional caller-supplied queue that will receive
+            the accepted AIR UDS socket.  Callers that pre-wire a consumer
+            (INV-EARLY-DRAIN) pass the same ``queue.Queue`` the consumer is
+            polling so that AIR's first bytes are drained the instant
+            AttachStream lands the socket — closing the AttachStream→
+            StartBlockPlanSession backpressure window.
+
     Returns:
         (process, socket_path, reader_socket_queue, grpc_addr). The reader_socket_queue
         receives the one accepted UDS connection from Air after AttachStream; the caller
         passes it to ChannelStream. grpc_addr (e.g. "127.0.0.1:port") is for later
-        LoadPreview/SwitchToLive RPCs (clock-driven segment switching).
+        FeedBlockPlan / SubscribeBlockEvents RPCs.
 
     Raises:
         RuntimeError: If Air binary not found, not executable, gRPC connect fails,
-            or StartChannel/LoadPreview/AttachStream/SwitchToLive times out or fails.
+            or StartChannel/AttachStream/StartBlockPlanSession times out or fails.
     """
     channel_id = playout_request.get("channel_id", "unknown")
-    asset_path = playout_request.get("asset_path", "")
-    start_pts_ms = playout_request.get("start_pts", 0)
+    join_utc_ms = int(playout_request.get("join_utc_ms", 0) or 0)
+    current_block = playout_request.get("current_block")
+    next_block = playout_request.get("next_block")
+    evidence_endpoint = str(playout_request.get("evidence_endpoint", "") or "")
+
+    if not isinstance(current_block, ScheduledBlock) or not isinstance(next_block, ScheduledBlock):
+        raise RuntimeError(
+            "Core→AIR BlockPlan contract: launch_air requires current_block and next_block"
+        )
+    if join_utc_ms <= 0:
+        raise RuntimeError(
+            "Core→AIR BlockPlan contract: launch_air requires join_utc_ms"
+        )
 
     # Use provided config or fall back to mock config for backwards compatibility
     config = channel_config if channel_config is not None else MOCK_CHANNEL_CONFIG
@@ -616,13 +779,14 @@ def launch_air(
 
     proc, socket_path, reader_socket_queue, grpc_addr = _launch_air_binary(
         air_bin=air_bin,
-        asset_path=asset_path,
-        start_pts_ms=start_pts_ms,
         socket_path=socket_path,
         channel_id=channel_id,
         channel_config=config,
-        segment_id=playout_request.get("segment_id", ""),
-        segment_start_time_utc=playout_request.get("start_time_utc"),
+        join_utc_ms=join_utc_ms,
+        current_block=current_block,
+        next_block=next_block,
+        evidence_endpoint=evidence_endpoint,
+        reader_socket_queue=reader_socket_queue,
         stdout=stdout,
         stderr=stderr,
     )
@@ -670,9 +834,12 @@ def terminate_air(process: ProcessHandle) -> None:
 
 __all__ = [
     "launch_air",
+    "air_load_preview",
+    "air_switch_to_live",
     "terminate_air",
+    "SwitchTimingError",
+    "SwitchProtocolError",
     "ProcessHandle",
     "get_uds_socket_path",
     "ensure_socket_dir_exists",
 ]
-

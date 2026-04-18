@@ -14,40 +14,47 @@ No implementations, no test harnesses.
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any, Protocol
 
 
-class ScheduleService(Protocol):
-    """Read-only schedule accessor.
+class ExecutionRuntimeReader(Protocol):
+    """Read-only execution data accessor.
 
-    Implementations: DslScheduleService (production), MockGridScheduleService,
-    MockAlternatingScheduleService (retrovue.dev), FakeScheduleService (tests).
-    Authority: retrovue/runtime/protocols.py
+    Runtime authority boundary:
+    - reads only precomputed execution blocks / PlaylistEvent rows
+    - never compiles, fills, extends, reconciles, or repairs
     """
 
-    def get_playout_plan_now(
+    def get_current_execution_block(
         self,
         channel_id: str,
-        at_station_time: datetime,
-    ) -> list[dict[str, Any]]:
-        """
-        Return the resolved segment sequence that should be airing 'right now' on this channel.
-
-        Must include correct timing offsets so we can join mid-program instead of restarting at frame 0.
-        Must NOT mutate schedule state.
-        """
+        now_ms: int,
+    ) -> "Any | None":
+        """Return the execution block covering now_ms, or None if missing."""
         ...
 
-    def get_block_at(self, channel_id: str, utc_ms: int) -> "Any | None":
-        """Return the fully constructed block covering the given wall-clock time.
+    def get_next_execution_block(
+        self,
+        channel_id: str,
+        after_utc_ms: int,
+    ) -> "Any | None":
+        """Return the next execution block beginning at or after after_utc_ms."""
+        ...
 
-        READ-ONLY: This is a pure query over pre-built horizon data.
-        It MUST NOT trigger schedule generation, pipeline execution, or grid rebuild.
-        It MAY perform idempotent day resolution (INV-P5-002) in legacy mode.
+    def get_execution_depth_ms(
+        self,
+        channel_id: str,
+        now_ms: int,
+    ) -> int:
+        """Return forward execution depth in milliseconds."""
+        ...
 
-        Returns ScheduledBlock or None (planning failure).
-        """
+    def get_playlist_event_by_block_id(
+        self,
+        channel_id: str,
+        block_id: str,
+    ) -> "Any | None":
+        """Return the authoritative execution block for block_id, or None."""
         ...
 
 

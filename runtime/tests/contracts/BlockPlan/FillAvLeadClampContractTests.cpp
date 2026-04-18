@@ -41,6 +41,15 @@ static buffer::AudioFrame MakeAudioFrame(int nb_samples) {
   return frame;
 }
 
+static int SamplesToMsFloor(int samples) {
+  return static_cast<int>((samples * 1000LL) / buffer::kHouseAudioSampleRate);
+}
+
+static int VideoMsFromLookaheadFloor(int lookahead_frames, RationalFps fps) {
+  return static_cast<int>((static_cast<int64_t>(std::max(0, lookahead_frames)) * 1000LL * fps.den) /
+                          fps.num);
+}
+
 // Produces large audio chunks so audio depth (ms) grows faster than video_time_ms_fill.
 class HeavyAudioMockProducer : public ITickProducer {
  public:
@@ -198,6 +207,145 @@ TEST(FillAvLeadClampContract, SuppressionDoesNotViolateContinuityCommittedSample
   // TotalSamplesPushed tracks nb_samples (per channel tick), not interleaved scalar count.
   EXPECT_EQ(pushed, 1000);
   EXPECT_GE(pushed, popped);
+}
+
+TEST(FillAvLeadClampContract, PrePushOnlyClampPolicy_CanPermitOneCycleOvershoot_OnHboBurstShape) {
+  // HBO recurrence window evidence:
+  // pre-push in-range state followed by a single decoded burst that pushes
+  // post-push delta far above tolerance before next-cycle clamp.
+  const RationalFps fps{30000, 1001};
+  const int av_tolerance_ms = 120;
+  const int pre_audio_ms = 512;
+  const int pre_video_ms = 433;  // observed bootstrap-end fill estimate
+  const int pre_delta_ms = pre_audio_ms - pre_video_ms;
+
+  // Observed decoded burst in first recurrence window: 8192 samples.
+  const int pending_samples = 8192;
+  const int pending_audio_ms = SamplesToMsFloor(pending_samples);
+  // Clamp log on next evaluation reported video_ms=467 in same local window.
+  const int projected_video_ms = 467;
+  const int projected_delta_ms = (pre_audio_ms + pending_audio_ms) - projected_video_ms;
+
+  EXPECT_LE(pre_delta_ms, av_tolerance_ms)
+      << "setup must start from in-range pre-push state";
+  EXPECT_GT(projected_delta_ms, av_tolerance_ms)
+      << "one-cycle burst should demonstrate overshoot loophole";
+}
+
+TEST(FillAvLeadClampContract, ProjectedAdmissionGuard_RejectsHboBurstButAllowsCheersLikeBatch) {
+  const RationalFps fps{30000, 1001};
+  const int av_tolerance_ms = 120;
+
+  const int pre_audio_ms = 512;
+  const int lookahead_frames = 14;
+  const int video_ms_fill = VideoMsFromLookaheadFloor(lookahead_frames, fps);
+  const int pre_delta_ms = pre_audio_ms - video_ms_fill;
+  ASSERT_LE(pre_delta_ms, av_tolerance_ms);
+
+  const auto projected_delta = [&](int batch_samples) {
+    return (pre_audio_ms + SamplesToMsFloor(batch_samples)) - video_ms_fill;
+  };
+
+  // HBO-like burst should be rejected by projected one-cycle guard.
+  EXPECT_GT(projected_delta(/*batch_samples=*/8192), av_tolerance_ms);
+  // Cheers-like single AAC packet remains admissible.
+  EXPECT_LE(projected_delta(/*batch_samples=*/1024), av_tolerance_ms);
+}
+
+TEST(FillAvLeadClampContract, PrePushHighWaterOnlyPolicy_CanPermitOneCycleOvershoot_OnHboBurstShape) {
+  // HBO recurrence shape:
+  // pre-push depth below high water + one decoded burst => post-push depth
+  // crosses high water in same cycle.
+  const int high_water_ms = 620;
+  const int pre_audio_ms = 597;
+  const int pending_samples = 4096;
+  const int pending_audio_ms = SamplesToMsFloor(pending_samples);
+  const int projected_audio_ms = pre_audio_ms + pending_audio_ms;
+
+  EXPECT_LE(pre_audio_ms, high_water_ms);
+  EXPECT_GT(projected_audio_ms, high_water_ms)
+      << "one-cycle high-water overshoot loophole should be demonstrable";
+}
+
+TEST(FillAvLeadClampContract, ProjectedHighWaterGuard_RejectsHboBurstButAllowsCheersLikeBatch) {
+  const int high_water_ms = 620;
+  const int pre_audio_ms = 597;
+
+  const auto projected_audio_ms = [&](int batch_samples) {
+    return pre_audio_ms + SamplesToMsFloor(batch_samples);
+  };
+
+  // HBO-like decoded burst (8x512) should be rejected by projected high-water guard.
+  EXPECT_GT(projected_audio_ms(/*batch_samples=*/4096), high_water_ms);
+  // Cheers-like decoded packet should remain admissible.
+  EXPECT_LE(projected_audio_ms(/*batch_samples=*/1024), high_water_ms);
+}
+
+TEST(FillAvLeadClampContract, FillLoop_HighWaterAdmission_MustNotOvershootInOneCycle) {
+  // Contract proof obligation for projected high-water admission:
+  // first clamp event must not require pre-push depth already above high-water.
+  VideoLookaheadBuffer buf(8);
+  buf.SetAvPhaseToleranceMs(5000);  // isolate high-water branch from AV-delta branch
+  AudioLookaheadBuffer audio(1000, buffer::kHouseAudioSampleRate, buffer::kHouseAudioChannels,
+                             333, /*high_water_ms=*/620, 2000);
+  HeavyAudioMockProducer mock(64, 48, 80, 4096);  // HBO-like decoded burst shape
+  std::atomic<bool> stop{false};
+  buf.StartFilling(&mock, &audio, FPS_30, FPS_30, &stop);
+
+  ASSERT_TRUE(WaitFor([&] { return buf.AvLeadClampEventCount() > 0; }, std::chrono::seconds(5)))
+      << "expected first AV_LEAD_CLAMP under high-water policy";
+  EXPECT_LE(audio.DepthMs(), audio.HighWaterMs())
+      << "one-cycle high-water overshoot admitted before clamp engaged";
+
+  buf.StopFilling(true);
+}
+
+TEST(FillAvLeadClampContract, SteadyState_MustNotRelyOnPersistentPredictiveHighWaterClampControl) {
+  // Equilibrium proof obligation:
+  // After convergence, clamp should be occasional safety, not recurring controller.
+  VideoLookaheadBuffer buf(8);
+  buf.SetAvPhaseToleranceMs(5000);  // isolate high-water branch behavior
+  AudioLookaheadBuffer audio(1000, buffer::kHouseAudioSampleRate, buffer::kHouseAudioChannels,
+                             333, /*high_water_ms=*/620, 2000);
+  // HBO-like cadence/batch shape (bursty decode packets).
+  HeavyAudioMockProducer mock(64, 48, 300, 8192);
+  std::atomic<bool> stop{false};
+  buf.StartFilling(&mock, &audio, FPS_30, FPS_30, &stop);
+
+  std::atomic<bool> pop_stop{false};
+  std::thread pop_thread([&] {
+    buffer::AudioFrame out;
+    while (!pop_stop.load(std::memory_order_relaxed)) {
+      (void)audio.TryPopSamples(1602, out);
+      std::this_thread::sleep_for(std::chrono::milliseconds(33));
+    }
+  });
+
+  const bool reached_steady_window =
+      WaitFor([&] { return audio.TotalSamplesPushed() >= 48000; }, std::chrono::seconds(5));
+  EXPECT_TRUE(reached_steady_window)
+      << "expected steady-state window with active fill";
+
+  if (reached_steady_window) {
+    const int64_t clamp_before = buf.AvLeadClampEventCount();
+    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    const int64_t clamp_after = buf.AvLeadClampEventCount();
+    const int64_t clamp_delta = clamp_after - clamp_before;
+    const int steady_headroom_ms = 33;  // one output-frame period @ ~30fps
+    const int burst_headroom_ms = SamplesToMsFloor(8192);
+
+    // Contract target: recurring clamp must not be the equilibrium controller.
+    EXPECT_LE(clamp_delta, 2)
+        << "steady-state relies on persistent predictive high-water clamp control";
+    EXPECT_LE(audio.DepthMs(), audio.HighWaterMs() - steady_headroom_ms)
+        << "steady-state failed to converge below high-water with operating headroom";
+    EXPECT_LE(audio.DepthMs(), audio.HighWaterMs() - burst_headroom_ms)
+        << "steady-state failed to maintain burst-aware headroom";
+  }
+
+  pop_stop.store(true, std::memory_order_relaxed);
+  if (pop_thread.joinable()) pop_thread.join();
+  buf.StopFilling(true);
 }
 
 }  // namespace

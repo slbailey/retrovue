@@ -20,6 +20,7 @@ from typing import Any
 import typer
 
 from retrovue.config.config_loader import load_defaults
+from retrovue.runtime.clock import SystemClock
 from retrovue.runtime.schedule_compiler import compile_schedule, parse_dsl
 
 
@@ -157,7 +158,11 @@ def _preview_break_fill(dur_ms: int, channel_slug: str) -> list[dict]:
 
     try:
         with session() as db:
-            lib = DatabaseAssetLibrary(db, channel_slug=channel_slug)
+            lib = DatabaseAssetLibrary(
+                db,
+                clock=SystemClock(),
+                channel_slug=channel_slug,
+            )
             # Get candidates that fit (generous count for variety)
             candidates = lib.get_filler_assets(max_duration_ms=dur_ms, count=50)
             if not candidates:

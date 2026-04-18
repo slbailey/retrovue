@@ -1020,24 +1020,24 @@ class TestInvAssetLibraryPlanningOnly001:
             )
 
     # Tier: 1 | Structural invariant
-    def test_talp_002_no_asset_library_in_playout_session(self) -> None:
+    def test_talp_002_no_asset_library_in_runtime_producer(self) -> None:
         """INV-ASSET-LIBRARY-PLANNING-ONLY-001 — positive
 
-        Invariant: Playout session (runtime) MUST NOT import Asset Library.
-        Scenario: Grep playout_session.py for asset library imports.
+        Invariant: Runtime playout (BlockPlanProducer) MUST NOT import Asset Library.
+        Scenario: Grep block_plan_producer.py for asset library imports.
         """
         import pathlib
 
-        playout_session = pathlib.Path(
-            "/opt/retrovue/server/src/retrovue/runtime/playout_session.py"
+        producer_file = pathlib.Path(
+            "/opt/retrovue/server/src/retrovue/runtime/block_plan_producer.py"
         )
-        if not playout_session.exists():
-            pytest.skip("playout_session.py not found")
+        if not producer_file.exists():
+            pytest.skip("block_plan_producer.py not found")
 
-        source = playout_session.read_text()
+        source = producer_file.read_text()
         forbidden = ["db_asset_library", "DatabaseAssetLibrary", "InMemoryAssetLibrary"]
         for term in forbidden:
             assert term not in source, (
                 f"INV-ASSET-LIBRARY-PLANNING-ONLY-001-VIOLATED: "
-                f"playout_session.py imports {term!r}"
+                f"block_plan_producer.py imports {term!r}"
             )

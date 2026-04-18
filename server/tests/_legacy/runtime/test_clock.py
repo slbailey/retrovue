@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from retrovue.runtime.clock import MasterClock, TimeEvent, TimeInfo, TimePrecision
+from retrovue.runtime.clock import AuthoritativeClock, TimeEvent, TimeInfo, TimePrecision
 
 
 class TestMasterClock:

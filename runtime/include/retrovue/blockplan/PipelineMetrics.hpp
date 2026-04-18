@@ -86,6 +86,9 @@ struct PipelineMetrics {
   // ---- Session Detach (underflow-triggered stops) ----
   int32_t detach_count = 0;
 
+  // LAW-AIR-015: Post-primed decoder underflow (fatal session termination).
+  int64_t session_fatal_post_primed_underflow = 0;
+
   // ---- Audio Silence Injection (INV-TICK-GUARANTEED-OUTPUT) ----
   int64_t audio_silence_injected = 0;
 
@@ -308,6 +311,11 @@ struct PipelineMetrics {
     oss << "# TYPE air_continuous_detach_count counter\n";
     oss << "air_continuous_detach_count{channel=\"" << ch << "\"} "
         << detach_count << "\n";
+
+    oss << "\n# HELP air_session_fatal_total Fatal session terminations by reason (LAW-AIR-015)\n";
+    oss << "# TYPE air_session_fatal_total counter\n";
+    oss << "air_session_fatal_total{channel=\"" << ch << "\",reason=\"post_primed_decoder_underflow\"} "
+        << session_fatal_post_primed_underflow << "\n";
 
     oss << "\n# HELP air_bootstrap_phase_failure_total Bootstrap gate timeout (INV-BOOTSTRAP-AV-PHASE-001)\n";
     oss << "# TYPE air_bootstrap_phase_failure_total counter\n";

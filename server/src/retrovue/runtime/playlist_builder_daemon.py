@@ -19,6 +19,7 @@ Lifecycle: start()/stop() run a background daemon thread.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import random
@@ -30,6 +31,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from retrovue.runtime.clock import AuthoritativeClock
 from retrovue.runtime.schedule_items_reader import expand_editorial_block
 
 logger = logging.getLogger(__name__)
@@ -51,33 +53,60 @@ def _subprocess_expand_blocks(payload: dict) -> list[dict]:
 
     Args:
         payload: dict with keys: channel_id, blocks (list of sb_dict),
-                 filler_uri, filler_duration_ms, policy, break_config.
+                 filler_uri, filler_duration_ms, policy, break_config, clock.
+                 ``clock`` is an ``AuthoritativeClock`` instance passed
+                 explicitly via the payload — no reference to the daemon
+                 instance (``self``) may escape into this function body.
 
     Returns:
-        List of result dicts, one per input block:
-        {"block_id": str, "ok": True, "serialized": dict} on success,
-        {"block_id": str, "ok": False, "error": str} on failure.
+        EXACTLY ``len(payload["blocks"])`` result dicts, in the same order
+        as the input blocks:
+          {"block_id": str, "ok": True,  "serialized": dict} on success,
+          {"block_id": str, "ok": False, "error": str}       on failure.
+
+        Setup failures (missing payload keys, DB session open failure,
+        asset library construction, or any exception that escapes the
+        per-block loop) produce one failure entry per yet-unprocessed
+        block so the parent's zip(results, blocks_to_fill) can never
+        silently drop candidates (INV-EXPANSION-SYMMETRY).
     """
     # Late imports: subprocess has its own module state.
     from retrovue.runtime.schedule_items_reader import expand_editorial_block
     from retrovue.runtime.dsl_schedule_service import _serialize_scheduled_block
-
-    channel_id = payload["channel_id"]
-    filler_uri = payload["filler_uri"]
-    filler_duration_ms = payload["filler_duration_ms"]
-    policy = payload.get("policy")
-    break_config = payload.get("break_config")
-
-    # Create a short-lived DB session for asset library queries.
-    # session() is a context manager — must use `with` to enter it.
     from retrovue.infra.uow import session as db_session_factory
     from retrovue.catalog.db_asset_library import DatabaseAssetLibrary
 
-    results = []
+    blocks = payload.get("blocks") or []
+
+    def _failure_entry(sb_dict: dict, err: BaseException | str) -> dict:
+        err_str = err if isinstance(err, str) else f"{type(err).__name__}: {err}"
+        return {
+            "block_id": sb_dict.get("block_id", "unknown"),
+            "ok": False,
+            "error": err_str,
+        }
+
+    # Required keys. A missing key is a programmer error — surface it as
+    # a per-block failure rather than crashing the subprocess silently.
+    try:
+        channel_id = payload["channel_id"]
+        filler_uri = payload["filler_uri"]
+        filler_duration_ms = payload["filler_duration_ms"]
+        clock = payload["clock"]
+    except KeyError as e:
+        return [_failure_entry(sb, f"missing payload key: {e}") for sb in blocks]
+    policy = payload.get("policy")
+    break_config = payload.get("break_config")
+
+    results: list[dict] = []
     try:
         with db_session_factory() as db_session:
-            asset_library = DatabaseAssetLibrary(db_session, channel_slug=channel_id)
-            for sb_dict in payload["blocks"]:
+            asset_library = DatabaseAssetLibrary(
+                db_session,
+                clock=clock,
+                channel_slug=channel_id,
+            )
+            for sb_dict in blocks:
                 block_id = sb_dict.get("block_id", "unknown")
                 try:
                     filled = expand_editorial_block(
@@ -94,13 +123,24 @@ def _subprocess_expand_blocks(payload: dict) -> list[dict]:
                         "serialized": _serialize_scheduled_block(filled),
                     })
                 except Exception as e:
-                    results.append({
-                        "block_id": block_id,
-                        "ok": False,
-                        "error": str(e),
-                    })
-    except Exception:
-        pass  # Fall back: return whatever results we have so far.
+                    results.append(_failure_entry(sb_dict, e))
+    except Exception as e:
+        # Setup failure (DB open, asset library construction, or any
+        # exception that escapes the per-block loop). Mark every block
+        # that has NOT produced a result as failed so the parent sees
+        # one entry per candidate (INV-EXPANSION-SYMMETRY).
+        for sb_dict in blocks[len(results):]:
+            results.append(_failure_entry(sb_dict, e))
+
+    # Defence-in-depth: guarantee one result per input block regardless of
+    # which exception path was taken above. This is the contract the parent
+    # relies on — zip(results, blocks_to_fill) must never truncate.
+    if len(results) < len(blocks):
+        for sb_dict in blocks[len(results):]:
+            results.append(_failure_entry(
+                sb_dict,
+                "subprocess produced fewer results than blocks",
+            ))
 
     return results
 
@@ -138,6 +178,7 @@ class PlaylistBuilderDaemon:
     def __init__(
         self,
         channel_id: str,
+        clock: AuthoritativeClock,
         *,
         min_hours: int = 3,
         evaluation_interval_seconds: int = 30,
@@ -145,7 +186,6 @@ class PlaylistBuilderDaemon:
         grid_minutes: int = 30,
         filler_path: str = "/opt/retrovue/assets/filler.mp4",
         filler_duration_ms: int = 3_650_000,
-        master_clock=None,
         channel_tz: str = "UTC",
         dsl_path: str | None = None,
         program_schedule_extend_callback: Any = None,
@@ -157,7 +197,7 @@ class PlaylistBuilderDaemon:
         self._grid_minutes = grid_minutes
         self._filler_path = filler_path
         self._filler_duration_ms = filler_duration_ms
-        self._clock = master_clock
+        self._clock = clock
         self._channel_tz = ZoneInfo(channel_tz)
         # INV-EPG-VIEWER-INDEPENDENT-001: Callback to extend program schedule horizon
         # when the daemon discovers missing days. Signature: (channel_id, now_utc_ms) -> None
@@ -390,10 +430,8 @@ class PlaylistBuilderDaemon:
             # INV-DAEMON-SESSION-RECOVERY-001: rollback poisoned transaction
             # so subsequent queries on the shared session can proceed.
             if db is not None:
-                try:
+                with contextlib.suppress(Exception):
                     db.rollback()
-                except Exception:
-                    pass
             logger.warning(
                 "INV-SCHEDULE-RETENTION-001: playlog plan purge failed for channel=%s: %s",
                 self._channel_id, e,
@@ -490,6 +528,11 @@ class PlaylistBuilderDaemon:
             "filler_duration_ms": self._filler_duration_ms,
             "policy": self._traffic_policy,
             "break_config": self._break_config,
+            # Clock is injected explicitly — the subprocess function is
+            # module-level and has no access to `self`. Required by
+            # INV-EXPANSION-CLOCK-INJECTION (Clock.md §Consumers: every
+            # runtime component receives its clock by explicit injection).
+            "clock": self._clock,
         }
 
         try:
@@ -504,6 +547,21 @@ class PlaylistBuilderDaemon:
             self._fill_errors += len(blocks_to_fill)
             return 0
 
+        # INV-EXPANSION-SYMMETRY (parent-side guard): the subprocess is
+        # contracted to return one result per input block. If the invariant
+        # is violated (e.g. a future refactor regresses the subprocess), we
+        # account for the missing results as errors rather than silently
+        # dropping candidates via zip() truncation.
+        if len(results) != len(blocks_to_fill):
+            missing = len(blocks_to_fill) - len(results)
+            logger.error(
+                "PlaylistBuilder[%s]: expansion asymmetry — %d results "
+                "for %d blocks; charging %d as fill errors",
+                self._channel_id, len(results), len(blocks_to_fill), missing,
+            )
+            if missing > 0:
+                self._fill_errors += missing
+
         # Phase 3: Write results to DB (parent process).
         # INV-DAEMON-SESSION-SCOPE-001: uses the session from evaluate_once().
         from retrovue.runtime.dsl_schedule_service import _deserialize_scheduled_block
@@ -516,10 +574,8 @@ class PlaylistBuilderDaemon:
             if not result["ok"]:
                 self._fill_errors += 1
                 if db is not None:
-                    try:
+                    with contextlib.suppress(Exception):
                         db.rollback()
-                    except Exception:
-                        pass
                 logger.error(
                     "PlaylistBuilder[%s]: failed to fill block=%s: %s",
                     self._channel_id, block_id, result.get("error", "unknown"),
@@ -559,10 +615,8 @@ class PlaylistBuilderDaemon:
             except Exception as e:
                 self._fill_errors += 1
                 if db is not None:
-                    try:
+                    with contextlib.suppress(Exception):
                         db.rollback()
-                    except Exception:
-                        pass
                 logger.error(
                     "PlaylistBuilder[%s]: failed to write block=%s: %s",
                     self._channel_id, block_id, e,
@@ -750,10 +804,8 @@ class PlaylistBuilderDaemon:
                 return _query(s)
         except Exception as e:
             if db is not None:
-                try:
+                with contextlib.suppress(Exception):
                     db.rollback()
-                except Exception:
-                    pass
             logger.debug(
                 "PlaylistBuilder[%s]: CUN render lookup failed: %s",
                 self._channel_id, e,
@@ -812,10 +864,8 @@ class PlaylistBuilderDaemon:
                     s.execute(stmt)
         except Exception as e:
             if db is not None:
-                try:
+                with contextlib.suppress(Exception):
                     db.rollback()
-                except Exception:
-                    pass
             logger.warning(
                 "PlaylistBuilder[%s]: CUN render enqueue failed: %s",
                 self._channel_id, e,
@@ -876,10 +926,8 @@ class PlaylistBuilderDaemon:
         except Exception as e:
             self._fill_errors += 1
             if db is not None:
-                try:
+                with contextlib.suppress(Exception):
                     db.rollback()
-                except Exception:
-                    pass
             logger.error(
                 "PlaylistBuilder[%s]: backfill failed for block=%s: %s",
                 self._channel_id, block_id, e,
@@ -913,10 +961,8 @@ class PlaylistBuilderDaemon:
                 return _query(s)
         except Exception:
             if db is not None:
-                try:
+                with contextlib.suppress(Exception):
                     db.rollback()
-                except Exception:
-                    pass
             return False
 
     def _get_program_schedule_block_containing(self, now_ms: int, *, db=None) -> dict | None:
@@ -961,10 +1007,8 @@ class PlaylistBuilderDaemon:
                 return _query(s)
         except Exception as e:
             if db is not None:
-                try:
+                with contextlib.suppress(Exception):
                     db.rollback()
-                except Exception:
-                    pass
             logger.error(
                 "PlaylistBuilder[%s]: DB error loading program schedule for %s: %s",
                 self._channel_id, broadcast_day.isoformat(), e,
@@ -1014,10 +1058,8 @@ class PlaylistBuilderDaemon:
                 return _query(s)
         except Exception:
             if db is not None:
-                try:
+                with contextlib.suppress(Exception):
                     db.rollback()
-                except Exception:
-                    pass
             return set()
 
     def _get_asset_library(self, *, db=None):
@@ -1029,16 +1071,22 @@ class PlaylistBuilderDaemon:
         try:
             from retrovue.catalog.db_asset_library import DatabaseAssetLibrary
             if db is not None:
-                return DatabaseAssetLibrary(db, channel_slug=self._channel_id)
+                return DatabaseAssetLibrary(
+                    db,
+                    clock=self._clock,
+                    channel_slug=self._channel_id,
+                )
             from retrovue.infra.uow import session as db_session_factory
             with db_session_factory() as s:
-                return DatabaseAssetLibrary(s, channel_slug=self._channel_id)
+                return DatabaseAssetLibrary(
+                    s,
+                    clock=self._clock,
+                    channel_slug=self._channel_id,
+                )
         except Exception as e:
             if db is not None:
-                try:
+                with contextlib.suppress(Exception):
                     db.rollback()
-                except Exception:
-                    pass
             logger.warning(
                 "PlaylistBuilder[%s]: Could not create asset library: %s",
                 self._channel_id, e,
@@ -1152,10 +1200,8 @@ class PlaylistBuilderDaemon:
                         )
         except Exception as e:
             if db is not None:
-                try:
+                with contextlib.suppress(Exception):
                     db.rollback()
-                except Exception:
-                    pass
             logger.error(
                 "PlaylistBuilder[%s]: Failed to write block=%s to PlaylistEvent: %s",
                 self._channel_id, block.block_id, e,
@@ -1188,10 +1234,8 @@ class PlaylistBuilderDaemon:
                 return _query(s)
         except Exception:
             if db is not None:
-                try:
+                with contextlib.suppress(Exception):
                     db.rollback()
-                except Exception:
-                    pass
             return 0
 
     def _count_blocks_in_window(self, now_ms: int) -> int:
@@ -1242,6 +1286,262 @@ class PlaylistBuilderDaemon:
         return local_dt.date()
 
     def _now_utc_ms(self) -> int:
-        if self._clock is not None:
-            return int(self._clock.now_utc().timestamp() * 1000)
-        return int(datetime.now(timezone.utc).timestamp() * 1000)
+        return self._clock.now_utc_ms()
+
+
+# ---------------------------------------------------------------------------
+# Phase 9 Step 6 — daemon-module sole-writer API for ``PlaylistEvent``.
+#
+# Every external caller that previously mutated ``PlaylistEvent`` now
+# routes through one of the functions below, passing their own session
+# so the write runs in the caller's transaction. This preserves the
+# atomicity of INV-PLAYLOG-SUPERSEDED-REVISION-001 (same SA transaction
+# as the revision publish) and keeps INV-AUTHORITY-SINGLE-OWNER-001
+# mechanically enforceable: all ``PlaylistEvent`` mutations live in this
+# file; a regression guard fails CI if any new external writer appears.
+# ---------------------------------------------------------------------------
+
+
+def invalidate_future_for_channel(
+    db,
+    *,
+    channel_slug: str,
+    boundary_utc: datetime,
+) -> int:
+    """Remove Tier-2 playlog plan rows from the publish instant forward.
+
+    Phase 9 Step 6 Stage B1. Moved from
+    ``schedule_revision_writer._invalidate_future_playlist_events_for_channel``
+    verbatim; callers now pass their own session so the delete runs in
+    their transaction (atomic with the revision publish).
+
+    Rows with ``start_utc_ms`` strictly before the boundary are retained
+    (sealed / historical materialization). Rows starting at or after the
+    boundary are removed so no future instant can read a ``PlaylistEvent``
+    tied to a superseded revision's tail.
+
+    INV-PLAYLOG-SUPERSEDED-REVISION-001.
+    """
+    from retrovue.domain.entities import PlaylistEvent
+
+    boundary = boundary_utc
+    if boundary.tzinfo is None:
+        boundary = boundary.replace(tzinfo=timezone.utc)
+    else:
+        boundary = boundary.astimezone(timezone.utc)
+    ms = int(boundary.timestamp() * 1000)
+    deleted = (
+        db.query(PlaylistEvent)
+        .filter(
+            PlaylistEvent.channel_slug == channel_slug,
+            PlaylistEvent.start_utc_ms >= ms,
+        )
+        .delete(synchronize_session=False)
+    )
+    if deleted:
+        logger.debug(
+            "playlog_future_invalidate channel_slug=%s boundary_utc_ms=%s deleted=%s",
+            channel_slug,
+            ms,
+            deleted,
+        )
+    return int(deleted or 0)
+
+
+def purge_for_channels(db, channel_slugs) -> int:
+    """Delete every ``PlaylistEvent`` row whose ``channel_slug`` is in the
+    supplied list.
+
+    Phase 9 Step 6 Stage B2. Replaces the raw-SQL
+    ``DELETE FROM playlist_events WHERE channel_slug = ANY(:slugs)`` in
+    ``channel_reconciliation.py``. Empty input is a no-op.
+    """
+    from sqlalchemy import delete as sa_delete
+    from retrovue.domain.entities import PlaylistEvent
+
+    slugs = list(channel_slugs)
+    if not slugs:
+        return 0
+    result = db.execute(
+        sa_delete(PlaylistEvent).where(PlaylistEvent.channel_slug.in_(slugs))
+    )
+    return int(result.rowcount or 0)
+
+
+def purge_all(db) -> int:
+    """Delete every ``PlaylistEvent`` row in the database.
+
+    Phase 9 Step 6 Stage B3. Replaces the raw-SQL
+    ``DELETE FROM playlist_events`` in ``channel_purge.py``.
+    """
+    from sqlalchemy import delete as sa_delete
+    from retrovue.domain.entities import PlaylistEvent
+
+    result = db.execute(sa_delete(PlaylistEvent))
+    return int(result.rowcount or 0)
+
+
+# ---------------------------------------------------------------------------
+# Phase 9 Step 6 follow-up — daemon-module API for compile-on-demand,
+# window rebuild, and reschedule flows.
+#
+# The three call sites below (``dsl_schedule_service.ensure_block_compiled``,
+# ``usecases/schedule_rebuild.rebuild_playlog_plan``, and
+# ``usecases/schedule_reschedule``) were the last remaining external
+# writers of ``PlaylistEvent``. Migrating them folds the last
+# allow-listed exceptions into the single-writer rule.
+# ---------------------------------------------------------------------------
+
+
+def purge_window_for_channel(
+    db,
+    *,
+    channel_slug: str,
+    start_utc_ms: int,
+    end_utc_ms: int,
+) -> int:
+    """Delete rows overlapping [``start_utc_ms``, ``end_utc_ms``) for a channel.
+
+    Overlap semantics are
+    ``start_utc_ms < end_boundary AND end_utc_ms > start_boundary`` —
+    identical to the pre-migration query in ``rebuild_playlog_plan``.
+    """
+    from retrovue.domain.entities import PlaylistEvent
+
+    return int(
+        db.query(PlaylistEvent)
+        .filter(
+            PlaylistEvent.channel_slug == channel_slug,
+            PlaylistEvent.start_utc_ms < end_utc_ms,
+            PlaylistEvent.end_utc_ms > start_utc_ms,
+        )
+        .delete(synchronize_session=False)
+        or 0
+    )
+
+
+def purge_future_in_broadcast_day_for_channel(
+    db,
+    *,
+    channel_slug: str,
+    broadcast_day,
+    after_utc_ms: int,
+) -> int:
+    """Delete rows in a specific ``broadcast_day`` for a channel whose
+    ``start_utc_ms`` is strictly greater than ``after_utc_ms``.
+
+    Day-scoped counterpart to ``invalidate_future_for_channel``. Used
+    by the reschedule flow to invalidate only the affected broadcast
+    day, not the whole future tail.
+    """
+    from retrovue.domain.entities import PlaylistEvent
+
+    return int(
+        db.query(PlaylistEvent)
+        .filter(
+            PlaylistEvent.channel_slug == channel_slug,
+            PlaylistEvent.broadcast_day == broadcast_day,
+            PlaylistEvent.start_utc_ms > after_utc_ms,
+        )
+        .delete(synchronize_session=False)
+        or 0
+    )
+
+
+def delete_block(db, *, block_id: str) -> bool:
+    """Delete a single ``PlaylistEvent`` row by ``block_id``.
+
+    Returns True if a row was deleted, False if no row existed.
+    Used by the DSL compile-on-demand stale-row cleanup and by the
+    reschedule single-block flow.
+    """
+    from retrovue.domain.entities import PlaylistEvent
+
+    row = (
+        db.query(PlaylistEvent)
+        .filter(PlaylistEvent.block_id == block_id)
+        .first()
+    )
+    if row is None:
+        return False
+    db.delete(row)
+    return True
+
+
+def upsert_block_if_missing(
+    db,
+    *,
+    block_id: str,
+    channel_slug: str,
+    broadcast_day,
+    start_utc_ms: int,
+    end_utc_ms: int,
+    segments,
+    schedule_revision_id=None,
+    window_uuid=None,
+) -> bool:
+    """``INSERT ... ON CONFLICT DO NOTHING`` for a single block row.
+
+    Returns True when a new row was inserted; False when an existing
+    row was preserved (INV-PLAYOUT-WRITE-ONCE-001). Used by DSL
+    compile-on-demand.
+    """
+    from retrovue.domain.entities import PlaylistEvent
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    values = {
+        "block_id": block_id,
+        "channel_slug": channel_slug,
+        "broadcast_day": broadcast_day,
+        "start_utc_ms": start_utc_ms,
+        "end_utc_ms": end_utc_ms,
+        "segments": segments,
+    }
+    if schedule_revision_id is not None:
+        values["schedule_revision_id"] = schedule_revision_id
+    if window_uuid is not None:
+        values["window_uuid"] = window_uuid
+    stmt = (
+        pg_insert(PlaylistEvent.__table__)
+        .values(**values)
+        .on_conflict_do_nothing(index_elements=["block_id"])
+    )
+    result = db.execute(stmt)
+    return bool(result.rowcount and result.rowcount > 0)
+
+
+def upsert_block_merge(
+    db,
+    *,
+    block_id: str,
+    channel_slug: str,
+    broadcast_day,
+    start_utc_ms: int,
+    end_utc_ms: int,
+    segments,
+    schedule_revision_id=None,
+    window_uuid=None,
+) -> None:
+    """``db.merge`` semantics for a single block row: INSERT if absent,
+    UPDATE all fields if present.
+
+    Used by the rebuild flow, which deletes the window first and then
+    re-inserts each block. ``merge`` keeps behavior consistent if a
+    row survives (e.g. live-safe shifted the start past a playing
+    block and left its row intact).
+    """
+    from retrovue.domain.entities import PlaylistEvent
+
+    kwargs = {
+        "block_id": block_id,
+        "channel_slug": channel_slug,
+        "broadcast_day": broadcast_day,
+        "start_utc_ms": start_utc_ms,
+        "end_utc_ms": end_utc_ms,
+        "segments": segments,
+    }
+    if schedule_revision_id is not None:
+        kwargs["schedule_revision_id"] = schedule_revision_id
+    if window_uuid is not None:
+        kwargs["window_uuid"] = window_uuid
+    db.merge(PlaylistEvent(**kwargs))

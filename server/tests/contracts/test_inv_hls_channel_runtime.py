@@ -32,10 +32,12 @@ def _make_segmenter(
     starting_index: int = 0,
 ) -> tuple[HlsSegmenter, SegmentRing]:
     """Create a segmenter + ring pair for testing."""
+    from retrovue.runtime.clock import SystemClock
     ring = SegmentRing(capacity=capacity, manifest_window=manifest_window)
     segmenter = HlsSegmenter(
         channel_id=channel_id,
         segment_ring=ring,
+        clock=SystemClock(),
         target_duration_ms=6000,
         starting_index=starting_index,
     )

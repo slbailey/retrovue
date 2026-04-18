@@ -180,7 +180,9 @@ def _start_channel_direct(channel_id: str, config_file: str | None, socket_path:
     import sys
     from pathlib import Path
     from retrovue.usecases.channel_manager_launch import launch_air, terminate_air
+    from retrovue.runtime.clock import SystemClock
     from retrovue.runtime.config import ChannelConfig
+    from retrovue.runtime.schedule_types import ScheduledBlock, ScheduledSegment
 
     # Load channel config from YAML (single source of truth)
     yaml_dir = Path("/opt/retrovue/config/channels")
@@ -267,10 +269,36 @@ def _start_channel_direct(channel_id: str, config_file: str | None, socket_path:
     typer.echo("Press Ctrl+C to stop...")
     typer.echo("")
 
+    now_ms = int(SystemClock().now_utc_ms())
     playout_request = {
         "channel_id": channel_id,
-        "asset_path": asset_path,
-        "start_pts": 0,
+        "join_utc_ms": now_ms,
+        "current_block": ScheduledBlock(
+            block_id=f"{channel_id}-manual-0",
+            start_utc_ms=now_ms,
+            end_utc_ms=now_ms + 30_000,
+            segments=(
+                ScheduledSegment(
+                    segment_type="content",
+                    asset_uri=asset_path,
+                    asset_start_offset_ms=0,
+                    segment_duration_ms=30_000,
+                ),
+            ),
+        ),
+        "next_block": ScheduledBlock(
+            block_id=f"{channel_id}-manual-1",
+            start_utc_ms=now_ms + 30_000,
+            end_utc_ms=now_ms + 60_000,
+            segments=(
+                ScheduledSegment(
+                    segment_type="content",
+                    asset_uri=asset_path,
+                    asset_start_offset_ms=0,
+                    segment_duration_ms=30_000,
+                ),
+            ),
+        ),
     }
 
     proc = None

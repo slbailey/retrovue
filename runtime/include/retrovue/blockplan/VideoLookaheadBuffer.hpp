@@ -154,7 +154,6 @@ class VideoLookaheadBuffer {
 
   // Current lookahead target (frames ahead of consumer). For diagnostics.
   int LookaheadTarget() const { return lookahead_target_; }
-
   // --- Observability ---
 
   // Current buffer depth in frames (container size). INV-VIDEO-BOUNDED: must be <= HardCapFrames().
@@ -250,6 +249,12 @@ class VideoLookaheadBuffer {
 
   // Exit bootstrap phase, restoring steady-state fill policy.
   void EndBootstrap();
+  // Post-handoff transition drain mode: when enabled, bootstrap phase becomes
+  // drain-first and suppresses decode admission until disabled.
+  void SetTransitionDrainOnly(bool enable);
+  bool IsTransitionDrainOnly() const {
+    return transition_drain_only_.load(std::memory_order_acquire);
+  }
 
   // Current fill phase (observable).
   FillPhase GetFillPhase() const;
@@ -387,6 +392,7 @@ class VideoLookaheadBuffer {
   std::atomic<int64_t> av_lead_clamp_events_{0};
 
   int av_phase_tolerance_ms_{120};
+  std::atomic<bool> transition_drain_only_{false};
 
   // --- FIVS stall diagnostics (INV-FIVS-LOOKAHEAD-STATE-001) ---
  public:

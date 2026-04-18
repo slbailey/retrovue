@@ -46,7 +46,7 @@ from fastapi import FastAPI, Request, Response, status
 from fastapi.responses import HTMLResponse, StreamingResponse
 from uvicorn import Config, Server
 
-from retrovue.runtime.clock import MasterClock, RealTimeMasterClock
+from retrovue.runtime.clock import AuthoritativeClock
 from retrovue.runtime.pace import PaceController
 from retrovue.runtime.channel_stream import (
     ChannelStream,
@@ -61,6 +61,8 @@ from retrovue.runtime.config import (
     InlineChannelConfigProvider,
 )
 from retrovue.runtime.consumption_adapters import HlsConsumptionAdapter, TsConsumptionAdapter
+from retrovue.runtime.execution_runtime_reader import DslExecutionRuntimeReader
+from retrovue.runtime.protocols import ExecutionRuntimeReader
 
 try:
     from retrovue.runtime.settings import RuntimeSettings  # type: ignore
@@ -220,6 +222,51 @@ from retrovue.runtime.pd_helpers import (  # noqa: F401
 )
 
 
+@dataclass(frozen=True)
+class ExecutionReadinessSnapshot:
+    channel_id: str
+    now_ms: int
+    current_block_id: str
+    next_block_id: str
+    current_block_start_utc_ms: int
+    current_block_end_utc_ms: int
+    next_block_start_utc_ms: int
+    next_block_end_utc_ms: int
+    forward_depth_ms: int
+    required_runtime_depth_ms: int
+    current_playlist_event_present: bool
+    next_playlist_event_present: bool
+    playlist_builder_healthy: bool | None = None
+    playlist_builder_last_evaluation_utc_ms: int | None = None
+
+
+class ExecutionReadinessFault(RuntimeError):
+    def __init__(
+        self,
+        *,
+        channel_id: str,
+        failed_check: str,
+        detail: str,
+        now_ms: int,
+        current_block_id: str | None = None,
+        next_block_id: str | None = None,
+        forward_depth_ms: int | None = None,
+        required_runtime_depth_ms: int = 0,
+    ) -> None:
+        self.channel_id = channel_id
+        self.failed_check = failed_check
+        self.detail = detail
+        self.now_ms = now_ms
+        self.current_block_id = current_block_id
+        self.next_block_id = next_block_id
+        self.forward_depth_ms = forward_depth_ms
+        self.required_runtime_depth_ms = required_runtime_depth_ms
+        super().__init__(
+            f"execution readiness failed for channel={channel_id} "
+            f"check={failed_check}: {detail}"
+        )
+
+
 class ProgramDirector:
     """
     Global coordinator and policy layer for the entire broadcast system.
@@ -258,8 +305,8 @@ class ProgramDirector:
 
     def __init__(
         self,
+        clock: AuthoritativeClock,
         channel_manager_provider: Optional[ChannelManagerProvider] = None,
-        clock: Optional[MasterClock] = None,
         target_hz: Optional[float] = None,
         host: str = "0.0.0.0",
         port: int = 8000,
@@ -284,7 +331,7 @@ class ProgramDirector:
         Args:
             channel_manager_provider: Optional provider for ChannelManager instances (tests).
                 When None, use embedded config (schedule_dir or mock flags) and PD owns the registry.
-            clock: MasterClock instance (optional)
+            clock: AuthoritativeClock instance
             target_hz: Pacing target frequency (optional)
             host: HTTP server bind address
             port: HTTP server port
@@ -302,7 +349,7 @@ class ProgramDirector:
             )
         # INV-CONFIG-IMMUTABLE-001: Read from resolved config (required).
         _ch_cfg = resolved_config["channel"]
-        self._clock = clock or RealTimeMasterClock()
+        self._clock = clock
         if target_hz is None and RuntimeSettings:
             target_hz = RuntimeSettings.pace_target_hz
         self._pace = PaceController(clock=self._clock, target_hz=target_hz or 30.0, sleep_fn=sleep_fn)
@@ -314,15 +361,38 @@ class ProgramDirector:
         # Embedded mode: PD is sole authority for ChannelManager lifecycle (creation, health, fanout, teardown)
         self._managers: dict[str, Any] = {}
         self._managers_lock = threading.Lock()
+
+        # Phase 8 Step 4: PD owns the linger timer registry. ChannelManager
+        # no longer holds _linger_handle / _linger_deadline / LINGER_SECONDS;
+        # the callback-inversion path (on_linger_expired) is gone. PD
+        # schedules on 1→0, cancels on 0→1 or admin stop, and fires its own
+        # _on_linger_expired when the timer expires.
+        self._linger_handles: dict[str, "asyncio.TimerHandle"] = {}
+        self._linger_lock = threading.Lock()
+
+        # Phase 8 Step 5: PD owns producer-recovery policy. CM reports
+        # failure; PD decides whether to retry, how long to back off, and
+        # when to give up. Recovery is scoped per channel.
+        #   _recovery_state[channel_id] = {"attempts": int}
+        #   _recovery_handles[channel_id] = asyncio.TimerHandle
+        self._recovery_state: dict[str, dict[str, int]] = {}
+        self._recovery_handles: dict[str, "asyncio.TimerHandle"] = {}
+        self._recovery_lock = threading.Lock()
         self._schedule_service: Optional[Any] = None
         # Playlist Builder Daemons (playlog plan — INV-PLAYLOG-HORIZON-001)
         self._playlog_daemons: dict[str, Any] = {}
+        self._execution_readers: dict[str, ExecutionRuntimeReader] = {}
+        self._channel_readiness_lock = threading.Lock()
+        self._channel_execution_ready: dict[str, ExecutionReadinessSnapshot] = {}
+        self._channel_startup_faults: dict[str, ExecutionReadinessFault] = {}
         self._channel_config_provider: Optional[Any] = None
         self._health_check_stop: Optional[threading.Event] = None
         self._health_check_thread: Optional[Thread] = None
+        self._readiness_recovery_stop = threading.Event()
+        self._readiness_recovery_thread: Optional[Thread] = None
         # P11D-009: boundaries are feasible at planning time; 1s tick cadence is sufficient
         self._health_check_interval_seconds = _ch_cfg["health_check_interval_seconds"]
-        self._embedded_clock: Optional[Any] = None  # MasterClock with now_utc() for ChannelManagers
+        self._embedded_clock: Optional[Any] = None  # AuthoritativeClock for runtime components
         self._test_mode = os.getenv("RETROVUE_TEST_MODE") == "1"
         self._mock_schedule_grid_mode = mock_schedule_grid_mode
         self._program_asset_path = program_asset_path
@@ -351,6 +421,7 @@ class ProgramDirector:
         self.host = host
         self.port = port
         self.fastapi_app = FastAPI(title="RetroVue ProgramDirector")
+        self.fastapi_app.state.clock = self._clock
         from fastapi.middleware.cors import CORSMiddleware
         cors_origins = os.environ.get("RETROVUE_CORS_ORIGINS", "http://localhost:5173")
         self.fastapi_app.add_middleware(
@@ -382,8 +453,8 @@ class ProgramDirector:
 
         # Phase 8b: HLS phantom state is owned by HlsConsumptionAdapter.
         # ProgramDirector delegates all phantom tracking to this adapter.
-        self._hls_adapter = HlsConsumptionAdapter(logger=self._logger)
-        self._ts_adapter = TsConsumptionAdapter(logger=self._logger)
+        self._hls_adapter = HlsConsumptionAdapter(clock=self._clock, logger=self._logger)
+        self._ts_adapter = TsConsumptionAdapter(clock=self._clock, logger=self._logger)
 
         # Evidence pipeline configuration
         _ev = _ch_cfg["evidence"]
@@ -561,8 +632,8 @@ class ProgramDirector:
         Blockplan-only: embedded registry registers only BlockPlan path.
         Mock/playlist schedule services are not available.
         """
-        # ChannelManager and schedule services expect clock.now_utc() (datetime); use concrete MasterClock
-        self._embedded_clock = MasterClock()
+        # Runtime components expect an AuthoritativeClock with UTC + monotonic time.
+        self._embedded_clock = self._clock
         from retrovue.runtime.channel_manager import (
             BlockPlanProducer,
             ChannelManager,
@@ -667,6 +738,28 @@ class ProgramDirector:
         setattr(self, key, svc)
         return svc
 
+    def _get_execution_reader_for_channel(
+        self,
+        channel_id: str,
+        channel_config: ChannelConfig,
+    ) -> ExecutionRuntimeReader:
+        cached = self._execution_readers.get(channel_id)
+        if cached is not None:
+            return cached
+
+        schedule_service = self._get_schedule_service_for_channel(channel_id, channel_config)
+        reader = DslExecutionRuntimeReader(channel_id, schedule_service)
+        self._execution_readers[channel_id] = reader
+        return reader
+
+    def get_execution_reader(self, channel_id: str) -> ExecutionRuntimeReader:
+        if self._channel_config_provider is None:
+            raise ValueError(f"[channel {channel_id}] No channel config provider available")
+        channel_config = self._channel_config_provider.get_channel_config(channel_id)
+        if channel_config is None:
+            raise ValueError(f"[channel {channel_id}] No channel config found")
+        return self._get_execution_reader_for_channel(channel_id, channel_config)
+
     def _prewarm_channel_schedules(self) -> None:
         """Pre-warm schedule data for all configured channels at server startup.
 
@@ -750,6 +843,7 @@ class ProgramDirector:
 
             daemon = PlaylistBuilderDaemon(
                 channel_id=channel_id,
+                clock=self._embedded_clock,
                 min_hours=sc.get("playlog_min_hours", 3),
                 evaluation_interval_seconds=sc.get(
                     "playlog_eval_interval_seconds", 60,
@@ -760,7 +854,6 @@ class ProgramDirector:
                 grid_minutes=sc.get("grid_minutes", 30),
                 filler_path=sc.get("filler_path", "/opt/retrovue/assets/filler.mp4"),
                 filler_duration_ms=sc.get("filler_duration_ms", 3_650_000),
-                master_clock=self._embedded_clock,
                 channel_tz=sc.get("channel_tz", "UTC"),
                 dsl_path=sc.get("dsl_path", ""),
                 program_schedule_extend_callback=program_schedule_cb,
@@ -782,11 +875,642 @@ class ProgramDirector:
             # Start background thread
             daemon.start()
             self._playlog_daemons[channel_id] = daemon
+            now_ms = int(self._embedded_clock.now_utc().timestamp() * 1000)
+            try:
+                self.wait_until_execution_ready(channel_id, now_ms)
+            except ExecutionReadinessFault as exc:
+                self._logger.warning(
+                    "ExecutionReadiness startup observation failed for channel=%s: "
+                    "check=%s detail=%s now_ms=%d current_block_id=%s "
+                    "next_block_id=%s forward_depth_ms=%s required_runtime_depth_ms=%d "
+                    "(non-blocking)",
+                    exc.channel_id,
+                    exc.failed_check,
+                    exc.detail,
+                    exc.now_ms,
+                    exc.current_block_id,
+                    exc.next_block_id,
+                    exc.forward_depth_ms,
+                    exc.required_runtime_depth_ms,
+                )
 
         self._logger.info(
             "PlaylistBuilderDaemons initialized: %d channels",
             len(self._playlog_daemons),
         )
+
+    def _required_runtime_depth_ms(self, channel_config: ChannelConfig) -> int:
+        """Return the minimum playlog depth required before execution is eligible."""
+        sc = channel_config.schedule_config or {}
+        min_hours = int(sc.get("playlog_min_hours", 3))
+        return max(0, min_hours * 3_600_000)
+
+    def _playlist_event_exists(self, channel_id: str, block_id: str) -> bool:
+        """Planner-owned check for a pre-filled PlaylistEvent by block_id."""
+        if self._channel_config_provider is None:
+            return False
+
+        channel_config = self._channel_config_provider.get_channel_config(channel_id)
+        if channel_config is None:
+            return False
+
+        reader = self._get_execution_reader_for_channel(channel_id, channel_config)
+        return reader.get_playlist_event_by_block_id(channel_id, block_id) is not None
+
+    def _execution_depth_ms(self, channel_id: str, now_ms: int) -> int:
+        """Return planner-owned forward execution depth from the playlog daemon frontier."""
+        if self._channel_config_provider is None:
+            return 0
+        channel_config = self._channel_config_provider.get_channel_config(channel_id)
+        if channel_config is None:
+            return 0
+        reader = self._get_execution_reader_for_channel(channel_id, channel_config)
+        return reader.get_execution_depth_ms(channel_id, now_ms)
+
+    def _raise_execution_readiness_fault(
+        self,
+        *,
+        channel_id: str,
+        failed_check: str,
+        detail: str,
+        now_ms: int,
+        current_block_id: str | None = None,
+        next_block_id: str | None = None,
+        forward_depth_ms: int | None = None,
+        required_runtime_depth_ms: int = 0,
+    ) -> None:
+        fault = ExecutionReadinessFault(
+            channel_id=channel_id,
+            failed_check=failed_check,
+            detail=detail,
+            now_ms=now_ms,
+            current_block_id=current_block_id,
+            next_block_id=next_block_id,
+            forward_depth_ms=forward_depth_ms,
+            required_runtime_depth_ms=required_runtime_depth_ms,
+        )
+        with self._channel_readiness_lock:
+            self._channel_startup_faults[channel_id] = fault
+            self._channel_execution_ready.pop(channel_id, None)
+        self._logger.warning(
+            "ExecutionReadiness failed: channel=%s check=%s detail=%s now_ms=%d "
+            "current_block_id=%s next_block_id=%s forward_depth_ms=%s "
+            "required_runtime_depth_ms=%d",
+            channel_id,
+            failed_check,
+            detail,
+            now_ms,
+            current_block_id,
+            next_block_id,
+            forward_depth_ms,
+            required_runtime_depth_ms,
+        )
+        raise fault
+
+    def _validate_execution_ready(
+        self,
+        channel_id: str,
+        now_ms: int,
+    ) -> ExecutionReadinessSnapshot:
+        """Validate planner/runtime startup readiness without mutating startup flow."""
+        if self._channel_config_provider is None:
+            self._raise_execution_readiness_fault(
+                channel_id=channel_id,
+                failed_check="channel_config_missing",
+                detail="channel config provider is not configured",
+                now_ms=now_ms,
+            )
+
+        channel_config = self._channel_config_provider.get_channel_config(channel_id)
+        if channel_config is None:
+            self._raise_execution_readiness_fault(
+                channel_id=channel_id,
+                failed_check="channel_config_missing",
+                detail="no channel config found",
+                now_ms=now_ms,
+            )
+
+        required_runtime_depth_ms = self._required_runtime_depth_ms(channel_config)
+        execution_reader = self._get_execution_reader_for_channel(channel_id, channel_config)
+
+        current_block = execution_reader.get_current_execution_block(channel_id, now_ms)
+        if current_block is None:
+            self._raise_execution_readiness_fault(
+                channel_id=channel_id,
+                failed_check="schedule_current_block_missing",
+                detail=f"no execution block covers now_ms={now_ms}",
+                now_ms=now_ms,
+                required_runtime_depth_ms=required_runtime_depth_ms,
+            )
+
+        next_start_ms = int(current_block.end_utc_ms)
+        next_block = execution_reader.get_next_execution_block(channel_id, next_start_ms)
+        if next_block is None:
+            self._raise_execution_readiness_fault(
+                channel_id=channel_id,
+                failed_check="schedule_next_block_missing",
+                detail=f"no next execution block begins at or after next_start_ms={next_start_ms}",
+                now_ms=now_ms,
+                current_block_id=current_block.block_id,
+                required_runtime_depth_ms=required_runtime_depth_ms,
+            )
+
+        current_playlist_event_present = self._playlist_event_exists(
+            channel_id, current_block.block_id
+        )
+        if not current_playlist_event_present:
+            self._raise_execution_readiness_fault(
+                channel_id=channel_id,
+                failed_check="playlog_current_block_missing",
+                detail=f"missing PlaylistEvent for current block {current_block.block_id}",
+                now_ms=now_ms,
+                current_block_id=current_block.block_id,
+                next_block_id=next_block.block_id,
+                required_runtime_depth_ms=required_runtime_depth_ms,
+            )
+
+        next_playlist_event_present = self._playlist_event_exists(
+            channel_id, next_block.block_id
+        )
+        if not next_playlist_event_present:
+            self._raise_execution_readiness_fault(
+                channel_id=channel_id,
+                failed_check="playlog_next_block_missing",
+                detail=f"missing PlaylistEvent for next block {next_block.block_id}",
+                now_ms=now_ms,
+                current_block_id=current_block.block_id,
+                next_block_id=next_block.block_id,
+                required_runtime_depth_ms=required_runtime_depth_ms,
+            )
+
+        forward_depth_ms = self._execution_depth_ms(channel_id, now_ms)
+        if forward_depth_ms == 0 and channel_id not in self._playlog_daemons:
+            self._raise_execution_readiness_fault(
+                channel_id=channel_id,
+                failed_check="forward_execution_depth_insufficient",
+                detail="playlist builder daemon is not initialized",
+                now_ms=now_ms,
+                current_block_id=current_block.block_id,
+                next_block_id=next_block.block_id,
+                forward_depth_ms=0,
+                required_runtime_depth_ms=required_runtime_depth_ms,
+            )
+
+        daemon = self._playlog_daemons.get(channel_id)
+        report = daemon.get_health_report() if daemon is not None else None
+        if forward_depth_ms < required_runtime_depth_ms:
+            self._raise_execution_readiness_fault(
+                channel_id=channel_id,
+                failed_check="forward_execution_depth_insufficient",
+                detail=(
+                    f"forward execution depth {forward_depth_ms}ms is below "
+                    f"required {required_runtime_depth_ms}ms"
+                ),
+                now_ms=now_ms,
+                current_block_id=current_block.block_id,
+                next_block_id=next_block.block_id,
+                forward_depth_ms=forward_depth_ms,
+                required_runtime_depth_ms=required_runtime_depth_ms,
+            )
+
+        snapshot = ExecutionReadinessSnapshot(
+            channel_id=channel_id,
+            now_ms=now_ms,
+            current_block_id=current_block.block_id,
+            next_block_id=next_block.block_id,
+            current_block_start_utc_ms=int(current_block.start_utc_ms),
+            current_block_end_utc_ms=int(current_block.end_utc_ms),
+            next_block_start_utc_ms=int(next_block.start_utc_ms),
+            next_block_end_utc_ms=int(next_block.end_utc_ms),
+            forward_depth_ms=forward_depth_ms,
+            required_runtime_depth_ms=required_runtime_depth_ms,
+            current_playlist_event_present=current_playlist_event_present,
+            next_playlist_event_present=next_playlist_event_present,
+            playlist_builder_healthy=(bool(report.is_healthy) if report is not None else None),
+            playlist_builder_last_evaluation_utc_ms=(
+                int(report.last_evaluation_utc_ms) if report is not None else None
+            ),
+        )
+        with self._channel_readiness_lock:
+            self._channel_execution_ready[channel_id] = snapshot
+            self._channel_startup_faults.pop(channel_id, None)
+        self._logger.info(
+            "ExecutionReadiness success: channel=%s now_ms=%d current_block_id=%s "
+            "next_block_id=%s forward_depth_ms=%d required_runtime_depth_ms=%d "
+            "current_playlist_event_present=%s next_playlist_event_present=%s "
+            "playlist_builder_healthy=%s",
+            snapshot.channel_id,
+            snapshot.now_ms,
+            snapshot.current_block_id,
+            snapshot.next_block_id,
+            snapshot.forward_depth_ms,
+            snapshot.required_runtime_depth_ms,
+            snapshot.current_playlist_event_present,
+            snapshot.next_playlist_event_present,
+            snapshot.playlist_builder_healthy,
+        )
+        return snapshot
+
+    def wait_until_execution_ready(
+        self,
+        channel_id: str,
+        now_ms: int,
+        *,
+        non_blocking: bool = False,
+    ) -> ExecutionReadinessSnapshot:
+        """Retry readiness validation until success or timeout."""
+        if non_blocking:
+            return self._validate_execution_ready(channel_id, now_ms)
+
+        grpc_cfg = self._resolved_config["playout"]["grpc"]
+        deadline = self._clock.monotonic() + float(grpc_cfg["readiness_timeout_seconds"])
+        retry_interval_s = float(grpc_cfg["retry_interval_seconds"])
+        last_fault: ExecutionReadinessFault | None = None
+
+        while True:
+            try:
+                return self._validate_execution_ready(channel_id, now_ms)
+            except ExecutionReadinessFault as exc:
+                last_fault = exc
+                if self._clock.monotonic() >= deadline:
+                    raise last_fault
+                time.sleep(retry_interval_s)
+
+    def _recover_unready_channels_once(self) -> int:
+        """Attempt a single non-blocking readiness re-check for unhealthy channels."""
+        if self._channel_config_provider is None:
+            return 0
+
+        with self._channel_readiness_lock:
+            pending_channel_ids = [
+                channel_id
+                for channel_id in self._channel_startup_faults
+                if channel_id not in self._channel_execution_ready
+            ]
+
+        recovered = 0
+        for channel_id in pending_channel_ids:
+            now_ms = int(self._embedded_clock.now_utc().timestamp() * 1000)
+            try:
+                self.wait_until_execution_ready(
+                    channel_id,
+                    now_ms,
+                    non_blocking=True,
+                )
+            except ExecutionReadinessFault:
+                continue
+            self._logger.info(
+                "READY-RECOVERY channel=%s now_ms=%d",
+                channel_id,
+                now_ms,
+            )
+            recovered += 1
+
+        return recovered
+
+    def _readiness_recovery_loop(self) -> None:
+        """Periodically retry readiness for channels that failed startup gating."""
+        while not self._readiness_recovery_stop.wait(timeout=self._health_check_interval_seconds):
+            try:
+                self._recover_unready_channels_once()
+            except Exception as exc:
+                self._logger.warning(
+                    "Readiness recovery loop error: %s",
+                    exc,
+                    exc_info=True,
+                )
+
+    def _resolve_linger_seconds(self, channel_id: str) -> int:
+        """Resolve the linger grace-period for a channel from resolved config.
+
+        Phase 8 Step 1: ProgramDirector is the sole owner of this config read.
+        ChannelManager receives the value at construction time; it does not
+        read ``resolved_config["channel"]["linger_seconds"]`` itself.
+
+        The `channel_id` argument is accepted for future per-channel override
+        support; the current config schema stores linger at the "channel"
+        section only, so the channel id is not yet consulted.
+        """
+        return int(self._resolved_config["channel"]["linger_seconds"])
+
+    def observe_viewer_transition(
+        self,
+        manager: Any,
+        session_id: str,
+        old_count: int,
+        new_count: int,
+    ) -> None:
+        """Observe a viewer-count transition reported by ChannelManager.
+
+        Phase 8 Step 4: PD owns the linger timer. On 0→1 we cancel any
+        pending linger (viewer returned during the grace window) and then
+        start the producer via the command surface. On 1→0 we schedule a
+        PD-owned linger timer for this channel; when the timer fires,
+        ``_on_linger_expired`` calls ``manager.stop_producer(reason="last_viewer_left")``.
+        """
+        if old_count == 0 and new_count == 1:
+            self._cancel_linger(manager.channel_id)
+            manager.start_producer(trigger_session_id=session_id)
+        elif old_count == 1 and new_count == 0:
+            self._schedule_linger(manager.channel_id)
+
+    def _schedule_linger(self, channel_id: str) -> None:
+        """Schedule the PD-owned linger timer for a channel.
+
+        Phase 8 Step 4 replaces ``ChannelManager._start_linger``. The handle
+        is stored in ``self._linger_handles`` so that a subsequent rejoin
+        (0→1) or admin stop can cancel it.
+
+        If no asyncio loop is available (pre-startup or a synchronous
+        teardown path), we execute the expiry logic inline — mirroring the
+        pre-Step-4 "no event loop" fallback that ``_start_linger`` used.
+        """
+        loop = self._asyncio_loop
+        linger_seconds = self._resolve_linger_seconds(channel_id)
+
+        if loop is None:
+            self._logger.info(
+                "[channel %s] LINGER_SKIP (no event loop); teardown immediate",
+                channel_id,
+            )
+            self._on_linger_expired(channel_id)
+            return
+
+        with self._linger_lock:
+            existing = self._linger_handles.pop(channel_id, None)
+        if existing is not None:
+            existing.cancel()
+
+        handle = loop.call_later(
+            linger_seconds, self._on_linger_expired, channel_id
+        )
+        with self._linger_lock:
+            self._linger_handles[channel_id] = handle
+        self._logger.debug(
+            "[channel %s] LINGER_STARTED %ss (PD-owned)",
+            channel_id, linger_seconds,
+        )
+
+    # --- Phase 8 Step 5: producer-recovery policy ------------------------
+    # INV-CHANNEL-LIVENESS-RECOVERY-001. ChannelManager reports producer
+    # session-end events; ProgramDirector owns the retry budget, backoff
+    # schedule, and the decision to give up. PD issues the retry via the
+    # existing command surface (``manager.start_producer()``).
+
+    def _resolve_recovery_config(self, channel_id: str) -> tuple[float, int]:
+        """Return ``(base_delay_seconds, max_attempts)`` for a channel.
+
+        Phase 8 Step 5: PD is the sole reader of recovery config.
+        ``channel_id`` is accepted for future per-channel overrides; the
+        current schema stores recovery config at the channel-level only.
+        """
+        _rec = self._resolved_config["channel"]["recovery"]
+        return (float(_rec["base_delay_seconds"]), int(_rec["max_attempts"]))
+
+    def on_producer_failure(self, channel_id: str, reason: str) -> None:
+        """Handle a producer-session-end notification from ChannelManager.
+
+        Policy (INV-CHANNEL-LIVENESS-RECOVERY-001, PD-owned since Step 5):
+
+        * Only ``"stopped"`` and ``"error"`` reasons are treated as
+          transient. ``"last_viewer_left"`` and ``"lookahead_exhausted"``
+          are intentional terminations — no retry.
+        * If ``viewer_count == 0`` there is nothing to serve, so no retry.
+        * If the channel is already in ``STOPPED`` state (admin teardown
+          in flight), suppress retry to avoid racing with teardown.
+        * Otherwise increment the attempt counter, check against the
+          per-channel max, and schedule a back-off retry.
+        """
+        if reason not in ("stopped", "error"):
+            return
+        with self._managers_lock:
+            manager = self._managers.get(channel_id)
+        if manager is None:
+            return
+        if getattr(getattr(manager, "runtime_state", None), "viewer_count", 0) == 0:
+            return
+        if getattr(manager, "_channel_state", None) == "STOPPED":
+            return
+
+        base_delay, max_attempts = self._resolve_recovery_config(channel_id)
+        with self._recovery_lock:
+            state = self._recovery_state.setdefault(channel_id, {"attempts": 0})
+            state["attempts"] += 1
+            attempts = state["attempts"]
+            if attempts > max_attempts:
+                self._logger.error(
+                    "INV-CHANNEL-LIVENESS-RECOVERY-001: channel %s: "
+                    "max recovery attempts (%d) exceeded; giving up",
+                    channel_id, max_attempts,
+                )
+                # Drop the handle (if any) but keep the counter so repeated
+                # failures don't schedule silently — next successful start
+                # resets it.
+                existing = self._recovery_handles.pop(channel_id, None)
+                if existing is not None:
+                    existing.cancel()
+                return
+            existing = self._recovery_handles.pop(channel_id, None)
+        if existing is not None:
+            existing.cancel()
+
+        delay = min(base_delay * (2 ** (attempts - 1)), 30.0)
+        self._logger.warning(
+            "INV-CHANNEL-LIVENESS-RECOVERY-001: channel %s: "
+            "scheduling recovery attempt %d/%d in %.1fs (reason=%s)",
+            channel_id, attempts, max_attempts, delay, reason,
+        )
+        self._schedule_recovery(channel_id, delay)
+
+    def _schedule_recovery(self, channel_id: str, delay: float) -> None:
+        """Schedule a PD-owned retry timer.
+
+        Uses the asyncio loop (same mechanism as the linger timer from
+        Step 4). If no loop is available, falls back to calling the retry
+        synchronously — preserving the pre-Step-5 "run even without a
+        loop" behavior that CM's ``threading.Timer`` provided.
+        """
+        loop = self._asyncio_loop
+        if loop is None:
+            self._logger.info(
+                "[channel %s] RECOVERY_SKIP (no event loop); retrying inline",
+                channel_id,
+            )
+            self._attempt_recovery(channel_id)
+            return
+        handle = loop.call_later(delay, self._attempt_recovery, channel_id)
+        with self._recovery_lock:
+            self._recovery_handles[channel_id] = handle
+
+    def _attempt_recovery(self, channel_id: str) -> None:
+        """Timer callback: issue ``manager.start_producer()`` if the
+        channel is still eligible. Resets the attempts counter on success
+        so the next failure starts from the base delay again.
+        """
+        with self._recovery_lock:
+            self._recovery_handles.pop(channel_id, None)
+
+        with self._managers_lock:
+            manager = self._managers.get(channel_id)
+        if manager is None:
+            return
+        if getattr(getattr(manager, "runtime_state", None), "viewer_count", 0) == 0:
+            # Viewers left during backoff. Drop the counter — a fresh
+            # failure should start from base again if it ever returns.
+            with self._recovery_lock:
+                self._recovery_state.pop(channel_id, None)
+            return
+        if getattr(manager, "_channel_state", None) == "STOPPED":
+            with self._recovery_lock:
+                self._recovery_state.pop(channel_id, None)
+            return
+
+        try:
+            manager.start_producer()
+        except Exception as exc:  # noqa: BLE001 — policy choice: log + leave counter for next failure
+            self._logger.error(
+                "INV-CHANNEL-LIVENESS-RECOVERY-001: channel %s: "
+                "recovery attempt failed: %s",
+                channel_id, exc,
+            )
+            return
+
+        # Successful issuance → reset the attempts counter. The next
+        # transient failure (if any) will start from the base delay.
+        with self._recovery_lock:
+            self._recovery_state.pop(channel_id, None)
+
+    def _cancel_recovery(self, channel_id: str) -> None:
+        """Cancel any pending recovery and clear the attempts counter.
+
+        Called on 0→1 rejoin would be redundant (rejoin triggers
+        ``start_producer`` directly, and a successful start resets the
+        counter in ``_attempt_recovery``), so the current call sites are
+        admin/teardown stop only. Idempotent.
+        """
+        with self._recovery_lock:
+            handle = self._recovery_handles.pop(channel_id, None)
+            self._recovery_state.pop(channel_id, None)
+        if handle is not None:
+            handle.cancel()
+
+    # --- end recovery driver --------------------------------------------
+
+    def _on_phantom_idle(
+        self,
+        channel_id: str,
+        phantom_id: str,
+        reason: str,
+    ) -> None:
+        """Handle a phantom-idle notification from HlsConsumptionAdapter.
+
+        Phase 8 Step 6: PD is the sole lifecycle actor for phantom
+        teardown. The adapter's drain thread is a detector only — it
+        emits this event when it observes:
+
+            - the fanout is no longer running  (reason="fanout_dead")
+            - the phantom queue yielded EOF     (reason="eof")
+            - byte-flow is dead past threshold  (reason="byte_flow_dead")
+            - no client activity past timeout   (reason="idle_timeout")
+            - fanout never came up at activation time
+                                                (reason="fanout_unavailable")
+
+        PD routes the event through the normal viewer-unregistration
+        path (``manager.tune_out(phantom_id)``), so the transition
+        obeys the same linger / teardown rules as any other
+        viewer_leave. That gives:
+
+            - idempotency: duplicate events see the session already
+              removed by `viewer_sessions.pop` and fall through harmlessly.
+            - no incorrect teardown when real viewers are still present
+              (the 1→0 gate is what schedules linger; a 2→1 transition
+              does nothing).
+            - consistent observability: all viewer transitions flow
+              through ``observe_viewer_transition``.
+        """
+        self._logger.info(
+            "[HLS-v2-phantom %s] phantom idle reason=%s phantom=%s",
+            channel_id, reason, phantom_id,
+        )
+        with self._managers_lock:
+            manager = self._managers.get(channel_id)
+        if manager is None:
+            return
+        try:
+            manager.tune_out(phantom_id)
+        except Exception as exc:  # noqa: BLE001 — cross-thread race tolerance
+            self._logger.warning(
+                "[HLS-v2-phantom %s] tune_out on phantom idle failed: %s",
+                channel_id, exc,
+            )
+
+    def register_fanout_buffer(self, channel_id: str, fanout: Any) -> None:
+        """Register a ChannelStream fanout for a channel.
+
+        Phase 9 Step 4: ProgramDirector is the sole writer of
+        ``_fanout_buffers``. Adapters that construct a fanout
+        (e.g. ``HlsConsumptionAdapter`` during activation) must register
+        it through this method rather than touching ``_fanout_buffers``
+        directly. Behavior-preserving: the method does exactly what the
+        previous subscript assignment did, under the existing fanout
+        lock.
+        """
+        with self._fanout_lock:
+            self._fanout_buffers[channel_id] = fanout
+
+    def is_channel_in_linger(self, channel_id: str) -> bool:
+        """Return True if a PD-owned linger timer is pending for the channel.
+
+        Phase 8 Step 4: read-only accessor for components that need to know
+        whether the channel is in the linger grace window (e.g. CM's
+        health loop skips zero-viewer handling while linger is pending).
+        CM never writes this state — PD is the sole owner.
+        """
+        with self._linger_lock:
+            return channel_id in self._linger_handles
+
+    def _cancel_linger(self, channel_id: str) -> None:
+        """Cancel any pending linger timer for a channel.
+
+        Called on 0→1 (viewer returned) and on admin stop. Idempotent —
+        missing entries are silently ignored.
+        """
+        with self._linger_lock:
+            handle = self._linger_handles.pop(channel_id, None)
+        if handle is not None:
+            handle.cancel()
+            self._logger.debug(
+                "[channel %s] LINGER_CANCELLED (PD-owned)", channel_id
+            )
+
+    def _on_linger_expired(self, channel_id: str) -> None:
+        """Fire the linger-expired teardown for a channel.
+
+        Phase 8 Step 4: invoked by the PD-owned timer (or by the
+        no-event-loop synchronous fallback in ``_schedule_linger``). This
+        is the replacement for the deleted ``on_linger_expired`` callback
+        slot on ChannelManager.
+
+        Race guard: if a viewer returned between timer scheduling and
+        expiry, skip the teardown. The observer normally cancels the timer
+        on 0→1, but we re-check here to close the window between
+        ``_schedule_linger`` and its ``call_later`` callback.
+        """
+        with self._linger_lock:
+            self._linger_handles.pop(channel_id, None)
+
+        with self._managers_lock:
+            manager = self._managers.get(channel_id)
+        if manager is None:
+            return
+        if getattr(getattr(manager, "runtime_state", None), "viewer_count", 0) > 0:
+            self._logger.debug(
+                "[channel %s] linger expired but viewer_count > 0; skipping teardown",
+                channel_id,
+            )
+            return
+
+        self._stop_channel_internal(channel_id, reason="last_viewer_left")
 
     def _get_or_create_manager(self, channel_id: str) -> Any:
         """Get or create ChannelManager for a channel (embedded mode). PD is sole authority for creation.
@@ -805,11 +1529,25 @@ class ProgramDirector:
             raise ChannelManagerError("Server is starting up — schedule prewarm in progress")
 
         with self._managers_lock:
+            with self._channel_readiness_lock:
+                readiness_snapshot = self._channel_execution_ready.get(channel_id)
+                fault = self._channel_startup_faults.get(channel_id)
+            if readiness_snapshot is None:
+                if fault is not None:
+                    raise fault
+                raise ExecutionReadinessFault(
+                    channel_id=channel_id,
+                    failed_check="execution_readiness_not_confirmed",
+                    detail="channel is not marked execution-ready",
+                    now_ms=int(self._embedded_clock.now_utc().timestamp() * 1000),
+                )
+
             if channel_id in self._managers:
                 manager = self._managers[channel_id]
-                # Re-activate stopped manager for returning viewers
-                if manager._channel_state == "STOPPED":
-                    manager._channel_state = "IDLE"
+                # Re-activate stopped manager for returning viewers.
+                # Phase 9 Step 3: the STOPPED → IDLE flip is owned by
+                # ChannelManager; mark_idle() is a no-op on any other state.
+                manager.mark_idle()
                 return manager
 
             channel_config = self._channel_config_provider.get_channel_config(channel_id)
@@ -819,12 +1557,17 @@ class ProgramDirector:
                     "blockplan-only mode requires config for each channel."
                 )
 
-            # INV-P5-001: Select schedule service based on channel config
-            schedule_service = self._get_schedule_service_for_channel(channel_id, channel_config)
+            # Runtime execution must read through the execution reader boundary only.
+            execution_reader = self._get_execution_reader_for_channel(
+                channel_id, channel_config
+            )
 
             # INV-SCHEDULE-PREWARM-001: Do not call load_schedule() here.
             # Schedule must already be loaded by _prewarm_channel_schedules().
             # Check readiness: for DSL services, blocks must be populated.
+            schedule_service = self._get_schedule_service_for_channel(
+                channel_id, channel_config
+            )
             if hasattr(schedule_service, "_blocks") and not schedule_service._blocks:
                 from retrovue.runtime.channel_manager import ChannelManagerError
                 raise ChannelManagerError(
@@ -842,15 +1585,15 @@ class ProgramDirector:
             manager = ChannelManager(
                 channel_id=channel_id,
                 clock=self._embedded_clock,
-                schedule_service=schedule_service,
+                execution_reader=execution_reader,
                 program_director=self,
                 event_loop=_loop,
                 evidence_endpoint=self._evidence_endpoint,
                 resolved_config=self._resolved_config,
-                # INV-LIFECYCLE-PD-SOLE-TEARDOWN-001: PD is the sole teardown
-                # authority. CM must not call stop_channel directly — it invokes
-                # this callback instead.
-                on_linger_expired=lambda cid=channel_id: self._stop_channel_internal(cid, reason="last_viewer_left"),
+                # Phase 8 Step 4: PD owns the linger timer. No
+                # linger_seconds parameter and no on_linger_expired
+                # callback are passed in — PD reads config and fires its
+                # own timer callback via _on_linger_expired.
             )
             manager.channel_config = channel_config
             if self._mock_schedule_grid_mode:
@@ -874,8 +1617,8 @@ class ProgramDirector:
 
     def _health_check_loop(self) -> None:
         """Run check_health() and tick() on each registered ChannelManager (embedded mode)."""
-        last_refreeze = time.monotonic()
-        last_mem_telemetry = time.monotonic()
+        last_refreeze = self._clock.monotonic()
+        last_mem_telemetry = self._clock.monotonic()
         while (
             self._health_check_stop is not None
             and not self._health_check_stop.wait(timeout=self._health_check_interval_seconds)
@@ -899,7 +1642,7 @@ class ProgramDirector:
                 # ORM identities) accumulates in Gen 2 after the startup freeze.
                 # At 60s interval, Gen 2 grew large enough for 80-90ms collections.
                 # At 15s, Gen 2 stays small and collections stay sub-5ms.
-                now = time.monotonic()
+                now = self._clock.monotonic()
                 if now - last_refreeze >= self._GC_REFREEZE_INTERVAL_S:
                     _gc_before = gc.get_stats()[2]
                     gc.collect()
@@ -1052,8 +1795,8 @@ class ProgramDirector:
     def stop_channel(self, channel_id: str, reason: str | None = None) -> None:
         """Stop channel and remove from registry (provider protocol; when embedded, PD is sole authority).
 
-        reason: When using embedded ChannelManagers, passed to AIR StopBlockPlanSession for accurate
-        logging. Use "last_viewer_left" only when stopping due to viewer count 1→0; omit for admin stop.
+        reason: When using embedded ChannelManagers, passed to Producer.stop(reason=...) for accurate
+        teardown logging. Use "last_viewer_left" only when stopping due to viewer count 1→0; omit for admin stop.
         Provider protocol only receives channel_id (backward compatible).
         """
         if self._channel_manager_provider is not None:
@@ -1077,8 +1820,17 @@ class ProgramDirector:
         in self._managers so that a returning viewer can re-activate the channel
         without triggering schedule recompilation. Only the producer and fanout
         are torn down; schedule state persists in the manager.
+
+        Phase 8 Step 4: any pending PD-owned linger timer for this channel is
+        cancelled at the top of this path, and teardown dispatches through
+        the command surface ``manager.stop_producer`` (the thin wrapper over
+        stop_channel added in Step 3).
         """
         stop_reason = reason or "channel_stop"
+        self._cancel_linger(channel_id)
+        # Phase 8 Step 5: any pending producer-recovery retry must be
+        # cancelled at teardown so PD does not race with itself.
+        self._cancel_recovery(channel_id)
         with self._pre_warmed_lock:
             timer = self._pre_warmed_timers.pop(channel_id, None)
         if timer:
@@ -1087,7 +1839,7 @@ class ProgramDirector:
             manager = self._managers.get(channel_id)
         if manager is not None:
             self._logger.info("[channel %s] ChannelManager idle (producer stopped)", channel_id)
-            manager.stop_channel(reason=stop_reason)
+            manager.stop_producer(reason=stop_reason)
             # Signal the fanout stop event *before* killing the producer so
             # that when AIR's socket closes and the reader gets EOF it sees
             # _stop_event already set and exits cleanly instead of attempting
@@ -1100,7 +1852,8 @@ class ProgramDirector:
                 self._logger.info("[channel %s] Force-stopping producer (terminating Air)", channel_id)
                 try:
                     manager.active_producer.stop(reason=getattr(manager, "_stop_reason", None) or stop_reason)
-                    manager.active_producer = None
+                    # Phase 9 Step 2: CM owns the field; PD issues the command.
+                    manager.clear_active_producer()
                 except Exception as e:
                     self._logger.warning(
                         "Error stopping producer for channel %s: %s", channel_id, e
@@ -1144,12 +1897,13 @@ class ProgramDirector:
                 return  # Already installed
 
         _start_ns_holder = [0]
+        _gc_clock = self._clock
 
         def _retrovue_gc_telemetry(phase: str, info: dict) -> None:
             if phase == "start":
-                _start_ns_holder[0] = time.monotonic_ns()
+                _start_ns_holder[0] = _gc_clock.monotonic_ns()
             elif phase == "stop":
-                duration_ms = (time.monotonic_ns() - _start_ns_holder[0]) / 1e6
+                duration_ms = (_gc_clock.monotonic_ns() - _start_ns_holder[0]) / 1e6
                 gen = info.get("generation", -1)
                 collected = info.get("collected", 0)
                 uncollectable = info.get("uncollectable", 0)
@@ -1199,10 +1953,14 @@ class ProgramDirector:
             try:
                 from retrovue.runtime import evidence_server
                 from retrovue.runtime.evidence_server import DurableAckStore
-                ack_store = DurableAckStore(ack_dir=self._evidence_ack_dir)
+                ack_store = DurableAckStore(
+                    ack_dir=self._evidence_ack_dir,
+                    clock=self._clock,
+                )
                 self._evidence_server = evidence_server.serve(
                     port=self._evidence_port,
                     block=False,
+                    clock=self._clock,
                     ack_store=ack_store,
                     asrun_dir=self._evidence_asrun_dir,
                 )
@@ -1273,6 +2031,13 @@ class ProgramDirector:
                             daemon=True,
                         )
                         self._health_check_thread.start()
+                    self._readiness_recovery_stop.clear()
+                    self._readiness_recovery_thread = Thread(
+                        target=self._readiness_recovery_loop,
+                        name="program-director-readiness-recovery",
+                        daemon=True,
+                    )
+                    self._readiness_recovery_thread.start()
                     # Freeze long-lived objects out of GC Gen 2 traversal.
                     # gc.freeze() moves them to a permanent generation the GC
                     # never re-traverses — Gen 2 drops to <1ms.
@@ -1355,18 +2120,22 @@ class ProgramDirector:
                 fanout.signal_stop()
 
         # Embedded mode: stop health-check thread and tear down all managers (including AIR).
-        # Stop channel managers (and thus PlayoutSession/AIR) before stopping the Evidence
-        # server so AIR receives Stop RPC and exits gracefully; otherwise Evidence server
-        # stop can cause AIR to disconnect and exit, leading to "Event stream error" and
-        # "Stop RPC error: connection refused" during shutdown.
+        # Stop channel managers (and thus AIR subprocesses) before stopping the Evidence server
+        # so AIR terminates cleanly (via terminate_air on the BlockPlanProducer).
         if self._channel_manager_provider is None:
             if self._health_check_stop is not None:
                 self._health_check_stop.set()
+            self._readiness_recovery_stop.set()
             if self._health_check_thread is not None and self._health_check_thread.is_alive():
                 self._health_check_thread.join(timeout=2.0)
                 if self._health_check_thread.is_alive():
                     self._logger.warning("Health-check thread did not stop within timeout")
                 self._health_check_thread = None
+            if self._readiness_recovery_thread is not None and self._readiness_recovery_thread.is_alive():
+                self._readiness_recovery_thread.join(timeout=2.0)
+                if self._readiness_recovery_thread.is_alive():
+                    self._logger.warning("Readiness-recovery thread did not stop within timeout")
+                self._readiness_recovery_thread = None
             with self._managers_lock:
                 for channel_id, manager in list(self._managers.items()):
                     if manager.active_producer:
@@ -1374,7 +2143,8 @@ class ProgramDirector:
                             manager.active_producer.stop()
                         except Exception as e:
                             self._logger.warning("Error stopping producer %s: %s", channel_id, e)
-                        manager.active_producer = None
+                        # Phase 9 Step 2: CM owns the field; PD issues the command.
+                        manager.clear_active_producer()
                 self._managers.clear()
 
         # Now do the full fanout stop (join threads, close resources).
@@ -1423,6 +2193,7 @@ class ProgramDirector:
             except Exception as e:
                 self._logger.warning("Error stopping PlaylistBuilderDaemon %s: %s", channel_id, e)
         self._playlog_daemons.clear()
+        self._execution_readers.clear()
 
         self._logger.debug("ProgramDirector stopped")
 
@@ -1537,22 +2308,30 @@ class ProgramDirector:
                 self._fanout_buffers[channel_id] = fanout
                 return fanout
 
-            # Check if Producer is running and has socket_path
+            # INV-EARLY-DRAIN: the fanout may be pre-wired BEFORE the
+            # producer starts so the upstream reader is already draining the
+            # UDS by the time AIR's AttachStream lands a socket in the queue
+            # (closes the AttachStream→SwitchToLive backpressure window that
+            # would otherwise fill AIR's 2 MB SocketSink buffer and trip
+            # POLLHUP before Core ever reads). A pre-wired fanout is kept
+            # even when active_producer is still None.
             producer = getattr(manager, "active_producer", None)
 
             if channel_id in self._fanout_buffers:
                 fanout = self._fanout_buffers[channel_id]
-                if fanout.is_running() and producer:
+                # Keep the cached instance if it is still reading (pre-wired
+                # or post-producer) — the factory handles producer rotation
+                # on its own via reader_socket_queue re-resolution.
+                if fanout.is_running():
                     return fanout
-                # Remove stopped or orphaned fanout (producer gone)
+                # Remove stopped fanout (reader died / teardown).
                 self._fanout_buffers.pop(channel_id, None)
-
-            if not producer:
-                return None
 
             # Delegate ChannelStream construction to TsConsumptionAdapter.
             # Phase 8c: construction logic (socket queue, socket_path fallback,
             # test-mode source path) lives in TsConsumptionAdapter._wire_fanout().
+            # When producer is None (pre-wire), _wire_fanout returns a
+            # ChannelStream whose factory will wait for the producer.
             fanout = self._ts_adapter._wire_fanout(
                 channel_id,
                 manager=manager,
@@ -1706,6 +2485,31 @@ class ProgramDirector:
                         mgr = self._channel_manager_provider.get_channel_manager(channel_id)
                     else:
                         mgr = self._get_or_create_manager(channel_id)
+
+                    # INV-EARLY-DRAIN: pre-wire the fanout BEFORE tune_in.
+                    # tune_in synchronously runs observe_viewer_transition →
+                    # start_producer → launch_air, during which AIR connects
+                    # to the UDS (AttachStream) and immediately begins writing
+                    # MPEG-TS. If the ChannelStream reader is not already
+                    # polling reader_socket_queue at that moment, AIR's
+                    # SocketSink buffer (2 MB) fills during the
+                    # AttachStream→SwitchToLive lead window and trips POLLHUP,
+                    # killing the output path before Core ever reads.
+                    # Creating+starting the fanout here — with the manager-
+                    # driven factory that re-resolves the queue at call time
+                    # — puts the reader on the queue the instant the producer
+                    # exposes it, which is the instant AIR's AttachStream
+                    # returns.
+                    try:
+                        pre_fanout = self._get_or_create_fanout_buffer(channel_id, mgr)
+                        if pre_fanout is not None and not pre_fanout.is_running():
+                            pre_fanout.start()
+                    except Exception as _exc:
+                        self._logger.warning(
+                            "[HTTP] pre-wire fanout failed for channel %s: %s",
+                            channel_id, _exc,
+                        )
+
                     mgr.tune_in(session_id, {"channel_id": channel_id})
                     return mgr
 
@@ -1762,7 +2566,7 @@ class ProgramDirector:
 
             async def generate_stream():
                 try:
-                    async for chunk in generate_ts_stream_async(client_queue):
+                    async for chunk in generate_ts_stream_async(client_queue, clock=self._clock):
                         yield chunk
                 except GeneratorExit:
                     cleanup_stream(reason="generator_exit")
@@ -2011,7 +2815,7 @@ class ProgramDirector:
             from retrovue.infra.uow import session
 
             tz = ZoneInfo("America/New_York")
-            now = datetime.now(tz)
+            now = self._embedded_clock.now_utc().astimezone(tz)
 
             viewer_count = self._get_pre_warmed_viewer_count(channel_id)
 
@@ -2264,7 +3068,7 @@ class ProgramDirector:
             # INV-HLS-ENDPOINT-SESSION-TOUCH-001: Touch on success only
             session_mgr = getattr(mgr, "hls_session_manager", None)
             if session_mgr is not None:
-                session_mgr.set_clock(int(__import__("time").monotonic() * 1000))
+                session_mgr.set_clock(self._clock.monotonic_ms())
                 session_mgr.touch(sid)
 
             # Refresh phantom activity so drain thread keeps channel alive
@@ -2362,7 +3166,7 @@ class ProgramDirector:
             session_mgr = getattr(mgr, "hls_session_manager", None)
             if session_mgr is not None:
                 sid = session or f"hls-anon-{uuid.uuid4().hex[:8]}"
-                session_mgr.set_clock(int(__import__("time").monotonic() * 1000))
+                session_mgr.set_clock(self._clock.monotonic_ms())
                 session_mgr.touch(sid)
 
             # Refresh phantom activity so drain thread keeps channel alive
@@ -2620,7 +3424,11 @@ class ProgramDirector:
             except Exception:
                 pass
             channel_config = _make_test_channel_config(channel_config)
-            test_session = EphemeralTestSession(block_id=block_id, session_id=session_id)
+            test_session = EphemeralTestSession(
+                block_id=block_id,
+                session_id=session_id,
+                clock=self._clock,
+            )
             try:
                 test_session.start(channel_config)
             except RuntimeError as e:
@@ -2644,7 +3452,7 @@ class ProgramDirector:
                 request, lambda: cleanup(reason="asgi_receive")))
             async def generate_stream():
                 try:
-                    async for chunk in generate_ts_stream_async(client_queue):
+                    async for chunk in generate_ts_stream_async(client_queue, clock=self._clock):
                         yield chunk
                 except GeneratorExit:
                     cleanup(reason="generator_exit")

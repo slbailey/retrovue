@@ -12,6 +12,8 @@ These tests validate:
 
 from __future__ import annotations
 
+from retrovue.runtime.clock import SystemClock
+
 import logging
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -158,7 +160,7 @@ class TestExecuteJobRecordsFailure:
         job = _FakeJob()
 
         try:
-            execute_job(db, job)
+            execute_job(db, job, clock=SystemClock())
         except Exception:
             pass
 
@@ -188,7 +190,7 @@ class TestExecuteJobRecordsFailure:
         job = _FakeJob()
 
         try:
-            execute_job(db, job)
+            execute_job(db, job, clock=SystemClock())
         except Exception:
             pass
 
@@ -229,7 +231,7 @@ class TestEnricherExecutionFailureVisible:
             InterstitialTypeEnricher, "enrich", side_effect=_broken_enrich,
         ):
             with pytest.raises(RuntimeError, match="simulated enricher crash"):
-                execute_job(db, job)
+                execute_job(db, job, clock=SystemClock())
 
         from retrovue.domain.entities import ProcessorRun
         run_records = [
@@ -269,7 +271,7 @@ class TestNoSilentSkip:
         job = _FakeJob()
 
         try:
-            execute_job(db, job)
+            execute_job(db, job, clock=SystemClock())
         except Exception:
             pass
 
@@ -298,7 +300,7 @@ class TestNoSilentSkip:
         job = _FakeJob()
 
         try:
-            execute_job(db, job)
+            execute_job(db, job, clock=SystemClock())
         except Exception:
             pass
 

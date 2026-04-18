@@ -266,110 +266,27 @@ EngineResult PlayoutEngine::StartChannel(
     }
     std::cout << "[PlayoutEngine] Phase 8 TimelineController started for channel " << channel_id << std::endl;
 
-    // Create producer config from ProgramFormat (canonical signal format)
-    producers::file::ProducerConfig producer_config;
-    producer_config.asset_uri = plan_handle; // For now, use plan_handle as asset URI
-    producer_config.target_fps = state->program_format.GetFrameRateAsDouble();
-    producer_config.stub_mode = false; // Use real decode
-    producer_config.target_width = state->program_format.video.width;
-    producer_config.target_height = state->program_format.video.height;
-    
-    // Create live producer (FileProducer - decodes both audio and video)
-    // Phase 8: Pass TimelineController for unified timeline authority
-    state->live_producer = std::make_unique<producers::file::FileProducer>(
-        producer_config, *state->ring_buffer, master_clock_, nullptr,
-        state->timeline_controller.get());
-
-    // P8-EOF-001: Wire decoder EOF callback; PlayoutEngine receives signal (boundary unchanged)
-    state->live_producer->SetLiveProducerEOFCallback(
-        [this, channel_id](const std::string& segment_id, int64_t ct_at_eof_us, int64_t frames_delivered) {
-          OnLiveProducerEOF(channel_id, segment_id, ct_at_eof_us, frames_delivered);
-        });
-
-    // Create program output
-    renderer::RenderConfig render_config;
-    render_config.mode = renderer::RenderMode::HEADLESS;
-    state->program_output = renderer::ProgramOutput::Create(
-        render_config, *state->ring_buffer, master_clock_, metrics_exporter_, channel_id);
-
-    // P8-FILL-002: ProgramOutput reads this to emit pad during content deficit (EOF before boundary)
-    state->program_output->SetContentDeficitActiveFlag(&state->content_deficit_active_);
-
-    // INV-P8-SUCCESSOR-OBSERVABILITY: Wire observer before any segment may commit.
-    // ProgramOutput notifies when first real successor video frame is routed.
-    state->program_output->SetOutputBus(state->output_bus.get());
-    PlayoutInstance* state_ptr = state.get();
-    timing::TimelineController* tc = state->timeline_controller.get();
-    state->program_output->SetOnSuccessorVideoEmitted([state_ptr, tc]() {
-      state_ptr->successor_video_emitted_.store(true, std::memory_order_release);
-      if (tc) tc->RecordSuccessorEmissionDiagnostic();
-    });
-    state->timeline_controller->SetEmissionObserverAttached(true);
-
     // Start control state machine
     const int64_t now = NowUtc(master_clock_);
     if (!state->control->BeginSession(MakeCommandId("start", channel_id), now)) {
       return EngineResult(false, "Failed to begin session for channel " + std::to_string(channel_id));
     }
 
-    // Phase 8: Begin segment BEFORE starting producer.
-    // INV-P8-SWITCH-002: First frame locks BOTH CT and MT together.
-    // At session start, CT_start will be very close to 0 (ms from epoch).
-    if (state->timeline_controller) {
-      auto pending = state->timeline_controller->BeginSegmentFromPreview();
-      std::cout << "[PlayoutEngine] Phase 8: Segment begun (preview-owned, id=" << pending.id
-                << "), CT and MT will lock on first frame" << std::endl;
-    }
-
-    // Start producer
-    if (!state->live_producer->start()) {
-      return EngineResult(false, "Failed to start producer for channel " + std::to_string(channel_id));
-    }
-
-    // Wait for minimum buffer depth BEFORE starting renderer
-    // (renderer would consume frames immediately, preventing buffer from filling)
-    const auto start_time = std::chrono::steady_clock::now();
-    while (state->ring_buffer->Size() < kReadyDepth) {
-      if (std::chrono::steady_clock::now() - start_time > kReadyTimeout) {
-        telemetry::ChannelMetrics metrics{};
-        metrics.state = telemetry::ChannelState::BUFFERING;
-        metrics.buffer_depth_frames = state->ring_buffer->Size();
-        metrics_exporter_->SubmitChannelMetrics(channel_id, metrics);
-        // Stop producer before returning so ~PlayoutInstance does not destroy
-        // running threads that then call virtuals on a partially destroyed object.
-        if (state->live_producer) {
-          state->live_producer->RequestTeardown(std::chrono::milliseconds(200));
-          while (state->live_producer->isRunning()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-          }
-          state->live_producer->stop();
-        }
-        return EngineResult(false, "Timeout waiting for buffer depth on channel " + std::to_string(channel_id));
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-
-    // Phase 8: Segment mapping was begun before producer start (BeginSegment).
-    // MT_start was locked on first admitted frame automatically.
-
-    // Start program output AFTER buffer has sufficient depth
-    if (!state->program_output->Start()) {
-      return EngineResult(false, "Failed to start program output for channel " + std::to_string(channel_id));
-    }
-    
-    // Update state machine with buffer depth
-    state->control->OnBufferDepth(state->ring_buffer->Size(), kDefaultBufferSize, NowUtc(master_clock_));
+    // BlockPlan mode owns actual producer lifecycle. StartChannel establishes only
+    // the session shell, timing primitives, and output bus; it must not interpret
+    // plan_handle as a media asset or begin playout before StartBlockPlanSession.
+    state->control->OnBufferDepth(0, kDefaultBufferSize, NowUtc(master_clock_));
     
     // Submit ready metrics
     telemetry::ChannelMetrics metrics{};
-    metrics.state = telemetry::ChannelState::READY;
-    metrics.buffer_depth_frames = state->ring_buffer->Size();
+    metrics.state = telemetry::ChannelState::BUFFERING;
+    metrics.buffer_depth_frames = 0;
     metrics_exporter_->SubmitChannelMetrics(channel_id, metrics);
     
     // Store channel state
     channels_[channel_id] = std::move(state);
     
-    return EngineResult(true, "Channel " + std::to_string(channel_id) + " started successfully");
+    return EngineResult(true, "Channel " + std::to_string(channel_id) + " initialized for BlockPlan session");
   } catch (const std::exception& e) {
     return EngineResult(false, "Exception starting channel " + std::to_string(channel_id) + ": " + e.what());
   }
@@ -796,9 +713,9 @@ void PlayoutEngine::SpawnSwitchWatcher(int32_t channel_id, PlayoutInstance* stat
                   << ", elapsed_ms=" << elapsed_ms << ", asset=" << s->live_asset_path << ")"
                   << std::endl;
 
-        // INV-P8-SHADOW-PREROLL-SYNC: Advance ct_cursor for pre-buffered frames
-        if (s->timeline_controller && video_depth > 0) {
-          s->timeline_controller->AdvanceCursorForPreBufferedFrames(video_depth);
+        // INV-P8-SHADOW-PREROLL-SYNC: Align ct_cursor to the last buffered frame's MT.
+        if (s->timeline_controller && video_depth > 0 && s->live_producer) {
+          s->timeline_controller->AlignCursorToLastBufferedMT(s->live_producer->GetLastShadowVideoMT());
         }
 
         did_complete = true;
@@ -1314,12 +1231,9 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id, int64_t target_boun
               << "(video=" << preview_depth_before << ", audio=" << preview_audio_depth
               << ", asset=" << state->live_asset_path << ")" << std::endl;
 
-    // INV-P8-SHADOW-PREROLL-SYNC: Advance ct_cursor to account for pre-buffered frames.
-    // During shadow preroll, frames were pushed to buffer without AdmitFrame, so ct_cursor
-    // didn't advance. Now that the segment is committed, we advance ct_cursor so the producer
-    // can continue adding frames sequentially without getting REJECTED_EARLY.
-    if (state->timeline_controller && preview_depth_before > 0) {
-      state->timeline_controller->AdvanceCursorForPreBufferedFrames(preview_depth_before);
+    // INV-P8-SHADOW-PREROLL-SYNC: Align ct_cursor to the last buffered frame's MT.
+    if (state->timeline_controller && preview_depth_before > 0 && state->live_producer) {
+      state->timeline_controller->AlignCursorToLastBufferedMT(state->live_producer->GetLastShadowVideoMT());
     }
 
     // ORCHESTRATION BOUNDARY:
@@ -1512,9 +1426,9 @@ EngineResult PlayoutEngine::ExecuteSwitchAtDeadline(int32_t channel_id, int64_t 
             << "(video=" << preview_depth_before << ", audio=" << preview_audio_depth
             << ", asset=" << state->live_asset_path << ", safety_rail=" << (!ready ? "true" : "false") << ")" << std::endl;
 
-  // INV-P8-SHADOW-PREROLL-SYNC: Advance ct_cursor for pre-buffered frames
-  if (state->timeline_controller && preview_depth_before > 0) {
-    state->timeline_controller->AdvanceCursorForPreBufferedFrames(preview_depth_before);
+  // INV-P8-SHADOW-PREROLL-SYNC: Align ct_cursor to the last buffered frame's MT.
+  if (state->timeline_controller && preview_depth_before > 0 && state->live_producer) {
+    state->timeline_controller->AlignCursorToLastBufferedMT(state->live_producer->GetLastShadowVideoMT());
   }
 
   // ORCHESTRATION BOUNDARY:
@@ -1842,4 +1756,3 @@ void PlayoutEngine::EndContentDeficitFill(PlayoutInstance* state) {
 }
 
 }  // namespace retrovue::runtime
-

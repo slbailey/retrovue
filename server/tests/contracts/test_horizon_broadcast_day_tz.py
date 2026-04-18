@@ -12,6 +12,7 @@ INV-PLAYLOG-HORIZON-TZ-001: Broadcast day boundary MUST be computed in channel l
 import pytest
 from datetime import datetime, date, timezone, timedelta
 from zoneinfo import ZoneInfo
+from retrovue.runtime.clock import SystemClock
 
 
 class TestBroadcastDateForTimezone:
@@ -21,6 +22,7 @@ class TestBroadcastDateForTimezone:
         from retrovue.runtime.playlist_builder_daemon import PlaylistBuilderDaemon
         return PlaylistBuilderDaemon(
             channel_id="test-ch",
+            clock=SystemClock(),
             programming_day_start_hour=day_start_hour,
             channel_tz=channel_tz,
         )
@@ -93,6 +95,7 @@ class TestScanOverlap:
         from retrovue.runtime.playlist_builder_daemon import PlaylistBuilderDaemon
         daemon = PlaylistBuilderDaemon(
             channel_id="test-ch",
+            clock=SystemClock(),
             channel_tz="America/New_York",
         )
         # At 06:00 UTC = 01:00 EST → broadcast_date_for = Feb 18
@@ -110,7 +113,11 @@ class TestViolationLogging:
 
     def test_consecutive_zero_fills_counter(self):
         from retrovue.runtime.playlist_builder_daemon import PlaylistBuilderDaemon
-        daemon = PlaylistBuilderDaemon(channel_id="test-ch", channel_tz="UTC")
+        daemon = PlaylistBuilderDaemon(
+            channel_id="test-ch",
+            clock=SystemClock(),
+            channel_tz="UTC",
+        )
         assert daemon._consecutive_zero_fills == 0
 
 

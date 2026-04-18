@@ -20,6 +20,8 @@ import structlog
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
+from ..runtime.clock import SystemClock
+
 logger = structlog.get_logger(__name__)
 
 
@@ -106,7 +108,7 @@ def make_source_ingest_fn(db: object, source: object) -> Callable[[], object]:
     from .source_ingest import SourceIngestService
 
     def _do_ingest() -> object:
-        svc = SourceIngestService(db)  # type: ignore[arg-type]
+        svc = SourceIngestService(db, clock=SystemClock())  # type: ignore[arg-type]
         return svc.ingest_source(source)  # type: ignore[arg-type]
 
     return _do_ingest

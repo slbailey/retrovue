@@ -28,6 +28,9 @@ from retrovue.runtime.channel_stream import (
     ChannelStream,
     generate_ts_stream_async,
 )
+from retrovue.runtime.clock import SystemClock
+
+_TEST_CLOCK = SystemClock()
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +80,7 @@ class TestDisconnectPolicyRemovesSlowClient:
             ),
             client_buffer_max_bytes=small_buffer,
             backpressure_policy="disconnect",
+            clock=_TEST_CLOCK,
         )
 
         try:
@@ -128,6 +132,7 @@ class TestDisconnectStructuredLogging:
             ),
             client_buffer_max_bytes=small_buffer,
             backpressure_policy="disconnect",
+            clock=_TEST_CLOCK,
         )
 
         try:
@@ -183,6 +188,7 @@ class TestDropOldestKeepsClientConnected:
             ),
             client_buffer_max_bytes=small_buffer,
             backpressure_policy="drop_oldest",
+            clock=_TEST_CLOCK,
         )
 
         try:
@@ -233,6 +239,7 @@ class TestClientStateCleanupOnDisconnect:
             ),
             client_buffer_max_bytes=small_buffer,
             backpressure_policy="disconnect",
+            clock=_TEST_CLOCK,
         )
 
         try:
@@ -283,6 +290,7 @@ class TestDisconnectReasonLog:
             ),
             client_buffer_max_bytes=small_buffer,
             backpressure_policy="disconnect",
+            clock=_TEST_CLOCK,
         )
 
         try:
@@ -338,7 +346,8 @@ class TestWriteTimeoutClosesConnection:
             q.put_nowait(b"\x47" * 188)
 
         chunks_yielded = 0
-        gen = generate_ts_stream_async(q, write_timeout_s=0.0)
+        from retrovue.runtime.clock import SystemClock
+        gen = generate_ts_stream_async(q, clock=SystemClock(), write_timeout_s=0.0)
         # write_timeout_s=0.0 means any non-zero yield time triggers break.
         # The first yield will take some non-zero wall time, so the generator
         # should break after yielding at most one batch.

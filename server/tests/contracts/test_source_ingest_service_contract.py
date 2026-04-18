@@ -13,6 +13,8 @@ Rules covered:
 
 from __future__ import annotations
 
+from retrovue.runtime.clock import SystemClock
+
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -118,7 +120,7 @@ class TestEligibleCollectionFiltering:
             mock_cis_cls.return_value = mock_cis
             mock_cif.return_value = MagicMock()
 
-            svc = SourceIngestService(db)
+            svc = SourceIngestService(db, clock=SystemClock())
             result = svc.ingest_source(_fake_source())
 
         assert result.collections_processed == 1
@@ -129,7 +131,7 @@ class TestEligibleCollectionFiltering:
         db = MagicMock()
         db.query.return_value.filter.return_value.all.return_value = []
 
-        svc = SourceIngestService(db)
+        svc = SourceIngestService(db, clock=SystemClock())
         result = svc.ingest_source(_fake_source())
 
         assert result.collections_processed == 0
@@ -167,7 +169,7 @@ class TestStatsAggregation:
             mock_cis_cls.return_value = mock_cis
             mock_cif.return_value = MagicMock()
 
-            svc = SourceIngestService(db)
+            svc = SourceIngestService(db, clock=SystemClock())
             result = svc.ingest_source(_fake_source())
 
         assert result.collections_processed == 2
@@ -201,7 +203,7 @@ class TestDelegatesToCIS:
             )
             mock_cis_cls.return_value = mock_cis
 
-            svc = SourceIngestService(db)
+            svc = SourceIngestService(db, clock=SystemClock())
             svc.ingest_source(_fake_source())
 
         mock_cis.ingest_container.assert_called_once()
@@ -233,7 +235,7 @@ class TestDryRun:
             )
             mock_cis_cls.return_value = mock_cis
 
-            svc = SourceIngestService(db)
+            svc = SourceIngestService(db, clock=SystemClock())
             svc.ingest_source(_fake_source(), dry_run=True)
 
         call_kwargs = mock_cis.ingest_container.call_args
@@ -271,7 +273,7 @@ class TestPartialFailure:
             mock_cis.ingest_container.side_effect = _side_effect
             mock_cis_cls.return_value = mock_cis
 
-            svc = SourceIngestService(db)
+            svc = SourceIngestService(db, clock=SystemClock())
             result = svc.ingest_source(_fake_source())
 
         rd = result.to_dict()
@@ -295,7 +297,7 @@ class TestPartialFailure:
             mock_cis.ingest_container.side_effect = RuntimeError("boom")
             mock_cis_cls.return_value = mock_cis
 
-            svc = SourceIngestService(db)
+            svc = SourceIngestService(db, clock=SystemClock())
             result = svc.ingest_source(_fake_source())
 
         rd = result.to_dict()
@@ -314,7 +316,7 @@ class TestTransactionBoundary:
         db = MagicMock()
         db.query.return_value.filter.return_value.all.return_value = []
 
-        svc = SourceIngestService(db)
+        svc = SourceIngestService(db, clock=SystemClock())
         svc.ingest_source(_fake_source())
 
         db.commit.assert_not_called()
@@ -344,7 +346,7 @@ class TestOutputShape:
             )
             mock_cis_cls.return_value = mock_cis
 
-            svc = SourceIngestService(db)
+            svc = SourceIngestService(db, clock=SystemClock())
             result = svc.ingest_source(_fake_source())
 
         rd = result.to_dict()
@@ -381,7 +383,7 @@ class TestOutputShape:
             )
             mock_cis_cls.return_value = mock_cis
 
-            svc = SourceIngestService(db)
+            svc = SourceIngestService(db, clock=SystemClock())
             result = svc.ingest_source(_fake_source())
 
         assert result.to_dict()["status"] == "success"
@@ -390,7 +392,7 @@ class TestOutputShape:
         db = MagicMock()
         db.query.return_value.filter.return_value.all.return_value = []
 
-        svc = SourceIngestService(db)
+        svc = SourceIngestService(db, clock=SystemClock())
         result = svc.ingest_source(_fake_source())
 
         assert result.to_dict()["status"] == "error"

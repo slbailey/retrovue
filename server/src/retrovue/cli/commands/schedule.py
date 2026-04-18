@@ -12,6 +12,7 @@ import json
 from datetime import datetime, timedelta, timezone
 
 import typer
+from ...runtime.clock import SystemClock
 
 
 def _ms_to_local(utc_ms: int) -> str:
@@ -94,7 +95,7 @@ def list_cmd(
     from retrovue.infra.uow import session
     from retrovue.usecases.schedule_reschedule import list_reschedulable
 
-    now = datetime.now(timezone.utc)
+    now = SystemClock().now_utc()
 
     try:
         with session() as db:
@@ -165,7 +166,7 @@ def reschedule_cmd(
         reschedule_by_id,
     )
 
-    now = datetime.now(timezone.utc)
+    now = SystemClock().now_utc()
 
     if not force:
         confirm = typer.confirm(

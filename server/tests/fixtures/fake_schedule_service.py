@@ -61,5 +61,17 @@ class FakeScheduleService:
             ),
         )
 
+    def get_current_execution_block(self, channel_id: str, now_ms: int) -> ScheduledBlock | None:
+        return self.get_block_at(channel_id, now_ms)
+
+    def get_next_execution_block(self, channel_id: str, after_utc_ms: int) -> ScheduledBlock | None:
+        return self.get_block_at(channel_id, after_utc_ms)
+
+    def get_execution_depth_ms(self, channel_id: str, now_ms: int) -> int:
+        return self.block_duration_ms
+
+    def get_playlist_event_by_block_id(self, channel_id: str, block_id: str) -> ScheduledBlock | None:
+        return None
+
     def load_schedule(self, channel_id: str) -> tuple[bool, str | None]:
         return (True, None)

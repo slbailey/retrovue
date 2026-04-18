@@ -17,10 +17,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ...infra.uow import session as get_session
+from ...runtime.clock import AuthoritativeClock
 from ...usecases.asset_attention import list_assets_needing_attention
 from ...usecases.asset_enrich_stale import enrich_stale_assets
 from ...usecases.asset_inspect import get_asset_inspect, get_enrichment_summary
 from ...usecases.asset_update import get_asset_summary, update_asset_review_status
+from ._clock import get_clock
 
 router = APIRouter(prefix="/api/catalog", tags=["catalog"])
 
@@ -130,6 +132,7 @@ def review_asset(
     asset_uuid: str,
     body: AssetReviewRequest,
     db: Session = Depends(get_db),
+    clock: AuthoritativeClock = Depends(get_clock),
 ) -> dict[str, Any]:
     """Update asset review status (approval and/or state transition).
 
@@ -138,7 +141,11 @@ def review_asset(
     """
     try:
         return update_asset_review_status(
-            db, asset_uuid=asset_uuid, approved=body.approved, state=body.state
+            db,
+            asset_uuid=asset_uuid,
+            now_utc=clock.now_utc(),
+            approved=body.approved,
+            state=body.state,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))

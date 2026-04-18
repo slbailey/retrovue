@@ -22,6 +22,8 @@ import pytest
 
 from retrovue.usecases.asset_enrich import EnrichResult, enrich_asset, _extract_label
 
+NOW = datetime(2026, 4, 16, tzinfo=timezone.utc)
+
 
 @pytest.fixture(autouse=True)
 def _patch_enqueue_processor_jobs():
@@ -127,7 +129,7 @@ class TestEnrichAssetClearsMetadata:
         ])
         pipeline = [(0, "ffprobe", enricher)]
 
-        result = enrich_asset(db, asset, pipeline)
+        result = enrich_asset(db, asset, pipeline, now_utc=NOW)
 
         # After reset, technical fields are cleared; worker will set them when job runs.
         assert asset.duration_ms is None
@@ -150,7 +152,7 @@ class TestEnrichAssetClearsMetadata:
         enricher = _make_enricher()  # produces no labels
         pipeline = [(0, "noop", enricher)]
 
-        result = enrich_asset(db, asset, pipeline)
+        result = enrich_asset(db, asset, pipeline, now_utc=NOW)
 
         assert asset.duration_ms is None
         assert asset.video_codec is None
@@ -173,7 +175,7 @@ class TestEnrichAssetDeletesProbed:
         enricher = _make_enricher(labels_to_add=["duration_ms:1000"])
         pipeline = [(0, "ffprobe", enricher)]
 
-        enrich_asset(db, asset, pipeline)
+        enrich_asset(db, asset, pipeline, now_utc=NOW)
 
         db.delete.assert_any_call(probed_row)
 
@@ -187,7 +189,7 @@ class TestEnrichAssetDeletesProbed:
         pipeline = [(0, "ffprobe", enricher)]
 
         # Should not raise
-        result = enrich_asset(db, asset, pipeline)
+        result = enrich_asset(db, asset, pipeline, now_utc=NOW)
         assert result.asset_uuid == str(asset.uuid)
 
 
@@ -203,7 +205,7 @@ class TestEnrichAssetChapterMarkers:
         enricher = _make_enricher(labels_to_add=["duration_ms:1000"])
         pipeline = [(0, "ffprobe", enricher)]
 
-        enrich_asset(db, asset, pipeline)
+        enrich_asset(db, asset, pipeline, now_utc=NOW)
 
         # Only the chapter marker should have been deleted
         db.delete.assert_any_call(chapter)
@@ -228,7 +230,7 @@ class TestEnrichAssetChapterMarkers:
         )
         pipeline = [(0, "ffprobe", enricher)]
 
-        enrich_asset(db, asset, pipeline)
+        enrich_asset(db, asset, pipeline, now_utc=NOW)
 
         # Worker creates chapter markers when job runs; enrich_asset only resets and enqueues.
         assert asset.state == "enriching"
@@ -249,7 +251,7 @@ class TestEnrichAssetChapterMarkers:
         )
         pipeline = [(0, "ffprobe", enricher)]
 
-        enrich_asset(db, asset, pipeline)
+        enrich_asset(db, asset, pipeline, now_utc=NOW)
 
         # Worker handles chapters; enrich_asset only resets and enqueues.
         assert asset.state == "enriching"
@@ -269,7 +271,7 @@ class TestEnrichAssetApprovalReset:
         enricher = _make_enricher(labels_to_add=["duration_ms:900000"])
         pipeline = [(0, "ffprobe", enricher)]
 
-        result = enrich_asset(db, asset, pipeline)
+        result = enrich_asset(db, asset, pipeline, now_utc=NOW)
 
         assert asset.approved_for_broadcast is False
         assert asset.state == "enriching"
@@ -286,7 +288,7 @@ class TestEnrichAssetApprovalReset:
         ])
         pipeline = [(0, "ffprobe", enricher)]
 
-        result = enrich_asset(db, asset, pipeline)
+        result = enrich_asset(db, asset, pipeline, now_utc=NOW)
 
         assert asset.state == "enriching"
         assert asset.approved_for_broadcast is False
@@ -302,7 +304,7 @@ class TestEnrichAssetStateTransitions:
         enricher = _make_enricher(labels_to_add=["duration_ms:1320000"])
         pipeline = [(0, "ffprobe", enricher)]
 
-        result = enrich_asset(db, asset, pipeline)
+        result = enrich_asset(db, asset, pipeline, now_utc=NOW)
 
         assert result.old_state == "new"
         assert result.new_state == "enriching"
@@ -315,7 +317,7 @@ class TestEnrichAssetStateTransitions:
         enricher = _make_enricher()  # no duration
         pipeline = [(0, "noop", enricher)]
 
-        result = enrich_asset(db, asset, pipeline)
+        result = enrich_asset(db, asset, pipeline, now_utc=NOW)
 
         assert result.new_state == "enriching"
         assert asset.state == "enriching"
@@ -331,7 +333,7 @@ class TestEnrichAssetStateTransitions:
         enricher = _make_enricher(labels_to_add=["duration_ms:900000"])
         pipeline = [(0, "ffprobe", enricher)]
 
-        result = enrich_asset(db, asset, pipeline)
+        result = enrich_asset(db, asset, pipeline, now_utc=NOW)
 
         assert result.old_state == "ready"
         assert result.new_state == "enriching"
@@ -350,7 +352,7 @@ class TestEnrichAssetDurationGate:
         enricher = _make_enricher(labels_to_add=["duration_ms:1320000"])
         pipeline = [(0, "ffprobe", enricher)]
 
-        result = enrich_asset(db, asset, pipeline)
+        result = enrich_asset(db, asset, pipeline, now_utc=NOW)
         assert asset.state == "enriching"
 
     def test_reverts_to_new_when_duration_none(self):
@@ -360,7 +362,7 @@ class TestEnrichAssetDurationGate:
         enricher = _make_enricher()
         pipeline = [(0, "noop", enricher)]
 
-        result = enrich_asset(db, asset, pipeline)
+        result = enrich_asset(db, asset, pipeline, now_utc=NOW)
         assert asset.state == "enriching"
 
     def test_reverts_to_new_when_duration_zero(self):
@@ -370,7 +372,7 @@ class TestEnrichAssetDurationGate:
         enricher = _make_enricher(labels_to_add=["duration_ms:0"])
         pipeline = [(0, "ffprobe", enricher)]
 
-        result = enrich_asset(db, asset, pipeline)
+        result = enrich_asset(db, asset, pipeline, now_utc=NOW)
         assert asset.state == "enriching"
 
 
@@ -385,7 +387,7 @@ class TestEnrichAssetChecksum:
         pipeline = [(0, "ffprobe", enricher)]
         checksum = "a" * 64
 
-        result = enrich_asset(db, asset, pipeline, pipeline_checksum=checksum)
+        result = enrich_asset(db, asset, pipeline, now_utc=NOW, pipeline_checksum=checksum)
 
         assert result.checksum_applied is None
         assert asset.state == "enriching"
@@ -397,7 +399,7 @@ class TestEnrichAssetChecksum:
         enricher = _make_enricher(labels_to_add=["duration_ms:1000"])
         pipeline = [(0, "ffprobe", enricher)]
 
-        result = enrich_asset(db, asset, pipeline)
+        result = enrich_asset(db, asset, pipeline, now_utc=NOW)
 
         assert asset.last_enricher_checksum == "old_checksum"
         assert result.checksum_applied is None
@@ -418,7 +420,7 @@ class TestEnrichAssetPipelineExecution:
             (1, "ffprobe", succeeding),
         ]
 
-        result = enrich_asset(db, asset, pipeline)
+        result = enrich_asset(db, asset, pipeline, now_utc=NOW)
 
         assert result.new_state == "enriching"
         assert asset.state == "enriching"
@@ -428,7 +430,7 @@ class TestEnrichAssetPipelineExecution:
         db = _make_mock_db()
         asset = _make_asset(state="new")
 
-        result = enrich_asset(db, asset, [])
+        result = enrich_asset(db, asset, [], now_utc=NOW)
 
         assert asset.state == "enriching"
         assert result.new_state == "enriching"
@@ -445,7 +447,7 @@ class TestEnrichAssetResult:
         enricher = _make_enricher(labels_to_add=["duration_ms:900000"])
         pipeline = [(0, "ffprobe", enricher)]
 
-        result = enrich_asset(db, asset, pipeline, pipeline_checksum="abc123")
+        result = enrich_asset(db, asset, pipeline, now_utc=NOW, pipeline_checksum="abc123")
 
         assert isinstance(result, EnrichResult)
         assert result.asset_uuid == str(asset.uuid)
@@ -480,7 +482,7 @@ class TestEnrichAssetEditorialMerge:
         )
         pipeline = [(0, "type_enricher", enricher)]
 
-        enrich_asset(db, asset, pipeline)
+        enrich_asset(db, asset, pipeline, now_utc=NOW)
 
         # Worker merges editorial when job runs; enrich_asset does not touch editorial.
         assert existing_ed.payload["title"] == "Original Title"

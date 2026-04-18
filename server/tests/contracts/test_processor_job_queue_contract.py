@@ -7,6 +7,8 @@ Uses real DB session (test engine) when available; processor_jobs table must exi
 
 from __future__ import annotations
 
+from retrovue.runtime.clock import SystemClock
+
 import uuid
 
 import pytest
@@ -68,10 +70,10 @@ class TestProcessorJobQueueContract:
         """Drain all pending jobs so following tests see an empty queue."""
         for _ in range(max_jobs):
             with session() as db:
-                j = claim_next_job(db)
+                j = claim_next_job(db, clock=SystemClock())
                 if j is None:
                     return
-                complete_job(db, j.id, True)
+                complete_job(db, j.id, True, clock=SystemClock())
 
     def test_job_lifecycle_pending_to_running_to_completed(self):
         """Job can transition pending → running → completed."""
@@ -85,14 +87,14 @@ class TestProcessorJobQueueContract:
             assert job.status == STATUS_PENDING
         claimed_id = None
         with session() as db:
-            claimed = claim_next_job(db)
+            claimed = claim_next_job(db, clock=SystemClock())
             if claimed:
                 claimed_id = claimed.id
                 _ = claimed.status  # read while session active
         assert claimed_id is not None
         assert claimed_id == job_id
         with session() as db:
-            complete_job(db, job_id, True)
+            complete_job(db, job_id, True, clock=SystemClock())
         final_status = None
         with session() as db:
             from retrovue.domain.entities import ProcessorJob
@@ -112,12 +114,12 @@ class TestProcessorJobQueueContract:
             job_id = job.id
         claimed_id = None
         with session() as db:
-            claimed = claim_next_job(db)
+            claimed = claim_next_job(db, clock=SystemClock())
             if claimed:
                 claimed_id = claimed.id
                 assert claimed.status == STATUS_RUNNING
         with session() as db:
-            complete_job(db, claimed_id, False, error_message="test failure")
+            complete_job(db, claimed_id, False, clock=SystemClock(), error_message="test failure")
         status_failed = None
         err_msg = None
         with session() as db:
@@ -139,9 +141,9 @@ class TestProcessorJobQueueContract:
             job = enqueue(db, target_type, target_id)
             job_id = job.id
         with session() as db:
-            claimed = claim_next_job(db)
+            claimed = claim_next_job(db, clock=SystemClock())
             if claimed:
-                complete_job(db, claimed.id, False)
+                complete_job(db, claimed.id, False, clock=SystemClock())
         with session() as db:
             retry_job(db, job_id)
         row_status, row_tt, row_tid, row_started, row_err = None, None, None, None, None
@@ -169,7 +171,7 @@ class TestProcessorJobQueueContract:
             enqueue(db, "ASSET", tid_high, priority=PRIORITY_HIGH)
         first_tid, first_prio = None, None
         with session() as db:
-            first = claim_next_job(db)
+            first = claim_next_job(db, clock=SystemClock())
             if first:
                 first_tid = first.target_id
                 first_prio = first.priority
@@ -178,9 +180,9 @@ class TestProcessorJobQueueContract:
         assert first_prio == PRIORITY_HIGH
         # drain second job so later tests get a clean queue
         with session() as db:
-            second = claim_next_job(db)
+            second = claim_next_job(db, clock=SystemClock())
             if second:
-                complete_job(db, second.id, True)
+                complete_job(db, second.id, True, clock=SystemClock())
 
     def test_worker_claims_one_job_at_a_time(self):
         """Only one worker can claim a given job; second claim returns different job or none."""
@@ -192,11 +194,11 @@ class TestProcessorJobQueueContract:
             enqueue(db, "ASSET", t2)
         first_id, second_id = None, None
         with session() as db:
-            first = claim_next_job(db)
+            first = claim_next_job(db, clock=SystemClock())
             if first:
                 first_id = first.id
         with session() as db:
-            second = claim_next_job(db)
+            second = claim_next_job(db, clock=SystemClock())
             if second:
                 second_id = second.id
         assert first is not None
@@ -204,12 +206,12 @@ class TestProcessorJobQueueContract:
         assert second_id != first_id  # each claim returned a different job
         third = None
         with session() as db:
-            third = claim_next_job(db)
+            third = claim_next_job(db, clock=SystemClock())
         assert third is None
         # drain so queue is clean
         with session() as db:
-            complete_job(db, first_id, True)
-            complete_job(db, second_id, True)
+            complete_job(db, first_id, True, clock=SystemClock())
+            complete_job(db, second_id, True, clock=SystemClock())
 
     def test_observable_state_queued_running_completed_failed(self):
         """Queue exposes observable state for queued, running, completed, and failed jobs."""
@@ -225,12 +227,12 @@ class TestProcessorJobQueueContract:
             status_pending = row.status
         assert status_pending == STATUS_PENDING
         with session() as db:
-            claimed = claim_next_job(db)
+            claimed = claim_next_job(db, clock=SystemClock())
             assert claimed is not None and claimed.id == job_id
             status_running = claimed.status
         assert status_running == STATUS_RUNNING
         with session() as db:
-            complete_job(db, job_id, True)
+            complete_job(db, job_id, True, clock=SystemClock())
             row = db.get(ProcessorJob, job_id)
             status_completed = row.status
         assert status_completed == STATUS_COMPLETED

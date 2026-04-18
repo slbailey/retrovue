@@ -12,7 +12,7 @@ from enum import Enum
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from retrovue.runtime.clock import RealTimeMasterClock
+from retrovue.runtime.clock import SystemClock
 
 
 class TimePrecision(Enum):
@@ -34,7 +34,7 @@ class MasterClock:
     precision: TimePrecision = TimePrecision.MILLISECOND
 
     def __post_init__(self) -> None:
-        self._clock = RealTimeMasterClock()
+        self._clock = SystemClock()
         self._baseline = datetime.now(UTC)
         self._local_tz = datetime.now(UTC).astimezone().tzinfo or UTC
         self.timezone_cache: dict[str, tzinfo] = {}
