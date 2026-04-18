@@ -415,3 +415,29 @@ Contracts affected: [list invariant IDs or "none"]
 Rollback unit: [why this change can be reverted independently]
 
 Changes that cannot answer these four questions are not ready to merge.
+
+# Change Management Policy
+
+For any architectural, behavioral, domain, runtime, scheduling, or ownership change:
+
+## Before proposing implementation:
+
+1. Review relevant vault notes (components, truths, domains, flows, ADRs).
+2. Identify conflicts, stale assumptions, or missing concepts.
+3. Recommend vault updates if understanding is incomplete.
+
+## During design:
+
+1. Treat vault truths and ADRs as governing constraints.
+2. Do not contradict accepted decisions silently.
+
+## After approved changes:
+
+1. Update impacted notes.
+2. Create or amend ADRs when decisions changed.
+3. Update links/indexes if topology changed.
+
+## Default Rule
+
+The vault is part of the system.
+Code and docs are not complete until the vault is current.

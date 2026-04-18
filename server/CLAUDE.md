@@ -134,3 +134,29 @@ When asked “add X to Core”:
 ACKNOWLEDGEMENT:
 Confirm understanding of Core as the multi-channel orchestration system that schedules, plans, and supervises playout while AIR handles runtime execution correctness.
 Do not proceed until this model is accepted.
+
+# Change Management Policy
+
+For any architectural, behavioral, domain, runtime, scheduling, or ownership change:
+
+## Before proposing implementation:
+
+1. Review relevant vault notes (components, truths, domains, flows, ADRs).
+2. Identify conflicts, stale assumptions, or missing concepts.
+3. Recommend vault updates if understanding is incomplete.
+
+## During design:
+
+1. Treat vault truths and ADRs as governing constraints.
+2. Do not contradict accepted decisions silently.
+
+## After approved changes:
+
+1. Update impacted notes.
+2. Create or amend ADRs when decisions changed.
+3. Update links/indexes if topology changed.
+
+## Default Rule
+
+The vault is part of the system.
+Code and docs are not complete until the vault is current.
