@@ -687,6 +687,13 @@ Canonical contract: [delivery_hls.md](delivery_hls.md)
 | INV-AIR-TAKE-PAD-CLASSIFICATION-EXPLICIT-001 | [air/TAKE_PAD_CLASSIFICATION.md](air/TAKE_PAD_CLASSIFICATION.md) | Primary — classification reflects frame source, not slot |
 | INV-AIR-TAKE-DEAD-PRODUCER-IS-PAD-001 | [air/TAKE_PAD_CLASSIFICATION.md](air/TAKE_PAD_CLASSIFICATION.md) | Primary — dead producers must classify as pad |
 | INV-AIR-TAKE-PAD-METRICS-CONSISTENT-001 | [air/TAKE_PAD_CLASSIFICATION.md](air/TAKE_PAD_CLASSIFICATION.md) | Primary — metric counter matches fingerprint is_pad |
+| INV-READINESS-SINGLE-OWNER-001 | [invariants/air/INV-READINESS-SINGLE-OWNER-001.md](invariants/air/INV-READINESS-SINGLE-OWNER-001.md) | Primary — derives LAW-RUNTIME-AUTHORITY, LAW-LIVENESS |
+| INV-READINESS-NOT-BYTE-INFERRED-001 | [invariants/air/INV-READINESS-NOT-BYTE-INFERRED-001.md](invariants/air/INV-READINESS-NOT-BYTE-INFERRED-001.md) | Derived — enforces INV-READINESS-SINGLE-OWNER-001 at the signal level; derives LAW-LIVENESS |
+| INV-READINESS-OBSERVABLE-001 | [invariants/air/INV-READINESS-OBSERVABLE-001.md](invariants/air/INV-READINESS-OBSERVABLE-001.md) | Primary — derives LAW-LIVENESS |
+| INV-READINESS-SCOPE-INDEPENDENCE-001 | [invariants/air/INV-READINESS-SCOPE-INDEPENDENCE-001.md](invariants/air/INV-READINESS-SCOPE-INDEPENDENCE-001.md) | Primary — derives LAW-RUNTIME-AUTHORITY, LAW-LIVENESS |
+| INV-VERDICT-BOUNDED-STATES-001 | [invariants/air/INV-VERDICT-BOUNDED-STATES-001.md](invariants/air/INV-VERDICT-BOUNDED-STATES-001.md) | Primary — derives LAW-LIVENESS |
+| INV-VERDICT-REASON-CLASS-BOUNDED-001 | [invariants/air/INV-VERDICT-REASON-CLASS-BOUNDED-001.md](invariants/air/INV-VERDICT-REASON-CLASS-BOUNDED-001.md) | Derived — enforces INV-VERDICT-BOUNDED-STATES-001 at the reason-class level; derives LAW-LIVENESS |
+| INV-FATAL-UNDERFLOW-VISIBILITY-001 | [invariants/air/INV-FATAL-UNDERFLOW-VISIBILITY-001.md](invariants/air/INV-FATAL-UNDERFLOW-VISIBILITY-001.md) | Primary — derives LAW-LIVENESS |
 
 ---
 
@@ -752,6 +759,13 @@ The following invariants lack test matrix entries and are flagged for follow-up:
 | INV-TIME-AUTHORITY-SINGLE-SOURCE | Shared; overlaps LAW-CLOCK; no test mapping |
 | INV-SWITCH-BOUNDARY-TIMING | No Derived From law cited; enforcement unclear |
 | INV-PACING-001, INV-PACING-ENFORCEMENT-002, INV-DECODE-RATE-001, INV-SEGMENT-CONTENT-001 | **INV-PACING-001 (single authority slice)** superseded by indexed **INV-PACING-SINGLE-AUTHORITY-001**; remainder still doc-only / P4 backlog |
+| INV-READINESS-SINGLE-OWNER-001 | AIR readiness invariant; no test matrix entry; Required Tests cite `runtime/tests/contracts/readiness/ReadinessInvariantTests.cpp` (file to be created; RED contract test is the next turn in the ReadinessController extraction path) |
+| INV-READINESS-NOT-BYTE-INFERRED-001 | AIR readiness invariant; no test matrix entry; Required Tests cite `runtime/tests/contracts/readiness/ReadinessInvariantTests.cpp` (file to be created) |
+| INV-READINESS-OBSERVABLE-001 | AIR readiness invariant; no test matrix entry; Required Tests cite `runtime/tests/contracts/readiness/ReadinessInvariantTests.cpp` (file to be created) |
+| INV-READINESS-SCOPE-INDEPENDENCE-001 | AIR readiness invariant; no test matrix entry; Required Tests cite `runtime/tests/contracts/readiness/ReadinessInvariantTests.cpp` (file to be created) |
+| INV-VERDICT-BOUNDED-STATES-001 | AIR readiness invariant; no test matrix entry; Required Tests cite `runtime/tests/contracts/readiness/ReadinessInvariantTests.cpp` (file to be created) |
+| INV-VERDICT-REASON-CLASS-BOUNDED-001 | AIR readiness invariant; no test matrix entry; Required Tests cite `runtime/tests/contracts/readiness/ReadinessInvariantTests.cpp` (file to be created) |
+| INV-FATAL-UNDERFLOW-VISIBILITY-001 | AIR observability invariant; no test matrix entry; Required Tests cite `runtime/tests/contracts/readiness/FatalUnderflowVisibilityTests.cpp` (file to be created); code implementation also pending — AIR currently detects underflow via counter increments (`VideoLookaheadBuffer::UnderflowCount()`, `AudioLookaheadBuffer::UnderflowCount()`) without structured event emission |
 
 See [audit/TEST_ANCHOR_BACKLOG.md](audit/TEST_ANCHOR_BACKLOG.md) for prioritized action.
 

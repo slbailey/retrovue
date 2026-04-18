@@ -28,6 +28,7 @@
 
 #include "retrovue/blockplan/AudioLookaheadBuffer.hpp"
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
+#include "retrovue/readiness/ReadinessSignals.hpp"
 #include "retrovue/blockplan/BroadcastAudioProcessor.hpp"
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
 #include "retrovue/blockplan/IProducerFactory.hpp"
@@ -198,6 +199,14 @@ class PipelineManager : public IPlayoutExecutionEngine {
 
   // Generate Prometheus text exposition.  Thread-safe.
   std::string GenerateMetricsText() const;
+
+  // Readiness D+1: point-in-time signal snapshot for the readiness observer.
+  // Thread-safe, read-only — queries VideoLookaheadBuffer and
+  // AudioLookaheadBuffer state via their existing concurrent accessors and
+  // computes the A/V delta via ComputeVideoTimeMsGate. Returns
+  // snapshot_valid=false if either buffer is not yet constructed.
+  // Contract: docs/contracts/invariants/air/INV-READINESS-*.md.
+  readiness::PipelineSignals CaptureReadinessSignals() const;
 
   // P3.2: Test-only - forward delay hook to internal ProducerPreloader.
   void SetPreloaderDelayHook(std::function<void(const std::atomic<bool>&)> hook);

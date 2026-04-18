@@ -137,4 +137,14 @@ std::shared_ptr<telemetry::MetricsExporter> PlayoutInterface::GetMetricsExporter
   return engine_->GetMetricsExporter();
 }
 
+void PlayoutInterface::AttachBlockPlanSignalSource(
+    int32_t channel_id,
+    std::function<readiness::PipelineSignals()> getter) {
+  engine_->AttachBlockPlanSignalSource(channel_id, std::move(getter));
+}
+
+void PlayoutInterface::DetachBlockPlanSignalSource(int32_t channel_id) {
+  engine_->DetachBlockPlanSignalSource(channel_id);
+}
+
 }  // namespace retrovue::runtime

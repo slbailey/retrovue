@@ -12,6 +12,8 @@
 #include <string>
 #include <optional>
 
+#include "retrovue/readiness/ReadinessSignals.hpp"
+
 namespace retrovue::buffer {
 struct Frame;
 struct AudioFrame;
@@ -129,6 +131,13 @@ class PlayoutInterface {
 
   // P9-OPT-002: Get the MetricsExporter for steady-state telemetry.
   std::shared_ptr<telemetry::MetricsExporter> GetMetricsExporter();
+
+  // Readiness D+1: pass-through to PlayoutEngine. Additive observational
+  // integration; does not gate any decision.
+  void AttachBlockPlanSignalSource(
+      int32_t channel_id,
+      std::function<readiness::PipelineSignals()> getter);
+  void DetachBlockPlanSignalSource(int32_t channel_id);
 
   // Update the playout plan for an active channel
   InterfaceResult UpdatePlan(

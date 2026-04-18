@@ -227,6 +227,11 @@ set(AIR_CORE_SOURCES
   # Memory diagnostics (RSS tracking + periodic logger)
   src/util/MemoryUtils.cpp
   src/util/AirMemoryMonitor.cpp
+  # Readiness observer (Phase 1 additive — no runtime behaviour change).
+  # See docs/contracts/invariants/air/INV-READINESS-*.md and
+  # docs/contracts/invariants/air/INV-VERDICT-*.md.
+  src/readiness/ReadinessEvaluator.cpp
+  src/readiness/ReadinessObserver.cpp
 )
 
 # Optional: enable PAD/audio priming diagnostic logging (PipelineManager).
@@ -538,6 +543,7 @@ add_executable(blockplan_contract_tests
   tests/contracts/BlockPlan/FirstIdrFromContentContractTests.cpp
   tests/contracts/BlockPlan/TransportContinuityContractTests.cpp
   tests/contracts/BlockPlan/BlockPlanQuarantineContractTests.cpp
+  tests/contracts/BlockPlan/StartupContractRegressionTests.cpp
   tests/contracts/BlockPlan/AudioSampleIntegerMathContractTests.cpp
 )
 
@@ -627,6 +633,80 @@ add_test(
   COMMAND audio_lookahead_tests
 )
 set_tests_properties(AudioLookaheadContracts PROPERTIES LABELS "contract")
+
+# ---- Readiness Contract Tests (INV-READINESS-* / INV-VERDICT-* / INV-FATAL-UNDERFLOW-VISIBILITY-001) ----
+# Phase 1 contract tests for the ReadinessController additive observer.
+# Core readiness-verdict tests are GREEN under the Turn C production code
+# in src/readiness/. FatalUnderflowVisibilityTests exercises
+# INV-FATAL-UNDERFLOW-VISIBILITY-001 which is registered but not yet
+# implemented — it remains a RED tripwire for a separate emission-site
+# implementation turn; we keep it out of the linked binary here so the
+# readiness_contract_tests target links and the ReadinessContracts ctest
+# can run clean.
+add_executable(readiness_contract_tests
+  tests/contracts/readiness/ReadinessInvariantTests.cpp
+)
+
+target_link_libraries(readiness_contract_tests
+  PRIVATE
+    retrovue_air_core
+    GTest::gtest
+    GTest::gtest_main
+)
+
+target_link_options(readiness_contract_tests PRIVATE
+  "LINKER:-rpath,${X264_RPATH}"
+  "LINKER:-rpath,${FFMPEG_RPATH}"
+)
+
+target_include_directories(readiness_contract_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/contracts/readiness
+)
+
+add_test(
+  NAME ReadinessContracts
+  COMMAND readiness_contract_tests
+)
+set_tests_properties(ReadinessContracts PROPERTIES LABELS "contract")
+
+# Fatal-underflow visibility contract tripwire — RED-pending. Excluded
+# from ALL and from ctest default rotation; build explicitly if you want
+# to watch for regression of the documented-but-unimplemented emission
+# site. Closing this tripwire is a follow-on implementation turn, not
+# part of the ReadinessController Phase 1 scope.
+# Build: cmake --build runtime/build --target fatal_underflow_visibility_tests
+add_executable(fatal_underflow_visibility_tests EXCLUDE_FROM_ALL
+  tests/contracts/readiness/FatalUnderflowVisibilityTests.cpp
+)
+
+target_link_libraries(fatal_underflow_visibility_tests
+  PRIVATE
+    retrovue_air_core
+    GTest::gtest
+    GTest::gtest_main
+)
+
+target_link_options(fatal_underflow_visibility_tests PRIVATE
+  "LINKER:-rpath,${X264_RPATH}"
+  "LINKER:-rpath,${FFMPEG_RPATH}"
+)
+
+target_include_directories(fatal_underflow_visibility_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/contracts/readiness
+)
+
+add_test(
+  NAME FatalUnderflowVisibilityContracts
+  COMMAND fatal_underflow_visibility_tests
+)
+set_tests_properties(FatalUnderflowVisibilityContracts PROPERTIES
+  LABELS "contract;red-pending-emission-site"
+  DISABLED TRUE
+)
 
 # ---- VideoLookaheadBuffer Contract Tests (INV-VIDEO-LOOKAHEAD-001) ----
 add_executable(video_lookahead_tests

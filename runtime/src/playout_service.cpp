@@ -1198,6 +1198,19 @@ namespace retrovue
               [engine_ptr]() { return engine_ptr->GenerateMetricsText(); });
         }
 
+        // Readiness D+1: enrich the Turn D observer snapshot with per-session
+        // BlockPlan signals (video/audio primed, A/V phase delta). The getter
+        // captures the PipelineManager* we just constructed; its lifetime is
+        // bracketed by the Detach call at session teardown below. Observational
+        // only — no playout decision consumes the verdict.
+        {
+          auto* engine_ptr = static_cast<blockplan::PipelineManager*>(
+              blockplan_session_->engine.get());
+          interface_->AttachBlockPlanSignalSource(
+              channel_id,
+              [engine_ptr]() { return engine_ptr->CaptureReadinessSignals(); });
+        }
+
         blockplan_session_->engine->Start();
       }
 
@@ -1307,6 +1320,12 @@ namespace retrovue
       if (auto metrics_exporter = interface_->GetMetricsExporter()) {
         metrics_exporter->UnregisterCustomMetricsProvider("continuous_output_engine");
       }
+
+      // Readiness D+1: detach BlockPlan signal getter BEFORE the engine is
+      // stopped/destroyed. After this call returns, no readiness scrape can
+      // invoke the captured PipelineManager* — the attach/detach mutex on
+      // ReadinessControlBox guarantees any in-flight scrape has completed.
+      interface_->DetachBlockPlanSignalSource(blockplan_session_->channel_id);
 
       // Stop execution engine (joins thread internally)
       if (blockplan_session_->engine) {

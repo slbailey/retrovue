@@ -625,6 +625,48 @@ std::string PipelineManager::GenerateMetricsText() const {
   return metrics_.GeneratePrometheusText();
 }
 
+readiness::PipelineSignals PipelineManager::CaptureReadinessSignals() const {
+  readiness::PipelineSignals signals;
+
+  // Raw pointers extracted under no lock — the buffers' own accessors are
+  // internally mutex-safe. Lifetime is bounded by PipelineManager's lifetime,
+  // which is guarded at the call site (see PlayoutEngine ReadinessControlBox
+  // wiring). If either buffer is not yet constructed, return an invalid
+  // snapshot so the consumer falls back to neutral stubs.
+  const VideoLookaheadBuffer* vb = video_buffer_.get();
+  const AudioLookaheadBuffer* ab = audio_buffer_.get();
+  if (vb == nullptr || ab == nullptr) {
+    return signals;  // snapshot_valid = false (default)
+  }
+
+  signals.video_primed = vb->IsPrimed();
+  signals.audio_primed = ab->IsPrimed();
+  signals.audio_depth_ms = ab->DepthMs();
+  signals.video_depth_frames = vb->DepthFrames();
+  signals.av_phase_tolerance_ms = vb->AvPhaseToleranceMs();
+
+  // Compute the A/V delta via the existing pure bootstrap-gate helper.
+  // ComputeVideoTimeMsGate derives "video time" from the video frame count
+  // and the session output FPS (ctx_->fps). The delta is then signed such
+  // that positive values mean audio leads video (the concern tracked by
+  // INV-FILL-AV-LEAD-CLAMP-001 and INV-BOOTSTRAP-AV-PHASE-001).
+  if (ctx_ != nullptr) {
+    const int video_time_ms = ComputeVideoTimeMsGate(
+        signals.video_depth_frames, ctx_->fps);
+    signals.av_delta_ms = signals.audio_depth_ms - video_time_ms;
+    const int tolerance = signals.av_phase_tolerance_ms > 0
+        ? signals.av_phase_tolerance_ms
+        : 1;
+    const int abs_delta = signals.av_delta_ms >= 0
+        ? signals.av_delta_ms
+        : -signals.av_delta_ms;
+    signals.av_within_tolerance = (abs_delta <= tolerance);
+  }
+
+  signals.snapshot_valid = true;
+  return signals;
+}
+
 // =============================================================================
 // TryLoadLiveProducer — load live_ from preloaded preview or queue.
 // Called ONLY when live_ is EMPTY — outside the timed tick window.
@@ -1346,6 +1388,12 @@ void PipelineManager::Run() {
   int64_t bootstrap_epoch_ms_for_transition = 0;
   int post_handoff_transition_bootstrap_cap_frames = 60;
   constexpr int kPostHandoffTransitionMaxTicks = 12;
+  // T2 DIAG (INV-BOOTSTRAP-AV-PHASE-001): per-tick probe of the transition
+  // drain window, to diagnose the observed "audio_depth stuck near target,
+  // transition exits by timeout" behavior. Captures the audio_depth
+  // trajectory and the drain-only gate state each tick.
+  int t2_prev_transition_audio_ms = -1;
+  int64_t t2_prev_transition_tick = -1;
 
   auto maybe_end_bootstrap_after_transition =
       [&](int64_t session_tick, int64_t selected_src) {
@@ -1379,6 +1427,33 @@ void PipelineManager::Run() {
         const int64_t ticks_elapsed = session_tick - post_handoff_transition_arm_tick;
         const bool target_reached = current_audio_ms <= post_handoff_transition_exit_audio_ms;
         const bool transition_timeout = ticks_elapsed >= kPostHandoffTransitionMaxTicks;
+        // T2 DIAG: per-tick trajectory. audio_delta_ms is the signed change in
+        // audio_depth since the previous probe; negative = draining (expected),
+        // positive = still being filled, zero = stuck.
+        {
+          const int delta_ms = (t2_prev_transition_audio_ms >= 0)
+              ? (current_audio_ms - t2_prev_transition_audio_ms)
+              : 0;
+          const int64_t delta_ticks = (t2_prev_transition_tick >= 0)
+              ? (session_tick - t2_prev_transition_tick)
+              : 0;
+          std::ostringstream oss;
+          oss << "[PipelineManager] INV-BOOTSTRAP-AV-PHASE-001: transition_probe"
+              << " tick=" << session_tick
+              << " ticks_elapsed=" << ticks_elapsed
+              << " audio_depth_ms=" << current_audio_ms
+              << " audio_delta_ms=" << delta_ms
+              << " delta_ticks=" << delta_ticks
+              << " target=" << post_handoff_transition_target_audio_ms
+              << " exit=" << post_handoff_transition_exit_audio_ms
+              << " selected_src=" << selected_src
+              << " drain_only=" << (video_buffer_->IsTransitionDrainOnly() ? 1 : 0)
+              << " target_reached=" << (target_reached ? 1 : 0)
+              << " transition_timeout=" << (transition_timeout ? 1 : 0);
+          Logger::Info(oss.str());
+          t2_prev_transition_audio_ms = current_audio_ms;
+          t2_prev_transition_tick = session_tick;
+        }
         if (target_reached || transition_timeout) {
           video_buffer_->SetTransitionDrainOnly(false);
           video_buffer_->EndBootstrap();

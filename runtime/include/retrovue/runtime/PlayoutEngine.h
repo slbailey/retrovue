@@ -31,6 +31,7 @@
 #include <optional>
 #include <unordered_map>
 
+#include "retrovue/readiness/ReadinessSignals.hpp"
 #include "retrovue/runtime/ProgramFormat.h"
 
 namespace retrovue::buffer {
@@ -137,6 +138,21 @@ class PlayoutEngine {
   void RegisterMuxAudioFrameCallback(int32_t channel_id,
                                      std::function<void(const buffer::AudioFrame&)> callback);
   void UnregisterMuxAudioFrameCallback(int32_t channel_id);
+
+  // Readiness D+1: attach / detach a BlockPlan signal getter for a channel.
+  // Called by the BlockPlan session lifecycle in playout_service to bridge
+  // PipelineManager-owned signals (video/audio primed, A/V delta) into the
+  // readiness observer. Additive, observational only — no decision gate is
+  // affected by whether a getter is attached.
+  //
+  // `getter` captures the PipelineManager instance and MUST be safe to invoke
+  // for the entire window it is attached; detach MUST be called before the
+  // pipeline is destroyed. A null / empty getter detaches the channel's
+  // BlockPlan signal source.
+  using BlockPlanSignalGetter = std::function<readiness::PipelineSignals()>;
+  void AttachBlockPlanSignalSource(int32_t channel_id,
+                                   BlockPlanSignalGetter getter);
+  void DetachBlockPlanSignalSource(int32_t channel_id);
 
   // Phase 9.0: OutputBus/OutputSink architecture
   // Attaches an output sink to the channel's OutputBus.

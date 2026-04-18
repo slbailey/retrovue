@@ -17,6 +17,9 @@
 #include "retrovue/output/OutputBus.h"
 #include "retrovue/producers/IProducer.h"
 #include "retrovue/producers/file/FileProducer.h"
+#include "retrovue/readiness/ReadinessEvaluator.h"
+#include "retrovue/readiness/ReadinessObserver.h"
+#include "retrovue/readiness/ReadinessVerdict.h"
 #include "retrovue/renderer/ProgramOutput.h"
 #include "retrovue/runtime/ProgramFormat.h"
 #include "retrovue/runtime/TimingLoop.h"
@@ -26,6 +29,9 @@
 #include "retrovue/timing/MasterClock.h"
 #include "retrovue/timing/TimelineController.h"
 #include "retrovue/util/ObservabilityLogger.hpp"
+
+#include <atomic>
+#include <sstream>
 
 namespace retrovue::runtime {
 
@@ -157,6 +163,30 @@ struct PlayoutEngine::PlayoutInstance {
   // Phase 8: Timeline Controller for unified time authority
   std::unique_ptr<timing::TimelineController> timeline_controller;
 
+  // Readiness observer — additive, observational only. Wired on
+  // StartChannel, unregistered on StopChannel. Not consulted by any
+  // playout decision. See docs/contracts/invariants/air/INV-READINESS-*.
+  //
+  // `readiness_control_box` is a lifetime-safety shim. The
+  // CustomMetricsProvider lambda captures weak_ptr<ControlBox>; the box
+  // holds the PlayoutControl* guarded by its own mutex. StopChannel
+  // acquires the box mutex and nulls the pointer BEFORE state tear-down,
+  // so any in-flight scrape either sees a valid control or sees null and
+  // exits cleanly — no raw-pointer dereference after destruction.
+  struct ReadinessControlBox {
+    std::mutex mtx;
+    PlayoutControl* control = nullptr;  // guarded by mtx
+    // D+1: BlockPlan signal getter. Bound by playout_service when a BlockPlan
+    // session starts; cleared when the session stops. Invoked under mtx so the
+    // lifetime of the underlying PipelineManager is bracketed by the same
+    // attach/detach mutex the ControlBox already uses for `control`.
+    PlayoutEngine::BlockPlanSignalGetter blockplan_signal_getter;
+  };
+  std::shared_ptr<ReadinessControlBox> readiness_control_box;
+  std::shared_ptr<readiness::ReadinessObserver> readiness_observer;
+  std::string readiness_provider_name;
+  std::shared_ptr<std::atomic<bool>> readiness_has_ever_been_ready;
+
   PlayoutInstance(int32_t id, const std::string& plan, int32_t p,
                  const std::optional<std::string>& uds, const ProgramFormat& format)
       : channel_id(id), plan_handle(plan), port(p), uds_path(uds), program_format(format) {}
@@ -276,7 +306,120 @@ EngineResult PlayoutEngine::StartChannel(
     // the session shell, timing primitives, and output bus; it must not interpret
     // plan_handle as a media asset or begin playout before StartBlockPlanSession.
     state->control->OnBufferDepth(0, kDefaultBufferSize, NowUtc(master_clock_));
-    
+
+    // ========================================================================
+    // Readiness observer wiring (additive, observational only).
+    //
+    // Contracts: docs/contracts/invariants/air/INV-READINESS-*.md,
+    //            docs/contracts/invariants/air/INV-VERDICT-*.md.
+    //
+    // No playout decision consumes the verdict. The observer is fed via a
+    // MetricsExporter CustomMetricsProvider (pull-based on /metrics scrape)
+    // and via explicit snapshot calls at channel-lifecycle edges. Transitions
+    // produce a structured log line. Phase 1: video/audio primed and A/V
+    // phase signals are not available at this layer and are treated as
+    // not-yet-observable; the readiness reason class reflects phase-derived
+    // state only. Enriching the snapshot with PipelineManager-owned signals
+    // is a follow-on step.
+    // ========================================================================
+    state->readiness_has_ever_been_ready = std::make_shared<std::atomic<bool>>(false);
+    auto transition_cb = [channel_id](const readiness::TransitionEvent& ev) {
+      std::cout << "[Readiness] channel=" << channel_id
+                << " from=" << static_cast<int>(ev.from_verdict)
+                << " to=" << static_cast<int>(ev.to_verdict)
+                << " reason=" << static_cast<int>(ev.reason)
+                << " utc_ms=" << ev.utc_ms << std::endl;
+    };
+    state->readiness_observer = std::make_shared<readiness::ReadinessObserver>(
+        channel_id, metrics_exporter_, transition_cb);
+    state->readiness_control_box =
+        std::make_shared<PlayoutInstance::ReadinessControlBox>();
+    {
+      std::lock_guard<std::mutex> box_lock(state->readiness_control_box->mtx);
+      state->readiness_control_box->control = state->control.get();
+    }
+
+    // Register a per-channel CustomMetricsProvider that emits two gauges on
+    // /metrics scrape: retrovue_readiness_verdict{channel}, and
+    // retrovue_readiness_reason_class{channel}. The provider also drives
+    // observer.Evaluate() on each scrape so transitions are observable.
+    std::weak_ptr<PlayoutInstance::ReadinessControlBox> box_weak =
+        state->readiness_control_box;
+    std::weak_ptr<readiness::ReadinessObserver> observer_weak =
+        state->readiness_observer;
+    std::weak_ptr<std::atomic<bool>> latch_weak =
+        state->readiness_has_ever_been_ready;
+    state->readiness_provider_name =
+        "readiness_channel_" + std::to_string(channel_id);
+    metrics_exporter_->RegisterCustomMetricsProvider(
+        state->readiness_provider_name,
+        [channel_id, box_weak, observer_weak, latch_weak]() -> std::string {
+          auto box = box_weak.lock();
+          auto obs = observer_weak.lock();
+          auto latch = latch_weak.lock();
+          if (!box || !obs || !latch) return "";
+
+          readiness::SessionReadinessSnapshot snap{};
+          readiness::PipelineSignals pipeline_signals;
+          {
+            std::lock_guard<std::mutex> box_lock(box->mtx);
+            if (box->control == nullptr) return "";
+            snap.phase = box->control->state();
+            snap.sink_attached = box->control->IsSinkAttached();
+            snap.fallback_engaged = box->control->IsInFallback();
+            // D+1: if a BlockPlan signal getter is attached, query it under
+            // the same mutex that brackets pipeline lifetime. If no getter
+            // is attached, pipeline_signals.snapshot_valid remains false and
+            // primed / av fields fall back to neutral stubs below.
+            if (box->blockplan_signal_getter) {
+              pipeline_signals = box->blockplan_signal_getter();
+            }
+          }
+          if (pipeline_signals.snapshot_valid) {
+            snap.video_primed = pipeline_signals.video_primed;
+            snap.audio_primed = pipeline_signals.audio_primed;
+            snap.av_delta_within_tolerance = pipeline_signals.av_within_tolerance;
+          } else {
+            // Phase-1 stubs: no BlockPlan layer attached yet.
+            snap.video_primed = false;
+            snap.audio_primed = false;
+            snap.av_delta_within_tolerance = true;
+          }
+          snap.session_ended_error = false;
+          snap.fatal_underflow_emitted = false;
+          snap.has_ever_been_ready = latch->load(std::memory_order_acquire);
+          snap.utc_ms = 0;
+
+          obs->Evaluate(snap);
+          const auto rec = obs->Current();
+          if (rec.verdict == readiness::Verdict::kReady) {
+            latch->store(true, std::memory_order_release);
+          }
+
+          std::ostringstream out;
+          out << "# HELP retrovue_readiness_verdict Readiness verdict "
+                 "(0=READY, 1=NOT_READY, 2=DEGRADED)\n";
+          out << "# TYPE retrovue_readiness_verdict gauge\n";
+          out << "retrovue_readiness_verdict{channel=\"" << channel_id << "\"} "
+              << static_cast<int>(rec.verdict) << "\n";
+          out << "# HELP retrovue_readiness_reason_class Readiness reason "
+                 "class (numeric enum)\n";
+          out << "# TYPE retrovue_readiness_reason_class gauge\n";
+          out << "retrovue_readiness_reason_class{channel=\"" << channel_id
+              << "\"} " << static_cast<int>(rec.reason) << "\n";
+          return out.str();
+        });
+
+    // Seed the observer with the initial startup snapshot so any subsequent
+    // scrape reflects the current session rather than the sentinel.
+    {
+      readiness::SessionReadinessSnapshot initial{};
+      initial.phase = state->control->state();
+      initial.sink_attached = state->control->IsSinkAttached();
+      initial.fallback_engaged = state->control->IsInFallback();
+      state->readiness_observer->Evaluate(initial);
+    }
+
     // Submit ready metrics
     telemetry::ChannelMetrics metrics{};
     metrics.state = telemetry::ChannelState::BUFFERING;
@@ -305,12 +448,29 @@ EngineResult PlayoutEngine::StopChannel(int32_t channel_id) {
   if (!state) {
     return EngineResult(false, "Channel " + std::to_string(channel_id) + " state is null");
   }
-  
+
+  // Readiness observer teardown (additive, observational only).
+  // Order:
+  //   1. Null the ControlBox's PlayoutControl* under its own mutex.
+  //      Any in-flight scrape holding the box mutex completes with a
+  //      valid pointer; any scrape entering after sees null and exits.
+  //   2. Unregister the CustomMetricsProvider so no new scrape fires.
+  //   3. Proceed with normal teardown (state destruction happens at
+  //      channels_.erase(it) later in this function).
+  if (state->readiness_control_box) {
+    std::lock_guard<std::mutex> box_lock(state->readiness_control_box->mtx);
+    state->readiness_control_box->control = nullptr;
+  }
+  if (!state->readiness_provider_name.empty() && metrics_exporter_) {
+    metrics_exporter_->UnregisterCustomMetricsProvider(
+        state->readiness_provider_name);
+  }
+
   if (control_surface_only_) {
     channels_.erase(it);
     return EngineResult(true, "Channel " + std::to_string(channel_id) + " stopped successfully");
   }
-  
+
   try {
     const int64_t now = NowUtc(master_clock_);
 
@@ -1526,6 +1686,27 @@ void PlayoutEngine::UnregisterMuxAudioFrameCallback(int32_t channel_id) {
   if (it == channels_.end() || !it->second || !it->second->program_output)
     return;
   it->second->program_output->ClearAudioSideSink();
+}
+
+void PlayoutEngine::AttachBlockPlanSignalSource(
+    int32_t channel_id, BlockPlanSignalGetter getter) {
+  std::lock_guard<std::mutex> lock(channels_mutex_);
+  auto it = channels_.find(channel_id);
+  if (it == channels_.end() || !it->second || !it->second->readiness_control_box)
+    return;
+  auto& box = it->second->readiness_control_box;
+  std::lock_guard<std::mutex> box_lock(box->mtx);
+  box->blockplan_signal_getter = std::move(getter);
+}
+
+void PlayoutEngine::DetachBlockPlanSignalSource(int32_t channel_id) {
+  std::lock_guard<std::mutex> lock(channels_mutex_);
+  auto it = channels_.find(channel_id);
+  if (it == channels_.end() || !it->second || !it->second->readiness_control_box)
+    return;
+  auto& box = it->second->readiness_control_box;
+  std::lock_guard<std::mutex> box_lock(box->mtx);
+  box->blockplan_signal_getter = nullptr;
 }
 
 EngineResult PlayoutEngine::UpdatePlan(
