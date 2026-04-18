@@ -25,13 +25,29 @@ import time
 import types
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, NoReturn
 
 # Type alias for subprocess.Process
 ProcessHandle = subprocess.Popen[bytes]
 
 # Air stdout/stderr go here: runtime/logs/<channel_id>-air.log
 _AIR_LOG_DIR = Path(__file__).resolve().parents[4] / "runtime" / "logs"
+
+
+def _log_and_raise_core_air_contract(
+    invariant_id: str,
+    message: str,
+    *,
+    exc_type: type[RuntimeError] = RuntimeError,
+    **fields: Any,
+) -> NoReturn:
+    logger = logging.getLogger(__name__)
+    if fields:
+        field_str = " ".join(f"{key}={value}" for key, value in sorted(fields.items()))
+        logger.error("CORE_AIR_CONTRACT_VIOLATION invariant=%s %s %s", invariant_id, message, field_str)
+    else:
+        logger.error("CORE_AIR_CONTRACT_VIOLATION invariant=%s %s", invariant_id, message)
+    raise exc_type(message)
 
 
 def _air_log_path(channel_id: str) -> Path:
@@ -168,15 +184,19 @@ RESULT_CODE_PROTOCOL_VIOLATION = 4  # Caller violated the protocol
 RESULT_CODE_FAILED = 5
 
 
-# P11D-005: Exceptions for SwitchToLive protocol (no retry)
-class SwitchTimingError(Exception):
-    """Raised when SwitchToLive issued with insufficient lead time (PROTOCOL_VIOLATION)."""
-    pass
+class LegacyStartupPathError(RuntimeError):
+    """Raised when Core attempts forbidden preview/switch startup choreography."""
 
 
-class SwitchProtocolError(Exception):
-    """Raised when AIR protocol contract violated (e.g. deprecated NOT_READY in deadline mode)."""
-    pass
+def _raise_legacy_startup_path_error(operation: str) -> NoReturn:
+    _log_and_raise_core_air_contract(
+        "INV-AIR-NO-SEGMENT-DRIVEN-EXECUTION-001",
+        "Core→AIR startup/tune-in contract violation: "
+        f"{operation} is part of the removed legacy preview/switch choreography. "
+        "Startup must use StartBlockPlanSession(join_utc_ms, block_a, block_b, program_format_json) only.",
+        exc_type=LegacyStartupPathError,
+        operation=operation,
+    )
 
 
 def _sum_segment_duration_ms(block: ScheduledBlock) -> int:
@@ -192,32 +212,57 @@ def _broadcast_date_for(utc_ms: int, day_start_hour: int = 6) -> date:
 
 def _validate_block_for_air(block: ScheduledBlock, *, context: str) -> None:
     if not block.segments:
-        raise RuntimeError(f"{context}: block {block.block_id} has no segments")
+        _log_and_raise_core_air_contract(
+            "INV-AIR-CORE-CONTRACT-001",
+            f"{context}: block {block.block_id} has no segments",
+            block_id=block.block_id,
+            context=context,
+        )
 
     block_duration_ms = int(block.end_utc_ms) - int(block.start_utc_ms)
     if block_duration_ms <= 0:
-        raise RuntimeError(
+        _log_and_raise_core_air_contract(
+            "INV-AIR-CORE-CONTRACT-001",
             f"{context}: block {block.block_id} has invalid timing "
-            f"start_utc_ms={block.start_utc_ms} end_utc_ms={block.end_utc_ms}"
+            f"start_utc_ms={block.start_utc_ms} end_utc_ms={block.end_utc_ms}",
+            block_id=block.block_id,
+            context=context,
+            start_utc_ms=int(block.start_utc_ms),
+            end_utc_ms=int(block.end_utc_ms),
         )
 
     segment_sum_ms = _sum_segment_duration_ms(block)
     if segment_sum_ms != block_duration_ms:
-        raise RuntimeError(
+        _log_and_raise_core_air_contract(
+            "INV-AIR-CORE-CONTRACT-001",
             f"{context}: block {block.block_id} segment duration mismatch "
-            f"sum_segment_ms={segment_sum_ms} block_duration_ms={block_duration_ms}"
+            f"sum_segment_ms={segment_sum_ms} block_duration_ms={block_duration_ms}",
+            block_id=block.block_id,
+            context=context,
+            sum_segment_ms=segment_sum_ms,
+            block_duration_ms=block_duration_ms,
         )
 
     for idx, seg in enumerate(block.segments):
         if int(seg.segment_duration_ms) <= 0:
-            raise RuntimeError(
+            _log_and_raise_core_air_contract(
+                "INV-AIR-CORE-CONTRACT-001",
                 f"{context}: block {block.block_id} segment {idx} has invalid "
-                f"segment_duration_ms={seg.segment_duration_ms}"
+                f"segment_duration_ms={seg.segment_duration_ms}",
+                block_id=block.block_id,
+                context=context,
+                segment_index=idx,
+                segment_duration_ms=int(seg.segment_duration_ms),
             )
         if int(seg.asset_start_offset_ms) < 0:
-            raise RuntimeError(
+            _log_and_raise_core_air_contract(
+                "INV-AIR-CORE-CONTRACT-001",
                 f"{context}: block {block.block_id} segment {idx} has invalid "
-                f"asset_start_offset_ms={seg.asset_start_offset_ms}"
+                f"asset_start_offset_ms={seg.asset_start_offset_ms}",
+                block_id=block.block_id,
+                context=context,
+                segment_index=idx,
+                asset_start_offset_ms=int(seg.asset_start_offset_ms),
             )
 
 
@@ -269,34 +314,6 @@ def _scheduled_block_to_proto(
     return proto
 
 
-def log_core_intent_frame_range(
-    *,
-    channel_id: str,
-    segment_id: str,
-    asset_path: str,
-    start_frame: int,
-    end_frame: int,
-    fps: float,
-    CT_start_us: int,
-    MT_start_us: int,
-) -> None:
-    """Emit structured CORE_INTENT_FRAME_RANGE probe (once per segment hand-off to AIR)."""
-    import logging
-    msg = (
-        f"CORE_INTENT_FRAME_RANGE channel_id={channel_id} segment_id={segment_id} asset_path={asset_path} "
-        f"start_frame={start_frame} end_frame={end_frame} fps={fps} CT_start_us={CT_start_us} MT_start_us={MT_start_us}"
-    )
-    logging.getLogger(__name__).info("%s", msg)
-    # Also append to the channel's Air log so intent and AIR_AS_RUN appear together for comparison.
-    try:
-        log_path = _air_log_path(channel_id)
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(log_path, "a", encoding="utf-8", errors="replace") as f:
-            f.write("[Core] " + msg + "\n")
-    except OSError:
-        pass  # Do not fail hand-off if log write fails
-
-
 def start_blockplan_session(
     grpc_addr: str,
     *,
@@ -311,11 +328,22 @@ def start_blockplan_session(
     import grpc
 
     if join_utc_ms <= 0:
-        raise RuntimeError("Core→AIR BlockPlan contract: join_utc_ms is required")
+        _log_and_raise_core_air_contract(
+            "INV-AIR-CORE-CONTRACT-001",
+            "Core→AIR BlockPlan contract: join_utc_ms is required",
+            channel_id=channel_id,
+            join_utc_ms=join_utc_ms,
+        )
     if int(current_block.end_utc_ms) != int(next_block.start_utc_ms):
-        raise RuntimeError(
+        _log_and_raise_core_air_contract(
+            "INV-AIR-CORE-CONTRACT-001",
             "Core→AIR BlockPlan contract: startup blocks must be contiguous "
-            f"current_end={current_block.end_utc_ms} next_start={next_block.start_utc_ms}"
+            f"current_end={current_block.end_utc_ms} next_start={next_block.start_utc_ms}",
+            channel_id=channel_id,
+            current_block=current_block.block_id,
+            next_block=next_block.block_id,
+            current_end=int(current_block.end_utc_ms),
+            next_start=int(next_block.start_utc_ms),
         )
 
     playout_pb2, playout_pb2_grpc = _get_playout_stubs()
@@ -336,7 +364,14 @@ def start_blockplan_session(
             timeout=timeout_s,
         )
     if not response.success:
-        raise RuntimeError(f"StartBlockPlanSession failed: {response.message}")
+        _log_and_raise_core_air_contract(
+            "INV-AIR-CORE-CONTRACT-001",
+            f"StartBlockPlanSession failed: {response.message}",
+            channel_id=channel_id,
+            join_utc_ms=join_utc_ms,
+            block_a=current_block.block_id,
+            block_b=next_block.block_id,
+        )
     logging.getLogger(__name__).info(
         "Core→AIR BlockPlan startup: channel_id=%s join_utc_ms=%d block_a=%s "
         "start_utc_ms=%d end_utc_ms=%d block_b=%s start_utc_ms=%d end_utc_ms=%d",
@@ -374,7 +409,12 @@ def feed_blockplan(
             timeout=timeout_s,
         )
     if not response.success:
-        raise RuntimeError(f"FeedBlockPlan failed: {response.message}")
+        _log_and_raise_core_air_contract(
+            "INV-AIR-CORE-CONTRACT-001",
+            f"FeedBlockPlan failed: {response.message}",
+            channel_id_int=channel_id_int,
+            block_id=block.block_id,
+        )
     return True
 
 
@@ -410,71 +450,18 @@ def air_load_preview(
     fps_denominator: int,
     timeout_s: int = 90,
 ) -> bool:
-    """Call Air LoadPreview RPC with frame-indexed execution (INV-FRAME-001/002/003).
-
-    Args:
-        grpc_addr: gRPC address of Air engine (e.g. "127.0.0.1:50051")
-        channel_id_int: Channel ID as integer
-        asset_path: Fully-qualified path to media file
-        start_frame: First frame index within asset (0-based, INV-FRAME-001)
-        frame_count: Exact number of frames to play (INV-FRAME-002)
-        fps_numerator: Frame rate numerator (e.g. 30000 for 29.97fps, INV-FRAME-003)
-        fps_denominator: Frame rate denominator (e.g. 1001 for 29.97fps, INV-FRAME-003)
-        timeout_s: RPC timeout in seconds
-
-    Returns:
-        True if preview loaded successfully, False otherwise.
-
-    Raises:
-        grpc.RpcError on connection/RPC error.
-
-    Phase 8: If result_code is REJECTED_BUSY, logs at INFO level (expected when
-    switch is armed) rather than WARNING.
-    """
-    import grpc
-    import logging
-    logger = logging.getLogger(__name__)
-
-    # INV-FRAME-003: Fail fast if fps not provided
-    if fps_denominator <= 0:
-        logger.error("INV-FRAME-003 violation: fps_denominator must be > 0 (got %d)", fps_denominator)
-        return False
-    if frame_count < 0:
-        logger.error(
-            "INV-AIR-NO-ADHOC-SWITCHING-001 violation: frame_count must be explicit (got %d)",
-            frame_count,
-        )
-        return False
-
-    playout_pb2, playout_pb2_grpc = _get_playout_stubs()
-    with grpc.insecure_channel(grpc_addr) as ch:
-        stub = playout_pb2_grpc.PlayoutControlStub(ch)
-        r = stub.LoadPreview(
-            playout_pb2.LoadPreviewRequest(
-                channel_id=channel_id_int,
-                asset_path=asset_path,
-                start_frame=start_frame,
-                frame_count=frame_count,
-                fps_numerator=fps_numerator,
-                fps_denominator=fps_denominator,
-            ),
-            timeout=timeout_s,
-        )
-
-    # Phase 8: Treat REJECTED_BUSY as expected (switch is armed, LoadPreview forbidden)
-    if not r.success:
-        result_code = getattr(r, 'result_code', RESULT_CODE_UNSPECIFIED)
-        if result_code == RESULT_CODE_REJECTED_BUSY:
-            logger.info("LoadPreview rejected (switch armed): %s", r.message)
-        else:
-            logger.warning("LoadPreview failed: %s (result_code=%d)", r.message, result_code)
-
-    return r.success
-
-
-# P11E-001: Single source for MIN_PREFEED_LEAD_TIME_MS (env RETROVUE_MIN_PREFEED_LEAD_TIME_MS).
-from retrovue.runtime.constants import MIN_PREFEED_LEAD_TIME_MS
-from retrovue.runtime.clock import AuthoritativeClock
+    """Legacy helper removed. Startup/tune-in must use BlockPlan session start."""
+    _ = (
+        grpc_addr,
+        channel_id_int,
+        asset_path,
+        start_frame,
+        frame_count,
+        fps_numerator,
+        fps_denominator,
+        timeout_s,
+    )
+    _raise_legacy_startup_path_error("LoadPreview")
 
 
 def air_switch_to_live(
@@ -485,54 +472,9 @@ def air_switch_to_live(
     timeout_s: int = 30,
     target_boundary_time_ms: int = 0,
 ) -> tuple[bool, int, str]:
-    """Call Air SwitchToLive RPC. Returns (success, result_code, violation_reason). Raises on failure.
-
-    P11D-005: INV-CONTROL-NO-POLL-001 — no retry. PROTOCOL_VIOLATION → SwitchTimingError;
-    NOT_READY → SwitchProtocolError (deprecated in deadline-authoritative mode).
-    P11C-001: target_boundary_time_ms is the scheduled grid boundary (wall-clock ms). 0 = legacy/immediate.
-    """
-    import grpc
-
-    # P11D-012: INV-LEADTIME-MEASUREMENT-001 — issued_at_time_ms for lead-time evaluation
-    issued_at_time_ms = clock.now_utc_ms()
-
-    if target_boundary_time_ms > 0:
-        lead_time_ms = target_boundary_time_ms - issued_at_time_ms
-        logging.getLogger(__name__).info(
-            "[SwitchToLive] Core issuing: issued_at_ms=%d target_boundary_ms=%d lead_time_ms=%d MIN_PREFEED_LEAD_TIME_MS=%d",
-            issued_at_time_ms,
-            target_boundary_time_ms,
-            lead_time_ms,
-            MIN_PREFEED_LEAD_TIME_MS,
-        )
-
-    playout_pb2, playout_pb2_grpc = _get_playout_stubs()
-    with grpc.insecure_channel(grpc_addr) as ch:
-        stub = playout_pb2_grpc.PlayoutControlStub(ch)
-        r = stub.SwitchToLive(
-            playout_pb2.SwitchToLiveRequest(
-                channel_id=channel_id_int,
-                target_boundary_time_ms=target_boundary_time_ms,
-                issued_at_time_ms=issued_at_time_ms,
-            ),
-            timeout=timeout_s,
-        )
-    result_code = getattr(r, 'result_code', RESULT_CODE_UNSPECIFIED)
-    violation_reason = getattr(r, 'violation_reason', '') or ''
-    if r.success:
-        # AUDIT: TP - Producer switch completed
-        _AUDIT_TP = clock.monotonic_ns()
-        logging.getLogger(__name__).info(
-            "[AUDIT-TP] SwitchToLive completed at %d ns for channel_id=%d",
-            _AUDIT_TP, channel_id_int
-        )
-        return (True, result_code, violation_reason)
-    # P11D-005: Treat PROTOCOL_VIOLATION and NOT_READY as fatal (no retry)
-    if result_code == RESULT_CODE_PROTOCOL_VIOLATION:
-        raise SwitchTimingError(violation_reason or "Insufficient prefeed lead time")
-    if result_code == RESULT_CODE_NOT_READY:
-        raise SwitchProtocolError("Unexpected NOT_READY in deadline-authoritative mode")
-    raise RuntimeError(r.message)
+    """Legacy helper removed. Startup/tune-in must use BlockPlan session start."""
+    _ = (grpc_addr, channel_id_int, clock, timeout_s, target_boundary_time_ms)
+    _raise_legacy_startup_path_error("SwitchToLive")
 
 
 def _launch_air_binary(
@@ -745,6 +687,53 @@ def launch_air(
         RuntimeError: If Air binary not found, not executable, gRPC connect fails,
             or StartChannel/AttachStream/StartBlockPlanSession times out or fails.
     """
+    legacy_keys = {
+        "asset_path",
+        "start_frame",
+        "frame_count",
+        "fps_numerator",
+        "fps_denominator",
+        "target_boundary_time_ms",
+        "issued_at_time_ms",
+    }
+    segment_only_keys = {
+        "segment",
+        "segment_index",
+        "asset_uri",
+        "asset_start_offset_ms",
+        "segment_duration_ms",
+    }
+    legacy_payload = {
+        key: playout_request[key]
+        for key in legacy_keys
+        if key in playout_request and playout_request[key] is not None
+    }
+    segment_only_payload = {
+        key: playout_request[key]
+        for key in segment_only_keys
+        if key in playout_request and playout_request[key] is not None
+    }
+    if legacy_payload:
+        _log_and_raise_core_air_contract(
+            "INV-AIR-NO-SEGMENT-DRIVEN-EXECUTION-001",
+            "Core→AIR startup/tune-in contract violation: launch_air received legacy "
+            f"preview/switch fields {sorted(legacy_payload.keys())}. "
+            "Use StartBlockPlanSession(join_utc_ms, block_a, block_b, program_format_json) only.",
+            exc_type=LegacyStartupPathError,
+            channel_id=playout_request.get("channel_id", "unknown"),
+            legacy_fields=",".join(sorted(legacy_payload.keys())),
+        )
+    if segment_only_payload:
+        _log_and_raise_core_air_contract(
+            "INV-AIR-NO-SEGMENT-DRIVEN-EXECUTION-001",
+            "Core→AIR startup/tune-in contract violation: launch_air received a "
+            "segment-only payload instead of block_a/block_b. "
+            "Startup must provide deterministic blocks, not a single segment.",
+            exc_type=LegacyStartupPathError,
+            channel_id=playout_request.get("channel_id", "unknown"),
+            segment_fields=",".join(sorted(segment_only_payload.keys())),
+        )
+
     channel_id = playout_request.get("channel_id", "unknown")
     join_utc_ms = int(playout_request.get("join_utc_ms", 0) or 0)
     current_block = playout_request.get("current_block")
@@ -752,12 +741,19 @@ def launch_air(
     evidence_endpoint = str(playout_request.get("evidence_endpoint", "") or "")
 
     if not isinstance(current_block, ScheduledBlock) or not isinstance(next_block, ScheduledBlock):
-        raise RuntimeError(
-            "Core→AIR BlockPlan contract: launch_air requires current_block and next_block"
+        _log_and_raise_core_air_contract(
+            "INV-AIR-CORE-CONTRACT-001",
+            "Core→AIR BlockPlan contract: launch_air requires current_block and next_block",
+            channel_id=channel_id,
+            has_current_block=isinstance(current_block, ScheduledBlock),
+            has_next_block=isinstance(next_block, ScheduledBlock),
         )
     if join_utc_ms <= 0:
-        raise RuntimeError(
-            "Core→AIR BlockPlan contract: launch_air requires join_utc_ms"
+        _log_and_raise_core_air_contract(
+            "INV-AIR-CORE-CONTRACT-001",
+            "Core→AIR BlockPlan contract: launch_air requires join_utc_ms",
+            channel_id=channel_id,
+            join_utc_ms=join_utc_ms,
         )
 
     # Use provided config or fall back to mock config for backwards compatibility
@@ -837,8 +833,7 @@ __all__ = [
     "air_load_preview",
     "air_switch_to_live",
     "terminate_air",
-    "SwitchTimingError",
-    "SwitchProtocolError",
+    "LegacyStartupPathError",
     "ProcessHandle",
     "get_uds_socket_path",
     "ensure_socket_dir_exists",

@@ -634,10 +634,8 @@ class ProgramDirector:
         """
         # Runtime components expect an AuthoritativeClock with UTC + monotonic time.
         self._embedded_clock = self._clock
-        from retrovue.runtime.channel_manager import (
-            BlockPlanProducer,
-            ChannelManager,
-        )
+        # Phase 5C.2 (INV-BPP-RETIRED-001): BlockPlanProducer retired.
+        from retrovue.runtime.channel_manager import ChannelManager
         from retrovue.dev.mock_schedule_services import (
             MockAlternatingScheduleService,
             MockGridScheduleService,
@@ -1848,10 +1846,12 @@ class ProgramDirector:
                 fanout = self._fanout_buffers.get(channel_id)
             if fanout is not None:
                 fanout.signal_stop()
-            if manager.active_producer:
+            if manager.is_producer_active():
                 self._logger.info("[channel %s] Force-stopping producer (terminating Air)", channel_id)
                 try:
-                    manager.active_producer.stop(reason=getattr(manager, "_stop_reason", None) or stop_reason)
+                    # Phase 5C.1: PD uses CM's narrow halt API; orchestration
+                    # lives on CM (INV-CM-ORCHESTRATION-SOLE-OWNER-001).
+                    manager.halt_producer(reason=getattr(manager, "_stop_reason", None) or stop_reason)
                     # Phase 9 Step 2: CM owns the field; PD issues the command.
                     manager.clear_active_producer()
                 except Exception as e:
@@ -2138,9 +2138,11 @@ class ProgramDirector:
                 self._readiness_recovery_thread = None
             with self._managers_lock:
                 for channel_id, manager in list(self._managers.items()):
-                    if manager.active_producer:
+                    if manager.is_producer_active():
                         try:
-                            manager.active_producer.stop()
+                            # Phase 5C.1: narrow halt API
+                            # (INV-CM-ORCHESTRATION-SOLE-OWNER-001).
+                            manager.halt_producer()
                         except Exception as e:
                             self._logger.warning("Error stopping producer %s: %s", channel_id, e)
                         # Phase 9 Step 2: CM owns the field; PD issues the command.
@@ -2586,44 +2588,6 @@ class ProgramDirector:
                     "X-Accel-Buffering": "no",
                 },
             )
-
-        @self.fastapi_app.get("/debug/channels/{channel_id}/current-segment")
-        async def get_current_segment(channel_id: str, now_utc_ms: Optional[int] = None) -> Any:
-            """
-            Phase 7: Test-only probe for expected asset + offset at tune-in.
-            Returns current segment (asset_id, asset_path, start_offset_ms) when the
-            channel manager supports get_current_segment(now_utc_ms).
-            """
-            try:
-                if self._channel_manager_provider is not None:
-                    manager = self._channel_manager_provider.get_channel_manager(channel_id)
-                else:
-                    manager = self._get_or_create_manager(channel_id)
-            except Exception:
-                return Response(
-                    content="Channel not found",
-                    status_code=status.HTTP_404_NOT_FOUND,
-                )
-            get_segment = getattr(manager, "get_current_segment", None)
-            if not callable(get_segment):
-                return Response(
-                    content="Manager does not support current segment probe",
-                    status_code=status.HTTP_404_NOT_FOUND,
-                )
-            try:
-                segment = get_segment(now_utc_ms)
-                if segment is None:
-                    return Response(
-                        content="No current segment",
-                        status_code=status.HTTP_404_NOT_FOUND,
-                    )
-                return segment
-            except Exception as e:
-                self._logger.exception("get_current_segment failed")
-                return Response(
-                    content=str(e),
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                )
 
         @self.fastapi_app.get("/debug/memory")
         def debug_memory() -> dict[str, Any]:

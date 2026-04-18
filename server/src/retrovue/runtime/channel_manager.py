@@ -42,6 +42,8 @@ from .clock import AuthoritativeClock
 from .schedule_types import ScheduledBlock, ScheduledSegment
 from .producer.base import Producer, ProducerMode, ProducerStatus, ContentSegment, ProducerState
 from .channel_stream import ChannelStream, SocketTsSource, generate_ts_stream
+from .air_bridge import AirBridge
+from .supply_controller import SupplyController
 from .config import (
     ChannelConfig,
     ChannelConfigProvider,
@@ -57,10 +59,11 @@ import os
 import threading
 
 # =============================================================================
-# PLAYOUT AUTHORITY: Model A (launch_air + LoadPreview + SwitchToLive)
+# PLAYOUT AUTHORITY: BlockPlan startup/feed only
 # =============================================================================
-# The only runtime playout path is BlockPlanProducer driving AIR through the
-# Model A RPC surface in retrovue.usecases.channel_manager_launch.
+# The only runtime playout path is BlockPlanProducer driving AIR through
+# StartBlockPlanSession + FeedBlockPlan in retrovue.usecases.channel_manager_launch.
+# Legacy startup/tune-in choreography (LoadPreview + SwitchToLive) is forbidden.
 # =============================================================================
 PLAYOUT_AUTHORITY: str = "blockplan"
 
@@ -351,7 +354,11 @@ class ChannelManager:
         self.viewer_sessions: dict[str, dict[str, Any]] = {}
 
         # At most one active producer for this channel.
-        self.active_producer: Producer | None = None
+        # Phase 5C.2: no longer holds a BlockPlanProducer; holds ``self`` while
+        # the CM-owned producer is running, ``None`` otherwise
+        # (INV-BPP-RETIRED-001). External ``if cm.active_producer:`` guards
+        # continue to work; ``cm.is_producer_active()`` is the preferred check.
+        self.active_producer = None
 
         # Runtime snapshot for ProgramDirector / dashboards / analytics.
         self.runtime_state = ChannelRuntimeState(
@@ -368,9 +375,6 @@ class ChannelManager:
         self._logger = logging.getLogger(__name__)
         # INV-CONFIG-IMMUTABLE-001: Read from resolved config (required).
         _ch = resolved_config["channel"]
-        self._teardown_timeout_seconds = _ch["teardown_timeout_seconds"]
-        self._teardown_started_station: float | None = None
-        self._teardown_reason: str | None = None
 
         # Mock grid configuration (when using mock grid schedule)
         self._mock_grid_block_minutes = _ch["mock_grid_block_minutes"]
@@ -556,7 +560,6 @@ class ChannelManager:
         # Phase 8 Step 5: PD also cancels any pending recovery timer in
         # ``_stop_channel_internal`` — CM no longer holds recovery state.
         self._channel_state = "STOPPED"
-        self._teardown_reason = None
         self._pending_fatal = None
         # Phase 8.5a: reset so first_segment fires again on re-activation.
         self._first_segment_logged = False
@@ -690,8 +693,8 @@ class ChannelManager:
                 # before it invokes start_producer.
                 self._channel_state = "RUNNING"
 
-            if self.active_producer:
-                self.runtime_state.stream_endpoint = self.active_producer.get_stream_endpoint()
+            if getattr(self, "_producer_started", False):
+                self.runtime_state.stream_endpoint = f"/channel/{self.channel_id}.ts"
 
             return (old_count, self.runtime_state.viewer_count)
 
@@ -820,12 +823,9 @@ class ChannelManager:
         """Enforce 'channel goes on-air' (BlockPlan path only)."""
         required_mode = self._get_current_mode()
 
-        # If there's an active producer and it's both in the correct mode and healthy, we're done.
-        if (
-            self.active_producer
-            and self.active_producer.mode.value == required_mode
-            and self.active_producer.health() == "running"
-        ):
+        # If a producer is already running (and healthy), we're done. Mode is
+        # implicit (BlockPlan only) after Phase 5C.2.
+        if getattr(self, "_producer_started", False) and self._producer_health() == "running":
             return
 
         # Otherwise we need to (re)start. On restart we also reset the
@@ -833,20 +833,16 @@ class ChannelManager:
         # (INV-HLS-RESTART-DISCONTINUITY-001). Pre-Phase-8-Step-5 this
         # reset was done in the CM-side recovery path; we keep it inline
         # so PD-driven restarts via start_producer preserve the marker.
-        if self.active_producer:
-            self.active_producer.stop()
+        if getattr(self, "_producer_started", False):
+            self._producer_stop()
             self.active_producer = None
             self._update_hls_segment_counter()
             self._reset_hls_segmenter_for_restart()
 
-        producer = self._build_producer_for_mode(required_mode)
-        if producer is None:
-            self.runtime_state.producer_status = "error"
-            raise ProducerStartupError(
-                f"Channel {self.channel_id}: cannot create Producer for mode '{required_mode}'"
-            )
-
-        self.active_producer = producer
+        # Phase 5C.2: construct CM's per-channel helpers (AirBridge,
+        # SupplyController) and producer-lifecycle state. No BlockPlanProducer
+        # instance is created (INV-BPP-RETIRED-001).
+        self._build_producer_for_mode(required_mode)
 
         # Get authoritative station time.
         station_time = self.clock.now_utc()
@@ -883,8 +879,9 @@ class ChannelManager:
             jip_offset_ms,
         )
 
-        # Ask the Producer to start with JIP parameters.
-        started_ok = self.active_producer.start(
+        # Phase 5C.1: CM owns orchestration start
+        # (INV-CM-ORCHESTRATION-SOLE-OWNER-001).
+        started_ok = self._producer_start(
             station_time,
             jip_offset_ms=jip_offset_ms,
         )
@@ -911,7 +908,7 @@ class ChannelManager:
         )
         self.runtime_state.producer_status = "running"
         self.runtime_state.producer_started_at = station_time
-        self.runtime_state.stream_endpoint = self.active_producer.get_stream_endpoint()
+        self.runtime_state.stream_endpoint = f"/channel/{self.channel_id}.ts"
 
         # Phase 8 Step 5: recovery-attempt bookkeeping lives on PD. When
         # PD's retry timer fires ``manager.start_producer()`` and this
@@ -959,42 +956,58 @@ class ChannelManager:
     @property
     def is_live(self) -> bool:
         """True when the channel has an active producer in running state (BlockPlan path)."""
-        if self.active_producer is None:
-            return False
-        return self.active_producer.status == ProducerStatus.RUNNING
+        return self._producer_started and self.runtime_state.producer_status == "running"
+
+    def is_producer_active(self) -> bool:
+        """Post-BPP truthy check replacing ``if manager.active_producer:``.
+
+        Returns True while the CM-owned producer is running
+        (INV-BPP-RETIRED-001).
+        """
+        return getattr(self, "_producer_started", False)
+
+    @property
+    def reader_socket_queue(self):
+        """Expose the active AirBridge's reader_socket_queue.
+
+        Post-ADR-004 Phase 5C.2, ``active_producer = self`` (CM). The
+        TsConsumptionAdapter factory resolves the per-channel UDS reader
+        queue via ``active_producer.reader_socket_queue``; this property
+        makes CM answer that call by forwarding to the composed AirBridge.
+        Returns ``None`` when no producer has been built yet
+        (INV-CM-READER-SOCKET-QUEUE-PROXY-001).
+        """
+        bridge = getattr(self, "_air_bridge", None)
+        if bridge is None:
+            return None
+        return bridge.reader_socket_queue
 
     def tick(self) -> None:
-        """Clock-driven health/state update. BlockPlan path: producer owns per-segment LoadPreview/SwitchToLive."""
-        self._check_teardown_completion()
+        """Clock-driven health/state update. CM-as-producer owns startup and
+        boundary-driven feeding; tick surfaces any pending fatal error and
+        returns early when the channel is stopped."""
         if self._pending_fatal is not None:
             e = self._pending_fatal
             self._pending_fatal = None
             raise e
         if self._channel_state == "STOPPED" or self.active_producer is None:
             return
-        # BlockPlanProducer owns execution; tick does not drive segment boundaries
 
     def _stop_producer_if_idle(self) -> None:
-        """Stop the Producer if there are no active viewers."""
-        self._check_teardown_completion()
+        """Stop the producer if there are no active viewers.
+
+        Post-ADR-004 Phase 5C.2: teardown is synchronous. ``_producer_stop``
+        terminates AIR, joins the driver thread, resets supply state, and
+        clears ``active_producer`` in one call. There is no cooperative
+        two-phase protocol (INV-CM-TEARDOWN-SYNCHRONOUS-001).
+        """
         if self.runtime_state.viewer_count != 0:
             return
 
-        producer = self.active_producer
-        if producer:
-            if not producer.teardown_in_progress():
-                self._teardown_started_station = self._station_now()
-                self._teardown_reason = "viewer_inactive"
-                self._logger.debug(
-                    "Channel %s initiating producer teardown (reason=%s)",
-                    self.channel_id,
-                    self._teardown_reason,
-                )
-                producer.request_teardown(
-                    reason=self._teardown_reason,
-                    timeout=self._teardown_timeout_seconds,
-                )
-            return
+        if self.is_producer_active():
+            self._producer_stop(
+                reason=getattr(self, "_stop_reason", None) or "viewer_inactive",
+            )
 
         self.runtime_state.producer_status = "stopped"
         self.runtime_state.stream_endpoint = None
@@ -1008,29 +1021,22 @@ class ChannelManager:
             # Do NOT stop producer when 0 viewers; upstream stays connected for reconnect.
             if self._channel_state == "STOPPED":
                 return
-            self._check_teardown_completion()
             if self.active_producer is None:
                 return
             # Fall through to update producer health (keep channel RUNNING)
         if self._channel_state == "STOPPED":
             return
-        self._check_teardown_completion()
 
-        # Snapshot to avoid TOCTOU race — another thread may clear active_producer
-        # between the None check and the method calls.
-        producer = self.active_producer
-        if producer is None:
+        # Phase 5C.2: CM reads its own state; BPP.get_state() retired.
+        if not self._producer_started:
             self.runtime_state.producer_status = "stopped"
             self.runtime_state.last_health = "stopped"
             return
 
-        health_status = producer.health()
-        producer_state: ProducerState = producer.get_state()
-
+        health_status = self._producer_health()
         self.runtime_state.last_health = health_status
-        self.runtime_state.producer_status = producer_state.status.value
-        self.runtime_state.stream_endpoint = producer_state.output_url
-        self.runtime_state.producer_started_at = producer_state.started_at
+        # producer_status / stream_endpoint / producer_started_at are owned
+        # by _producer_start / _producer_stop / _producer_fail transitions.
         
     def attach_metrics_publisher(self, publisher: "MetricsPublisher") -> None:
         """Register the metrics publisher responsible for this channel."""
@@ -1043,38 +1049,26 @@ class ChannelManager:
         return self._metrics_publisher.get_latest_sample()
 
     def populate_metrics_sample(self, sample: "ChannelMetricsSample") -> None:
-        """Populate the provided sample with the most recent channel state."""
-        self._check_teardown_completion()
+        """Populate the provided sample with the most recent channel state.
+
+        Post-ADR-004 Phase 5C.2, ``active_producer`` is ``self`` (CM).
+        Metrics derive from CM-local state, not from BPP-era producer
+        methods (INV-CM-METRICS-SAMPLE-CM-SHAPE-001). Segment-progress and
+        frame counters were BPP-owned; CM does not track them today, so
+        they report as ``None`` / ``0.0`` until a replacement pathway is
+        wired through AIR telemetry.
+        """
         viewer_count = len(self.viewer_sessions)
-        producer = self.active_producer
-
-        producer_state = "stopped"
-        segment_id: str | None = None
-        segment_position = 0.0
-        dropped_frames: int | None = None
-        queued_frames: int | None = None
-
-        if producer is not None:
-            status_obj = getattr(producer, "status", ProducerStatus.RUNNING)
-            if isinstance(status_obj, ProducerStatus):
-                producer_state = status_obj.value
-            else:
-                producer_state = str(status_obj)
-
-            seg_id, seg_position = producer.get_segment_progress()
-            segment_id = seg_id
-            segment_position = seg_position
-            dropped_frames, queued_frames = producer.get_frame_counters()
-
+        producer_state = self.runtime_state.producer_status or "stopped"
         active = viewer_count > 0 or producer_state == ProducerStatus.RUNNING.value
 
         sample.channel_state = "active" if active else "idle"
         sample.viewer_count = viewer_count
         sample.producer_state = producer_state
-        sample.segment_id = segment_id
-        sample.segment_position = segment_position
-        sample.dropped_frames = dropped_frames
-        sample.queued_frames = queued_frames
+        sample.segment_id = None
+        sample.segment_position = 0.0
+        sample.dropped_frames = None
+        sample.queued_frames = None
 
     def _station_now(self) -> float:
         """Get current station time as float timestamp."""
@@ -1083,84 +1077,306 @@ class ChannelManager:
             return current_time.timestamp()
         return float(current_time)
 
-    def _check_teardown_completion(self) -> None:
-        if self._teardown_started_station is None:
-            return
-        producer = self.active_producer
-        if producer is None:
-            self._finalize_teardown(completed=True)
-            return
-        if producer.teardown_in_progress():
-            return
-        completed = producer.status == ProducerStatus.STOPPED
-        self._finalize_teardown(completed=completed)
+    def _build_producer_for_mode(self, mode: str) -> None:
+        """Construct CM-held per-channel helpers and initialize producer-
+        lifecycle state.
 
-    def _finalize_teardown(self, *, completed: bool) -> None:
-        duration = 0.0
-        if self._teardown_started_station is not None:
-            duration = max(0.0, self._station_now() - self._teardown_started_station)
-        reason = self._teardown_reason or "unspecified"
-        producer = self.active_producer
+        Phase 5C.2 of ADR-004: BlockPlanProducer is retired
+        (INV-BPP-RETIRED-001). This method now only sets up the CM-internal
+        structures needed by ``_producer_start``:
 
-        if completed:
-            self._logger.debug(
-                "Channel %s producer teardown completed in %.3fs (reason=%s)",
-                self.channel_id,
-                duration,
-                reason,
-            )
-        else:
-            self._logger.warning(
-                "Channel %s producer teardown timed out after %.3fs (reason=%s); forcing stop",
-                self.channel_id,
-                duration,
-                reason,
-            )
+          * AirBridge  (INV-CM-OWNS-AIR-BRIDGE-001)
+          * SupplyController  (INV-CM-OWNS-SUPPLY-CONTROLLER-001)
+          * producer-lifecycle state (``_producer_lock``, ``_producer_stop_event``,
+            ``_producer_driver_thread``, ``_producer_started``)
 
-        # INV-TEARDOWN-AIR-REAP-001: Always stop the producer before dropping
-        # the reference, regardless of graceful vs timeout completion.
-        # Without this, the AIR subprocess is orphaned as a zombie.
-        if producer:
-            producer.stop(reason=getattr(self, "_stop_reason", None) or reason or "channel_stop")
-
-        self.active_producer = None
-        self.runtime_state.producer_status = "stopped"
-        self.runtime_state.stream_endpoint = None
-        self._teardown_started_station = None
-        self._teardown_reason = None
-
-    def _build_producer_for_mode(self, mode: str) -> Producer | None:
-        """Build the Producer for the given mode. BlockPlanProducer only."""
+        Returns ``None`` — there is no producer object to return.
+        """
         if not self._blockplan_mode:
             self._logger.error(
-                "Channel %s: _blockplan_mode is False. Only BlockPlanProducer is permitted.",
+                "Channel %s: _blockplan_mode is False. BlockPlan is the only path.",
                 self.channel_id,
             )
             raise RuntimeError(
-                f"Channel {self.channel_id}: Only BlockPlanProducer is permitted. "
+                f"Channel {self.channel_id}: BlockPlan is the only supported mode. "
                 "Call set_blockplan_mode(True) before starting the channel."
             )
         self._logger.debug(
-            "Channel %s: Building BlockPlanProducer (mode=%s)",
+            "Channel %s: Building CM-owned producer helpers (mode=%s)",
             self.channel_id, mode,
         )
-        producer = BlockPlanProducer(
-            channel_id=self.channel_id,
-            configuration={},
-            channel_config=self._get_channel_config(),
-            execution_reader=self.execution_reader,
-            clock=self.clock,
-            evidence_endpoint=self._evidence_endpoint,
-            # Phase 8 Step 5: report producer session-end directly to PD;
-            # CM no longer owns recovery policy. The lambda captures the
-            # channel id once at producer-construction time.
-            on_producer_failure=lambda reason, _cid=self.channel_id: (
-                self.program_director.on_producer_failure(_cid, reason)
-            ),
+
+        channel_config = self._get_channel_config()
+        # Failure callback: reported to PD for recovery-policy decisions.
+        on_failure = lambda reason, _cid=self.channel_id: (
+            self.program_director.on_producer_failure(_cid, reason)
         )
-        # Wire HLS segmenter for BlockPlan timebase updates
-        producer._hls_segmenter_ref = self._hls_segmenter
-        return producer
+
+        self._air_bridge = AirBridge(
+            channel_id=self.channel_id,
+            channel_config=channel_config,
+            logger=self._logger,
+        )
+        self._supply = SupplyController(
+            channel_id=self.channel_id,
+            execution_reader=self.execution_reader,
+            on_failure=on_failure,
+            logger=self._logger,
+        )
+        self._producer_lock = threading.RLock()
+        self._producer_stop_event = threading.Event()
+        self._producer_driver_thread = None
+        self._producer_started = False
+
+    # ------------------------------------------------------------------
+    # Phase 5C.1: CM-owned runtime orchestration
+    # (INV-CM-ORCHESTRATION-SOLE-OWNER-001)
+    # ------------------------------------------------------------------
+
+    def _producer_start(
+        self,
+        start_at_station_time,
+        *,
+        jip_offset_ms: int = 0,
+    ) -> bool:
+        """Launch AIR via CM's own orchestration path.
+
+        Replaces the prior ``self.active_producer.start(...)`` delegation.
+        Uses the CM-held AirBridge + SupplyController directly. Mirrors key
+        Producer-base fields onto ``self.active_producer`` so ``get_state()``
+        consumers (check_health, is_live) continue to see correct state
+        during the Phase 5C.1 transition window.
+        """
+        with self._producer_lock:
+            if self._producer_started:
+                return True
+
+            now_utc_ms = int(start_at_station_time.timestamp() * 1000)
+            current_block = self._supply.resolve_current(now_utc_ms)
+            if current_block is None or not current_block.segments:
+                self._logger.error(
+                    "Channel %s: cannot start — no current block at %d",
+                    self.channel_id, now_utc_ms,
+                )
+                self.runtime_state.producer_status = "error"
+                return False
+
+            if jip_offset_ms < 0:
+                self._logger.error(
+                    "Channel %s: cannot start — invalid jip_offset_ms=%d",
+                    self.channel_id, jip_offset_ms,
+                )
+                self.runtime_state.producer_status = "error"
+                return False
+
+            next_block = self._supply.resolve_next(current_block.end_utc_ms)
+            if next_block is None:
+                self._logger.error(
+                    "Channel %s: cannot start — no next block after %s",
+                    self.channel_id, current_block.block_id,
+                )
+                self.runtime_state.producer_status = "error"
+                return False
+
+            if int(current_block.end_utc_ms) != int(next_block.start_utc_ms):
+                self._logger.error(
+                    "Channel %s: cannot start — non-contiguous startup blocks "
+                    "current=%s next=%s",
+                    self.channel_id, current_block.block_id, next_block.block_id,
+                )
+                self.runtime_state.producer_status = "error"
+                return False
+
+            active_seg_idx, offset_into_segment_ms = _resolve_jip_position(
+                current_block, max(0, int(jip_offset_ms)),
+            )
+
+            # INV-HLS-SEGMENT-WALLCLOCK-001: seed the HLS segmenter timebase.
+            self._producer_push_hls_timebase(current_block)
+
+            playout_request = {
+                "channel_id": self.channel_id,
+                "join_utc_ms": now_utc_ms,
+                "current_block": current_block,
+                "next_block": next_block,
+                "evidence_endpoint": self._evidence_endpoint,
+            }
+
+            if not self._air_bridge.spawn(playout_request):
+                self.runtime_state.producer_status = "error"
+                return False
+
+            self._supply.seed(current_block, next_block)
+
+            self._producer_started = True
+            self.runtime_state.producer_status = "running"
+            self.runtime_state.producer_started_at = start_at_station_time
+            self.runtime_state.stream_endpoint = f"/channel/{self.channel_id}.ts"
+
+            # Phase 5C.2: active_producer is set to self (CM) as a truthy
+            # marker for legacy ``if cm.active_producer:`` callers
+            # (INV-BPP-RETIRED-001). No BlockPlanProducer instance exists.
+            self.active_producer = self
+
+            self._producer_stop_event.clear()
+            self._producer_driver_thread = threading.Thread(
+                target=self._producer_driver_loop,
+                name=f"cm-driver-{self.channel_id}",
+                daemon=True,
+            )
+            self._producer_driver_thread.start()
+
+            self._logger.debug(
+                "Channel %s: CM producer started | current_block=%s next_block=%s "
+                "join_utc_ms=%d grpc_addr=%s socket_path=%s active_seg=%d "
+                "offset_into_segment_ms=%d",
+                self.channel_id, current_block.block_id, next_block.block_id,
+                now_utc_ms, self._air_bridge.grpc_addr,
+                self._air_bridge.socket_path, active_seg_idx,
+                offset_into_segment_ms,
+            )
+            return True
+
+    def _producer_stop(self, reason: str | None = None) -> bool:
+        """Terminate AIR + stop driver thread; idempotent if not started."""
+        if not hasattr(self, "_producer_lock"):
+            return True  # Never built — nothing to stop.
+
+        with self._producer_lock:
+            if not self._producer_started:
+                return True
+            self._producer_stop_event.set()
+            driver = self._producer_driver_thread
+
+        # Terminate outside the lock so the driver can take the lock to exit.
+        self._air_bridge.terminate()
+
+        if driver is not None and driver.is_alive():
+            driver.join(timeout=5.0)
+
+        with self._producer_lock:
+            self._producer_driver_thread = None
+            self._supply.reset()
+            self._producer_started = False
+            self.runtime_state.producer_status = "stopped"
+            self.runtime_state.stream_endpoint = None
+            # Phase 5C.2: clear the active_producer marker.
+            self.active_producer = None
+
+        self._logger.debug(
+            "Channel %s: CM producer stopped (reason=%s)", self.channel_id, reason,
+        )
+        return True
+
+    def _producer_health(self) -> str:
+        """Health projection: 'stopped' | 'running' | 'degraded'."""
+        if not hasattr(self, "_producer_lock"):
+            return "stopped"
+        with self._producer_lock:
+            if not self._producer_started:
+                return "stopped"
+            if self.runtime_state.producer_status == "error":
+                return "degraded"
+        if not self._air_bridge.is_alive:
+            return "degraded"
+        return "running"
+
+    def _producer_driver_loop(self) -> None:
+        """Subscribe to AIR block events and feed the next scheduled block."""
+        try:
+            with self._producer_lock:
+                started = self._producer_started
+            if not started or self._air_bridge.grpc_addr is None:
+                return
+
+            for event in self._air_bridge.iter_events():
+                if self._producer_stop_event.is_set():
+                    return
+
+                which = event.WhichOneof("event")
+                if which == "block_started":
+                    self._logger.debug(
+                        "Channel %s: AIR block started %s",
+                        self.channel_id, event.block_started.block_id,
+                    )
+                    continue
+
+                if which == "session_ended":
+                    self._logger.error(
+                        "Channel %s: AIR session ended reason=%s",
+                        self.channel_id, event.session_ended.reason,
+                    )
+                    self._producer_fail("session_ended")
+                    return
+
+                if which != "block_completed":
+                    continue
+
+                completed = event.block_completed
+                next_block = self._supply.resolve_next(
+                    int(completed.block_end_utc_ms),
+                )
+                if next_block is None:
+                    self._producer_fail("lookahead_exhausted")
+                    return
+
+                if self._supply.is_duplicate_feed(next_block):
+                    continue
+
+                try:
+                    self._air_bridge.feed(next_block)
+                except Exception as exc:
+                    self._logger.error(
+                        "Channel %s: FeedBlockPlan failed after %s: %s",
+                        self.channel_id, completed.block_id, exc,
+                    )
+                    self._producer_fail("feed_block_error")
+                    return
+
+                self._supply.mark_fed(next_block)
+                with self._producer_lock:
+                    self._producer_push_hls_timebase(next_block)
+
+        except Exception as exc:  # pragma: no cover — defensive
+            self._logger.error(
+                "Channel %s: driver thread crashed: %s", self.channel_id, exc,
+            )
+            self._producer_fail("driver_crash")
+
+    def _producer_fail(self, reason: str) -> None:
+        """Mark the producer failed; delegate log + callback to SupplyController."""
+        self.runtime_state.producer_status = "error"
+        self._supply.fail(reason)
+
+    def _producer_push_hls_timebase(self, block) -> None:
+        """INV-HLS-SEGMENT-WALLCLOCK-001: feed editorial timebase to HLS."""
+        ref = self._hls_segmenter
+        if ref is None:
+            return
+        try:
+            ref.set_blockplan_timebase(
+                start_utc_ms=block.start_utc_ms,
+                active_block_start_utc_ms=block.start_utc_ms,
+                active_block_end_utc_ms=block.end_utc_ms,
+            )
+        except Exception:
+            # HLS timebase is observability — a failure here must not stop playback.
+            pass
+
+    # ------------------------------------------------------------------
+    # Phase 5C.1 public narrow API — replaces PD's
+    # ``manager.active_producer.stop(...)`` pattern
+    # (INV-CM-ORCHESTRATION-SOLE-OWNER-001).
+    # ------------------------------------------------------------------
+
+    def halt_producer(self, *, reason: str | None = None) -> None:
+        """Halt the AIR subprocess without triggering channel-wide teardown.
+
+        Narrow counterpart to ``stop_producer`` (which goes through
+        ``stop_channel`` for full teardown). PD uses this in its shutdown
+        paths that own the channel teardown sequence themselves.
+        """
+        self._producer_stop(reason=reason)
 
     def _get_channel_config(self) -> ChannelConfig:
         """Get or create ChannelConfig for this channel."""
@@ -1200,6 +1416,23 @@ class ChannelManager:
 from .cm_helpers import _FeedState, _AsRunAnnotation, TracedSocket  # noqa: F401
 
 
-# INV-PLAYOUT-MODULE-EXTRACTION-001: BlockPlanProducer extracted to block_plan_producer.py.
-# Re-exported here for backward compatibility.
-from .block_plan_producer import BlockPlanProducer  # noqa: F401
+# Phase 5C.2: BlockPlanProducer module retired (INV-BPP-RETIRED-001).
+# ``_resolve_jip_position`` is defined below as a module-level helper; its
+# former home (block_plan_producer.py) is deleted.
+
+
+def _resolve_jip_position(block, jip_offset_ms: int) -> tuple[int, int]:
+    """Return ``(active_seg_idx, offset_into_segment_ms)`` for a JIP join.
+
+    Walks the segments, skipping fully elapsed ones. Clamps to the last
+    segment if ``jip_offset_ms`` exceeds the block.
+    """
+    remaining = max(0, int(jip_offset_ms))
+    for i, seg in enumerate(block.segments):
+        dur = int(seg.segment_duration_ms)
+        if remaining < dur:
+            return (i, remaining)
+        remaining -= dur
+    # jip past end of block — clamp to last segment
+    last = len(block.segments) - 1
+    return (last, 0)

@@ -139,7 +139,7 @@ class EphemeralTestSession:
         1. Looks up block from DB (PlaylistEvent)
         2. Creates SingleBlockExecutionReader
         3. Creates BlockPlanProducer
-        4. Starts it (launch_air + per-segment LoadPreview/SwitchToLive driver)
+        4. Starts it (launch_air + StartBlockPlanSession)
         5. Creates ChannelStream
 
         Returns the channel_id for stream subscription.
