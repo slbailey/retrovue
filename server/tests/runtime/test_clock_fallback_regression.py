@@ -92,8 +92,13 @@ def test_control_plane_module_has_no_direct_wall_clock(module):
 from retrovue.runtime import channel_stream as _channel_stream_module
 from retrovue.runtime import consumption_adapters as _consumption_adapters_module
 from retrovue.runtime import pace as _pace_module
-from retrovue.runtime import block_plan_producer as _block_plan_producer_module
 from retrovue.runtime.hls import segmenter as _hls_segmenter_module
+# Phase 5C.2 (INV-BPP-RETIRED-001): block_plan_producer module deleted; its
+# former time-authority target is now covered by channel_manager (which owns
+# orchestration) and air_bridge (which owns subprocess + gRPC).
+from retrovue.runtime import channel_manager as _channel_manager_module
+from retrovue.runtime import air_bridge as _air_bridge_module
+from retrovue.runtime import supply_controller as _supply_controller_module
 
 _MONOTONIC_TARGET_MODULES = [
     _program_director_module,
@@ -102,7 +107,9 @@ _MONOTONIC_TARGET_MODULES = [
     _pace_module,
     _hls_segmenter_module,
     _launch_module,
-    _block_plan_producer_module,
+    _channel_manager_module,
+    _air_bridge_module,
+    _supply_controller_module,
 ]
 
 _FORBIDDEN_MONOTONIC_CALLS = (

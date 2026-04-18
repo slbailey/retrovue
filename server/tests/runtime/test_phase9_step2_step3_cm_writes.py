@@ -142,7 +142,7 @@ _PROD_MODULES = [
     _SRC_ROOT / "runtime" / "consumption_adapters.py",
     _SRC_ROOT / "runtime" / "pd_helpers.py",
     _SRC_ROOT / "runtime" / "channel_stream.py",
-    _SRC_ROOT / "runtime" / "block_plan_producer.py",
+    # Phase 5C.2 (INV-BPP-RETIRED-001): block_plan_producer.py deleted.
     _SRC_ROOT / "usecases" / "channel_manager_launch.py",
 ]
 

@@ -31,7 +31,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from retrovue.runtime.channel_manager import BlockPlanProducer, ChannelManager
+from retrovue.runtime.channel_manager import ChannelManager
 from retrovue.runtime.program_director import ProgramDirector
 
 

@@ -24,7 +24,7 @@ from unittest.mock import patch
 
 import pytest
 
-from retrovue.runtime.channel_manager import BlockPlanProducer, ChannelManager
+from retrovue.runtime.channel_manager import ChannelManager
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +174,7 @@ def test_bare_viewer_join_does_not_start_producer():
     itself must not trigger producer startup.
     """
     cm = _make_cm_with_dispatching_pd()
-    with patch.object(BlockPlanProducer, "start", return_value=True) as mock_start:
+    with patch.object(ChannelManager, "_producer_start", return_value=True) as mock_start:
         cm.viewer_join("s1", {})
     assert mock_start.call_count == 0, (
         "Phase 8 Step 2: viewer_join must not auto-start the producer. "
@@ -193,7 +193,7 @@ def test_tune_in_first_viewer_still_starts_producer():
     but the end effect is identical to the pre-refactor path.
     """
     cm = _make_cm_with_dispatching_pd()
-    with patch.object(BlockPlanProducer, "start", return_value=True) as mock_start:
+    with patch.object(ChannelManager, "_producer_start", return_value=True) as mock_start:
         cm.tune_in("s1", {"client": "test"})
     assert mock_start.call_count == 1
     assert cm.runtime_state.viewer_count == 1
@@ -207,7 +207,7 @@ def test_tune_out_last_viewer_is_observed_by_pd():
     tests/runtime/test_phase8_step4_linger_ownership.py.
     """
     cm = _make_cm_with_dispatching_pd()
-    with patch.object(BlockPlanProducer, "start", return_value=True):
+    with patch.object(ChannelManager, "_producer_start", return_value=True):
         cm.tune_in("s1", {})
     cm.tune_out("s1")
     assert cm.runtime_state.viewer_count == 0

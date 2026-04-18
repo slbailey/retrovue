@@ -13,7 +13,8 @@ def test_runtime_protocols_expose_no_schedule_service_surface():
 
 
 def test_runtime_execution_modules_do_not_reference_legacy_planning_apis():
-    from retrovue.runtime.block_plan_producer import BlockPlanProducer
+    # Phase 5C.2 (INV-BPP-RETIRED-001): BlockPlanProducer retired; ChannelManager
+    # absorbs its orchestration and gets scanned in its place.
     from retrovue.runtime.channel_manager import ChannelManager
     from retrovue.runtime.test_playout_endpoint import SingleBlockExecutionReader
 
@@ -24,7 +25,7 @@ def test_runtime_execution_modules_do_not_reference_legacy_planning_apis():
         "schedule_service",
     )
 
-    for obj in (BlockPlanProducer, ChannelManager, SingleBlockExecutionReader):
+    for obj in (ChannelManager, SingleBlockExecutionReader):
         source = inspect.getsource(obj)
         for token in forbidden_tokens:
             assert token not in source, f"{obj.__name__} still references {token}"

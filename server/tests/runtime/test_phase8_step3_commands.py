@@ -27,7 +27,7 @@ from unittest.mock import patch
 
 import pytest
 
-from retrovue.runtime.channel_manager import BlockPlanProducer, ChannelManager
+from retrovue.runtime.channel_manager import ChannelManager
 
 
 # ---------------------------------------------------------------------------
@@ -150,16 +150,18 @@ def _make_cm_with_dispatching_pd():
 
 def test_first_viewer_via_tune_in_starts_producer_once():
     cm = _make_cm_with_dispatching_pd()
-    with patch.object(BlockPlanProducer, "start", return_value=True) as mock_start:
+    # Phase 5C.1: CM owns orchestration; patch ChannelManager._producer_start.
+    # Post-5C.2 (INV-BPP-RETIRED-001): active_producer assertion retired
+    # since _producer_start is mocked and doesn't set the marker.
+    with patch.object(ChannelManager, "_producer_start", return_value=True) as mock_start:
         cm.tune_in("s1", {})
     assert mock_start.call_count == 1
-    assert cm.active_producer is not None
     assert cm.runtime_state.viewer_count == 1
 
 
 def test_repeated_viewers_do_not_double_start_producer():
     cm = _make_cm_with_dispatching_pd()
-    with patch.object(BlockPlanProducer, "start", return_value=True) as mock_start:
+    with patch.object(ChannelManager, "_producer_start", return_value=True) as mock_start:
         cm.tune_in("s1", {})
         cm.tune_in("s2", {})
         cm.tune_in("s3", {})
@@ -189,7 +191,8 @@ def test_start_producer_noop_when_no_viewers():
     a concurrent viewer_leave)."""
     cm = _make_cm_with_dispatching_pd()
     # No tune_in; viewer_count is 0.
-    with patch.object(BlockPlanProducer, "start", return_value=True) as mock_start:
+    # Phase 5C.1: CM owns orchestration; patch ChannelManager._producer_start.
+    with patch.object(ChannelManager, "_producer_start", return_value=True) as mock_start:
         cm.start_producer(trigger_session_id="racey")
     assert mock_start.call_count == 0
     assert cm.active_producer is None
