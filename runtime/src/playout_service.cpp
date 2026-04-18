@@ -156,6 +156,21 @@ namespace retrovue
         assert(false && "INV-BLOCKPLAN-QUARANTINE: legacy RPC during active BlockPlan session");
         std::abort();  // Release builds: assert is compiled out, abort is unconditional.
       }
+
+      template <typename ResponseT, typename CodeT>
+      grpc::Status FailContractViolation(
+          ResponseT* response,
+          bool success,
+          const std::string& message,
+          CodeT code,
+          const std::string& invariant_id,
+          std::vector<std::pair<std::string, std::string>> fields = {}) {
+        response->set_success(success);
+        response->set_message(message);
+        response->set_result_code(code);
+        Logger::ErrorStructured(message, invariant_id, std::move(fields));
+        return grpc::Status::OK;
+      }
     } // namespace
 
     PlayoutControlImpl::PlayoutControlImpl(
@@ -401,34 +416,54 @@ namespace retrovue
       const int32_t fps_numerator = request->fps_numerator();
       const int32_t fps_denominator = request->fps_denominator();
 
-      // INV-BLOCKPLAN-QUARANTINE: Legacy ProducerBus path is forbidden while a
-      // BlockPlan session is active.
-      {
-        std::lock_guard<std::mutex> lock(blockplan_mutex_);
-        if (blockplan_session_ && blockplan_session_->active) {
-          EnforceBlockPlanQuarantine("LoadPreview", channel_id);
-        }
+      if (frame_count < 0) {
+        std::ostringstream oss;
+        oss << "[LoadPreview] Rejected: frame_count=" << frame_count
+            << " (explicit ownership required)";
+        return FailContractViolation(
+            response,
+            false,
+            "INV-AIR-NO-ADHOC-SWITCHING-001 violation: frame_count must be explicit",
+            RESULT_CODE_PROTOCOL_VIOLATION,
+            "INV-AIR-NO-ADHOC-SWITCHING-001-VIOLATED",
+            {{"rpc", "LoadPreview"},
+             {"channel_id", std::to_string(channel_id)},
+             {"frame_count", std::to_string(frame_count)},
+             {"detail", oss.str()}});
       }
-
       // INV-FRAME-003: Reject if fps not provided (denominator 0 is invalid)
       if (fps_denominator <= 0) {
-        response->set_success(false);
-        response->set_message("INV-FRAME-003 violation: fps_denominator must be > 0");
-        response->set_result_code(RESULT_CODE_PROTOCOL_VIOLATION);
-        { std::ostringstream oss;
-          oss << "[LoadPreview] Rejected: fps_denominator=" << fps_denominator;
-          Logger::Info(oss.str()); }
-        return grpc::Status::OK;
+        std::ostringstream oss;
+        oss << "[LoadPreview] Rejected: fps_denominator=" << fps_denominator;
+        return FailContractViolation(
+            response,
+            false,
+            "INV-FRAME-003 violation: fps_denominator must be > 0",
+            RESULT_CODE_PROTOCOL_VIOLATION,
+            "INV-FRAME-003-VIOLATED",
+            {{"rpc", "LoadPreview"},
+             {"channel_id", std::to_string(channel_id)},
+             {"fps_denominator", std::to_string(fps_denominator)},
+             {"detail", oss.str()}});
       }
-      if (frame_count < 0) {
-        response->set_success(false);
-        response->set_message("INV-AIR-NO-ADHOC-SWITCHING-001 violation: frame_count must be explicit");
-        response->set_result_code(RESULT_CODE_PROTOCOL_VIOLATION);
-        { std::ostringstream oss;
-          oss << "[LoadPreview] Rejected: frame_count=" << frame_count
-              << " (explicit ownership required)";
-          Logger::Info(oss.str()); }
-        return grpc::Status::OK;
+      {
+        std::ostringstream oss;
+        oss << "[LoadPreview] Rejected: segment-only playback attempt is forbidden"
+            << " channel_id=" << channel_id
+            << " asset_path=" << asset_path;
+        return FailContractViolation(
+            response,
+            false,
+            oss.str(),
+            RESULT_CODE_PROTOCOL_VIOLATION,
+            "INV-AIR-NO-SEGMENT-DRIVEN-EXECUTION-001-VIOLATED",
+            {{"rpc", "LoadPreview"},
+             {"channel_id", std::to_string(channel_id)},
+             {"asset_path", asset_path},
+             {"start_frame", std::to_string(start_frame)},
+             {"frame_count", std::to_string(frame_count)},
+             {"fps_numerator", std::to_string(fps_numerator)},
+             {"fps_denominator", std::to_string(fps_denominator)}});
       }
 
       { std::ostringstream oss;
@@ -481,19 +516,19 @@ namespace retrovue
       const int32_t channel_id = request->channel_id();
       const int64_t target_boundary_time_ms = request->target_boundary_time_ms();  // P11C-001 (0 = legacy)
       const int64_t issued_at_time_ms = request->issued_at_time_ms();  // P11D-012: INV-LEADTIME-MEASUREMENT-001
-
-      // INV-BLOCKPLAN-QUARANTINE: Legacy ProducerBus path is forbidden while a
-      // BlockPlan session is active.
-      {
-        std::lock_guard<std::mutex> lock(blockplan_mutex_);
-        if (blockplan_session_ && blockplan_session_->active) {
-          EnforceBlockPlanQuarantine("SwitchToLive", channel_id);
-        }
-      }
-
-      { std::ostringstream oss;
-        oss << "[SwitchToLive] Request received: channel_id=" << channel_id;
-        Logger::Info(oss.str()); }
+      std::ostringstream oss;
+      oss << "[SwitchToLive] Rejected: segment-only playback attempt is forbidden"
+          << " channel_id=" << channel_id;
+      return FailContractViolation(
+          response,
+          false,
+          oss.str(),
+          RESULT_CODE_PROTOCOL_VIOLATION,
+          "INV-AIR-NO-SEGMENT-DRIVEN-EXECUTION-001-VIOLATED",
+          {{"rpc", "SwitchToLive"},
+           {"channel_id", std::to_string(channel_id)},
+           {"target_boundary_time_ms", std::to_string(target_boundary_time_ms)},
+           {"issued_at_time_ms", std::to_string(issued_at_time_ms)}});
 
       // LAW-OBS-001/002/004: Log intent received.
       // TODO(LAW-OBS-002): correlation_id is not present in SwitchToLiveRequest proto; cannot populate.
@@ -849,29 +884,54 @@ namespace retrovue
       const auto& block_a = request->block_a();
       const auto& block_b = request->block_b();
       if (request->join_utc_ms() <= 0) {
-        response->set_success(false);
-        response->set_message("join_utc_ms is required");
-        response->set_result_code(BLOCKPLAN_RESULT_INVALID_BLOCK);
-        return grpc::Status::OK;
+        return FailContractViolation(
+            response,
+            false,
+            "join_utc_ms is required",
+            BLOCKPLAN_RESULT_INVALID_BLOCK,
+            "INV-AIR-CORE-CONTRACT-001-VIOLATED",
+            {{"rpc", "StartBlockPlanSession"},
+             {"channel_id", std::to_string(channel_id)},
+             {"join_utc_ms", std::to_string(request->join_utc_ms())}});
       }
       std::string block_error;
       if (!ValidateBlockPlanProto(block_a, &block_error)) {
-        response->set_success(false);
-        response->set_message(block_error);
-        response->set_result_code(BLOCKPLAN_RESULT_INVALID_BLOCK);
-        return grpc::Status::OK;
+        return FailContractViolation(
+            response,
+            false,
+            block_error,
+            BLOCKPLAN_RESULT_INVALID_BLOCK,
+            "INV-AIR-CORE-CONTRACT-001-VIOLATED",
+            {{"rpc", "StartBlockPlanSession"},
+             {"channel_id", std::to_string(channel_id)},
+             {"block", "block_a"},
+             {"block_id", block_a.block_id()}});
       }
       if (!ValidateBlockPlanProto(block_b, &block_error)) {
-        response->set_success(false);
-        response->set_message(block_error);
-        response->set_result_code(BLOCKPLAN_RESULT_INVALID_BLOCK);
-        return grpc::Status::OK;
+        return FailContractViolation(
+            response,
+            false,
+            block_error,
+            BLOCKPLAN_RESULT_INVALID_BLOCK,
+            "INV-AIR-CORE-CONTRACT-001-VIOLATED",
+            {{"rpc", "StartBlockPlanSession"},
+             {"channel_id", std::to_string(channel_id)},
+             {"block", "block_b"},
+             {"block_id", block_b.block_id()}});
       }
       if (block_a.end_utc_ms() != block_b.start_utc_ms()) {
-        response->set_success(false);
-        response->set_message("Blocks not contiguous: block_a.end != block_b.start");
-        response->set_result_code(BLOCKPLAN_RESULT_NOT_CONTIGUOUS);
-        return grpc::Status::OK;
+        return FailContractViolation(
+            response,
+            false,
+            "Blocks not contiguous: block_a.end != block_b.start",
+            BLOCKPLAN_RESULT_NOT_CONTIGUOUS,
+            "INV-AIR-CORE-CONTRACT-001-VIOLATED",
+            {{"rpc", "StartBlockPlanSession"},
+             {"channel_id", std::to_string(channel_id)},
+             {"block_a", block_a.block_id()},
+             {"block_b", block_b.block_id()},
+             {"block_a_end_utc_ms", std::to_string(block_a.end_utc_ms())},
+             {"block_b_start_utc_ms", std::to_string(block_b.start_utc_ms())}});
       }
 
       output::SetAirShutdownChannelId(channel_id);
@@ -1252,11 +1312,16 @@ namespace retrovue
 
       std::string block_error;
       if (!ValidateBlockPlanProto(block, &block_error)) {
-        response->set_success(false);
-        response->set_message(block_error);
-        response->set_result_code(BLOCKPLAN_RESULT_INVALID_BLOCK);
         response->set_queue_full(false);
-        return grpc::Status::OK;
+        return FailContractViolation(
+            response,
+            false,
+            block_error,
+            BLOCKPLAN_RESULT_INVALID_BLOCK,
+            "INV-AIR-CORE-CONTRACT-001-VIOLATED",
+            {{"rpc", "FeedBlockPlan"},
+             {"channel_id", std::to_string(channel_id)},
+             {"block_id", block.block_id()}});
       }
 
       // Add block to queue and notify execution thread

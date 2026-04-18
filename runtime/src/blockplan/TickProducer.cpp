@@ -291,30 +291,6 @@ void TickProducer::AssignBlock(const FedBlock& block) {
   diag_emit_count_ = 0;
   diag_decode_emit_count_ = 0;
 
-  // DIAG: Movie playback defect — log exact mode chosen for this block (diagnostic only).
-  {
-    const char* mode_str = (resample_mode_ == ResampleMode::OFF) ? "OFF" :
-        (resample_mode_ == ResampleMode::DROP) ? "DROP" : "CADENCE";
-    const bool jip_or_offset = (first_seg.asset_start_offset_ms > 0);
-    std::ostringstream oss;
-    oss << "[TickProducer] DIAG_ASSIGN_BLOCK"
-        << " block_id=" << block.block_id
-        << " asset_uri=" << first_seg.asset_uri
-        << " asset_start_offset_ms=" << first_seg.asset_start_offset_ms
-        << " current_segment_index=" << current_segment_index_
-        << " logical_segment_index=" << logical_segment_index_
-        << " input_fps_num=" << input_fps_num_
-        << " input_fps_den=" << input_fps_den_
-        << " output_fps_num=" << output_fps_.num
-        << " output_fps_den=" << output_fps_.den
-        << " resample_mode=" << mode_str
-        << " drop_step=" << drop_step_
-        << " InputFramePeriodMs=" << InputFramePeriodMs()
-        << " decoder_fps_source=n/a"
-        << " jip_or_nonzero_offset=" << (jip_or_offset ? "Y" : "N");
-    retrovue::util::Logger::Info(oss.str());
-  }
-
   state_ = State::kReady;
 
   std::cout << "[TickProducer] Block assigned: " << block.block_id
