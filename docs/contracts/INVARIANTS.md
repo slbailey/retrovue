@@ -694,6 +694,11 @@ Canonical contract: [delivery_hls.md](delivery_hls.md)
 | INV-VERDICT-BOUNDED-STATES-001 | [invariants/air/INV-VERDICT-BOUNDED-STATES-001.md](invariants/air/INV-VERDICT-BOUNDED-STATES-001.md) | Primary — derives LAW-LIVENESS |
 | INV-VERDICT-REASON-CLASS-BOUNDED-001 | [invariants/air/INV-VERDICT-REASON-CLASS-BOUNDED-001.md](invariants/air/INV-VERDICT-REASON-CLASS-BOUNDED-001.md) | Derived — enforces INV-VERDICT-BOUNDED-STATES-001 at the reason-class level; derives LAW-LIVENESS |
 | INV-FATAL-UNDERFLOW-VISIBILITY-001 | [invariants/air/INV-FATAL-UNDERFLOW-VISIBILITY-001.md](invariants/air/INV-FATAL-UNDERFLOW-VISIBILITY-001.md) | Primary — derives LAW-LIVENESS |
+| INV-SEAM-SINGLE-AUTHORITY-001 | [invariants/air/INV-SEAM-SINGLE-AUTHORITY-001.md](invariants/air/INV-SEAM-SINGLE-AUTHORITY-001.md) | Primary — derives LAW-SWITCHING, LAW-LIVENESS |
+| INV-SEAM-SINGLE-EXECUTION-001 | [invariants/air/INV-SEAM-SINGLE-EXECUTION-001.md](invariants/air/INV-SEAM-SINGLE-EXECUTION-001.md) | Primary — derives LAW-SWITCHING, INV-SEAM-BOUNDARY-COUNT-MATCH-001 |
+| INV-SEAM-MISSED-RESOLUTION-001 | [invariants/air/INV-SEAM-MISSED-RESOLUTION-001.md](invariants/air/INV-SEAM-MISSED-RESOLUTION-001.md) | Derived — enforces INV-CONTINUOUS-FRAME-AUTHORITY-001 at missed-seam disposition; derives LAW-LIVENESS |
+| INV-SEAM-EDITORIAL-EXTERNAL-001 | [invariants/air/INV-SEAM-EDITORIAL-EXTERNAL-001.md](invariants/air/INV-SEAM-EDITORIAL-EXTERNAL-001.md) | Primary — derives LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY |
+| INV-SEAM-OBSERVABLE-001 | [invariants/air/INV-SEAM-OBSERVABLE-001.md](invariants/air/INV-SEAM-OBSERVABLE-001.md) | Primary — derives LAW-LIVENESS |
 
 ---
 
@@ -766,6 +771,11 @@ The following invariants lack test matrix entries and are flagged for follow-up:
 | INV-VERDICT-BOUNDED-STATES-001 | AIR readiness invariant; no test matrix entry; Required Tests cite `runtime/tests/contracts/readiness/ReadinessInvariantTests.cpp` (file to be created) |
 | INV-VERDICT-REASON-CLASS-BOUNDED-001 | AIR readiness invariant; no test matrix entry; Required Tests cite `runtime/tests/contracts/readiness/ReadinessInvariantTests.cpp` (file to be created) |
 | INV-FATAL-UNDERFLOW-VISIBILITY-001 | AIR observability invariant; no test matrix entry; Required Tests cite `runtime/tests/contracts/readiness/FatalUnderflowVisibilityTests.cpp` (file to be created); code implementation also pending — AIR currently detects underflow via counter increments (`VideoLookaheadBuffer::UnderflowCount()`, `AudioLookaheadBuffer::UnderflowCount()`) without structured event emission |
+| INV-SEAM-SINGLE-AUTHORITY-001 | AIR seam authority invariant; no test matrix entry; Required Tests cite `runtime/tests/contracts/seam/SeamAuthorityInvariantTests.cpp` (file to be created; RED contract test is Turn B of the SeamController extraction path per ADR-006 step 2) |
+| INV-SEAM-SINGLE-EXECUTION-001 | AIR seam authority invariant; no test matrix entry; Required Tests cite `runtime/tests/contracts/seam/SeamAuthorityInvariantTests.cpp` (file to be created) |
+| INV-SEAM-MISSED-RESOLUTION-001 | AIR seam authority invariant; no test matrix entry; Required Tests cite `runtime/tests/contracts/seam/SeamAuthorityInvariantTests.cpp` (file to be created) |
+| INV-SEAM-EDITORIAL-EXTERNAL-001 | AIR seam authority invariant; no test matrix entry; Required Tests cite `runtime/tests/contracts/seam/SeamAuthorityInvariantTests.cpp` (file to be created) |
+| INV-SEAM-OBSERVABLE-001 | AIR seam authority invariant; no test matrix entry; Required Tests cite `runtime/tests/contracts/seam/SeamAuthorityInvariantTests.cpp` (file to be created) |
 
 See [audit/TEST_ANCHOR_BACKLOG.md](audit/TEST_ANCHOR_BACKLOG.md) for prioritized action.
 

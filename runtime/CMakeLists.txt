@@ -232,6 +232,11 @@ set(AIR_CORE_SOURCES
   # docs/contracts/invariants/air/INV-VERDICT-*.md.
   src/readiness/ReadinessEvaluator.cpp
   src/readiness/ReadinessObserver.cpp
+  # Seam authority (Phase 1 additive — ADR-006 step 2, no runtime behaviour
+  # change). See docs/contracts/invariants/air/INV-SEAM-SINGLE-AUTHORITY-001.md
+  # and the four peer INV-SEAM-*-001 files.
+  src/seam/SeamEvaluator.cpp
+  src/seam/SeamController.cpp
 )
 
 # Optional: enable PAD/audio priming diagnostic logging (PipelineManager).
@@ -680,6 +685,40 @@ set_tests_properties(ReadinessContracts PROPERTIES LABELS "contract")
 add_executable(fatal_underflow_visibility_tests EXCLUDE_FROM_ALL
   tests/contracts/readiness/FatalUnderflowVisibilityTests.cpp
 )
+
+# ---- Seam Authority Contract Tests (INV-SEAM-SINGLE-AUTHORITY / SINGLE-EXECUTION / MISSED-RESOLUTION / EDITORIAL-EXTERNAL / OBSERVABLE -001) ----
+# Phase 1 contract tests for the SeamController authority (ADR-006 step 2).
+# Core seam-authority tests are GREEN under the Turn C production code in
+# src/seam/. Invoke via:
+#   cmake --build runtime/build --target seam_contract_tests
+#   ctest --test-dir runtime/build -R SeamContracts --output-on-failure
+add_executable(seam_contract_tests
+  tests/contracts/seam/SeamAuthorityInvariantTests.cpp
+)
+
+target_link_libraries(seam_contract_tests
+  PRIVATE
+    retrovue_air_core
+    GTest::gtest
+    GTest::gtest_main
+)
+
+target_link_options(seam_contract_tests PRIVATE
+  "LINKER:-rpath,${X264_RPATH}"
+  "LINKER:-rpath,${FFMPEG_RPATH}"
+)
+
+target_include_directories(seam_contract_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/contracts/seam
+)
+
+add_test(
+  NAME SeamContracts
+  COMMAND seam_contract_tests
+)
+set_tests_properties(SeamContracts PROPERTIES LABELS "contract")
 
 target_link_libraries(fatal_underflow_visibility_tests
   PRIVATE
