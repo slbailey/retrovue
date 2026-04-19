@@ -20,6 +20,8 @@
 #include "retrovue/readiness/ReadinessEvaluator.h"
 #include "retrovue/readiness/ReadinessObserver.h"
 #include "retrovue/readiness/ReadinessVerdict.h"
+#include "retrovue/seam/SeamCommand.h"
+#include "retrovue/seam/SeamController.h"
 #include "retrovue/renderer/ProgramOutput.h"
 #include "retrovue/runtime/ProgramFormat.h"
 #include "retrovue/runtime/TimingLoop.h"
@@ -186,6 +188,18 @@ struct PlayoutEngine::PlayoutInstance {
   std::shared_ptr<readiness::ReadinessObserver> readiness_observer;
   std::string readiness_provider_name;
   std::shared_ptr<std::atomic<bool>> readiness_has_ever_been_ready;
+
+  // Seam authority — additive, observational only. Wired on StartChannel,
+  // unregistered on StopChannel. Not consulted by any playout decision.
+  // See docs/contracts/invariants/air/INV-SEAM-*.md.
+  //
+  // Turn D scope: controller is constructed and its Current() record is
+  // published as a Prometheus gauge. No ArmBoundary / Evaluate calls are
+  // issued from production code in this turn — the controller stays in
+  // kIdle until Turn D+1 adds the signal bridge (PipelineManager seam-
+  // signal getter + per-boundary ArmBoundary wiring).
+  std::shared_ptr<seam::SeamController> seam_controller;
+  std::string seam_provider_name;
 
   PlayoutInstance(int32_t id, const std::string& plan, int32_t p,
                  const std::optional<std::string>& uds, const ProgramFormat& format)
@@ -420,6 +434,67 @@ EngineResult PlayoutEngine::StartChannel(
       state->readiness_observer->Evaluate(initial);
     }
 
+    // ========================================================================
+    // Seam authority wiring (additive, observational only).
+    //
+    // Contracts: docs/contracts/invariants/air/INV-SEAM-*.md.
+    //
+    // Turn D scope: construct the per-channel SeamController, attach a
+    // transition-log callback, and register a CustomMetricsProvider that
+    // publishes the controller's current {state, disposition, reason} as
+    // Prometheus gauges on /metrics scrape. No ArmBoundary or Evaluate
+    // calls are issued from production flow in this turn; the controller
+    // remains in kIdle until Turn D+1 adds the PipelineManager signal
+    // bridge and the per-boundary ArmBoundary sites.
+    // ========================================================================
+    auto seam_transition_cb = [channel_id](const seam::TransitionEvent& ev) {
+      std::cout << "[Seam] channel=" << channel_id
+                << " boundary=" << ev.boundary_index
+                << " from=" << static_cast<int>(ev.from_state)
+                << " to=" << static_cast<int>(ev.to_state)
+                << " disposition=" << static_cast<int>(ev.disposition)
+                << " reason=" << static_cast<int>(ev.reason)
+                << " utc_ms=" << ev.utc_ms << std::endl;
+    };
+    state->seam_controller = std::make_shared<seam::SeamController>(
+        channel_id, seam_transition_cb);
+
+    // Register a per-channel CustomMetricsProvider that emits three gauges
+    // on /metrics scrape: retrovue_seam_state, retrovue_seam_disposition,
+    // retrovue_seam_reason_class. The provider reads Current() — no
+    // evaluator call on scrape since Turn D has no signal bridge.
+    std::weak_ptr<seam::SeamController> seam_controller_weak =
+        state->seam_controller;
+    state->seam_provider_name =
+        "seam_channel_" + std::to_string(channel_id);
+    metrics_exporter_->RegisterCustomMetricsProvider(
+        state->seam_provider_name,
+        [channel_id, seam_controller_weak]() -> std::string {
+          auto sc = seam_controller_weak.lock();
+          if (!sc) return "";
+
+          const auto rec = sc->Current();
+
+          std::ostringstream out;
+          out << "# HELP retrovue_seam_state Seam boundary state "
+                 "(0=kIdle,1=kArmed,2=kExecuting,3=kCommitted,4=kMissed,"
+                 "5=kPadBridging,6=kCompleted)\n";
+          out << "# TYPE retrovue_seam_state gauge\n";
+          out << "retrovue_seam_state{channel=\"" << channel_id << "\"} "
+              << static_cast<int>(rec.state) << "\n";
+          out << "# HELP retrovue_seam_disposition Seam disposition "
+                 "(0=kUnresolved,1=kCutover,2=kPadBridge,3=kJip)\n";
+          out << "# TYPE retrovue_seam_disposition gauge\n";
+          out << "retrovue_seam_disposition{channel=\"" << channel_id
+              << "\"} " << static_cast<int>(rec.disposition) << "\n";
+          out << "# HELP retrovue_seam_reason_class Seam reason class "
+                 "(numeric enum)\n";
+          out << "# TYPE retrovue_seam_reason_class gauge\n";
+          out << "retrovue_seam_reason_class{channel=\"" << channel_id
+              << "\"} " << static_cast<int>(rec.reason) << "\n";
+          return out.str();
+        });
+
     // Submit ready metrics
     telemetry::ChannelMetrics metrics{};
     metrics.state = telemetry::ChannelState::BUFFERING;
@@ -464,6 +539,16 @@ EngineResult PlayoutEngine::StopChannel(int32_t channel_id) {
   if (!state->readiness_provider_name.empty() && metrics_exporter_) {
     metrics_exporter_->UnregisterCustomMetricsProvider(
         state->readiness_provider_name);
+  }
+
+  // Seam authority teardown (additive, observational only). Turn D
+  // scope: the provider captures a weak_ptr<SeamController>; the lambda
+  // early-exits if lock() fails. Unregister here so no new scrape fires
+  // during state destruction. The controller's shared_ptr on PlayoutInstance
+  // is dropped naturally when state is destroyed at channels_.erase().
+  if (!state->seam_provider_name.empty() && metrics_exporter_) {
+    metrics_exporter_->UnregisterCustomMetricsProvider(
+        state->seam_provider_name);
   }
 
   if (control_surface_only_) {
