@@ -26,6 +26,7 @@
 #include <atomic>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -67,6 +68,18 @@ enum class SessionState {
 
 const char* ToString(SessionState s);
 
+// Structured lifecycle event emitted on every state transition in the
+// encode thread. Consumed by an optional LifecycleObserver for logging,
+// metrics, or test inspection.
+struct StateTransitionEvent {
+  int64_t mono_us;          // monotonic timestamp of the transition
+  SessionState from;
+  SessionState to;
+  std::string reason_class; // optional detail, e.g. "SOURCE_EOF_DURING_WARMUP"
+};
+
+using LifecycleObserver = std::function<void(const StateTransitionEvent&)>;
+
 class AirSession {
  public:
   AirSession();
@@ -96,6 +109,12 @@ class AirSession {
   // Clean shutdown. Signals encode thread to exit, joins it, closes encoder,
   // closes fd. Idempotent.
   void Close();
+
+  // Install a lifecycle observer. Called on every state transition from the
+  // encode thread. Set before OpenAir() — not thread-safe to change after
+  // the encode thread starts. If no observer is set, a default observer
+  // logs structured events to stderr.
+  void SetLifecycleObserver(LifecycleObserver obs);
 
   // Inspection.
   bool HasOutput() const { return owned_fd_ >= 0; }
@@ -146,6 +165,7 @@ class AirSession {
   std::thread encode_thread_;
   std::atomic<bool> stopping_{false};
   std::atomic<int64_t> frames_encoded_{0};
+  LifecycleObserver lifecycle_observer_;
 
   // Warmup pre-buffer. Populated during Warming; drained at OnAir entry
   // before further pulls from normalizer resume. These live on the encode
@@ -170,6 +190,9 @@ class AirSession {
 
   // Helper: set FailedStart with reason class + mark state_.
   void FailStart(const char* reason_class);
+
+  // Helper: atomic state transition + lifecycle event emission.
+  void TransitionTo(SessionState to, const char* reason_class);
 };
 
 }  // namespace retrovue::air

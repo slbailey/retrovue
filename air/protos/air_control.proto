@@ -22,10 +22,11 @@ package retrovue.air.v1;
 service AirControl {
   // Start a channel session. Orchestrates three internal phases:
   //   1. AttachOutput(fd)      — connect to output_uds_path
-  //   2. AssignContent(path)   — build source + normalizer
-  //   3. OpenAir()             — start emission (currently no bootstrap
-  //                              gate; first byte is content because the
-  //                              gate/buffering machinery isn't built yet)
+  //   2. AssignContent(path)   — build source + normalizer + encoder
+  //   3. OpenAir()             — start encode thread; BootstrapContentGate
+  //                              holds the byte path closed until content
+  //                              is primed, then opens emission (first byte
+  //                              on wire is guaranteed content).
   // Single session per process. Calling StartChannel while one is active
   // returns FAILED_PRECONDITION.
   rpc StartChannel(StartChannelRequest) returns (StartChannelResponse);
@@ -33,6 +34,23 @@ service AirControl {
   // Stop the currently active channel. Clean shutdown: flush encoder,
   // close fd, join encode thread. Idempotent (no-op if no session active).
   rpc StopChannel(StopChannelRequest) returns (StopChannelResponse);
+
+  // Snapshot the current session's state + counters. Cheap, non-blocking,
+  // safe to poll at 1 Hz from Core or soak tooling. Reflects the lifecycle
+  // state machine (Warming / Ready / OnAir / Stopping / FailedStart) and
+  // all exposed diagnostic counters. Intended as the observability surface
+  // for operators and tests, not a metrics aggregation endpoint.
+  rpc GetSessionStatus(GetSessionStatusRequest) returns (GetSessionStatusResponse);
+}
+
+enum SessionStateProto {
+  SESSION_STATE_UNSPECIFIED = 0;
+  SESSION_STATE_NONE = 1;           // no session active
+  SESSION_STATE_WARMING = 2;
+  SESSION_STATE_READY = 3;
+  SESSION_STATE_ON_AIR = 4;
+  SESSION_STATE_STOPPING = 5;
+  SESSION_STATE_FAILED_START = 6;
 }
 
 message ChannelCanonical {
@@ -73,4 +91,31 @@ message StopChannelRequest {
 message StopChannelResponse {
   bool ok = 1;
   string message = 2;
+}
+
+message GetSessionStatusRequest {
+  // Informational; single-session model ignores this and returns status of
+  // whatever session is active.
+  int32 channel_id = 1;
+}
+
+message GetSessionStatusResponse {
+  // Lifecycle state at the moment of the snapshot.
+  SessionStateProto state = 1;
+
+  // Cumulative counters since session start.
+  int64 frames_encoded = 2;
+  int64 bytes_written = 3;
+  int64 bytes_dropped = 4;
+  int64 epipe_count = 5;
+  int64 pacer_sleep_ms = 6;
+  int64 pacer_late_releases = 7;
+
+  // Bootstrap diagnostics.
+  //   -1 = not yet left Warming / not yet reached OnAir.
+  int64 warming_duration_us = 8;
+  int64 bootstrap_total_duration_us = 9;
+
+  // Populated only when state == SESSION_STATE_FAILED_START.
+  string failed_start_reason = 10;
 }

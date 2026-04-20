@@ -140,4 +140,44 @@ grpc::Status AirControlServiceImpl::StopChannel(
   return grpc::Status::OK;
 }
 
+namespace {
+
+retrovue::air::v1::SessionStateProto ToProto(SessionState s) {
+  using P = retrovue::air::v1::SessionStateProto;
+  switch (s) {
+    case SessionState::Warming:     return P::SESSION_STATE_WARMING;
+    case SessionState::Ready:       return P::SESSION_STATE_READY;
+    case SessionState::OnAir:       return P::SESSION_STATE_ON_AIR;
+    case SessionState::Stopping:    return P::SESSION_STATE_STOPPING;
+    case SessionState::FailedStart: return P::SESSION_STATE_FAILED_START;
+  }
+  return P::SESSION_STATE_UNSPECIFIED;
+}
+
+}  // namespace
+
+grpc::Status AirControlServiceImpl::GetSessionStatus(
+    grpc::ServerContext* /*context*/,
+    const retrovue::air::v1::GetSessionStatusRequest* /*request*/,
+    retrovue::air::v1::GetSessionStatusResponse* response) {
+  std::lock_guard<std::mutex> lock(mu_);
+  // If nothing has ever been started (no output attached), return NONE.
+  const bool has_session = session_.HasOutput() || session_.HasContent();
+  if (!has_session && session_.State() == SessionState::Warming) {
+    response->set_state(retrovue::air::v1::SESSION_STATE_NONE);
+    return grpc::Status::OK;
+  }
+  response->set_state(ToProto(session_.State()));
+  response->set_frames_encoded(session_.FramesEncoded());
+  response->set_bytes_written(session_.BytesWritten());
+  response->set_bytes_dropped(session_.BytesDropped());
+  response->set_epipe_count(0);  // emitter-level; expose later if needed
+  response->set_pacer_sleep_ms(session_.PacerSleepMs());
+  response->set_pacer_late_releases(session_.PacerLateReleases());
+  response->set_warming_duration_us(session_.WarmingDurationUs());
+  response->set_bootstrap_total_duration_us(session_.BootstrapTotalDurationUs());
+  response->set_failed_start_reason(session_.FailedStartReason());
+  return grpc::Status::OK;
+}
+
 }  // namespace retrovue::air

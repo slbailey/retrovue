@@ -18,6 +18,7 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <iostream>
 #include <utility>
 
 #include "bootstrap_content_gate.hpp"
@@ -36,6 +37,17 @@ int64_t MonoUs() {
   return std::chrono::duration_cast<std::chrono::microseconds>(now).count();
 }
 
+// Default lifecycle observer: structured stderr line, key=value.
+// Parseable by grep/awk. Used by soak tooling and ad-hoc ops.
+void DefaultLifecycleObserver(const StateTransitionEvent& e) {
+  std::cerr << "[air.lifecycle]"
+            << " mono_us=" << e.mono_us
+            << " from=" << ToString(e.from)
+            << " to=" << ToString(e.to)
+            << " reason=" << (e.reason_class.empty() ? "-" : e.reason_class)
+            << std::endl;
+}
+
 }  // namespace
 
 const char* ToString(SessionState s) {
@@ -49,9 +61,27 @@ const char* ToString(SessionState s) {
   return "Unknown";
 }
 
-AirSession::AirSession() = default;
+AirSession::AirSession() : lifecycle_observer_(&DefaultLifecycleObserver) {}
 
 AirSession::~AirSession() { Close(); }
+
+void AirSession::SetLifecycleObserver(LifecycleObserver obs) {
+  lifecycle_observer_ = obs ? std::move(obs) : LifecycleObserver(&DefaultLifecycleObserver);
+}
+
+void AirSession::TransitionTo(SessionState to, const char* reason_class) {
+  const SessionState from = state_.exchange(to);
+  if (from == to) return;  // no-op
+  if (lifecycle_observer_) {
+    StateTransitionEvent e{
+        .mono_us = MonoUs(),
+        .from = from,
+        .to = to,
+        .reason_class = reason_class ? reason_class : "",
+    };
+    lifecycle_observer_(e);
+  }
+}
 
 bool AirSession::AttachOutput(int fd) {
   // Preconditions: no output attached, fd is valid.
@@ -142,12 +172,12 @@ void AirSession::FailStart(const char* reason_class) {
     std::lock_guard<std::mutex> lock(failed_start_mutex_);
     failed_start_reason_ = reason_class;
   }
-  state_.store(SessionState::FailedStart);
+  TransitionTo(SessionState::FailedStart, reason_class);
 }
 
 void AirSession::EncodeLoop() {
   const int64_t warming_entered_mono_us = MonoUs();
-  state_.store(SessionState::Warming);
+  TransitionTo(SessionState::Warming, "openair");
 
   // ---- Phase 1: WARMING — pre-buffer frames; byte path HELD CLOSED. ----
   // Pull from normalizer into the warmup deques. Evaluate the gate every
@@ -173,7 +203,7 @@ void AirSession::EncodeLoop() {
     };
     if (gate_->Evaluate(snapshot) == BootstrapContentGate::Verdict::Ready) {
       warming_duration_us_.store(MonoUs() - warming_entered_mono_us);
-      state_.store(SessionState::Ready);
+      TransitionTo(SessionState::Ready, "gate_fired");
       break;
     }
   }
@@ -186,7 +216,7 @@ void AirSession::EncodeLoop() {
   // bootstrap total and move to OnAir immediately.
   const int64_t on_air_entered_mono_us = MonoUs();
   bootstrap_total_duration_us_.store(on_air_entered_mono_us - warming_entered_mono_us);
-  state_.store(SessionState::OnAir);
+  TransitionTo(SessionState::OnAir, "first_emit");
 
   // ---- Phase 3: ON_AIR — drain warmup buffer, then continue pulling. ----
   // Frames are fed into the encoder for the first time here. First byte on
@@ -229,7 +259,7 @@ void AirSession::Close() {
   // Transition to Stopping unless we're already in a terminal failure
   // state (FailedStart must not be overwritten). Stopping is terminal.
   if (state_.load() != SessionState::FailedStart) {
-    state_.store(SessionState::Stopping);
+    TransitionTo(SessionState::Stopping, "close");
   }
   stopping_.store(true);
   if (encode_thread_.joinable()) {

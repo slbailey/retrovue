@@ -38,6 +38,11 @@ class AirControlServiceImpl final
       const retrovue::air::v1::StopChannelRequest* request,
       retrovue::air::v1::StopChannelResponse* response) override;
 
+  grpc::Status GetSessionStatus(
+      grpc::ServerContext* context,
+      const retrovue::air::v1::GetSessionStatusRequest* request,
+      retrovue::air::v1::GetSessionStatusResponse* response) override;
+
  private:
   std::mutex mu_;
   AirSession session_;
