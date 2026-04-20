@@ -28,6 +28,7 @@
 #include <string>
 
 #include "channel_canonical.hpp"
+#include "egress_pacer.hpp"
 #include "file_source_producer.hpp"
 #include "mpeg_ts_encoder.hpp"
 #include "socket_emitter.hpp"
@@ -155,11 +156,17 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  // Real-time egress pacer: holds each video frame until its wall-clock
+  // moment. Audio rides alongside video — one pacer gate controls the loop
+  // cadence and the encoder/socket emit in lockstep with the channel clock.
+  EgressPacer pacer;
+
   // Encode until the source runs out.
   int64_t frames = 0;
   while (true) {
     auto vf = norm.PullVideo();
     if (!vf.has_value()) break;
+    pacer.WaitFor(vf->pts_us_relative);
     if (!encoder.EncodeVideo(*vf)) {
       std::cerr << "[air] EncodeVideo failed at frame " << frames << std::endl;
       break;
@@ -182,7 +189,9 @@ int main(int argc, char** argv) {
   std::cerr << "[air] done. frames=" << frames
             << " bytes_written=" << emitter.BytesWrittenTotal()
             << " bytes_dropped=" << emitter.BytesDroppedTotal()
-            << " epipe=" << emitter.EpipeCount() << std::endl;
+            << " epipe=" << emitter.EpipeCount()
+            << " pacer_total_sleep_ms=" << (pacer.TotalSleepUs() / 1000)
+            << " pacer_late_releases=" << pacer.LateReleases() << std::endl;
 
   ::close(client_fd);
   ::close(listen_fd);

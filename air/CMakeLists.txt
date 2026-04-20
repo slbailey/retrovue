@@ -46,6 +46,7 @@ add_library(air_vnext STATIC
   src/file_source_producer.cpp
   src/mpeg_ts_encoder.cpp
   src/socket_emitter.cpp
+  src/egress_pacer.cpp
 )
 
 target_include_directories(air_vnext PUBLIC
@@ -82,6 +83,7 @@ add_executable(air_vnext_contract_tests
   tests/contracts/file_decode_test.cpp
   tests/contracts/encoder_smoke_test.cpp
   tests/contracts/socket_emit_integration_test.cpp
+  tests/contracts/egress_pacer_test.cpp
 )
 
 target_link_libraries(air_vnext_contract_tests PRIVATE
