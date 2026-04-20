@@ -91,6 +91,7 @@ add_library(air_vnext STATIC
   src/grpc_service.cpp
   src/bootstrap_content_gate.cpp
   src/segment_fence.cpp
+  src/priming_pipeline.cpp
 )
 
 target_include_directories(air_vnext PUBLIC
@@ -136,6 +137,7 @@ add_executable(air_vnext_contract_tests
   tests/contracts/soak_test.cpp
   tests/contracts/queue_foundation_test.cpp
   tests/contracts/segment_fence_test.cpp
+  tests/contracts/priming_pipeline_test.cpp
 )
 
 target_link_libraries(air_vnext_contract_tests PRIVATE
