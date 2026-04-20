@@ -149,6 +149,11 @@ class AirSession {
   // logs structured events to stderr.
   void SetLifecycleObserver(LifecycleObserver obs);
 
+  // Install a seam event observer. Forwarded to the internal
+  // SeamController on OpenAir. Set before OpenAir. Receives
+  // seam.armed / seam.disarmed / seam.committed / seam.executed.
+  void SetSeamEventObserver(SeamEventObserver obs);
+
   // Inspection.
   bool HasOutput() const { return owned_fd_ >= 0; }
   bool HasContent() const;
@@ -272,6 +277,7 @@ class AirSession {
   std::vector<int64_t> test_prime_delays_ms_;
   std::atomic<std::size_t> test_prime_call_idx_{0};
   LifecycleObserver lifecycle_observer_;
+  SeamEventObserver seam_event_observer_;
 
   // ---- Seam controller + priming pipeline ----
   // SeamController (C1.4a): owns seam lifecycle; driven by the encode

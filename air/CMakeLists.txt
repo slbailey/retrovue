@@ -142,6 +142,7 @@ add_executable(air_vnext_contract_tests
   tests/contracts/seam_controller_test.cpp
   tests/contracts/air_session_seam_integration_test.cpp
   tests/contracts/file_seek_frame_accurate_test.cpp
+  tests/contracts/air_session_c1_end_to_end_test.cpp
 )
 
 target_link_libraries(air_vnext_contract_tests PRIVATE

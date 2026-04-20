@@ -72,6 +72,10 @@ void AirSession::SetLifecycleObserver(LifecycleObserver obs) {
   lifecycle_observer_ = obs ? std::move(obs) : LifecycleObserver(&DefaultLifecycleObserver);
 }
 
+void AirSession::SetSeamEventObserver(SeamEventObserver obs) {
+  seam_event_observer_ = std::move(obs);
+}
+
 void AirSession::TransitionTo(SessionState to, const char* reason_class) {
   const SessionState from = state_.exchange(to);
   if (from == to) return;  // no-op
@@ -271,6 +275,9 @@ bool AirSession::OpenAir() {
         }
         return active_block_->IsPrimed(next);
       });
+  if (seam_event_observer_) {
+    seam_controller_->SetEventObserver(seam_event_observer_);
+  }
 
   // Async priming pipeline. Enforces INV-SEGMENT-PRIMING-SINGLE-001
   // structurally (single worker). Hooks mutate BlockRuntime state under
