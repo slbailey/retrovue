@@ -29,9 +29,11 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 
+#include "block.hpp"
 #include "channel_canonical.hpp"
 #include "frame_types.hpp"
 
@@ -96,11 +98,32 @@ class AirSession {
   // Preconditions: AttachOutput has been called. Returns false on error
   // (decoder open failure, canonical mismatch, etc.).
   //
+  // Two entry points:
+  //   AssignContent(path, canonical) — legacy single-file mode. Synthesizes
+  //     an internal active_block_ with a generated block_id for queue-state
+  //     uniformity. Kept for backward compatibility with existing tests.
+  //   SeedActiveBlock(block) — queue-based mode. active_block_ is the full
+  //     supplied Block record (block_id, asset_uri, fence, JIP, canonical).
+  //     Used by StartChannel when seed_block is provided.
+  //
+  // Both paths establish one active block and leave queued_blocks_ empty.
   // (Note: in the current channel-centric build the encoder is constructed
   // here because canonical drives encoder config. In a future device-centric
   // mode the encoder would move into AttachOutput with a device canonical.)
   bool AssignContent(const std::string& input_path,
                      const ChannelCanonical& canonical);
+  bool SeedActiveBlock(const Block& block);
+
+  // Phase 2b — append a queued block via SupplyBlock RPC. Core pushes; AIR
+  // stores. Phase B scope: simple append. Mutation rules for armed/primed
+  // states land in Phase C+.
+  //
+  // Returns false on rejection; `reason_out` carries a stable reason code:
+  //   "NO_SESSION" — no active session to append to.
+  //   (Future: BLOCK_ALREADY_QUEUED, CANONICAL_MISMATCH.)
+  bool AddQueuedBlock(const Block& block,
+                      const std::string& predecessor_id,
+                      std::string* reason_out = nullptr);
 
   // Phase 3 — start encode loop. Emission begins at the first pulled frame.
   // Preconditions: AttachOutput and AssignContent both succeeded.
@@ -120,6 +143,10 @@ class AirSession {
   bool HasOutput() const { return owned_fd_ >= 0; }
   bool HasContent() const { return source_ != nullptr; }
   bool IsOnAir() const { return encode_thread_.joinable(); }
+
+  // Queue depth: active block (if any) + count of queued blocks. Scalar
+  // only — does not expose queue contents. Read-safe from any thread.
+  int32_t QueueDepth() const;
 
   // Lifecycle state. Safe to read from any thread.
   SessionState State() const { return state_.load(); }
@@ -155,6 +182,15 @@ class AirSession {
   std::unique_ptr<StandardNormalizer> normalizer_;
   ChannelCanonical canonical_{};
   int audio_samples_per_block_ = 0;
+
+  // Phase B execution queue. active_block_ is populated by SeedActiveBlock
+  // or synthesized by AssignContent (legacy mode). queued_blocks_ receives
+  // AddQueuedBlock appends. Both are mutated only from the gRPC handler
+  // thread (serialized by AirControlServiceImpl::mu_). Guarded by
+  // queue_mutex_ for read-safety from diagnostic accessors.
+  mutable std::mutex queue_mutex_;
+  std::optional<Block> active_block_;
+  std::deque<Block> queued_blocks_;
 
   // ---- Byte-production (today: per-session; future: per-device) ----
   std::unique_ptr<MpegTsEncoder> encoder_;

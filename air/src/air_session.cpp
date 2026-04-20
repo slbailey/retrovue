@@ -102,6 +102,18 @@ bool AirSession::AssignContent(const std::string& input_path,
 
   canonical_ = canonical;
 
+  // Legacy mode: synthesize an active_block_ with a generated block_id so
+  // downstream queue accounting (QueueDepth, GetSessionStatus) treats this
+  // session uniformly with queue-based sessions.
+  Block legacy_block;
+  legacy_block.block_id = "legacy:" + input_path;
+  legacy_block.asset_uri = input_path;
+  legacy_block.canonical = canonical;
+  {
+    std::lock_guard<std::mutex> lk(queue_mutex_);
+    active_block_ = std::move(legacy_block);
+  }
+
   // Channel audio block: ~ one video-frame-period of samples at the
   // channel audio rate. For 30000/1001 video at 48kHz audio, this is
   // ~1601 samples. Hardcoded for now (matches existing tests).
@@ -145,6 +157,45 @@ bool AirSession::AssignContent(const std::string& input_path,
   normalizer_ = std::move(normalizer);
   encoder_ = std::move(encoder);
   return true;
+}
+
+bool AirSession::SeedActiveBlock(const Block& block) {
+  // Phase B: wrap AssignContent with block-centric entry. Extract asset_uri
+  // and canonical from the Block; call the existing AssignContent to build
+  // source/normalizer/encoder; then record the full block in active_block_
+  // (overwriting the synthesized legacy_block AssignContent would install).
+  if (block.asset_uri.empty()) return false;
+  if (!block.canonical.IsValid()) return false;
+
+  if (!AssignContent(block.asset_uri, block.canonical)) return false;
+
+  // Replace the synthesized legacy_block with the real supplied Block.
+  std::lock_guard<std::mutex> lk(queue_mutex_);
+  active_block_ = block;
+  return true;
+}
+
+bool AirSession::AddQueuedBlock(const Block& block,
+                                const std::string& /*predecessor_id*/,
+                                std::string* reason_out) {
+  // Phase B scope: simple append. No predecessor validation yet (that's
+  // Phase C when pull/supply ordering matters). No mutation-state checks
+  // (revisions/retirements are separate RPCs).
+  std::lock_guard<std::mutex> lk(queue_mutex_);
+  if (!active_block_.has_value() && source_ == nullptr) {
+    if (reason_out) *reason_out = "NO_SESSION";
+    return false;
+  }
+  queued_blocks_.push_back(block);
+  return true;
+}
+
+int32_t AirSession::QueueDepth() const {
+  std::lock_guard<std::mutex> lk(queue_mutex_);
+  int32_t depth = 0;
+  if (active_block_.has_value()) ++depth;
+  depth += static_cast<int32_t>(queued_blocks_.size());
+  return depth;
 }
 
 bool AirSession::OpenAir() {
@@ -286,6 +337,12 @@ void AirSession::Close() {
   warmup_audio_.clear();
   frames_encoded_.store(0);
   stopping_.store(false);
+  // Clear execution queue on session end.
+  {
+    std::lock_guard<std::mutex> lk(queue_mutex_);
+    active_block_.reset();
+    queued_blocks_.clear();
+  }
   // Note: state_ stays at Stopping (or FailedStart). Terminal — do not
   // reset to Warming. A new session uses a new AirSession instance.
 }
