@@ -17,8 +17,10 @@
 
 #include <unistd.h>
 
+#include <chrono>
 #include <utility>
 
+#include "bootstrap_content_gate.hpp"
 #include "egress_pacer.hpp"
 #include "file_source_producer.hpp"
 #include "mpeg_ts_encoder.hpp"
@@ -26,6 +28,26 @@
 #include "standard_normalizer.hpp"
 
 namespace retrovue::air {
+
+namespace {
+
+int64_t MonoUs() {
+  const auto now = std::chrono::steady_clock::now().time_since_epoch();
+  return std::chrono::duration_cast<std::chrono::microseconds>(now).count();
+}
+
+}  // namespace
+
+const char* ToString(SessionState s) {
+  switch (s) {
+    case SessionState::Warming:     return "Warming";
+    case SessionState::Ready:       return "Ready";
+    case SessionState::OnAir:       return "OnAir";
+    case SessionState::Stopping:    return "Stopping";
+    case SessionState::FailedStart: return "FailedStart";
+  }
+  return "Unknown";
+}
 
 AirSession::AirSession() = default;
 
@@ -104,22 +126,95 @@ bool AirSession::OpenAir() {
   if (encode_thread_.joinable()) return false;
 
   pacer_ = std::make_unique<EgressPacer>();
+  gate_ = std::make_unique<BootstrapContentGate>();
   stopping_.store(false);
+  state_.store(SessionState::Warming);
+  warming_duration_us_.store(-1);
+  bootstrap_total_duration_us_.store(-1);
+  warmup_video_.clear();
+  warmup_audio_.clear();
   encode_thread_ = std::thread([this]() { EncodeLoop(); });
   return true;
 }
 
-void AirSession::EncodeLoop() {
-  // Mirrors the pattern in main.cpp (pre-vNext gRPC binary).
-  while (!stopping_.load()) {
-    auto vf = normalizer_->PullVideo();
-    if (!vf.has_value()) break;  // natural EOF
-    pacer_->WaitFor(vf->pts_us_relative);
-    if (!encoder_->EncodeVideo(*vf)) break;
-    frames_encoded_.fetch_add(1);
-    auto ab = normalizer_->PullAudio();
-    if (ab.has_value()) encoder_->EncodeAudio(*ab);
+void AirSession::FailStart(const char* reason_class) {
+  {
+    std::lock_guard<std::mutex> lock(failed_start_mutex_);
+    failed_start_reason_ = reason_class;
   }
+  state_.store(SessionState::FailedStart);
+}
+
+void AirSession::EncodeLoop() {
+  const int64_t warming_entered_mono_us = MonoUs();
+  state_.store(SessionState::Warming);
+
+  // ---- Phase 1: WARMING — pre-buffer frames; byte path HELD CLOSED. ----
+  // Pull from normalizer into the warmup deques. Evaluate the gate every
+  // tick. Exit this phase when gate fires (→ Ready) or source EOFs before
+  // readiness (→ FailedStart).
+  while (!stopping_.load() && !gate_->HasFired()) {
+    auto vf = normalizer_->PullVideo();
+    if (!vf.has_value()) {
+      // Source EOF before gate could fire. The content is too short to
+      // satisfy the warmup floor — treat as FailedStart per design doc.
+      FailStart("SOURCE_EOF_DURING_WARMUP");
+      return;
+    }
+    warmup_video_.push_back(std::move(*vf));
+    auto ab = normalizer_->PullAudio();
+    if (ab.has_value()) warmup_audio_.push_back(std::move(*ab));
+
+    BootstrapContentGate::ReadinessSnapshot snapshot{
+        .video_buffer_depth = warmup_video_.size(),
+        .audio_buffer_depth = warmup_audio_.size(),
+        // TODO: when FileSourceProducer exposes health signal, wire here.
+        .decoder_healthy = true,
+    };
+    if (gate_->Evaluate(snapshot) == BootstrapContentGate::Verdict::Ready) {
+      warming_duration_us_.store(MonoUs() - warming_entered_mono_us);
+      state_.store(SessionState::Ready);
+      break;
+    }
+  }
+
+  if (stopping_.load()) return;                              // external Close()
+  if (state_.load() == SessionState::FailedStart) return;    // bootstrap fail
+
+  // ---- Phase 2: READY → ON_AIR — transient, one-step transition. ----
+  // Per design guardrail, Ready is not a long-lived mode. Record the
+  // bootstrap total and move to OnAir immediately.
+  const int64_t on_air_entered_mono_us = MonoUs();
+  bootstrap_total_duration_us_.store(on_air_entered_mono_us - warming_entered_mono_us);
+  state_.store(SessionState::OnAir);
+
+  // ---- Phase 3: ON_AIR — drain warmup buffer, then continue pulling. ----
+  // Frames are fed into the encoder for the first time here. First byte on
+  // wire is content, per lifecycle memory.
+  while (!stopping_.load()) {
+    std::optional<VideoFrame> vf_opt;
+    if (!warmup_video_.empty()) {
+      vf_opt = std::move(warmup_video_.front());
+      warmup_video_.pop_front();
+    } else {
+      vf_opt = normalizer_->PullVideo();
+    }
+    if (!vf_opt.has_value()) break;  // natural EOF
+
+    pacer_->WaitFor(vf_opt->pts_us_relative);
+    if (!encoder_->EncodeVideo(*vf_opt)) break;
+    frames_encoded_.fetch_add(1);
+
+    std::optional<AudioBlock> ab_opt;
+    if (!warmup_audio_.empty()) {
+      ab_opt = std::move(warmup_audio_.front());
+      warmup_audio_.pop_front();
+    } else {
+      ab_opt = normalizer_->PullAudio();
+    }
+    if (ab_opt.has_value()) encoder_->EncodeAudio(*ab_opt);
+  }
+
   // Drain a few extra audio blocks so the interleaver has enough audio
   // to cover the video span on final flush.
   for (int extra = 0; extra < 10; ++extra) {
@@ -131,6 +226,11 @@ void AirSession::EncodeLoop() {
 }
 
 void AirSession::Close() {
+  // Transition to Stopping unless we're already in a terminal failure
+  // state (FailedStart must not be overwritten). Stopping is terminal.
+  if (state_.load() != SessionState::FailedStart) {
+    state_.store(SessionState::Stopping);
+  }
   stopping_.store(true);
   if (encode_thread_.joinable()) {
     encode_thread_.join();
@@ -148,11 +248,21 @@ void AirSession::Close() {
   }
   encoder_.reset();
   pacer_.reset();
+  gate_.reset();
   normalizer_.reset();
   source_.reset();
   emitter_.reset();
+  warmup_video_.clear();
+  warmup_audio_.clear();
   frames_encoded_.store(0);
   stopping_.store(false);
+  // Note: state_ stays at Stopping (or FailedStart). Terminal — do not
+  // reset to Warming. A new session uses a new AirSession instance.
+}
+
+std::string AirSession::FailedStartReason() const {
+  std::lock_guard<std::mutex> lock(failed_start_mutex_);
+  return failed_start_reason_;
 }
 
 int64_t AirSession::BytesWritten() const {

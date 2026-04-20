@@ -89,6 +89,7 @@ add_library(air_vnext STATIC
   src/egress_pacer.cpp
   src/air_session.cpp
   src/grpc_service.cpp
+  src/bootstrap_content_gate.cpp
 )
 
 target_include_directories(air_vnext PUBLIC
@@ -129,6 +130,7 @@ add_executable(air_vnext_contract_tests
   tests/contracts/socket_emit_integration_test.cpp
   tests/contracts/egress_pacer_test.cpp
   tests/contracts/grpc_start_stop_integration_test.cpp
+  tests/contracts/bootstrap_content_gate_test.cpp
 )
 
 target_link_libraries(air_vnext_contract_tests PRIVATE

@@ -25,11 +25,14 @@
 
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 
 #include "channel_canonical.hpp"
+#include "frame_types.hpp"
 
 namespace retrovue::air {
 
@@ -38,6 +41,31 @@ class StandardNormalizer;
 class MpegTsEncoder;
 class SocketEmitter;
 class EgressPacer;
+class BootstrapContentGate;
+
+// Session lifecycle states. See LIFECYCLE_DESIGN.md for the full state
+// machine (entry/exit rules, transitions, telemetry).
+//
+//   Warming   — OpenAir() has started the encode thread; pre-buffering
+//               frames, byte path HELD CLOSED (no encoder calls yet).
+//   Ready     — Transient: bootstrap gate has fired conditions-met but
+//               commit hasn't run yet. Exists as an observable waypoint;
+//               the encode thread passes through in one step.
+//   OnAir     — Encoder is receiving frames; bytes flowing. Sticky — the
+//               system does NOT regress to Warming from here. Pad
+//               substitution (future) happens WITHIN OnAir.
+//   Stopping  — Close() in progress. Terminal.
+//   FailedStart — Irrecoverable pre-OnAir error. Terminal. reason_class
+//               available via FailedStartReason().
+enum class SessionState {
+  Warming,
+  Ready,
+  OnAir,
+  Stopping,
+  FailedStart,
+};
+
+const char* ToString(SessionState s);
 
 class AirSession {
  public:
@@ -74,12 +102,29 @@ class AirSession {
   bool HasContent() const { return source_ != nullptr; }
   bool IsOnAir() const { return encode_thread_.joinable(); }
 
+  // Lifecycle state. Safe to read from any thread.
+  SessionState State() const { return state_.load(); }
+
   // Diagnostics snapshot (atomic reads of encode-thread state).
   int64_t FramesEncoded() const { return frames_encoded_.load(); }
   int64_t BytesWritten() const;
   int64_t BytesDropped() const;
   int64_t PacerSleepMs() const;
   int64_t PacerLateReleases() const;
+
+  // Bootstrap lifecycle diagnostics.
+  // WarmingDurationUs: time spent in Warming before hitting Ready. -1 if
+  //   never left Warming. Set once when Ready is entered.
+  // BootstrapTotalDurationUs: Warming entry → OnAir entry. -1 if never
+  //   reached OnAir. In practice equals WarmingDurationUs + ~0 (Ready is
+  //   transient).
+  // FailedStartReason: stable reason class string if state is FailedStart,
+  //   else empty.
+  int64_t WarmingDurationUs() const { return warming_duration_us_.load(); }
+  int64_t BootstrapTotalDurationUs() const {
+    return bootstrap_total_duration_us_.load();
+  }
+  std::string FailedStartReason() const;
 
  private:
   // ---- Sink group (swappable independently; persists across retune) ----
@@ -97,12 +142,34 @@ class AirSession {
 
   // ---- On-air execution ----
   std::unique_ptr<EgressPacer> pacer_;
+  std::unique_ptr<BootstrapContentGate> gate_;
   std::thread encode_thread_;
   std::atomic<bool> stopping_{false};
   std::atomic<int64_t> frames_encoded_{0};
 
+  // Warmup pre-buffer. Populated during Warming; drained at OnAir entry
+  // before further pulls from normalizer resume. These live on the encode
+  // thread — not thread-safe, accessed only from EncodeLoop.
+  std::deque<VideoFrame> warmup_video_;
+  std::deque<AudioBlock> warmup_audio_;
+
+  // Lifecycle state. Transitions are written by the encode thread (for
+  // Warming/Ready/OnAir/FailedStart) and by Close() (for Stopping).
+  std::atomic<SessionState> state_{SessionState::Warming};
+
+  // Bootstrap diagnostics (written on state transition into that phase).
+  std::atomic<int64_t> warming_duration_us_{-1};
+  std::atomic<int64_t> bootstrap_total_duration_us_{-1};
+  // FailedStart reason. Guarded by failed_start_mutex_ (written on the
+  // encode thread, read via FailedStartReason()).
+  mutable std::mutex failed_start_mutex_;
+  std::string failed_start_reason_;
+
   // Encode loop body run by encode_thread_.
   void EncodeLoop();
+
+  // Helper: set FailedStart with reason class + mark state_.
+  void FailStart(const char* reason_class);
 };
 
 }  // namespace retrovue::air
