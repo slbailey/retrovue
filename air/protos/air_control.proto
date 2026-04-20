@@ -41,6 +41,27 @@ service AirControl {
   // all exposed diagnostic counters. Intended as the observability surface
   // for operators and tests, not a metrics aggregation endpoint.
   rpc GetSessionStatus(GetSessionStatusRequest) returns (GetSessionStatusResponse);
+
+  // --- Execution queue surface (Phase A: declared, handlers stubbed) ---
+  // See EXECUTION_QUEUE_AND_SEAMS_DESIGN.md for semantics.
+  //
+  // Every Block carries an ordered list of 1..N Segments (per
+  // Truth - Block Is Handoff Unit and Segment Is Playback Unit). Block is
+  // the handoff unit; Segment is AIR's execution unit.
+  //
+  // Core pushes a Block to AIR's execution queue. Used after AIR signals
+  // demand for a successor (pull-primary) or for explicit overrides (push).
+  rpc SupplyBlock(SupplyBlockRequest) returns (SupplyBlockResponse);
+
+  // Core revises a queued Block (same block_id, updated fields including
+  // revised segments list). Rejected if the target block is active
+  // (ACTIVE_BLOCK_IMMUTABLE) or if any of its segments is armed for an
+  // upcoming seam (BLOCK_ARMED; v1 simplification).
+  rpc PutBlockRevision(PutBlockRevisionRequest) returns (PutBlockRevisionResponse);
+
+  // Core retires a queued Block. Always accepted for non-active Blocks.
+  // Rejected for the active Block (ACTIVE_BLOCK_IMMUTABLE).
+  rpc RetireBlock(RetireBlockRequest) returns (RetireBlockResponse);
 }
 
 enum SessionStateProto {
@@ -62,12 +83,76 @@ message ChannelCanonical {
   int32 audio_channels = 6;     // e.g. 2
 }
 
+// Segment — AIR's unit of playback execution.
+//
+// Per Truth - Segment Is AIR's Runtime Unit and INV-AIR-CORE-CONTRACT-001:
+// AIR performs decode, timing, seams, join-in-progress, pad insertion,
+// pacing, and source transitions at Segment boundaries. Segments live
+// inside a Block (every Block has 1..N Segments); they are not handoff
+// objects in their own right.
+message Segment {
+  // Opaque stable identity chosen by Core. Useful for observability
+  // and as-run records. AIR does not interpret.
+  string segment_id = 1;
+
+  // Asset location for this segment's content. v1: local file path.
+  string asset_uri = 2;
+
+  // Offset into the asset at which this segment's content begins.
+  // 0 = play from start. Non-zero = enter mid-asset (trimmed acts,
+  // JIP materialization, etc.).
+  int64 asset_start_offset_ms = 3;
+
+  // Segment duration. Together with start_utc_ms of the parent Block
+  // and cumulative duration of preceding segments, this determines the
+  // segment's wall-clock fence.
+  int64 duration_ms = 4;
+
+  // Ordinal position within the parent Block's segments list (0-based).
+  // Must match the index at which this Segment appears.
+  int32 segment_index = 5;
+}
+
+// Block — Core's unit of editorial work handed to AIR.
+//
+// Per Truth - Block Is Handoff Unit and Segment Is Playback Unit: Block
+// is the smallest unit transferred from Core to AIR. Every Block MUST
+// contain 1..N Segments. A Block with zero Segments is malformed. A
+// Block with exactly one Segment is valid and common.
+//
+// Block boundaries are editorial (start_utc_ms / end_utc_ms fence).
+// Runtime transitions land on Segment boundaries, not Block boundaries
+// directly; Block seams coincide with segment seams only because the
+// final Segment of one Block is followed by the first Segment of another.
+message Block {
+  // Stable editorial identity (opaque to AIR). Revisions and retirements
+  // key on this field.
+  string block_id = 1;
+
+  // Scheduled airing window in wall-clock UTC ms. end_utc_ms is the outer
+  // fence — the sum of all segment durations MUST equal end_utc_ms -
+  // start_utc_ms. AIR MUST NOT overrun end_utc_ms.
+  int64 start_utc_ms = 2;
+  int64 end_utc_ms = 3;
+
+  // Channel canonical parameters for this block. For v1, all Blocks in a
+  // session are expected to share canonical.
+  ChannelCanonical canonical = 4;
+
+  // Ordered list of Segments (1..N). MUST contain at least one Segment.
+  // Segments are executed in order; seams fire at each boundary between
+  // adjacent segments within the Block, and again at the Block->Block
+  // boundary (which is the same kind of segment seam).
+  repeated Segment segments = 5;
+}
+
 message StartChannelRequest {
   // Informational; for logs/metrics.
   int32 channel_id = 1;
 
-  // Local path to the media asset to air. MP4 with H.264 + AAC.
-  // In a future BlockPlan slice, this is replaced by a block list.
+  // LEGACY: single-file mode. Provide a local path; AIR treats it as a
+  // one-segment, one-Block session. Preserved for existing tests and
+  // simple standalone use. For queue-based sessions, use seed_block.
   string input_path = 2;
 
   // Unix Domain Socket path that Core has already bound and is draining.
@@ -75,8 +160,16 @@ message StartChannelRequest {
   // over this socket.
   string output_uds_path = 3;
 
-  // Channel canonical parameters (video + audio).
+  // Channel canonical parameters (video + audio). If seed_block is also
+  // set, seed_block.canonical overrides this for the seed Block.
   ChannelCanonical canonical = 4;
+
+  // Seed Block for a queue-based session (with 1..N Segments). If set,
+  // AIR uses this as the initial active Block and expects subsequent
+  // Blocks via SupplyBlock. If unset, AIR falls back to input_path
+  // (legacy single-file mode, synthesised internally as a one-segment
+  // Block).
+  Block seed_block = 5;
 }
 
 message StartChannelResponse {
@@ -118,4 +211,59 @@ message GetSessionStatusResponse {
 
   // Populated only when state == SESSION_STATE_FAILED_START.
   string failed_start_reason = 10;
+
+  // --- Execution queue diagnostics (Phase A: declared; populated in Phase B+) ---
+  // queue_depth reports Blocks (editorial grain) per INV-QUEUE-DEPTH-AIR-PRIVATE-001.
+  int32 queue_depth = 11;                    // active + queued Block count
+  int32 segment_depth = 12;                  // internal diagnostic: total Segments across all queued Blocks
+  int64 pad_bridge_ms_total = 13;            // cumulative time in pad-bridge
+  int64 seams_executed_total = 14;           // successful seams (all, intra- and inter-Block)
+  int64 block_transitions_total = 15;        // subset of seams_executed: inter-Block transitions
+  int64 revisions_accepted_total = 16;
+  int64 revisions_rejected_total = 17;
+}
+
+// --- Execution queue request/response types (Phase A) ---
+
+message SupplyBlockRequest {
+  int32 channel_id = 1;
+  // The Block being supplied (with its segment list). Identity via
+  // block.block_id.
+  Block block = 2;
+  // The block_id this Block follows in editorial order. Empty string
+  // for the seed (first Block in a session; seed usually arrives via
+  // StartChannel.seed_block instead).
+  string predecessor_id = 3;
+}
+
+message SupplyBlockResponse {
+  bool ok = 1;
+  // Populated when ok == false. Reason codes: "NO_SESSION",
+  // "BLOCK_ALREADY_QUEUED", "CANONICAL_MISMATCH", "EMPTY_SEGMENTS".
+  string reason = 2;
+}
+
+message PutBlockRevisionRequest {
+  int32 channel_id = 1;
+  // Block record with the target block_id and updated fields (including
+  // a revised segments list if applicable).
+  Block block = 2;
+}
+
+message PutBlockRevisionResponse {
+  bool ok = 1;
+  // Reason codes: "ACTIVE_BLOCK_IMMUTABLE", "BLOCK_ARMED",
+  // "BLOCK_NOT_IN_QUEUE", "CANONICAL_MISMATCH", "EMPTY_SEGMENTS".
+  string reason = 2;
+}
+
+message RetireBlockRequest {
+  int32 channel_id = 1;
+  string block_id = 2;
+}
+
+message RetireBlockResponse {
+  bool ok = 1;
+  // Reason codes: "ACTIVE_BLOCK_IMMUTABLE", "BLOCK_NOT_IN_QUEUE".
+  string reason = 2;
 }
