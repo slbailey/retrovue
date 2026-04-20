@@ -92,6 +92,7 @@ add_library(air_vnext STATIC
   src/bootstrap_content_gate.cpp
   src/segment_fence.cpp
   src/priming_pipeline.cpp
+  src/seam_controller.cpp
 )
 
 target_include_directories(air_vnext PUBLIC
@@ -138,6 +139,7 @@ add_executable(air_vnext_contract_tests
   tests/contracts/queue_foundation_test.cpp
   tests/contracts/segment_fence_test.cpp
   tests/contracts/priming_pipeline_test.cpp
+  tests/contracts/seam_controller_test.cpp
 )
 
 target_link_libraries(air_vnext_contract_tests PRIVATE
