@@ -24,7 +24,9 @@
 #include <cstring>
 #include <string>
 
+#include "block.hpp"
 #include "channel_canonical.hpp"
+#include "segment.hpp"
 
 namespace retrovue::air {
 
@@ -73,6 +75,34 @@ ChannelCanonical BuildCanonicalFromProto(
   return c;
 }
 
+Segment BuildSegmentFromProto(const retrovue::air::v1::Segment& p) {
+  Segment s;
+  s.segment_id = p.segment_id();
+  s.asset_uri = p.asset_uri();
+  s.asset_start_offset_ms = p.asset_start_offset_ms();
+  s.duration_ms = p.duration_ms();
+  s.segment_index = p.segment_index();
+  return s;
+}
+
+Block BuildBlockFromProto(const retrovue::air::v1::Block& p,
+                          const ChannelCanonical& fallback_canonical) {
+  Block b;
+  b.block_id = p.block_id();
+  b.start_utc_ms = p.start_utc_ms();
+  b.end_utc_ms = p.end_utc_ms();
+  if (p.has_canonical()) {
+    b.canonical = BuildCanonicalFromProto(p.canonical());
+  } else {
+    b.canonical = fallback_canonical;
+  }
+  b.segments.reserve(p.segments_size());
+  for (const auto& seg_proto : p.segments()) {
+    b.segments.push_back(BuildSegmentFromProto(seg_proto));
+  }
+  return b;
+}
+
 }  // namespace
 
 grpc::Status AirControlServiceImpl::StartChannel(
@@ -108,29 +138,32 @@ grpc::Status AirControlServiceImpl::StartChannel(
 
   // 4. AssignContent (phase 2).
   //
-  // Phase A compatibility: if seed_block is provided, route its first
-  // segment's asset_uri through legacy AssignContent (Phase A doesn't yet
-  // have a segment-aware queue — that lands in Phase B). If seed_block has
-  // multiple segments, only the first plays in Phase A. If unset, fall
-  // back to the legacy input_path field.
+  // Phase B: if seed_block is provided, route through SeedActiveBlock so
+  // active_block_ carries the full Block record with its segment list.
+  // Otherwise fall back to legacy AssignContent(input_path, canonical),
+  // which synthesizes a one-segment Block internally.
+  //
+  // Playback in Phase B still consumes only segments[0] end-to-end;
+  // multi-segment walk + seams arrive in Phase C.
   const ChannelCanonical canonical =
       BuildCanonicalFromProto(request->canonical());
-  std::string content_path = request->input_path();
+  bool assigned = false;
   std::string assign_detail;
   if (request->has_seed_block()) {
-    const auto& seed = request->seed_block();
-    if (seed.segments_size() == 0) {
+    const Block seed = BuildBlockFromProto(request->seed_block(), canonical);
+    if (seed.segments.empty()) {
+      session_.Close();
       response->set_ok(false);
       response->set_message("seed_block has no segments; Block MUST contain 1..N Segments");
-      session_.Close();
       return grpc::Status::OK;
     }
-    content_path = seed.segments(0).asset_uri();
-    assign_detail = "seed_block.segments[0].asset_uri=" + content_path;
+    assigned = session_.SeedActiveBlock(seed);
+    assign_detail = "seed_block.segments[0].asset_uri=" + seed.segments[0].asset_uri;
   } else {
-    assign_detail = "input_path=" + content_path;
+    assigned = session_.AssignContent(request->input_path(), canonical);
+    assign_detail = "input_path=" + request->input_path();
   }
-  if (!session_.AssignContent(content_path, canonical)) {
+  if (!assigned) {
     session_.Close();  // resets fd + unique_ptrs for a clean retry.
     response->set_ok(false);
     response->set_message("AssignContent failed for " + assign_detail);
@@ -198,9 +231,11 @@ grpc::Status AirControlServiceImpl::GetSessionStatus(
   response->set_warming_duration_us(session_.WarmingDurationUs());
   response->set_bootstrap_total_duration_us(session_.BootstrapTotalDurationUs());
   response->set_failed_start_reason(session_.FailedStartReason());
-  // Execution-queue diagnostics (Phase A: placeholders; populated in Phase B+).
-  response->set_queue_depth(session_.HasContent() ? 1 : 0);
-  response->set_segment_depth(session_.HasContent() ? 1 : 0);
+  // Execution-queue diagnostics. Phase B: queue_depth and segment_depth are
+  // real. Other counters are still placeholders — they'll land with
+  // SeamController (Phase C) and revision/retirement wiring.
+  response->set_queue_depth(session_.QueueDepth());
+  response->set_segment_depth(session_.SegmentDepth());
   response->set_pad_bridge_ms_total(0);
   response->set_seams_executed_total(0);
   response->set_block_transitions_total(0);
@@ -216,12 +251,22 @@ grpc::Status AirControlServiceImpl::GetSessionStatus(
 
 grpc::Status AirControlServiceImpl::SupplyBlock(
     grpc::ServerContext* /*context*/,
-    const retrovue::air::v1::SupplyBlockRequest* /*request*/,
+    const retrovue::air::v1::SupplyBlockRequest* request,
     retrovue::air::v1::SupplyBlockResponse* response) {
-  response->set_ok(false);
-  response->set_reason("UNIMPLEMENTED_PHASE_A");
-  return grpc::Status(grpc::StatusCode::UNIMPLEMENTED,
-                      "SupplyBlock: Phase A stub — queue model lands in Phase B");
+  std::lock_guard<std::mutex> lock(mu_);
+  // Phase B: append the supplied Block (with its segment list) to the
+  // execution queue. Mutation rules for canonical mismatch and duplicate
+  // block_id are deferred to Phase C.
+  const ChannelCanonical fallback_canonical{};
+  const Block block = BuildBlockFromProto(request->block(), fallback_canonical);
+  std::string reason;
+  if (!session_.AddQueuedBlock(block, request->predecessor_id(), &reason)) {
+    response->set_ok(false);
+    response->set_reason(reason.empty() ? "UNKNOWN" : reason);
+    return grpc::Status::OK;
+  }
+  response->set_ok(true);
+  return grpc::Status::OK;
 }
 
 grpc::Status AirControlServiceImpl::PutBlockRevision(

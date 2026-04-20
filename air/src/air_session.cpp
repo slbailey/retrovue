@@ -102,6 +102,26 @@ bool AirSession::AssignContent(const std::string& input_path,
 
   canonical_ = canonical;
 
+  // Legacy mode: synthesize a one-segment Block with a generated block_id
+  // so downstream queue accounting (QueueDepth, GetSessionStatus) treats
+  // this session uniformly with queue-based sessions. A one-segment Block
+  // is still a Block — not a promoted Segment.
+  Block legacy_block;
+  legacy_block.block_id = "legacy:" + input_path;
+  legacy_block.canonical = canonical;
+  Segment legacy_segment;
+  legacy_segment.segment_id = "legacy:" + input_path + ":0";
+  legacy_segment.asset_uri = input_path;
+  legacy_segment.asset_start_offset_ms = 0;
+  legacy_segment.duration_ms = 0;  // unknown; legacy mode plays until EOF
+  legacy_segment.segment_index = 0;
+  legacy_block.segments.push_back(std::move(legacy_segment));
+  {
+    std::lock_guard<std::mutex> lk(queue_mutex_);
+    active_block_ = std::move(legacy_block);
+    active_segment_index_ = 0;
+  }
+
   // Channel audio block: ~ one video-frame-period of samples at the
   // channel audio rate. For 30000/1001 video at 48kHz audio, this is
   // ~1601 samples. Hardcoded for now (matches existing tests).
@@ -145,6 +165,64 @@ bool AirSession::AssignContent(const std::string& input_path,
   normalizer_ = std::move(normalizer);
   encoder_ = std::move(encoder);
   return true;
+}
+
+bool AirSession::SeedActiveBlock(const Block& block) {
+  // Phase B: block-centric entry. Requires ≥1 segment per the truth.
+  // Extract segments[0].asset_uri and canonical from the Block; call
+  // AssignContent; then replace the synthesized legacy_block with the
+  // real supplied Block (preserving segment list + block_id).
+  if (block.segments.empty()) return false;  // EMPTY_SEGMENTS
+  if (block.segments[0].asset_uri.empty()) return false;
+  if (!block.canonical.IsValid()) return false;
+
+  if (!AssignContent(block.segments[0].asset_uri, block.canonical)) {
+    return false;
+  }
+
+  std::lock_guard<std::mutex> lk(queue_mutex_);
+  active_block_ = block;
+  active_segment_index_ = 0;
+  return true;
+}
+
+bool AirSession::AddQueuedBlock(const Block& block,
+                                const std::string& /*predecessor_id*/,
+                                std::string* reason_out) {
+  // Phase B scope: validate session exists + block has ≥1 segment.
+  // Predecessor validation, canonical-mismatch, and mutation-state rules
+  // land in Phase C.
+  std::lock_guard<std::mutex> lk(queue_mutex_);
+  if (!active_block_.has_value() && source_ == nullptr) {
+    if (reason_out) *reason_out = "NO_SESSION";
+    return false;
+  }
+  if (block.segments.empty()) {
+    if (reason_out) *reason_out = "EMPTY_SEGMENTS";
+    return false;
+  }
+  queued_blocks_.push_back(block);
+  return true;
+}
+
+int32_t AirSession::QueueDepth() const {
+  std::lock_guard<std::mutex> lk(queue_mutex_);
+  int32_t depth = 0;
+  if (active_block_.has_value()) ++depth;
+  depth += static_cast<int32_t>(queued_blocks_.size());
+  return depth;
+}
+
+int32_t AirSession::SegmentDepth() const {
+  std::lock_guard<std::mutex> lk(queue_mutex_);
+  int32_t count = 0;
+  if (active_block_.has_value()) {
+    count += static_cast<int32_t>(active_block_->segments.size());
+  }
+  for (const auto& b : queued_blocks_) {
+    count += static_cast<int32_t>(b.segments.size());
+  }
+  return count;
 }
 
 bool AirSession::OpenAir() {
@@ -286,6 +364,13 @@ void AirSession::Close() {
   warmup_audio_.clear();
   frames_encoded_.store(0);
   stopping_.store(false);
+  // Clear execution queue on session end.
+  {
+    std::lock_guard<std::mutex> lk(queue_mutex_);
+    active_block_.reset();
+    active_segment_index_ = 0;
+    queued_blocks_.clear();
+  }
   // Note: state_ stays at Stopping (or FailedStart). Terminal — do not
   // reset to Warming. A new session uses a new AirSession instance.
 }
