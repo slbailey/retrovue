@@ -41,6 +41,22 @@ service AirControl {
   // all exposed diagnostic counters. Intended as the observability surface
   // for operators and tests, not a metrics aggregation endpoint.
   rpc GetSessionStatus(GetSessionStatusRequest) returns (GetSessionStatusResponse);
+
+  // --- Execution queue surface (Phase A: declared, handlers stubbed) ---
+  // See EXECUTION_QUEUE_AND_SEAMS_DESIGN.md for semantics.
+  //
+  // Core pushes a block to AIR's execution queue. Used after AIR signals
+  // demand for a successor (pull-primary) or for explicit overrides (push).
+  rpc SupplyBlock(SupplyBlockRequest) returns (SupplyBlockResponse);
+
+  // Core revises a queued block (same block_id, updated fields).
+  // Rejected if the target block is the active block (ACTIVE_BLOCK_IMMUTABLE)
+  // or is armed for an upcoming seam (BLOCK_ARMED; v1 simplification).
+  rpc PutBlockRevision(PutBlockRevisionRequest) returns (PutBlockRevisionResponse);
+
+  // Core retires a queued block. Always accepted for non-active blocks.
+  // Rejected for the active block (ACTIVE_BLOCK_IMMUTABLE).
+  rpc RetireBlock(RetireBlockRequest) returns (RetireBlockResponse);
 }
 
 enum SessionStateProto {
@@ -62,12 +78,28 @@ message ChannelCanonical {
   int32 audio_channels = 6;     // e.g. 2
 }
 
+// Editorial block record. Exchanged across the Core↔AIR boundary.
+// Identity via block_id; asset referenced by URI; fence via end_utc_ms.
+//
+// Per "Shared block record identity" in BlockSupplyDemand §Vocabulary Doctrine,
+// the same block_id always refers to the same block. Revisions update fields
+// keyed on block_id; retirements drop by block_id.
+message Block {
+  string block_id = 1;       // stable editorial identity (opaque to AIR)
+  string asset_uri = 2;      // local path or URL (v1: local file path)
+  int64 start_utc_ms = 3;    // scheduled airing start (wall clock, UTC ms)
+  int64 end_utc_ms = 4;      // fence (sacred). MUST NOT overrun.
+  int64 jip_offset_ms = 5;   // join-in-progress offset into asset (0 = start)
+  ChannelCanonical canonical = 6;
+}
+
 message StartChannelRequest {
   // Informational; for logs/metrics.
   int32 channel_id = 1;
 
-  // Local path to the media asset to air. MP4 with H.264 + AAC.
-  // In a future BlockPlan slice, this is replaced by a block list.
+  // LEGACY: single-file mode. Provide a local path; AIR treats it as a
+  // one-block session. Preserved for existing tests and simple standalone
+  // use. For queue-based sessions, use seed_block (field 5) instead.
   string input_path = 2;
 
   // Unix Domain Socket path that Core has already bound and is draining.
@@ -75,8 +107,14 @@ message StartChannelRequest {
   // over this socket.
   string output_uds_path = 3;
 
-  // Channel canonical parameters (video + audio).
+  // Channel canonical parameters (video + audio). If seed_block is also
+  // set, seed_block.canonical overrides this field for the seed's block.
   ChannelCanonical canonical = 4;
+
+  // Seed block for a queue-based session. If set, AIR uses this as the
+  // initial active block and expects subsequent blocks via SupplyBlock.
+  // If unset, AIR falls back to input_path (legacy single-file mode).
+  Block seed_block = 5;
 }
 
 message StartChannelResponse {
@@ -118,4 +156,54 @@ message GetSessionStatusResponse {
 
   // Populated only when state == SESSION_STATE_FAILED_START.
   string failed_start_reason = 10;
+
+  // --- Execution queue diagnostics (Phase A: declared; populated in Phase B+) ---
+  int32 queue_depth = 11;                  // active + queued block count (scalar; does not leak queue contents)
+  int64 pad_bridge_ms_total = 12;          // cumulative time in pad-bridge during this session
+  int64 seams_executed_total = 13;         // count of successful seams (A→B transitions)
+  int64 revisions_accepted_total = 14;
+  int64 revisions_rejected_total = 15;
+}
+
+// --- Execution queue request/response types (Phase A) ---
+
+message SupplyBlockRequest {
+  int32 channel_id = 1;
+  // The block being supplied. Identity via block.block_id.
+  Block block = 2;
+  // The block_id this block follows in editorial order. Empty string for
+  // the seed (first block in a session, though seed usually arrives via
+  // StartChannel.seed_block instead).
+  string predecessor_id = 3;
+}
+
+message SupplyBlockResponse {
+  bool ok = 1;
+  // Populated when ok == false. Reason codes: "NO_SESSION",
+  // "BLOCK_ALREADY_QUEUED", "CANONICAL_MISMATCH".
+  string reason = 2;
+}
+
+message PutBlockRevisionRequest {
+  int32 channel_id = 1;
+  // Block record with the target block_id and updated fields.
+  Block block = 2;
+}
+
+message PutBlockRevisionResponse {
+  bool ok = 1;
+  // Reason codes: "ACTIVE_BLOCK_IMMUTABLE", "BLOCK_ARMED",
+  // "BLOCK_NOT_IN_QUEUE", "CANONICAL_MISMATCH".
+  string reason = 2;
+}
+
+message RetireBlockRequest {
+  int32 channel_id = 1;
+  string block_id = 2;
+}
+
+message RetireBlockResponse {
+  bool ok = 1;
+  // Reason codes: "ACTIVE_BLOCK_IMMUTABLE", "BLOCK_NOT_IN_QUEUE".
+  string reason = 2;
 }
