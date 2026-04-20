@@ -140,6 +140,7 @@ add_executable(air_vnext_contract_tests
   tests/contracts/segment_fence_test.cpp
   tests/contracts/priming_pipeline_test.cpp
   tests/contracts/seam_controller_test.cpp
+  tests/contracts/air_session_seam_integration_test.cpp
 )
 
 target_link_libraries(air_vnext_contract_tests PRIVATE

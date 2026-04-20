@@ -41,12 +41,22 @@ namespace retrovue::air {
 class FileSourceProducer;
 class StandardNormalizer;
 
-// Per-Segment prime state (C1.2 scope: raw / priming / primed / failed).
-// armed / active / retired states land in C1.3+ (SeamController).
+// Per-Segment runtime state machine:
+//   kRaw → kPriming → kPrimed → kActive → kRetired
+//          └→ kFailed
+//
+// Priming transitions (kRaw → kPriming → kPrimed/kFailed) are owned by
+// PrimingPipeline. Activation and retirement (kPrimed → kActive → kRetired)
+// are owned by AirSession's encode loop around seam firing (C1.4a). The
+// SeamController's kArmed phase is coincident with but distinct from
+// SegmentPrimeState — seam phase is SeamController's state, segment state
+// stays with BlockRuntime.
 enum class SegmentPrimeState {
   kRaw,
   kPriming,
   kPrimed,
+  kActive,   // currently being emitted (active_segment_index_ points at it)
+  kRetired,  // seam swapped past; source retired, normalizer dropped
   kFailed,
 };
 

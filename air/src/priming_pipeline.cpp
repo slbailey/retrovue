@@ -29,6 +29,8 @@ const char* ToString(SegmentPrimeState s) {
     case SegmentPrimeState::kRaw:     return "raw";
     case SegmentPrimeState::kPriming: return "priming";
     case SegmentPrimeState::kPrimed:  return "primed";
+    case SegmentPrimeState::kActive:  return "active";
+    case SegmentPrimeState::kRetired: return "retired";
     case SegmentPrimeState::kFailed:  return "failed";
   }
   return "?";

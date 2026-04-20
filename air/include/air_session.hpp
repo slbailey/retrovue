@@ -37,11 +37,10 @@
 #include "block_runtime.hpp"
 #include "channel_canonical.hpp"
 #include "frame_types.hpp"
+#include "seam_controller.hpp"
 
 namespace retrovue::air {
 
-class FileSourceProducer;
-class StandardNormalizer;
 class MpegTsEncoder;
 class SocketEmitter;
 class EgressPacer;
@@ -148,8 +147,18 @@ class AirSession {
 
   // Inspection.
   bool HasOutput() const { return owned_fd_ >= 0; }
-  bool HasContent() const { return source_ != nullptr; }
+  bool HasContent() const;
   bool IsOnAir() const { return encode_thread_.joinable(); }
+
+  // Expose the execution queue for tests. Not thread-safe against
+  // concurrent mutation; intended for post-teardown or pre-OpenAir
+  // inspection, and for integration tests that read state while the
+  // encode thread is active but is the only mutator.
+  const std::optional<BlockRuntime>& ActiveBlock() const { return active_block_; }
+  int32_t ActiveSegmentIndex() const { return active_segment_index_.load(); }
+
+  // Seam-execution diagnostics (updated only from the encode thread).
+  int64_t SeamsExecuted() const { return seams_executed_.load(); }
 
   // Lifecycle state. Safe to read from any thread.
   SessionState State() const { return state_.load(); }
@@ -191,9 +200,11 @@ class AirSession {
   std::unique_ptr<SocketEmitter> emitter_;
   int owned_fd_ = -1;
 
-  // ---- Content group (swappable per retune) ----
-  std::unique_ptr<FileSourceProducer> source_;
-  std::unique_ptr<StandardNormalizer> normalizer_;
+  // ---- Content group: canonical config + audio block size ----
+  // Per-segment source + normalizer live inside active_block_ /
+  // queued_blocks_ (BlockRuntime.segment_runtimes[i]). AirSession no longer
+  // holds its own source_ / normalizer_ members — C1.4a unified ownership
+  // into BlockRuntime so there is a single active-source owner.
   ChannelCanonical canonical_{};
   int audio_samples_per_block_ = 0;
 
@@ -213,7 +224,10 @@ class AirSession {
   // (active_segment_index_), not SeamController.
   mutable std::mutex queue_mutex_;
   std::optional<BlockRuntime> active_block_;
-  int32_t active_segment_index_ = 0;
+  // Cursor into active_block_->block().segments. Written only from the
+  // encode thread (OpenAir-entry set, seam advance); read from diagnostic
+  // accessors. Atomic so readers don't need queue_mutex_.
+  std::atomic<int32_t> active_segment_index_{0};
   std::deque<BlockRuntime> queued_blocks_;
 
   // ---- Byte-production (today: per-session; future: per-device) ----
@@ -225,7 +239,26 @@ class AirSession {
   std::thread encode_thread_;
   std::atomic<bool> stopping_{false};
   std::atomic<int64_t> frames_encoded_{0};
+  std::atomic<int64_t> seams_executed_{0};
   LifecycleObserver lifecycle_observer_;
+
+  // ---- Seam controller (C1.4a: happy-path intra-block seams) ----
+  // Owned by AirSession; driven by the encode loop. Readiness callback
+  // reads BlockRuntime::IsPrimed(next_index). No pad bridge, no late
+  // successor handling (C1.4b), no block promotion (C2.3).
+  std::unique_ptr<SeamController> seam_controller_;
+
+  // Session anchor. Established at OnAir entry: maps monotonic time to
+  // wall-clock UTC so segment fence ticks can be computed via
+  // SegmentFenceMonotonicUs (INV-SEAM-FENCE-ARITHMETIC-001).
+  int64_t anchor_monotonic_us_ = 0;
+  int64_t anchor_utc_ms_ = 0;
+
+  // Channel-PTS offset applied to frames pulled from the current segment's
+  // normalizer. Each segment's normalizer emits pts_us_relative starting
+  // from 0; we add this accumulator so channel PTS does not regress across
+  // a seam swap (encoder continuity criterion).
+  int64_t channel_pts_offset_us_ = 0;
 
   // Warmup pre-buffer. Populated during Warming; drained at OnAir entry
   // before further pulls from normalizer resume. These live on the encode
@@ -253,6 +286,20 @@ class AirSession {
 
   // Helper: atomic state transition + lifecycle event emission.
   void TransitionTo(SessionState to, const char* reason_class);
+
+  // Helper: construct FileSourceProducer + StandardNormalizer for the
+  // named segment and install as kPrimed into the given BlockRuntime.
+  // Returns false on prepare/activate failure (segment is marked
+  // kFailed with a reason). Scope: synchronous upfront priming used by
+  // SeedActiveBlock / AssignContent in the C1.4a happy path; async
+  // priming via PrimingPipeline lands later.
+  bool PrimeSegmentSync(BlockRuntime& rt, int32_t segment_index);
+
+  // Helper: observe the seam from (active_segment_index_) to
+  // (active_segment_index_ + 1) on the SeamController, using the fence
+  // arithmetic from segment_fence.hpp and the session anchor. Pre: next
+  // segment exists.
+  void ObserveNextSeam();
 };
 
 }  // namespace retrovue::air
