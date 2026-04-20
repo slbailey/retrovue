@@ -137,11 +137,12 @@ TEST(AirSessionSeamIntegrationTest, IntraBlockSeamAdvancesRuntimeState) {
   const Block block = MakeTwoSegmentBlock(asset);
   ASSERT_TRUE(session.SeedActiveBlock(block));
 
-  // After seed: both segments primed, cursor at 0, 0 seams executed.
+  // After seed: segment 0 primed synchronously; segment 1 still raw.
+  // Async priming pipeline starts on OpenAir and brings segment 1 up.
   ASSERT_TRUE(session.ActiveBlock().has_value());
   ASSERT_EQ(session.ActiveBlock()->segment_count(), 2u);
   EXPECT_EQ(session.ActiveBlock()->State(0), SegmentPrimeState::kPrimed);
-  EXPECT_EQ(session.ActiveBlock()->State(1), SegmentPrimeState::kPrimed);
+  EXPECT_EQ(session.ActiveBlock()->State(1), SegmentPrimeState::kRaw);
   EXPECT_EQ(session.ActiveSegmentIndex(), 0);
   EXPECT_EQ(session.SeamsExecuted(), 0);
 
@@ -209,6 +210,121 @@ TEST(AirSessionSeamIntegrationTest, IntraBlockSeamAdvancesRuntimeState) {
 
   reader_running.store(false);
   // Client fd is closed by session.Close() via owned_fd_ path.
+  reader.join();
+  ::close(listen_fd);
+  ::unlink(uds.c_str());
+}
+
+// Genuinely late successor: prime of segment 1 is artificially delayed so
+// segment 0's fence arrives before segment 1 is primed. The encode loop
+// must engage a pad bridge, continue emitting, and transition to segment 1
+// once priming completes. Uses the real PrimingPipeline worker — the
+// delay injected in the next_raw hook is wall-clock, not test-only seam
+// manipulation, so pad bridge is exercised end-to-end.
+TEST(AirSessionSeamIntegrationTest, LateSuccessorEngagesPadBridge) {
+  const std::string asset = ResolveSampleA();
+  if (!std::filesystem::exists(asset)) {
+    GTEST_SKIP() << "SampleA not found";
+  }
+
+  // UDS reader.
+  const std::string uds =
+      "/tmp/air_pad_bridge_" + std::to_string(getpid()) + ".sock";
+  ::unlink(uds.c_str());
+  int listen_fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+  ASSERT_GE(listen_fd, 0);
+  sockaddr_un addr{};
+  addr.sun_family = AF_UNIX;
+  std::strncpy(addr.sun_path, uds.c_str(), sizeof(addr.sun_path) - 1);
+  ASSERT_EQ(::bind(listen_fd, reinterpret_cast<sockaddr*>(&addr),
+                   sizeof(addr)), 0);
+  ASSERT_EQ(::listen(listen_fd, 1), 0);
+
+  std::atomic<bool> reader_running{true};
+  std::atomic<int64_t> bytes_read{0};
+  std::thread reader([&]() {
+    int conn = ::accept(listen_fd, nullptr, nullptr);
+    if (conn < 0) return;
+    uint8_t buf[16 * 1024];
+    while (reader_running.load()) {
+      ssize_t n = ::read(conn, buf, sizeof(buf));
+      if (n <= 0) break;
+      bytes_read.fetch_add(n);
+    }
+    ::close(conn);
+  });
+
+  AirSession session;
+  // Inject a 1500ms delay before priming runs. Segment 0 duration is
+  // 1000ms, so the fence arrives ~500ms before segment 1 is primed.
+  session.SetTestPrimeDelayMs(1500);
+
+  int client_fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+  ASSERT_GE(client_fd, 0);
+  sockaddr_un client_addr{};
+  client_addr.sun_family = AF_UNIX;
+  std::strncpy(client_addr.sun_path, uds.c_str(),
+               sizeof(client_addr.sun_path) - 1);
+  ASSERT_EQ(::connect(client_fd, reinterpret_cast<sockaddr*>(&client_addr),
+                      sizeof(client_addr)), 0);
+  ASSERT_TRUE(session.AttachOutput(client_fd));
+
+  const Block block = MakeTwoSegmentBlock(asset);
+  ASSERT_TRUE(session.SeedActiveBlock(block));
+
+  // Pre-OpenAir: only segment 0 primed; 1 is raw.
+  EXPECT_EQ(session.ActiveBlock()->State(1), SegmentPrimeState::kRaw);
+  EXPECT_EQ(session.PadBridgeEventsTotal(), 0);
+
+  ASSERT_TRUE(session.OpenAir());
+
+  // Wait for OnAir.
+  const auto on_air_deadline = std::chrono::steady_clock::now() +
+                               std::chrono::seconds(5);
+  while (session.State() != SessionState::OnAir &&
+         std::chrono::steady_clock::now() < on_air_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  ASSERT_EQ(session.State(), SessionState::OnAir);
+
+  // Wait for the pad bridge to be engaged. This happens at fence time
+  // (~1000ms after OnAir) with segment 1 still mid-prime. Generous
+  // timeout accounts for warmup buffer and scheduler variability.
+  const auto bridge_deadline = std::chrono::steady_clock::now() +
+                               std::chrono::seconds(4);
+  while (session.PadBridgeEventsTotal() == 0 &&
+         std::chrono::steady_clock::now() < bridge_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  ASSERT_EQ(session.PadBridgeEventsTotal(), 1)
+      << "pad bridge should engage when fence arrives before successor is primed";
+  EXPECT_EQ(session.SeamsExecuted(), 0)
+      << "seam has not yet fired — bridge is mid-flight";
+
+  // Segment 1 should finish priming (~1500ms after OpenAir) and the
+  // seam should fire, ending the bridge.
+  const auto seam_deadline = std::chrono::steady_clock::now() +
+                             std::chrono::seconds(4);
+  while (session.SeamsExecuted() == 0 &&
+         std::chrono::steady_clock::now() < seam_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  ASSERT_EQ(session.SeamsExecuted(), 1) << "seam did not fire after bridge";
+  EXPECT_EQ(session.ActiveSegmentIndex(), 1);
+  EXPECT_EQ(session.ActiveBlock()->State(0), SegmentPrimeState::kRetired);
+  EXPECT_EQ(session.ActiveBlock()->State(1), SegmentPrimeState::kActive);
+
+  // Bridge duration: we expect at least ~300ms of pad (500ms in theory;
+  // scheduling + seam-tick cadence introduces slack; don't over-assert).
+  EXPECT_GE(session.PadBridgeMsTotal(), 200)
+      << "pad bridge should cover the 500ms gap with comfortable margin";
+
+  // Encoder continuity: frames kept flowing through the bridge.
+  EXPECT_GT(session.FramesEncoded(), 0);
+  EXPECT_GT(session.BytesWritten(), 0);
+
+  session.Close();
+  reader_running.store(false);
   reader.join();
   ::close(listen_fd);
   ::unlink(uds.c_str());

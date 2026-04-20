@@ -37,6 +37,7 @@
 #include "block_runtime.hpp"
 #include "channel_canonical.hpp"
 #include "frame_types.hpp"
+#include "priming_pipeline.hpp"
 #include "seam_controller.hpp"
 
 namespace retrovue::air {
@@ -45,6 +46,8 @@ class MpegTsEncoder;
 class SocketEmitter;
 class EgressPacer;
 class BootstrapContentGate;
+class PadSourceProducer;
+class IdentityNormalizer;
 
 // Session lifecycle states. See LIFECYCLE_DESIGN.md for the full state
 // machine (entry/exit rules, transitions, telemetry).
@@ -160,6 +163,19 @@ class AirSession {
   // Seam-execution diagnostics (updated only from the encode thread).
   int64_t SeamsExecuted() const { return seams_executed_.load(); }
 
+  // Pad-bridge diagnostics. A pad bridge is engaged (C1.4b) when a
+  // segment fence arrives before the successor segment is primed. Count
+  // is distinct events; ms is cumulative time in pad.
+  int64_t PadBridgeEventsTotal() const { return pad_bridge_events_total_.load(); }
+  int64_t PadBridgeMsTotal() const { return pad_bridge_ms_total_.load(); }
+
+  // Test hook: inject an artificial sleep before the priming worker
+  // returns the next raw PrimingRequest. Used by integration tests to
+  // force a genuinely late successor without fake-priming shortcuts.
+  // Default 0 = no delay. Safe to set before OpenAir; changes after
+  // OpenAir take effect on subsequent priming decisions.
+  void SetTestPrimeDelayMs(int64_t ms) { test_prime_delay_ms_.store(ms); }
+
   // Lifecycle state. Safe to read from any thread.
   SessionState State() const { return state_.load(); }
 
@@ -240,13 +256,30 @@ class AirSession {
   std::atomic<bool> stopping_{false};
   std::atomic<int64_t> frames_encoded_{0};
   std::atomic<int64_t> seams_executed_{0};
+  std::atomic<int64_t> pad_bridge_events_total_{0};
+  std::atomic<int64_t> pad_bridge_ms_total_{0};
+  std::atomic<int64_t> test_prime_delay_ms_{0};
   LifecycleObserver lifecycle_observer_;
 
-  // ---- Seam controller (C1.4a: happy-path intra-block seams) ----
-  // Owned by AirSession; driven by the encode loop. Readiness callback
-  // reads BlockRuntime::IsPrimed(next_index). No pad bridge, no late
-  // successor handling (C1.4b), no block promotion (C2.3).
+  // ---- Seam controller + priming pipeline ----
+  // SeamController (C1.4a): owns seam lifecycle; driven by the encode
+  // loop. Readiness callback reads BlockRuntime::IsPrimed(next_index).
+  // PrimingPipeline (C1.4b): async worker that primes kRaw segments in
+  // the execution queue. Started by OpenAir, stopped by Close before
+  // BlockRuntime teardown so worker never outlives the state it touches.
   std::unique_ptr<SeamController> seam_controller_;
+  std::unique_ptr<PrimingPipeline> priming_pipeline_;
+
+  // ---- Pad bridge state (encode-thread local) ----
+  // Engaged when a segment fence arrives before the successor is primed.
+  // pad_source_/pad_normalizer_ emit broadcast-safe continuity content
+  // through the SAME encoder + pacer (encoder continuity). Reset per
+  // engagement so each bridge starts with fresh PTS bookkeeping.
+  std::unique_ptr<PadSourceProducer> pad_source_;
+  std::unique_ptr<IdentityNormalizer> pad_normalizer_;
+  bool in_pad_bridge_ = false;
+  int64_t pad_bridge_start_mono_us_ = 0;
+  int64_t pad_frames_in_current_bridge_ = 0;
 
   // Session anchor. Established at OnAir entry: maps monotonic time to
   // wall-clock UTC so segment fence ticks can be computed via
@@ -300,6 +333,16 @@ class AirSession {
   // arithmetic from segment_fence.hpp and the session anchor. Pre: next
   // segment exists.
   void ObserveNextSeam();
+
+  // PrimingPipeline::Hooks::next_raw impl. Scans active_block_ forward
+  // from (active_segment_index_ + 1) for the first kRaw segment and
+  // returns a PrimingRequest for it, or nullopt if none.
+  std::optional<PrimingRequest> FindNextRawSegment();
+
+  // Engage pad bridge: fence passed with successor not yet primed.
+  // Retires the current segment (sets kRetired, advances offset),
+  // constructs pad source + normalizer, flags in_pad_bridge_.
+  void EngagePadBridge();
 };
 
 }  // namespace retrovue::air
