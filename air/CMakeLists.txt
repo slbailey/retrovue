@@ -133,7 +133,6 @@ add_executable(air_vnext_contract_tests
   tests/contracts/bootstrap_content_gate_test.cpp
   tests/contracts/grpc_status_and_events_test.cpp
   tests/contracts/soak_test.cpp
-  tests/contracts/queue_foundation_test.cpp
 )
 
 target_link_libraries(air_vnext_contract_tests PRIVATE

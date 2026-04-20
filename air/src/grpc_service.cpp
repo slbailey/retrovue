@@ -73,22 +73,6 @@ ChannelCanonical BuildCanonicalFromProto(
   return c;
 }
 
-Block BuildBlockFromProto(const retrovue::air::v1::Block& p,
-                          const ChannelCanonical& fallback_canonical) {
-  Block b;
-  b.block_id = p.block_id();
-  b.asset_uri = p.asset_uri();
-  b.start_utc_ms = p.start_utc_ms();
-  b.end_utc_ms = p.end_utc_ms();
-  b.jip_offset_ms = p.jip_offset_ms();
-  if (p.has_canonical()) {
-    b.canonical = BuildCanonicalFromProto(p.canonical());
-  } else {
-    b.canonical = fallback_canonical;
-  }
-  return b;
-}
-
 }  // namespace
 
 grpc::Status AirControlServiceImpl::StartChannel(
@@ -124,26 +108,24 @@ grpc::Status AirControlServiceImpl::StartChannel(
 
   // 4. AssignContent (phase 2).
   //
-  // Phase B: if seed_block is provided, route through SeedActiveBlock so
-  // active_block_ carries the full Block record (block_id, fence, etc.).
-  // Otherwise fall back to legacy AssignContent(input_path, canonical),
-  // which synthesizes an active_block_ with a generated block_id.
-  const ChannelCanonical canonical =
-      BuildCanonicalFromProto(request->canonical());
-  bool assigned = false;
-  std::string assign_detail;
+  // Phase A compatibility: prefer seed_block if provided; otherwise fall back
+  // to the legacy input_path field. In Phase B the queue model will consume
+  // seed_block as the initial active block and expect SupplyBlock calls for
+  // successors. For now the only effect is which string becomes input_path.
+  std::string content_path = request->input_path();
+  ChannelCanonical canonical = BuildCanonicalFromProto(request->canonical());
   if (request->has_seed_block()) {
-    const Block seed = BuildBlockFromProto(request->seed_block(), canonical);
-    assigned = session_.SeedActiveBlock(seed);
-    assign_detail = "seed_block.asset_uri=" + seed.asset_uri;
-  } else {
-    assigned = session_.AssignContent(request->input_path(), canonical);
-    assign_detail = "input_path=" + request->input_path();
+    const auto& seed = request->seed_block();
+    content_path = seed.asset_uri();
+    // seed_block.canonical, when set, overrides the top-level canonical.
+    if (seed.has_canonical()) {
+      canonical = BuildCanonicalFromProto(seed.canonical());
+    }
   }
-  if (!assigned) {
+  if (!session_.AssignContent(content_path, canonical)) {
     session_.Close();  // resets fd + unique_ptrs for a clean retry.
     response->set_ok(false);
-    response->set_message("AssignContent failed for " + assign_detail);
+    response->set_message("AssignContent failed for input_path=" + content_path);
     return grpc::Status::OK;
   }
 
@@ -208,11 +190,8 @@ grpc::Status AirControlServiceImpl::GetSessionStatus(
   response->set_warming_duration_us(session_.WarmingDurationUs());
   response->set_bootstrap_total_duration_us(session_.BootstrapTotalDurationUs());
   response->set_failed_start_reason(session_.FailedStartReason());
-  // Execution-queue diagnostics. Phase B: queue_depth is real (active +
-  // queued count via AirSession::QueueDepth). Other counters are still
-  // placeholders — they'll land with SeamController (Phase C) and
-  // revision/retirement wiring.
-  response->set_queue_depth(session_.QueueDepth());
+  // Execution-queue diagnostics (Phase A: placeholders; populated in Phase B+).
+  response->set_queue_depth(session_.HasContent() ? 1 : 0);
   response->set_pad_bridge_ms_total(0);
   response->set_seams_executed_total(0);
   response->set_revisions_accepted_total(0);
@@ -227,28 +206,12 @@ grpc::Status AirControlServiceImpl::GetSessionStatus(
 
 grpc::Status AirControlServiceImpl::SupplyBlock(
     grpc::ServerContext* /*context*/,
-    const retrovue::air::v1::SupplyBlockRequest* request,
+    const retrovue::air::v1::SupplyBlockRequest* /*request*/,
     retrovue::air::v1::SupplyBlockResponse* response) {
-  std::lock_guard<std::mutex> lock(mu_);
-  // Phase B: append to the execution queue. Canonical rejection cases
-  // (BLOCK_ALREADY_QUEUED, CANONICAL_MISMATCH) will land alongside pull
-  // plumbing in Phase C; for now, the only reason is NO_SESSION.
-  ChannelCanonical fallback_canonical{};
-  if (session_.HasContent()) {
-    // Borrow the session's canonical as fallback when the proto omits it.
-    // (AirSession doesn't currently expose canonical via getter; the supplied
-    // block.canonical is the source of truth when present, and Phase B trusts
-    // Core to include canonical on supplied blocks.)
-  }
-  const Block block = BuildBlockFromProto(request->block(), fallback_canonical);
-  std::string reason;
-  if (!session_.AddQueuedBlock(block, request->predecessor_id(), &reason)) {
-    response->set_ok(false);
-    response->set_reason(reason.empty() ? "UNKNOWN" : reason);
-    return grpc::Status::OK;
-  }
-  response->set_ok(true);
-  return grpc::Status::OK;
+  response->set_ok(false);
+  response->set_reason("UNIMPLEMENTED_PHASE_A");
+  return grpc::Status(grpc::StatusCode::UNIMPLEMENTED,
+                      "SupplyBlock: Phase A stub — queue model lands in Phase B");
 }
 
 grpc::Status AirControlServiceImpl::PutBlockRevision(
