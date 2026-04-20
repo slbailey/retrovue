@@ -34,6 +34,7 @@
 #include <thread>
 
 #include "block.hpp"
+#include "block_runtime.hpp"
 #include "channel_canonical.hpp"
 #include "frame_types.hpp"
 
@@ -196,16 +197,24 @@ class AirSession {
   ChannelCanonical canonical_{};
   int audio_samples_per_block_ = 0;
 
-  // Phase B execution queue. active_block_ is populated by SeedActiveBlock
-  // or synthesized by AssignContent (legacy mode). active_segment_index_
-  // cursors into active_block_.segments. queued_blocks_ receives
+  // Execution queue. active_block_ is populated by SeedActiveBlock or
+  // synthesized by AssignContent (legacy mode). active_segment_index_
+  // cursors into active_block_->block().segments. queued_blocks_ receives
   // AddQueuedBlock appends. Mutated only from the gRPC handler thread
   // (serialized by AirControlServiceImpl::mu_). Guarded by queue_mutex_
   // for read-safety from diagnostic accessors.
+  //
+  // As of C1.3.5, storage is BlockRuntime (not bare Block): each queued
+  // Block carries its parallel per-Segment runtime state (raw / priming /
+  // primed / failed) and owns the primed FileSourceProducer +
+  // StandardNormalizer per segment. PrimingPipeline writes into this
+  // state via AirSession hooks (C1.4a); SeamController reads readiness
+  // from it via a callback. Active-segment tracking remains on AirSession
+  // (active_segment_index_), not SeamController.
   mutable std::mutex queue_mutex_;
-  std::optional<Block> active_block_;
+  std::optional<BlockRuntime> active_block_;
   int32_t active_segment_index_ = 0;
-  std::deque<Block> queued_blocks_;
+  std::deque<BlockRuntime> queued_blocks_;
 
   // ---- Byte-production (today: per-session; future: per-device) ----
   std::unique_ptr<MpegTsEncoder> encoder_;

@@ -118,7 +118,7 @@ bool AirSession::AssignContent(const std::string& input_path,
   legacy_block.segments.push_back(std::move(legacy_segment));
   {
     std::lock_guard<std::mutex> lk(queue_mutex_);
-    active_block_ = std::move(legacy_block);
+    active_block_.emplace(std::move(legacy_block));
     active_segment_index_ = 0;
   }
 
@@ -181,7 +181,7 @@ bool AirSession::SeedActiveBlock(const Block& block) {
   }
 
   std::lock_guard<std::mutex> lk(queue_mutex_);
-  active_block_ = block;
+  active_block_.emplace(block);
   active_segment_index_ = 0;
   return true;
 }
@@ -201,7 +201,7 @@ bool AirSession::AddQueuedBlock(const Block& block,
     if (reason_out) *reason_out = "EMPTY_SEGMENTS";
     return false;
   }
-  queued_blocks_.push_back(block);
+  queued_blocks_.emplace_back(block);
   return true;
 }
 
@@ -217,10 +217,10 @@ int32_t AirSession::SegmentDepth() const {
   std::lock_guard<std::mutex> lk(queue_mutex_);
   int32_t count = 0;
   if (active_block_.has_value()) {
-    count += static_cast<int32_t>(active_block_->segments.size());
+    count += static_cast<int32_t>(active_block_->segment_count());
   }
-  for (const auto& b : queued_blocks_) {
-    count += static_cast<int32_t>(b.segments.size());
+  for (const auto& br : queued_blocks_) {
+    count += static_cast<int32_t>(br.segment_count());
   }
   return count;
 }
