@@ -52,6 +52,14 @@ struct SegmentRuntime {
   // jip_lateness_ms. Consumed at the NEXT seam swap so the PTS offset
   // advances by (duration_ms − jip_lateness_ms), preserving downstream
   // fence alignment.
+  //
+  // Entry MUST be frame-accurate per the invariant: the first emitted
+  // frame's PTS MUST correspond to jip_lateness_ms into the asset.
+  // Landing on a preceding keyframe without decoding forward to the
+  // target is a violation. The current AirSession implementation calls
+  // FileSourceProducer::SeekTo (backward keyframe) but does not yet
+  // decode-and-discard forward — this is an open gap against the
+  // invariant, tracked for a C1.4c follow-up.
   int64_t jip_lateness_ms = 0;
 };
 

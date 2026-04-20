@@ -13,6 +13,7 @@ extern "C" {
 #include <libswresample/swresample.h>
 }
 
+#include <algorithm>
 #include <cstring>
 #include <deque>
 #include <utility>
@@ -343,9 +344,8 @@ bool FileSourceProducer::SeekTo(int64_t offset_ms) {
   const int64_t seek_pts = av_rescale(
       offset_ms, impl_->v_tb.den, impl_->v_tb.num * int64_t{1000});
 
-  // AVSEEK_FLAG_BACKWARD: land on nearest keyframe <= target. Good-enough
-  // v1 per INV-SEAM-LATE-SUCCESSOR-JIP-001; frame-accurate seek is a
-  // later refinement (decode-and-discard up to target).
+  // AVSEEK_FLAG_BACKWARD: land on nearest keyframe <= target. Low-level
+  // primitive only; frame-accurate entry requires SeekFrameAccurate.
   const int ret = av_seek_frame(impl_->fmt, impl_->v_idx, seek_pts,
                                 AVSEEK_FLAG_BACKWARD);
   if (ret < 0) return false;
@@ -356,6 +356,44 @@ bool FileSourceProducer::SeekTo(int64_t offset_ms) {
   impl_->v_out.clear();
   impl_->a_out.clear();
   impl_->eof = false;
+  return true;
+}
+
+bool FileSourceProducer::SeekFrameAccurate(int64_t offset_ms) {
+  if (!SeekTo(offset_ms)) return false;
+
+  const int64_t target_us = offset_ms * int64_t{1000};
+
+  // Forward decode-and-discard on video: pump until v_out has a frame;
+  // if its source_pts_us is before the target, discard and keep pumping.
+  // Exit when the front frame is at-or-after target or the stream EOFs.
+  while (true) {
+    while (impl_->v_out.empty() && !impl_->eof) {
+      if (!Pump(impl_.get())) break;
+    }
+    if (impl_->v_out.empty()) return true;  // EOF before target
+    if (impl_->v_out.front().source_pts_us >= target_us) break;
+    impl_->v_out.pop_front();
+  }
+
+  // Audio: discard blocks whose END PTS is strictly before the target,
+  // so the block that straddles the target (if any) is retained. Up to
+  // one block of sample-level slop is accepted; video-frame precision
+  // is the vault contract.
+  while (true) {
+    while (impl_->a_out.empty() && !impl_->eof) {
+      if (!Pump(impl_.get())) break;
+    }
+    if (impl_->a_out.empty()) break;
+    const auto& blk = impl_->a_out.front();
+    const int64_t blk_end_us =
+        blk.source_pts_us +
+        (static_cast<int64_t>(blk.nb_samples) * int64_t{1'000'000}) /
+            std::max(blk.sample_rate, 1);
+    if (blk_end_us >= target_us) break;
+    impl_->a_out.pop_front();
+  }
+
   return true;
 }
 

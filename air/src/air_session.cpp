@@ -508,11 +508,14 @@ void AirSession::EncodeLoop() {
         if (bridge_ms > 0) pad_bridge_ms_total_.fetch_add(bridge_ms);
         in_pad_bridge_ = false;
 
-        // JIP per INV-SEAM-LATE-SUCCESSOR-JIP-001: seek the successor
-        // source to asset_start_offset_ms + lateness_ms so its content
-        // plays its tail inside its own editorial window. Lateness is
-        // the authoritative session-time interval between the
-        // predecessor's fence and the current activation moment.
+        // JIP per INV-SEAM-LATE-SUCCESSOR-JIP-001. Frame-accurate
+        // entry is required: backward keyframe seek + forward decode-
+        // and-discard until the first queued frame is at-or-after
+        // target. Call MUST complete before MarkFired so the seam
+        // does not activate until the successor is positioned. Runs
+        // synchronously on the encode thread; this is a real-time
+        // trade-off for v1 (async pre-seek during pad is a future
+        // optimisation).
         const int64_t fence_mono_us =
             seam_controller_->CurrentTarget()->fence_monotonic_us;
         const int64_t lateness_ms = (now - fence_mono_us) / 1000;
@@ -521,7 +524,7 @@ void AirSession::EncodeLoop() {
         const int64_t jip_offset_ms =
             successor_seg.asset_start_offset_ms + lateness_ms;
         if (successor_rt.source) {
-          successor_rt.source->SeekTo(jip_offset_ms);
+          successor_rt.source->SeekFrameAccurate(jip_offset_ms);
         }
         successor_rt.jip_lateness_ms = lateness_ms;
       } else {

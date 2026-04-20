@@ -59,16 +59,43 @@ class FileSourceProducer : public ISourceProducer {
   ProducerHealth Health() const override;
   ProducerLifecycle Lifecycle() const override;
 
-  // Seek to approximately `offset_ms` into the asset (good-enough v1).
-  // Uses AVSEEK_FLAG_BACKWARD so the seek lands on the nearest preceding
-  // keyframe; decode resumes from there. The first emitted post-seek
-  // frame may therefore be up to one GOP earlier than the requested
-  // offset. Caller is responsible for tolerating this (frame-accurate
-  // JIP is a later refinement). Returns false if the producer is not in
-  // Prepared/Activated lifecycle, has no video stream, or the seek call
-  // itself fails. Used by AirSession to satisfy
-  // INV-SEAM-LATE-SUCCESSOR-JIP-001 on pad-bridge exit.
+  // Low-level backward keyframe seek. Uses AVSEEK_FLAG_BACKWARD so the
+  // seek lands on the nearest preceding keyframe; decode resumes from
+  // there. The first emitted post-seek frame may precede `offset_ms`
+  // by up to one GOP.
+  //
+  // THIS IS AN INTERNAL MECHANISM, NOT A FRAME-ACCURATE ENTRY POINT.
+  // INV-SEAM-LATE-SUCCESSOR-JIP-001 requires frame-accurate entry.
+  // Seam-recovery callers MUST use SeekFrameAccurate (below) instead.
+  //
+  // Returns false if the producer is not in Prepared/Activated lifecycle,
+  // has no video stream, or the seek call itself fails.
   bool SeekTo(int64_t offset_ms);
+
+  // Frame-accurate seek per INV-SEAM-LATE-SUCCESSOR-JIP-001. Performs
+  // backward keyframe seek + forward decode-and-discard until the first
+  // queued video frame's source_pts_us is at-or-after `offset_ms * 1000`.
+  // Discards audio blocks whose end PTS is before the target (up to one
+  // block of slop is acceptable; audio-sample precision is out of scope
+  // for v1 frame-accurate JIP — the invariant's frame contract is on
+  // video presentation timestamps).
+  //
+  // After a successful call, the NEXT PullVideo returns the first
+  // at-or-after-target frame, satisfying the seam entry contract. The
+  // caller (AirSession at pad-bridge exit) MUST NOT activate the seam
+  // until this call returns.
+  //
+  // Runs on the caller's thread (typically the encode thread during
+  // seam fire). Blocks until the target frame is decoded or EOF is
+  // hit. For normal GOP sizes this is sub-100ms; pathological GOP
+  // structures (keyframe-every-10s) could stall longer. This is a
+  // known real-time trade-off for v1; asynchronous pre-seek during
+  // pad bridge is a future optimisation.
+  //
+  // Returns false if SeekTo fails; returns true otherwise, even if
+  // EOF is reached before the target (in which case subsequent
+  // PullVideo returns nullopt — caller sees an empty successor).
+  bool SeekFrameAccurate(int64_t offset_ms);
 
   // Source-format accessors. Valid after Prepare() returns true.
   bool HasVideoStream() const;

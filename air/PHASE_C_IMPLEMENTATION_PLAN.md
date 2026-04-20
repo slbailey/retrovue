@@ -20,7 +20,7 @@
 
 **C2 — inter-block block-to-block seams.** At the fence of the last segment of Block A, AIR transitions to the first segment of Block B (head of queued_blocks_). Mechanically identical to intra-block seam per the truth; the additional action is promoting queued_blocks_.front() to active_block_ (with active_segment_index_ reset to 0). Introduces pull-driven queue refill and the revision/retirement handlers.
 
-**Out of scope for Phase C:** device retune, canonical-changing seams, concurrent priming, JIP disposition (beyond accepting it in the seam payload), admission pacing (fill-thread architecture).
+**Out of scope for Phase C:** device retune, canonical-changing seams, concurrent priming, admission pacing (fill-thread architecture), editorial mid-asset entry (Segment.asset_start_offset_ms > 0 on happy path). Note: late-successor JIP recovery (lateness_ms > 0) is IN scope — implemented in C1.4c per `INV-SEAM-LATE-SUCCESSOR-JIP-001`, with frame-accurate entry required (backward keyframe seek + forward decode-and-discard).
 
 ## New invariants
 
@@ -298,7 +298,7 @@ Single commit. Diff-first discipline per prior vault work. Vault changes are not
 
 - Canonical-changing seams (retune).
 - Concurrent priming (>1 segment at a time).
-- JIP execution (accept the proto field but v1 behavior = start from segment's offset regardless).
+- Editorial mid-asset entry on happy path (Segment.asset_start_offset_ms > 0 with no lateness). Late-successor JIP recovery (lateness_ms > 0) is in scope and implemented in C1.4c with frame-accurate entry.
 - Admission pacing (fill-thread architecture).
 - Real Core integration (Core-side implementation of the pull/push protocol is not AIR's scope).
 - Cross-session state (single-session is still the model).
