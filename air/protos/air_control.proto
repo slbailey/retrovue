@@ -1,0 +1,76 @@
+// AIR vNext — control plane proto.
+//
+// Minimal, vNext-specific. Does NOT reuse runtime/protos/playout.proto —
+// that proto carries legacy preview/live choreography (LoadPreview,
+// SwitchToLive, etc.) which vNext retires.
+//
+// One process = one channel = one session (for now). Device-centric
+// retune is not yet in scope; the proto is shaped so that a future
+// Retune RPC could be added without reshaping StartChannel/StopChannel.
+//
+// Transport: AIR is the gRPC server. Core connects as gRPC client and
+// drives AIR via these RPCs.
+//
+// Byte path: carried out-of-band over a Unix Domain Socket that Core
+// creates and listens on. AIR connects to that UDS on StartChannel per
+// `output_uds_path`. Byte path != gRPC.
+
+syntax = "proto3";
+
+package retrovue.air.v1;
+
+service AirControl {
+  // Start a channel session. Orchestrates three internal phases:
+  //   1. AttachOutput(fd)      — connect to output_uds_path
+  //   2. AssignContent(path)   — build source + normalizer
+  //   3. OpenAir()             — start emission (currently no bootstrap
+  //                              gate; first byte is content because the
+  //                              gate/buffering machinery isn't built yet)
+  // Single session per process. Calling StartChannel while one is active
+  // returns FAILED_PRECONDITION.
+  rpc StartChannel(StartChannelRequest) returns (StartChannelResponse);
+
+  // Stop the currently active channel. Clean shutdown: flush encoder,
+  // close fd, join encode thread. Idempotent (no-op if no session active).
+  rpc StopChannel(StopChannelRequest) returns (StopChannelResponse);
+}
+
+message ChannelCanonical {
+  int32 video_width = 1;
+  int32 video_height = 2;
+  int32 video_fps_num = 3;   // e.g. 30000
+  int32 video_fps_den = 4;   // e.g. 1001
+  int32 audio_sample_rate = 5;  // e.g. 48000
+  int32 audio_channels = 6;     // e.g. 2
+}
+
+message StartChannelRequest {
+  // Informational; for logs/metrics.
+  int32 channel_id = 1;
+
+  // Local path to the media asset to air. MP4 with H.264 + AAC.
+  // In a future BlockPlan slice, this is replaced by a block list.
+  string input_path = 2;
+
+  // Unix Domain Socket path that Core has already bound and is draining.
+  // AIR connects to this as client; MPEG-TS bytes flow from AIR to Core
+  // over this socket.
+  string output_uds_path = 3;
+
+  // Channel canonical parameters (video + audio).
+  ChannelCanonical canonical = 4;
+}
+
+message StartChannelResponse {
+  bool ok = 1;
+  string message = 2;
+}
+
+message StopChannelRequest {
+  int32 channel_id = 1;
+}
+
+message StopChannelResponse {
+  bool ok = 1;
+  string message = 2;
+}
