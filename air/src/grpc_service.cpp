@@ -107,25 +107,12 @@ grpc::Status AirControlServiceImpl::StartChannel(
   }
 
   // 4. AssignContent (phase 2).
-  //
-  // Phase A compatibility: prefer seed_block if provided; otherwise fall back
-  // to the legacy input_path field. In Phase B the queue model will consume
-  // seed_block as the initial active block and expect SupplyBlock calls for
-  // successors. For now the only effect is which string becomes input_path.
-  std::string content_path = request->input_path();
-  ChannelCanonical canonical = BuildCanonicalFromProto(request->canonical());
-  if (request->has_seed_block()) {
-    const auto& seed = request->seed_block();
-    content_path = seed.asset_uri();
-    // seed_block.canonical, when set, overrides the top-level canonical.
-    if (seed.has_canonical()) {
-      canonical = BuildCanonicalFromProto(seed.canonical());
-    }
-  }
-  if (!session_.AssignContent(content_path, canonical)) {
+  const ChannelCanonical canonical = BuildCanonicalFromProto(request->canonical());
+  if (!session_.AssignContent(request->input_path(), canonical)) {
     session_.Close();  // resets fd + unique_ptrs for a clean retry.
     response->set_ok(false);
-    response->set_message("AssignContent failed for input_path=" + content_path);
+    response->set_message("AssignContent failed for input_path=" +
+                          request->input_path());
     return grpc::Status::OK;
   }
 
@@ -190,48 +177,7 @@ grpc::Status AirControlServiceImpl::GetSessionStatus(
   response->set_warming_duration_us(session_.WarmingDurationUs());
   response->set_bootstrap_total_duration_us(session_.BootstrapTotalDurationUs());
   response->set_failed_start_reason(session_.FailedStartReason());
-  // Execution-queue diagnostics (Phase A: placeholders; populated in Phase B+).
-  response->set_queue_depth(session_.HasContent() ? 1 : 0);
-  response->set_pad_bridge_ms_total(0);
-  response->set_seams_executed_total(0);
-  response->set_revisions_accepted_total(0);
-  response->set_revisions_rejected_total(0);
   return grpc::Status::OK;
-}
-
-// --- Execution queue handlers (Phase A: proto surface declared; semantics
-// arrive in Phase B with the queue model and Phase C with SeamController).
-// Stubs return UNIMPLEMENTED so callers see an honest "not yet implemented"
-// rather than a silent success.
-
-grpc::Status AirControlServiceImpl::SupplyBlock(
-    grpc::ServerContext* /*context*/,
-    const retrovue::air::v1::SupplyBlockRequest* /*request*/,
-    retrovue::air::v1::SupplyBlockResponse* response) {
-  response->set_ok(false);
-  response->set_reason("UNIMPLEMENTED_PHASE_A");
-  return grpc::Status(grpc::StatusCode::UNIMPLEMENTED,
-                      "SupplyBlock: Phase A stub — queue model lands in Phase B");
-}
-
-grpc::Status AirControlServiceImpl::PutBlockRevision(
-    grpc::ServerContext* /*context*/,
-    const retrovue::air::v1::PutBlockRevisionRequest* /*request*/,
-    retrovue::air::v1::PutBlockRevisionResponse* response) {
-  response->set_ok(false);
-  response->set_reason("UNIMPLEMENTED_PHASE_A");
-  return grpc::Status(grpc::StatusCode::UNIMPLEMENTED,
-                      "PutBlockRevision: Phase A stub");
-}
-
-grpc::Status AirControlServiceImpl::RetireBlock(
-    grpc::ServerContext* /*context*/,
-    const retrovue::air::v1::RetireBlockRequest* /*request*/,
-    retrovue::air::v1::RetireBlockResponse* response) {
-  response->set_ok(false);
-  response->set_reason("UNIMPLEMENTED_PHASE_A");
-  return grpc::Status(grpc::StatusCode::UNIMPLEMENTED,
-                      "RetireBlock: Phase A stub");
 }
 
 }  // namespace retrovue::air

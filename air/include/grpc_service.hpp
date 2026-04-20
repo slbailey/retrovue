@@ -43,22 +43,6 @@ class AirControlServiceImpl final
       const retrovue::air::v1::GetSessionStatusRequest* request,
       retrovue::air::v1::GetSessionStatusResponse* response) override;
 
-  // --- Execution queue surface (Phase A: stubs returning UNIMPLEMENTED) ---
-  grpc::Status SupplyBlock(
-      grpc::ServerContext* context,
-      const retrovue::air::v1::SupplyBlockRequest* request,
-      retrovue::air::v1::SupplyBlockResponse* response) override;
-
-  grpc::Status PutBlockRevision(
-      grpc::ServerContext* context,
-      const retrovue::air::v1::PutBlockRevisionRequest* request,
-      retrovue::air::v1::PutBlockRevisionResponse* response) override;
-
-  grpc::Status RetireBlock(
-      grpc::ServerContext* context,
-      const retrovue::air::v1::RetireBlockRequest* request,
-      retrovue::air::v1::RetireBlockResponse* response) override;
-
  private:
   std::mutex mu_;
   AirSession session_;
