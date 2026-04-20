@@ -276,12 +276,23 @@ bool AirSession::OpenAir() {
   // structurally (single worker). Hooks mutate BlockRuntime state under
   // queue_mutex_; encode-thread readers of State()/IsPrimed() take the
   // same lock during the seam-readiness callback.
+  test_prime_call_idx_.store(0);
   PrimingPipeline::Hooks hooks;
   hooks.next_raw = [this]() -> std::optional<PrimingRequest> {
     auto req = FindNextRawSegment();
-    const int64_t delay = test_prime_delay_ms_.load();
-    if (req.has_value() && delay > 0) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(delay));
+    if (req.has_value()) {
+      int64_t delay_ms = 0;
+      if (!test_prime_delays_ms_.empty()) {
+        const std::size_t idx = test_prime_call_idx_.fetch_add(1);
+        delay_ms = (idx < test_prime_delays_ms_.size())
+                       ? test_prime_delays_ms_[idx]
+                       : 0;
+      } else {
+        delay_ms = test_prime_delay_ms_.load();
+      }
+      if (delay_ms > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+      }
     }
     return req;
   };
@@ -480,10 +491,13 @@ void AirSession::EncodeLoop() {
     // Seam-commit check. Two paths: pad-bridge exit (install primed
     // successor after a gap) or happy-path direct swap.
     if (seam_controller_->ShouldCommitAt(now)) {
+      const int32_t new_idx = active_segment_index_.load() + 1;
+      auto& successor_rt = active_block_->at(new_idx);
+
       if (in_pad_bridge_) {
-        // Exit pad bridge. Accumulate pad-duration into the channel-PTS
-        // offset so segment 1's fresh (0-based) normalizer output picks
-        // up past the last pad frame's PTS.
+        // Pad PTS advance: pad frames were emitted at channel rate;
+        // their cumulative duration is the right offset advance so the
+        // successor's 0-based normalizer picks up past pad's last PTS.
         channel_pts_offset_us_ +=
             pad_frames_in_current_bridge_ * video_period_us;
         if (pad_source_) pad_source_->Retire();
@@ -493,18 +507,40 @@ void AirSession::EncodeLoop() {
             (now - pad_bridge_start_mono_us_) / 1000;
         if (bridge_ms > 0) pad_bridge_ms_total_.fetch_add(bridge_ms);
         in_pad_bridge_ = false;
+
+        // JIP per INV-SEAM-LATE-SUCCESSOR-JIP-001: seek the successor
+        // source to asset_start_offset_ms + lateness_ms so its content
+        // plays its tail inside its own editorial window. Lateness is
+        // the authoritative session-time interval between the
+        // predecessor's fence and the current activation moment.
+        const int64_t fence_mono_us =
+            seam_controller_->CurrentTarget()->fence_monotonic_us;
+        const int64_t lateness_ms = (now - fence_mono_us) / 1000;
+        const auto& successor_seg =
+            active_block_->block().segments[new_idx];
+        const int64_t jip_offset_ms =
+            successor_seg.asset_start_offset_ms + lateness_ms;
+        if (successor_rt.source) {
+          successor_rt.source->SeekTo(jip_offset_ms);
+        }
+        successor_rt.jip_lateness_ms = lateness_ms;
       } else {
         // Happy path: current segment's normalizer is still live.
+        // Offset advances by (duration − jip_lateness_ms) — for a
+        // non-JIP'd predecessor this equals full duration; for a
+        // JIP'd predecessor, the skipped head is already accounted
+        // for in the pad-exit offset advance and must NOT be double-
+        // counted here.
         const int32_t cur_idx = active_segment_index_.load();
         auto& cur_rt = active_block_->at(cur_idx);
         const int64_t cur_duration_us =
             active_block_->block().segments[cur_idx].duration_ms * 1000;
-        channel_pts_offset_us_ += cur_duration_us;
+        const int64_t jip_adjust_us = cur_rt.jip_lateness_ms * 1000;
+        channel_pts_offset_us_ += (cur_duration_us - jip_adjust_us);
         if (cur_rt.source) cur_rt.source->Retire();
         active_block_->SetState(cur_idx, SegmentPrimeState::kRetired);
       }
 
-      const int32_t new_idx = active_segment_index_.load() + 1;
       active_segment_index_.store(new_idx);
       active_block_->SetState(new_idx, SegmentPrimeState::kActive);
 

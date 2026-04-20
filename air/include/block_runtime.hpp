@@ -46,6 +46,13 @@ struct SegmentRuntime {
   // fires and the encode loop takes over (C1.4a).
   std::unique_ptr<FileSourceProducer> source;
   std::unique_ptr<StandardNormalizer> normalizer;
+  // JIP lateness in ms applied to this segment at seam fire per
+  // INV-SEAM-LATE-SUCCESSOR-JIP-001. Populated when the pad bridge
+  // exits and this segment is entered at asset_start_offset_ms +
+  // jip_lateness_ms. Consumed at the NEXT seam swap so the PTS offset
+  // advances by (duration_ms − jip_lateness_ms), preserving downstream
+  // fence alignment.
+  int64_t jip_lateness_ms = 0;
 };
 
 class BlockRuntime {

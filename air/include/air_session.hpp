@@ -32,6 +32,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "block.hpp"
 #include "block_runtime.hpp"
@@ -176,6 +177,15 @@ class AirSession {
   // OpenAir take effect on subsequent priming decisions.
   void SetTestPrimeDelayMs(int64_t ms) { test_prime_delay_ms_.store(ms); }
 
+  // Test hook (multi-segment): per-prime-call delays. Element i is the
+  // delay applied to the i-th prime invocation; beyond size, delay is 0.
+  // When set to non-empty, takes precedence over SetTestPrimeDelayMs.
+  // Must be set before OpenAir; the worker captures the vector by
+  // reference via `this` and relies on no mutation after start.
+  void SetTestPrimeDelaysMs(std::vector<int64_t> delays) {
+    test_prime_delays_ms_ = std::move(delays);
+  }
+
   // Lifecycle state. Safe to read from any thread.
   SessionState State() const { return state_.load(); }
 
@@ -259,6 +269,8 @@ class AirSession {
   std::atomic<int64_t> pad_bridge_events_total_{0};
   std::atomic<int64_t> pad_bridge_ms_total_{0};
   std::atomic<int64_t> test_prime_delay_ms_{0};
+  std::vector<int64_t> test_prime_delays_ms_;
+  std::atomic<std::size_t> test_prime_call_idx_{0};
   LifecycleObserver lifecycle_observer_;
 
   // ---- Seam controller + priming pipeline ----

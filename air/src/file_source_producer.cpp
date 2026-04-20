@@ -331,6 +331,34 @@ void FileSourceProducer::Retire() {
   lifecycle_ = ProducerLifecycle::kRetired;
 }
 
+bool FileSourceProducer::SeekTo(int64_t offset_ms) {
+  if (lifecycle_ != ProducerLifecycle::kPrepared &&
+      lifecycle_ != ProducerLifecycle::kActivated) {
+    return false;
+  }
+  if (impl_->v_idx < 0 || !impl_->fmt) return false;
+
+  // Convert ms to stream-timebase PTS on the video stream:
+  //   pts = offset_s / tb = offset_ms * tb_den / (tb_num * 1000)
+  const int64_t seek_pts = av_rescale(
+      offset_ms, impl_->v_tb.den, impl_->v_tb.num * int64_t{1000});
+
+  // AVSEEK_FLAG_BACKWARD: land on nearest keyframe <= target. Good-enough
+  // v1 per INV-SEAM-LATE-SUCCESSOR-JIP-001; frame-accurate seek is a
+  // later refinement (decode-and-discard up to target).
+  const int ret = av_seek_frame(impl_->fmt, impl_->v_idx, seek_pts,
+                                AVSEEK_FLAG_BACKWARD);
+  if (ret < 0) return false;
+
+  if (impl_->v_ctx) avcodec_flush_buffers(impl_->v_ctx);
+  if (impl_->a_ctx) avcodec_flush_buffers(impl_->a_ctx);
+
+  impl_->v_out.clear();
+  impl_->a_out.clear();
+  impl_->eof = false;
+  return true;
+}
+
 std::optional<SourceVideoFrame> FileSourceProducer::PullVideo() {
   if (lifecycle_ != ProducerLifecycle::kActivated) return std::nullopt;
   while (impl_->v_out.empty() && !impl_->eof) {

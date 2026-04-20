@@ -330,5 +330,174 @@ TEST(AirSessionSeamIntegrationTest, LateSuccessorEngagesPadBridge) {
   ::unlink(uds.c_str());
 }
 
+// Build an N-segment Block, each segment `duration_ms` long, all pointing
+// at `asset`. start_utc_ms is synthetic but stable.
+Block MakeNSegmentBlock(const std::string& asset, int count,
+                        int64_t duration_ms = 1000) {
+  Block b;
+  b.block_id = "jip-block";
+  b.start_utc_ms = 1'700'000'000'000LL;
+  b.end_utc_ms = b.start_utc_ms + count * duration_ms;
+  b.canonical = CheersCanonical();
+  for (int i = 0; i < count; ++i) {
+    Segment s;
+    s.segment_id = "jip-block:" + std::to_string(i);
+    s.asset_uri = asset;
+    s.asset_start_offset_ms = 0;
+    s.duration_ms = duration_ms;
+    s.segment_index = i;
+    b.segments.push_back(s);
+  }
+  return b;
+}
+
+// 3-segment block. Segment 1 primes 500ms late (pad bridge engages for
+// seam 0→1); segment 2 primes immediately (happy swap for seam 1→2).
+// Validates INV-SEAM-LATE-SUCCESSOR-JIP-001:
+//   - Exactly one pad bridge engages (between seg 0 and seg 1).
+//   - Two seams fire; cursor advances 0 → 1 → 2.
+//   - Seam 1→2 fires at its editorial wall-clock tick, NOT shifted by
+//     the lateness of seg 1. Downstream fences remain sacred.
+//   - Seg 1 plays its tail inside its editorial window (not its head
+//     past the window); seg 2's editorial start aligns with fence 1.
+TEST(AirSessionSeamIntegrationTest, LateSeg1DoesNotRippleIntoSeg2Fence) {
+  const std::string asset = ResolveSampleA();
+  if (!std::filesystem::exists(asset)) {
+    GTEST_SKIP() << "SampleA not found";
+  }
+
+  const std::string uds =
+      "/tmp/air_jip_ripple_" + std::to_string(getpid()) + ".sock";
+  ::unlink(uds.c_str());
+  int listen_fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+  ASSERT_GE(listen_fd, 0);
+  sockaddr_un addr{};
+  addr.sun_family = AF_UNIX;
+  std::strncpy(addr.sun_path, uds.c_str(), sizeof(addr.sun_path) - 1);
+  ASSERT_EQ(::bind(listen_fd, reinterpret_cast<sockaddr*>(&addr),
+                   sizeof(addr)), 0);
+  ASSERT_EQ(::listen(listen_fd, 1), 0);
+
+  std::atomic<bool> reader_running{true};
+  std::thread reader([&]() {
+    int conn = ::accept(listen_fd, nullptr, nullptr);
+    if (conn < 0) return;
+    uint8_t buf[16 * 1024];
+    while (reader_running.load()) {
+      ssize_t n = ::read(conn, buf, sizeof(buf));
+      if (n <= 0) break;
+    }
+    ::close(conn);
+  });
+
+  AirSession session;
+  // Per-prime-call delays. i=0 applies to the prime of segment 1 (1500ms);
+  // i=1 applies to segment 2 (immediate). Single-worker pipeline processes
+  // segments in order, so this cleanly isolates lateness to seam 0→1.
+  session.SetTestPrimeDelaysMs({1500, 0});
+
+  int client_fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+  ASSERT_GE(client_fd, 0);
+  sockaddr_un client_addr{};
+  client_addr.sun_family = AF_UNIX;
+  std::strncpy(client_addr.sun_path, uds.c_str(),
+               sizeof(client_addr.sun_path) - 1);
+  ASSERT_EQ(::connect(client_fd, reinterpret_cast<sockaddr*>(&client_addr),
+                      sizeof(client_addr)), 0);
+  ASSERT_TRUE(session.AttachOutput(client_fd));
+
+  const Block block = MakeNSegmentBlock(asset, 3, /*duration_ms=*/1000);
+  ASSERT_TRUE(session.SeedActiveBlock(block));
+
+  const auto test_start = std::chrono::steady_clock::now();
+  ASSERT_TRUE(session.OpenAir());
+
+  // Wait for OnAir.
+  const auto on_air_deadline = test_start + std::chrono::seconds(5);
+  while (session.State() != SessionState::OnAir &&
+         std::chrono::steady_clock::now() < on_air_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  ASSERT_EQ(session.State(), SessionState::OnAir);
+  const auto on_air_at = std::chrono::steady_clock::now();
+
+  // Wait for pad bridge to engage (fence 0 arrives with seg 1 still priming).
+  const auto bridge_deadline =
+      on_air_at + std::chrono::milliseconds(2000);
+  while (session.PadBridgeEventsTotal() == 0 &&
+         std::chrono::steady_clock::now() < bridge_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  ASSERT_EQ(session.PadBridgeEventsTotal(), 1);
+
+  // Wait for seam 0→1 to fire (pad bridge exits when seg 1 primes).
+  const auto seam1_deadline = on_air_at + std::chrono::milliseconds(3000);
+  while (session.SeamsExecuted() < 1 &&
+         std::chrono::steady_clock::now() < seam1_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  ASSERT_GE(session.SeamsExecuted(), 1);
+  const auto seam1_at = std::chrono::steady_clock::now();
+
+  // Wait for seam 1→2 (fence 1 = editorial 2000ms from OnAir). If JIP
+  // is NOT compensating, seg 2's fence would be delayed by the 500ms
+  // lateness ripple; with JIP, fence 1 fires at its editorial tick.
+  const auto seam2_deadline = on_air_at + std::chrono::milliseconds(4000);
+  while (session.SeamsExecuted() < 2 &&
+         std::chrono::steady_clock::now() < seam2_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  ASSERT_EQ(session.SeamsExecuted(), 2)
+      << "seam 1→2 did not fire within editorial fence window — "
+         "late successor likely rippled into downstream timeline";
+  const auto seam2_at = std::chrono::steady_clock::now();
+
+  // Fence integrity: seam 1→2 fires approximately at editorial
+  // wall-clock 2000ms from OnAir entry. Allow a generous ±300ms slack
+  // for scheduler variability. Without JIP, this would be ~2500ms
+  // (500ms ripple from seg 1 lateness) — the upper bound would be
+  // violated.
+  const int64_t seam2_from_on_air =
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          seam2_at - on_air_at).count();
+  EXPECT_GE(seam2_from_on_air, 1700)
+      << "seam 1→2 fired too early; fence arithmetic suspect";
+  EXPECT_LE(seam2_from_on_air, 2300)
+      << "seam 1→2 fired late (possible lateness ripple from seg 1)";
+
+  // Only one pad bridge — seg 2 should have been primed by its fence,
+  // so no second bridge engages.
+  EXPECT_EQ(session.PadBridgeEventsTotal(), 1)
+      << "second pad bridge engaged — seg 2 missed its fence";
+
+  // Cursor and state progression.
+  EXPECT_EQ(session.ActiveSegmentIndex(), 2);
+  EXPECT_EQ(session.ActiveBlock()->State(0), SegmentPrimeState::kRetired);
+  EXPECT_EQ(session.ActiveBlock()->State(1), SegmentPrimeState::kRetired);
+  EXPECT_EQ(session.ActiveBlock()->State(2), SegmentPrimeState::kActive);
+
+  // Seam 0→1 to seam 1→2 interval: ≈ seg 1 editorial duration
+  // minus lateness_ms ≈ 500ms. With JIP, seg 1 plays its TAIL inside
+  // its editorial window; this is the authoritative proof of no
+  // truncation ripple.
+  const int64_t between_seams_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          seam2_at - seam1_at).count();
+  EXPECT_GE(between_seams_ms, 300)
+      << "seg 1 emitted < 300ms of content (expected ~500ms)";
+  EXPECT_LE(between_seams_ms, 700)
+      << "seg 1 emitted > 700ms of content (expected ~500ms); "
+         "possible non-JIP behavior (full duration played, fence shifted)";
+
+  EXPECT_GT(session.FramesEncoded(), 0);
+  EXPECT_GT(session.BytesWritten(), 0);
+
+  session.Close();
+  reader_running.store(false);
+  reader.join();
+  ::close(listen_fd);
+  ::unlink(uds.c_str());
+}
+
 }  // namespace
 }  // namespace retrovue::air

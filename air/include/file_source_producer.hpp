@@ -59,6 +59,17 @@ class FileSourceProducer : public ISourceProducer {
   ProducerHealth Health() const override;
   ProducerLifecycle Lifecycle() const override;
 
+  // Seek to approximately `offset_ms` into the asset (good-enough v1).
+  // Uses AVSEEK_FLAG_BACKWARD so the seek lands on the nearest preceding
+  // keyframe; decode resumes from there. The first emitted post-seek
+  // frame may therefore be up to one GOP earlier than the requested
+  // offset. Caller is responsible for tolerating this (frame-accurate
+  // JIP is a later refinement). Returns false if the producer is not in
+  // Prepared/Activated lifecycle, has no video stream, or the seek call
+  // itself fails. Used by AirSession to satisfy
+  // INV-SEAM-LATE-SUCCESSOR-JIP-001 on pad-bridge exit.
+  bool SeekTo(int64_t offset_ms);
+
   // Source-format accessors. Valid after Prepare() returns true.
   bool HasVideoStream() const;
   bool HasAudioStream() const;
