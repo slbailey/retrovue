@@ -305,6 +305,122 @@ TEST(SeamControllerTest, ReadinessFromBlockRuntimeDrivesArming) {
   EXPECT_EQ(events[0].kind, SeamEventKind::kArmed);
 }
 
+// ---- C2.2: block-transition flag propagation ------------------------
+
+TEST(SeamControllerTest, IntraBlockSeamReportsIsBlockTransitionFalse) {
+  // Sanity: default intra-block target (from_block == to_block) carries
+  // is_block_transition=false through all emitted events. This is the
+  // happy-path contract that C1 relied on implicitly; C2.2 asserts it
+  // directly.
+  std::vector<SeamEvent> events;
+  SeamController sc({}, [] { return true; });
+  sc.SetEventObserver([&](const SeamEvent& e) { events.push_back(e); });
+  sc.ObserveSeam(IntraTarget("A", 0, 1, 1'000'000));
+
+  sc.Tick(500'000);     // observe → arm
+  sc.Tick(600'000);     // arm → commit
+  sc.Tick(1'000'000);   // commit → firing
+  sc.MarkFired(1'000'000);
+
+  ASSERT_EQ(events.size(), 3u);
+  for (const auto& e : events) {
+    EXPECT_FALSE(e.target.is_block_transition)
+        << "intra-block seam event " << static_cast<int>(e.kind)
+        << " unexpectedly reports is_block_transition=true";
+  }
+}
+
+SeamTarget InterTarget(const std::string& from_block, int from_idx,
+                       const std::string& to_block, int to_idx,
+                       int64_t fence_us) {
+  return SeamTarget{.from_block_id = from_block,
+                    .from_segment_index = from_idx,
+                    .to_block_id = to_block,
+                    .to_segment_index = to_idx,
+                    .fence_monotonic_us = fence_us,
+                    .is_block_transition = true};
+}
+
+TEST(SeamControllerTest, InterBlockSeamPropagatesIsBlockTransitionOnExecuted) {
+  // Primary C2.2 contract: when the caller constructs a SeamTarget with
+  // is_block_transition=true, the kExecuted event carries that flag.
+  std::vector<SeamEvent> events;
+  SeamController sc({}, [] { return true; });
+  sc.SetEventObserver([&](const SeamEvent& e) { events.push_back(e); });
+  sc.ObserveSeam(InterTarget("A", 2, "B", 0, 1'000'000));
+
+  sc.Tick(500'000);
+  sc.Tick(600'000);
+  sc.Tick(1'000'000);
+  sc.MarkFired(1'000'000);
+
+  ASSERT_GE(events.size(), 3u);
+  const auto& executed = events.back();
+  EXPECT_EQ(executed.kind, SeamEventKind::kExecuted);
+  EXPECT_TRUE(executed.target.is_block_transition)
+      << "kExecuted MUST carry is_block_transition=true for inter-block seams";
+  // Full target identity survives the lifecycle.
+  EXPECT_EQ(executed.target.from_block_id, "A");
+  EXPECT_EQ(executed.target.from_segment_index, 2);
+  EXPECT_EQ(executed.target.to_block_id, "B");
+  EXPECT_EQ(executed.target.to_segment_index, 0);
+}
+
+TEST(SeamControllerTest, InterBlockFlagEchoedOnArmedAndCommittedToo) {
+  // Extended contract per SeamTarget doc: the flag is echoed on every
+  // event the controller emits, not only kExecuted. This lets observers
+  // recognise an upcoming block transition in advance (e.g., for
+  // preparing downstream counters).
+  std::vector<SeamEvent> events;
+  SeamController sc({}, [] { return true; });
+  sc.SetEventObserver([&](const SeamEvent& e) { events.push_back(e); });
+  sc.ObserveSeam(InterTarget("A", 2, "B", 0, 1'000'000));
+
+  sc.Tick(500'000);
+  sc.Tick(600'000);
+  sc.Tick(1'000'000);
+  sc.MarkFired(1'000'000);
+
+  int armed_count = 0, committed_count = 0, executed_count = 0;
+  for (const auto& e : events) {
+    switch (e.kind) {
+      case SeamEventKind::kArmed:
+        EXPECT_TRUE(e.target.is_block_transition);
+        ++armed_count;
+        break;
+      case SeamEventKind::kCommitted:
+        EXPECT_TRUE(e.target.is_block_transition);
+        ++committed_count;
+        break;
+      case SeamEventKind::kExecuted:
+        EXPECT_TRUE(e.target.is_block_transition);
+        ++executed_count;
+        break;
+      default:
+        break;
+    }
+  }
+  EXPECT_EQ(armed_count, 1);
+  EXPECT_EQ(committed_count, 1);
+  EXPECT_EQ(executed_count, 1);
+}
+
+TEST(SeamControllerTest, InterBlockRetractPreservesFlagOnDisarmed) {
+  // Disarmed events emit for targets canceled from kObserving or kArmed.
+  // The flag MUST be preserved on the disarmed event so a consumer
+  // observing only event streams can tell what kind of seam was cancelled.
+  std::vector<SeamEvent> events;
+  SeamController sc({}, [] { return false; });
+  sc.SetEventObserver([&](const SeamEvent& e) { events.push_back(e); });
+  sc.ObserveSeam(InterTarget("A", 2, "B", 0, 5'000'000));
+
+  ASSERT_TRUE(sc.Retract("test_cancel"));
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].kind, SeamEventKind::kDisarmed);
+  EXPECT_TRUE(events[0].target.is_block_transition);
+  EXPECT_EQ(events[0].target.to_block_id, "B");
+}
+
 TEST(SeamControllerTest, ResetAfterCompleteAllowsNewObserveSeam) {
   SeamController sc({}, [] { return true; });
   sc.ObserveSeam(IntraTarget("A", 0, 1, 1'000'000));

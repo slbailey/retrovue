@@ -65,8 +65,14 @@ struct SeamTarget {
   // Fence tick in monotonic microseconds. Computed by the caller via
   // segment_fence::SegmentFenceMonotonicUs() (INV-SEAM-FENCE-ARITHMETIC-001).
   int64_t fence_monotonic_us = 0;
-  // C2 flag: set when this seam crosses a Block boundary. Emitted on
-  // seam.executed. For C1 intra-block seams, always false.
+  // Set by the caller when this seam crosses a Block boundary (i.e.,
+  // `from_block_id != to_block_id`, or equivalently: the predecessor
+  // segment is the last of its block and the successor is the first
+  // segment of the next block). The flag is echoed on EVERY event the
+  // controller emits for this target (kArmed, kCommitted, kExecuted,
+  // kPadBridgeStarted, kPadBridgeEnded — and kDisarmed when present),
+  // not only on kExecuted, so observers can recognise an upcoming
+  // block transition in advance. For intra-block seams, false.
   bool is_block_transition = false;
 };
 
