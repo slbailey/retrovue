@@ -394,6 +394,20 @@ bool AirSession::OpenAir() {
   // the session anchor is set, so PositionAndInstallPrimed always sees a
   // valid anchor when computing lateness (C1.H1b ordering invariant).
 
+  // C2.4 pull worker. Only started if a responder has been installed;
+  // otherwise queue refills come only from external SupplyBlock RPCs /
+  // direct AddQueuedBlock calls.
+  if (pull_responder_) {
+    pull_requests_issued_total_.store(0);
+    pull_responses_supplied_total_.store(0);
+    pull_responses_empty_total_.store(0);
+    {
+      std::lock_guard<std::mutex> lk(pull_mu_);
+      pull_stop_ = false;
+    }
+    pull_thread_ = std::thread([this]() { PullWorkerLoop(); });
+  }
+
   encode_thread_ = std::thread([this]() { EncodeLoop(); });
   return true;
 }
@@ -462,15 +476,34 @@ void AirSession::EngagePadBridge() {
   pad_frames_in_current_bridge_ = 0;
   pad_bridge_events_total_.fetch_add(1);
 
-  // Emit seam.pad_bridge_started tied to the current seam target.
+  // Emit seam.pad_bridge_started. For trigger A (late successor) the
+  // SeamController has a target we can attach. For trigger B (queue
+  // empty) there is no target yet; fabricate one from known state so
+  // observers always see a pad_bridge_started with meaningful identity.
+  // to_block_id="" signals "successor unknown at engagement time."
+  SeamTarget event_target;
   if (const auto& target = seam_controller_->CurrentTarget();
       target.has_value()) {
-    EmitSeamEvent(SeamEvent{
-        .kind = SeamEventKind::kPadBridgeStarted,
-        .mono_us = pad_bridge_start_mono_us_,
-        .target = *target,
-    });
+    event_target = *target;
+  } else {
+    const auto& block = active_block_->block();
+    event_target.from_block_id = block.block_id;
+    event_target.from_segment_index = cur_idx;
+    event_target.to_block_id = "";   // unknown at queue-empty engagement
+    event_target.to_segment_index = 0;
+    event_target.is_block_transition = true;
+    const auto fence = SegmentFenceMonotonicUs(
+        block, cur_idx,
+        SessionAnchor{
+            .anchor_monotonic_us = anchor_monotonic_us_.load(),
+            .anchor_utc_ms = anchor_utc_ms_.load()});
+    event_target.fence_monotonic_us = fence.value_or(0);
   }
+  EmitSeamEvent(SeamEvent{
+      .kind = SeamEventKind::kPadBridgeStarted,
+      .mono_us = pad_bridge_start_mono_us_,
+      .target = event_target,
+  });
 }
 
 void AirSession::ObserveNextSeam() {
@@ -507,6 +540,71 @@ void AirSession::ObserveNextSeam() {
   }
 
   seam_controller_->ObserveSeam(target);
+}
+
+void AirSession::PullWorkerLoop() {
+  // Structural single-outstanding per INV-PULL-SINGLE-OUTSTANDING-001:
+  // only this thread calls the responder, synchronously, and there's
+  // one thread. No in-flight atomic needed.
+  //
+  // Loop body: poll queue depth under queue_mutex_; if below target,
+  // capture predecessor id and release lock; invoke responder; if it
+  // returned a Block, enqueue via AddQueuedBlock; if empty, back off.
+  constexpr std::chrono::milliseconds kEmptyBackoff{50};
+  constexpr std::chrono::milliseconds kAtTargetPoll{100};
+  while (true) {
+    {
+      std::unique_lock<std::mutex> lk(pull_mu_);
+      if (pull_stop_) return;
+    }
+
+    std::string predecessor_id;
+    bool below_target = false;
+    {
+      std::lock_guard<std::mutex> lk(queue_mutex_);
+      int32_t depth = 0;
+      if (active_block_.has_value()) ++depth;
+      depth += static_cast<int32_t>(queued_blocks_.size());
+      if (depth < pull_target_depth_ && active_block_.has_value()) {
+        below_target = true;
+        predecessor_id = queued_blocks_.empty()
+                             ? active_block_->block_id()
+                             : queued_blocks_.back().block_id();
+      }
+    }
+
+    if (!below_target) {
+      std::unique_lock<std::mutex> lk(pull_mu_);
+      pull_cv_.wait_for(lk, kAtTargetPoll, [this] { return pull_stop_; });
+      if (pull_stop_) return;
+      continue;
+    }
+
+    // Issue pull. Responder call is synchronous; enforces the single-
+    // outstanding invariant structurally (one thread, synchronous call).
+    pull_requests_issued_total_.fetch_add(1);
+    std::optional<Block> supplied;
+    try {
+      supplied = pull_responder_ ? pull_responder_(predecessor_id)
+                                 : std::nullopt;
+    } catch (...) {
+      supplied = std::nullopt;  // responder threw; treat as empty
+    }
+
+    if (supplied.has_value()) {
+      pull_responses_supplied_total_.fetch_add(1);
+      std::string reason;
+      AddQueuedBlock(*supplied, predecessor_id, &reason);
+      // If AddQueuedBlock rejected, we silently continue; reason codes
+      // are for the RPC-admission path and C2.5's revision/retirement
+      // policy surface, not for the pull-loop to interpret at this slice.
+    } else {
+      pull_responses_empty_total_.fetch_add(1);
+      std::unique_lock<std::mutex> lk(pull_mu_);
+      pull_cv_.wait_for(lk, kEmptyBackoff, [this] { return pull_stop_; });
+      if (pull_stop_) return;
+    }
+  }
 }
 
 void AirSession::PromoteActiveBlock() {
@@ -703,14 +801,53 @@ void AirSession::EncodeLoop() {
   while (!stopping_.load()) {
     const int64_t now = MonoUs();
 
-    // Pad-bridge engagement detection: fence passed + controller still
-    // observing (successor not primed in time). Happens at most once per
-    // seam; in_pad_bridge_ guards re-entry.
-    if (!in_pad_bridge_ && seam_controller_->Phase() == SeamPhase::kObserving) {
-      const auto& target = seam_controller_->CurrentTarget();
-      if (target.has_value() && now >= target->fence_monotonic_us) {
-        EngagePadBridge();
+    // Pad-bridge engagement. Two trigger paths; same emission mode:
+    //
+    //   Trigger A (late successor): SeamController has an observing
+    //   target whose fence has passed but whose successor is not yet
+    //   primed. Engage pad to cover the gap.
+    //
+    //   Trigger B (queue empty at last fence): per
+    //   INV-PLAYBACK-QUEUE-EMPTY-PAD-BRIDGE-001. SeamController is
+    //   idle (no target armed because ObserveNextSeam returned early
+    //   on an empty queue), cursor is on the last segment of the
+    //   active block, and that segment's fence has passed. Pad
+    //   MUST emit indefinitely until a successor Block is supplied.
+    //
+    // Both triggers call EngagePadBridge which retires the current
+    // segment and starts the pad source+normalizer. Exit in both cases
+    // goes through the same seam-fire path once a seam arms+commits
+    // (Trigger A: readiness flips; Trigger B: queue fills via pull or
+    // external SupplyBlock, ObserveNextSeam arms, readiness flips).
+    if (!in_pad_bridge_) {
+      const auto phase = seam_controller_->Phase();
+      if (phase == SeamPhase::kObserving) {
+        const auto& target = seam_controller_->CurrentTarget();
+        if (target.has_value() && now >= target->fence_monotonic_us) {
+          EngagePadBridge();  // trigger A
+        }
+      } else if (phase == SeamPhase::kIdle && active_block_.has_value()) {
+        const int32_t cur = active_segment_index_.load();
+        const auto& block = active_block_->block();
+        if (IsLastSegmentOfBlock(block, cur)) {
+          const auto fence = SegmentFenceMonotonicUs(
+              block, cur,
+              SessionAnchor{
+                  .anchor_monotonic_us = anchor_monotonic_us_.load(),
+                  .anchor_utc_ms = anchor_utc_ms_.load()});
+          if (fence.has_value() && now >= *fence) {
+            EngagePadBridge();  // trigger B
+          }
+        }
       }
+    }
+
+    // Retry arming while in queue-empty pad. Once queued_blocks_ fills
+    // (via pull loop or external SupplyBlock), ObserveNextSeam succeeds
+    // and the seam arms; the late-successor exit path (shared with
+    // trigger A) then fires the seam when readiness completes.
+    if (in_pad_bridge_ && seam_controller_->Phase() == SeamPhase::kIdle) {
+      ObserveNextSeam();
     }
 
     // Seam-commit check. Two paths: pad-bridge exit or happy-path
@@ -854,6 +991,20 @@ void AirSession::Close() {
     TransitionTo(SessionState::Stopping, "close");
   }
   stopping_.store(true);
+  // Stop pull worker BEFORE the encode thread joins. Pull worker calls
+  // AddQueuedBlock, which takes queue_mutex_; encode thread also takes
+  // queue_mutex_. Joining in this order avoids deadlock via ordering
+  // discipline (pull worker holds queue_mutex_ only briefly; encode
+  // thread never holds it across blocking operations).
+  {
+    std::lock_guard<std::mutex> lk(pull_mu_);
+    pull_stop_ = true;
+    pull_cv_.notify_all();
+  }
+  if (pull_thread_.joinable()) {
+    pull_thread_.join();
+  }
+
   if (encode_thread_.joinable()) {
     encode_thread_.join();
   }

@@ -24,6 +24,7 @@
 #define AIR_AIR_SESSION_HPP_
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -99,6 +100,16 @@ struct SegmentFailedEvent {
 };
 
 using SegmentFailedObserver = std::function<void(const SegmentFailedEvent&)>;
+
+// Pull-loop responder (C2.4). Called by AirSession's pull worker thread
+// to request the successor of `predecessor_block_id` from the supply
+// source. Returning nullopt means "no successor available right now"
+// (worker backs off and retries); returning a Block delivers it into the
+// execution queue. In production this would be a gRPC client stub for
+// Core's GetSuccessorOf; in tests it is a direct callable. AirSession
+// owns the contract; concrete client wiring is out of scope for C2.4.
+using PullResponder =
+    std::function<std::optional<Block>(const std::string& predecessor_block_id)>;
 
 class AirSession {
  public:
@@ -200,6 +211,20 @@ class AirSession {
     return block_transitions_total_.load();
   }
 
+  // Pull-loop diagnostics (C2.4). Counters for pull requests issued by
+  // AirSession's pull worker, requests that returned a Block (supplied),
+  // and requests that returned nullopt (empty). Single-outstanding per
+  // INV-PULL-SINGLE-OUTSTANDING-001; structural (single worker thread).
+  int64_t PullRequestsIssuedTotal() const {
+    return pull_requests_issued_total_.load();
+  }
+  int64_t PullResponsesSuppliedTotal() const {
+    return pull_responses_supplied_total_.load();
+  }
+  int64_t PullResponsesEmptyTotal() const {
+    return pull_responses_empty_total_.load();
+  }
+
   // Pad-bridge diagnostics. A pad bridge is engaged (C1.4b) when a
   // segment fence arrives before the successor segment is primed. Count
   // is distinct events; ms is cumulative time in pad.
@@ -221,6 +246,20 @@ class AirSession {
   void SetTestPrimeDelaysMs(std::vector<int64_t> delays) {
     test_prime_delays_ms_ = std::move(delays);
   }
+
+  // Install a pull responder (C2.4). Optional; if not set, the pull
+  // worker is NOT started at OpenAir and queue refills come only from
+  // external SupplyBlock RPCs / direct AddQueuedBlock calls. Setting
+  // this turns on demand-driven pull: the worker polls queue depth and,
+  // when below the configured target, invokes the responder with the
+  // current last-block id and enqueues any returned Block. Must be set
+  // before OpenAir.
+  void SetPullResponder(PullResponder r) { pull_responder_ = std::move(r); }
+
+  // Configure pull-loop target queue depth in Blocks (counting the
+  // active block as depth 1). Default: 2 (= active + 1 queued). Set
+  // before OpenAir; mid-session changes take effect on the next poll.
+  void SetPullTargetDepth(int depth) { pull_target_depth_ = depth; }
 
   // Lifecycle state. Safe to read from any thread.
   SessionState State() const { return state_.load(); }
@@ -311,6 +350,17 @@ class AirSession {
   LifecycleObserver lifecycle_observer_;
   SeamEventObserver seam_event_observer_;
   SegmentFailedObserver segment_failed_observer_;
+
+  // ---- Pull loop (C2.4) ------------------------------------------
+  PullResponder pull_responder_;
+  int pull_target_depth_ = 2;
+  std::thread pull_thread_;
+  std::mutex pull_mu_;
+  std::condition_variable pull_cv_;
+  bool pull_stop_ = false;
+  std::atomic<int64_t> pull_requests_issued_total_{0};
+  std::atomic<int64_t> pull_responses_supplied_total_{0};
+  std::atomic<int64_t> pull_responses_empty_total_{0};
 
   // ---- Seam controller + priming pipeline ----
   // SeamController (C1.4a): owns seam lifecycle; driven by the encode
@@ -435,6 +485,15 @@ class AirSession {
   // queue_mutex_ hold so external observers see the transition as one
   // state change. Pre: queued_blocks_ is non-empty. Encode thread only.
   void PromoteActiveBlock();
+
+  // Pull worker loop (C2.4). Polls queue depth; when depth <
+  // pull_target_depth_ AND no in-flight request, invokes pull_responder_
+  // with the id of the current last block (active if queue empty,
+  // queued_blocks_.back() otherwise). On supplied Block, calls
+  // AddQueuedBlock. On empty response, backs off briefly. Single
+  // outstanding invariant per INV-PULL-SINGLE-OUTSTANDING-001 is
+  // structural (single worker thread).
+  void PullWorkerLoop();
 
   // Emit a seam event (pad-bridge events in C1; potentially more later)
   // through the observer. No-op if no observer installed.
