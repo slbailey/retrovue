@@ -98,6 +98,17 @@ void AirSession::FailSegment(BlockRuntime& rt, int32_t segment_index,
   }
 }
 
+BlockRuntime* AirSession::FindBlockRuntimeByIdLocked(
+    const std::string& block_id) {
+  if (active_block_.has_value() && active_block_->block_id() == block_id) {
+    return &*active_block_;
+  }
+  for (auto& qb : queued_blocks_) {
+    if (qb.block_id() == block_id) return &qb;
+  }
+  return nullptr;
+}
+
 void AirSession::TransitionTo(SessionState to, const char* reason_class) {
   const SessionState from = state_.exchange(to);
   if (from == to) return;  // no-op
@@ -302,11 +313,17 @@ bool AirSession::OpenAir() {
       [this]() -> bool {
         std::lock_guard<std::mutex> lk(queue_mutex_);
         if (!active_block_.has_value()) return false;
-        const int32_t next = active_segment_index_.load() + 1;
-        if (next >= static_cast<int32_t>(active_block_->segment_count())) {
-          return false;
+        const int32_t cur = active_segment_index_.load();
+        const auto& block = active_block_->block();
+        // Intra-block readiness: successor is next segment within
+        // active block.
+        if (!IsLastSegmentOfBlock(block, cur)) {
+          return active_block_->IsPrimed(cur + 1);
         }
-        return active_block_->IsPrimed(next);
+        // Inter-block readiness (C2.3): successor is queued_blocks_
+        // .front().segments[0]. Queue-empty → not ready.
+        if (queued_blocks_.empty()) return false;
+        return queued_blocks_.front().IsPrimed(0);
       });
   if (seam_event_observer_) {
     seam_controller_->SetEventObserver(seam_event_observer_);
@@ -338,21 +355,21 @@ bool AirSession::OpenAir() {
   };
   hooks.on_priming = [this](const std::string& block_id, int32_t idx) {
     std::lock_guard<std::mutex> lk(queue_mutex_);
-    if (active_block_.has_value() && active_block_->block_id() == block_id) {
-      active_block_->SetState(idx, SegmentPrimeState::kPriming);
+    if (auto* br = FindBlockRuntimeByIdLocked(block_id)) {
+      br->SetState(idx, SegmentPrimeState::kPriming);
     }
   };
   hooks.on_primed = [this](PrimedSegment primed) {
     // C1.H1b: position frame-accurately BEFORE publishing as kPrimed.
     // The helper handles lock discipline, target computation, and the
-    // seek+install atomic unit.
+    // seek+install atomic unit. C2.3: supports queued-block segments too.
     PositionAndInstallPrimed(std::move(primed));
   };
   hooks.on_failed = [this](const std::string& block_id, int32_t idx,
                            const std::string& reason) {
     std::lock_guard<std::mutex> lk(queue_mutex_);
-    if (active_block_.has_value() && active_block_->block_id() == block_id) {
-      FailSegment(*active_block_, idx, reason);
+    if (auto* br = FindBlockRuntimeByIdLocked(block_id)) {
+      FailSegment(*br, idx, reason);
     }
   };
   priming_pipeline_ = std::make_unique<PrimingPipeline>(std::move(hooks));
@@ -362,6 +379,7 @@ bool AirSession::OpenAir() {
   warming_duration_us_.store(-1);
   bootstrap_total_duration_us_.store(-1);
   seams_executed_.store(0);
+  block_transitions_total_.store(0);
   pad_bridge_events_total_.store(0);
   pad_bridge_ms_total_.store(0);
   channel_pts_offset_us_ = 0;
@@ -383,19 +401,36 @@ bool AirSession::OpenAir() {
 std::optional<PrimingRequest> AirSession::FindNextRawSegment() {
   std::lock_guard<std::mutex> lk(queue_mutex_);
   if (!active_block_.has_value()) return std::nullopt;
-  const auto& block = active_block_->block();
+
+  auto build_request = [this](const BlockRuntime& br,
+                              int32_t seg_idx) -> PrimingRequest {
+    const auto& b = br.block();
+    PrimingRequest r;
+    r.block_id = b.block_id;
+    r.segment_index = seg_idx;
+    r.asset_uri = b.segments[seg_idx].asset_uri;
+    r.asset_start_offset_ms = b.segments[seg_idx].asset_start_offset_ms;
+    r.canonical = b.canonical;
+    r.samples_per_channel_audio_block = audio_samples_per_block_;
+    return r;
+  };
+
+  // Scan active block first (segments after the cursor).
   const int32_t start = active_segment_index_.load() + 1;
   for (int32_t i = start;
        i < static_cast<int32_t>(active_block_->segment_count()); ++i) {
     if (active_block_->State(i) == SegmentPrimeState::kRaw) {
-      PrimingRequest r;
-      r.block_id = block.block_id;
-      r.segment_index = i;
-      r.asset_uri = block.segments[i].asset_uri;
-      r.asset_start_offset_ms = block.segments[i].asset_start_offset_ms;
-      r.canonical = block.canonical;
-      r.samples_per_channel_audio_block = audio_samples_per_block_;
-      return r;
+      return build_request(*active_block_, i);
+    }
+  }
+  // Then scan queued blocks in order (C2.3). Single-worker discipline
+  // per INV-PLAYBACK-PRIMING-SINGLE-001 is preserved: at most one
+  // kPriming exists globally, regardless of which Block owns it.
+  for (const auto& qb : queued_blocks_) {
+    for (int32_t i = 0; i < static_cast<int32_t>(qb.segment_count()); ++i) {
+      if (qb.State(i) == SegmentPrimeState::kRaw) {
+        return build_request(qb, i);
+      }
     }
   }
   return std::nullopt;
@@ -439,89 +474,153 @@ void AirSession::EngagePadBridge() {
 }
 
 void AirSession::ObserveNextSeam() {
+  // C2.3: produces intra-block OR inter-block SeamTargets depending on
+  // whether active_segment_index_ is the last of active_block_ and
+  // whether queued_blocks_ has a successor to transition into.
   const int32_t from_idx = active_segment_index_.load();
-  const int32_t to_idx = from_idx + 1;
   const auto& block = active_block_->block();
-  const auto fence_us = SegmentFenceMonotonicUs(
-      block, from_idx,
-      SessionAnchor{.anchor_monotonic_us = anchor_monotonic_us_.load(),
-                    .anchor_utc_ms = anchor_utc_ms_.load()});
-  if (!fence_us.has_value()) return;  // no next segment / out-of-range
-  seam_controller_.get()->ObserveSeam(SeamTarget{
-      .from_block_id = block.block_id,
-      .from_segment_index = from_idx,
-      .to_block_id = block.block_id,
-      .to_segment_index = to_idx,
-      .fence_monotonic_us = *fence_us,
-      .is_block_transition = false,
-  });
+  const SessionAnchor anchor{
+      .anchor_monotonic_us = anchor_monotonic_us_.load(),
+      .anchor_utc_ms = anchor_utc_ms_.load()};
+  const auto fence_us = SegmentFenceMonotonicUs(block, from_idx, anchor);
+  if (!fence_us.has_value()) return;
+
+  SeamTarget target;
+  target.from_block_id = block.block_id;
+  target.from_segment_index = from_idx;
+  target.fence_monotonic_us = *fence_us;
+
+  if (IsLastSegmentOfBlock(block, from_idx)) {
+    // Inter-block: needs a queued successor to target. If queue is
+    // empty, no seam is armed; the active segment plays to its fence
+    // and the session follows natural EOF or (C2.x) queue-empty pad
+    // bridge semantics. That queue-empty case is deferred.
+    std::lock_guard<std::mutex> lk(queue_mutex_);
+    if (queued_blocks_.empty()) return;
+    target.to_block_id = queued_blocks_.front().block_id();
+    target.to_segment_index = 0;
+    target.is_block_transition = true;
+  } else {
+    target.to_block_id = block.block_id;
+    target.to_segment_index = from_idx + 1;
+    target.is_block_transition = false;
+  }
+
+  seam_controller_->ObserveSeam(target);
+}
+
+void AirSession::PromoteActiveBlock() {
+  // INV-PLAYBACK-BLOCK-PROMOTION-ATOMIC-001: pop queued_blocks_.front(),
+  // install as active_block_, reset cursor, all inside one lock hold so
+  // the transition is observable as a single state change. Pre: queue
+  // non-empty. Encode thread only (called from seam-fire branch).
+  std::lock_guard<std::mutex> lk(queue_mutex_);
+  if (queued_blocks_.empty()) return;  // defensive; shouldn't happen
+  BlockRuntime next = std::move(queued_blocks_.front());
+  queued_blocks_.pop_front();
+  // Assigning to the std::optional<BlockRuntime> destroys the previous
+  // BlockRuntime (releasing any remaining source/normalizer) and moves
+  // the new one in. No intermediate "empty" observable state because
+  // the entire window is under queue_mutex_.
+  active_block_ = std::move(next);
+  active_segment_index_.store(0);
+  block_transitions_total_.fetch_add(1);
 }
 
 void AirSession::PositionAndInstallPrimed(PrimedSegment primed) {
-  // Compute positioning target under lock (read block + anchor atomics),
-  // then release lock for the long SeekFrameAccurate call, then reacquire
-  // for publish. Priming worker thread is the sole owner of `primed` for
-  // the duration of this call; no one else reads its source/normalizer
-  // until it's installed and state flips to kPrimed.
+  // C1.H1b: compute positioning target under lock, release lock for the
+  // long SeekFrameAccurate call, reacquire for publish. Priming worker
+  // thread is the sole owner of `primed` for the duration of this call;
+  // no one else reads its source/normalizer until it's installed.
   //
-  // NOTE: active_block_ is set at SeedActiveBlock (pre-OpenAir) and cleared
-  // only after the priming worker joins in Close(). So during this call
-  // active_block_ is stable; the early-return stale-check is defensive.
+  // C2.3: `primed` may belong to active_block_ OR any queued_blocks_[j].
+  // Predecessor fence resolution depends on owner location:
+  //   - segment k>0 of any block → predecessor is segments[k-1] of the
+  //     same block.
+  //   - segment 0 of active_block_ → no predecessor (sync-primed by
+  //     SeedActiveBlock; this async path is defensive for that case).
+  //   - segment 0 of queued_blocks_[0] → predecessor is the last segment
+  //     of active_block_.
+  //   - segment 0 of queued_blocks_[j>0] → predecessor is the last
+  //     segment of queued_blocks_[j-1].
+  //
+  // Between the two lock holds, the queue can be promoted: a block moves
+  // from queued_blocks_.front() into active_block_. The block_id is
+  // stable through that move, so FindBlockRuntimeByIdLocked on the
+  // second acquire still locates the same SegmentRuntime vector — just
+  // at a different slot. No race hazard; publishing always lands in the
+  // correct owner.
+  const std::string block_id = primed.block_id;
+  const int32_t segment_index = primed.segment_index;
+
   int64_t target_ms = 0;
   int64_t lateness_ms = 0;
   {
     std::lock_guard<std::mutex> lk(queue_mutex_);
-    if (!active_block_.has_value() ||
-        active_block_->block_id() != primed.block_id) {
-      return;  // session changed under us; discard silently
-    }
-    const int32_t idx = primed.segment_index;
+    auto* owner = FindBlockRuntimeByIdLocked(block_id);
+    if (!owner) return;  // session changed / block retired
+
+    const auto& block = owner->block();
     const int64_t asset_offset =
-        active_block_->block().segments[idx].asset_start_offset_ms;
-    const int32_t pred_idx = idx - 1;
-    if (pred_idx < 0) {
-      // Segment 0 — no predecessor fence. Position at editorial offset
-      // with no lateness. In practice segment 0 is primed synchronously
-      // via PrimeSegmentSync; this branch is defensive.
+        block.segments[segment_index].asset_start_offset_ms;
+
+    // Resolve predecessor fence.
+    const SessionAnchor anchor{
+        .anchor_monotonic_us = anchor_monotonic_us_.load(),
+        .anchor_utc_ms = anchor_utc_ms_.load()};
+    std::optional<int64_t> pred_fence_mono;
+    if (segment_index > 0) {
+      // Same-block predecessor.
+      pred_fence_mono = SegmentFenceMonotonicUs(block, segment_index - 1,
+                                                anchor);
+    } else {
+      // segment 0: predecessor is in a preceding block.
+      const Block* pred_block = nullptr;
+      if (owner == &*active_block_) {
+        // Seed block seg 0 — no predecessor. Handled by the
+        // "no predecessor → lateness=0" branch below.
+      } else {
+        // Find which queued slot `owner` occupies.
+        for (std::size_t j = 0; j < queued_blocks_.size(); ++j) {
+          if (&queued_blocks_[j] == owner) {
+            if (j == 0) {
+              pred_block = &active_block_->block();
+            } else {
+              pred_block = &queued_blocks_[j - 1].block();
+            }
+            break;
+          }
+        }
+      }
+      if (pred_block != nullptr) {
+        pred_fence_mono = BlockFinalFenceMonotonicUs(*pred_block, anchor);
+      }
+    }
+
+    if (!pred_fence_mono.has_value()) {
+      // No predecessor (seed block seg 0, or arithmetic failure). Enter
+      // at editorial offset with zero lateness.
       target_ms = asset_offset;
       lateness_ms = 0;
     } else {
-      const auto fence_mono = SegmentFenceMonotonicUs(
-          active_block_->block(), pred_idx,
-          SessionAnchor{.anchor_monotonic_us = anchor_monotonic_us_.load(),
-                        .anchor_utc_ms = anchor_utc_ms_.load()});
-      if (!fence_mono.has_value()) return;  // arithmetic failure; bail
       const int64_t now = MonoUs();
-      // Clamp at 0: pre-fence primes have negative "lateness" which is
-      // semantically zero (not late).
-      lateness_ms = std::max<int64_t>(0, (now - *fence_mono) / 1000);
+      lateness_ms = std::max<int64_t>(0, (now - *pred_fence_mono) / 1000);
       target_ms = asset_offset + lateness_ms;
     }
   }
 
-  // Seek without holding the lock. This is the slow step (tens to
-  // hundreds of milliseconds for typical GOPs). Encode thread's
-  // readiness callback may briefly block on queue_mutex_ if it checks
-  // during the publish step below, but not during the seek itself.
   const bool positioned = primed.source->SeekFrameAccurate(target_ms);
 
-  // Publish under lock.
   std::lock_guard<std::mutex> lk(queue_mutex_);
-  if (!active_block_.has_value() ||
-      active_block_->block_id() != primed.block_id) {
-    return;
-  }
+  auto* owner = FindBlockRuntimeByIdLocked(block_id);
+  if (!owner) return;  // block retired under us
+
   if (!positioned) {
-    // C1.H1a semantics at prime time: successor cannot be positioned.
-    // Mark kFailed; seam will never arm because readiness returns false
-    // for non-kPrimed segments. Pad bridge (if/when engaged) continues
-    // indefinitely until session stops or another source appears.
-    FailSegment(*active_block_, primed.segment_index, "SEEK_PAST_EOF");
+    FailSegment(*owner, segment_index, "SEEK_PAST_EOF");
     return;
   }
-  const int32_t idx = primed.segment_index;
-  active_block_->InstallPrimed(idx, std::move(primed));
-  active_block_->at(idx).jip_lateness_ms = lateness_ms;
+  owner->InstallPrimed(segment_index, std::move(primed));
+  owner->at(segment_index).jip_lateness_ms = lateness_ms;
 }
 
 void AirSession::FailStart(const char* reason_class) {
@@ -590,10 +689,11 @@ void AirSession::EncodeLoop() {
   // non-zero anchor when it runs. Kick is cheap and idempotent.
   if (priming_pipeline_) priming_pipeline_->Kick();
 
-  // If more than one segment, arm the first seam (0→1).
-  if (active_block_->segment_count() >= 2) {
-    ObserveNextSeam();
-  }
+  // Arm the first seam. ObserveNextSeam handles all three cases:
+  //   - intra-block (active block has more segments after cursor),
+  //   - inter-block (cursor at last-of-active + queued_blocks non-empty),
+  //   - no-op (cursor at last-of-active + queued empty, nothing to arm).
+  ObserveNextSeam();
 
   TransitionTo(SessionState::OnAir, "first_emit");
 
@@ -621,12 +721,21 @@ void AirSession::EncodeLoop() {
     // readiness can return true, so ShouldCommitAt never fires for
     // an un-positioned successor.
     if (seam_controller_->ShouldCommitAt(now)) {
-      const int32_t new_idx = active_segment_index_.load() + 1;
-      auto& successor_rt = active_block_->at(new_idx);
+      // Three orthogonal decisions at seam fire:
+      //   1. Pad-exit vs happy-path (depends on in_pad_bridge_).
+      //   2. Inter-block vs intra-block (depends on
+      //      SeamController target's is_block_transition flag, set by
+      //      ObserveNextSeam per IsLastSegmentOfBlock + queue state).
+      //   3. Offset-advance accounting (predecessor segment duration
+      //      minus any JIP lateness).
+      const bool is_block_transition =
+          seam_controller_->CurrentTarget().has_value() &&
+          seam_controller_->CurrentTarget()->is_block_transition;
 
       if (in_pad_bridge_) {
         // Pad-exit: retire pad, advance offset by pad-emitted channel
-        // time, clear bridge state. Successor is already positioned.
+        // time, clear bridge state. Successor is already positioned
+        // (possibly in queued_blocks_.front() if inter-block).
         channel_pts_offset_us_ +=
             pad_frames_in_current_bridge_ * video_period_us;
         if (pad_source_) pad_source_->Retire();
@@ -636,9 +745,7 @@ void AirSession::EncodeLoop() {
             (now - pad_bridge_start_mono_us_) / 1000;
         if (bridge_ms > 0) pad_bridge_ms_total_.fetch_add(bridge_ms);
         in_pad_bridge_ = false;
-        // successor_rt.jip_lateness_ms was set at prime time; keep it.
 
-        // Emit seam.pad_bridge_ended tied to the current seam target.
         if (const auto& target = seam_controller_->CurrentTarget();
             target.has_value()) {
           EmitSeamEvent(SeamEvent{
@@ -649,12 +756,8 @@ void AirSession::EncodeLoop() {
           });
         }
       } else {
-        // Happy path: current segment's normalizer is still live.
-        // Offset advances by (duration − jip_lateness_ms) — for a
-        // non-JIP'd predecessor this equals full duration; for a
-        // JIP'd predecessor, the skipped head is already accounted
-        // for in the pad-exit offset advance and must NOT be double-
-        // counted here.
+        // Happy path: predecessor segment's source is live and we're
+        // retiring it. Offset advances by (duration − jip_lateness_ms).
         const int32_t cur_idx = active_segment_index_.load();
         auto& cur_rt = active_block_->at(cur_idx);
         const int64_t cur_duration_us =
@@ -665,18 +768,32 @@ void AirSession::EncodeLoop() {
         active_block_->SetState(cur_idx, SegmentPrimeState::kRetired);
       }
 
-      active_segment_index_.store(new_idx);
-      active_block_->SetState(new_idx, SegmentPrimeState::kActive);
+      // Successor installation — two paths.
+      if (is_block_transition) {
+        // INV-PLAYBACK-BLOCK-PROMOTION-ATOMIC-001: atomic promotion of
+        // queued_blocks_.front() to active_block_, cursor reset. The
+        // BlockRuntime move preserves the SegmentRuntime vector so the
+        // (pre-positioned, primed) segment 0 carries over to the new
+        // active slot without re-priming.
+        PromoteActiveBlock();
+        // After PromoteActiveBlock: active_segment_index_ == 0 and the
+        // new active_block_->at(0) holds the primed source+normalizer
+        // that was just queued. Mark it kActive.
+        active_block_->SetState(0, SegmentPrimeState::kActive);
+      } else {
+        // Intra-block: cursor advances within active block.
+        const int32_t new_idx = active_segment_index_.load() + 1;
+        active_segment_index_.store(new_idx);
+        active_block_->SetState(new_idx, SegmentPrimeState::kActive);
+      }
 
       seam_controller_->MarkFired(now);
       seams_executed_.fetch_add(1);
       seam_controller_->Reset();
 
-      // Arm next seam if another segment follows.
-      if (new_idx + 1 <
-          static_cast<int32_t>(active_block_->segment_count())) {
-        ObserveNextSeam();
-      }
+      // Arm next seam unconditionally; ObserveNextSeam handles all
+      // cases (intra-block, inter-block, nothing-to-arm).
+      ObserveNextSeam();
     }
 
     // Source of frames: pad during bridge, else the active segment's
@@ -785,6 +902,7 @@ void AirSession::Close() {
   warmup_audio_.clear();
   frames_encoded_.store(0);
   seams_executed_.store(0);
+  block_transitions_total_.store(0);
   pad_bridge_events_total_.store(0);
   pad_bridge_ms_total_.store(0);
   stopping_.store(false);

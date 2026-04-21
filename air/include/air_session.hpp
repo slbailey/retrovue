@@ -192,6 +192,14 @@ class AirSession {
   // Seam-execution diagnostics (updated only from the encode thread).
   int64_t SeamsExecuted() const { return seams_executed_.load(); }
 
+  // Subset of SeamsExecuted: inter-block seams (i.e., seams where the
+  // predecessor was the final segment of its Block and the successor is
+  // the first segment of the next Block). Incremented at PromoteActiveBlock
+  // per INV-PLAYBACK-BLOCK-PROMOTION-ATOMIC-001.
+  int64_t BlockTransitionsTotal() const {
+    return block_transitions_total_.load();
+  }
+
   // Pad-bridge diagnostics. A pad bridge is engaged (C1.4b) when a
   // segment fence arrives before the successor segment is primed. Count
   // is distinct events; ms is cumulative time in pad.
@@ -294,6 +302,7 @@ class AirSession {
   std::atomic<bool> stopping_{false};
   std::atomic<int64_t> frames_encoded_{0};
   std::atomic<int64_t> seams_executed_{0};
+  std::atomic<int64_t> block_transitions_total_{0};
   std::atomic<int64_t> pad_bridge_events_total_{0};
   std::atomic<int64_t> pad_bridge_ms_total_{0};
   std::atomic<int64_t> test_prime_delay_ms_{0};
@@ -409,6 +418,23 @@ class AirSession {
   // calling. rt.block_id() is read for the event.
   void FailSegment(BlockRuntime& rt, int32_t segment_index,
                    const std::string& reason);
+
+  // Locate a BlockRuntime by block_id. Checks active_block_ first, then
+  // queued_blocks_ in order. Returns nullptr if no match. Caller MUST
+  // hold queue_mutex_; returned pointer is valid only for the duration
+  // of that lock hold. Used by PrimingPipeline hooks and by
+  // PositionAndInstallPrimed to support priming segments belonging to
+  // queued blocks as well as active.
+  BlockRuntime* FindBlockRuntimeByIdLocked(const std::string& block_id);
+
+  // Atomically promote queued_blocks_.front() to active_block_ per
+  // INV-PLAYBACK-BLOCK-PROMOTION-ATOMIC-001. Pops the front, moves it
+  // into the active slot (replacing the outgoing Block, whose resources
+  // are released via BlockRuntime destruction), and resets
+  // active_segment_index_ to 0. All mutations occur inside a single
+  // queue_mutex_ hold so external observers see the transition as one
+  // state change. Pre: queued_blocks_ is non-empty. Encode thread only.
+  void PromoteActiveBlock();
 
   // Emit a seam event (pad-bridge events in C1; potentially more later)
   // through the observer. No-op if no observer installed.

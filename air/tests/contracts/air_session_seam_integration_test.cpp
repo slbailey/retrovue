@@ -878,5 +878,186 @@ TEST(AirSessionSeamIntegrationTest, SuccessorPositionedAtPrimeCompletion) {
   ::unlink(uds.c_str());
 }
 
+// C2.3: inter-block seam promotes queued front atomically.
+//
+// Two-block scenario:
+//   Block A (block_id="A", 2 segments × 1s): fences at T=1s, T=2s.
+//   Block B (block_id="B", 2 segments × 1s): fences at T=3s, T=4s.
+//   B.start_utc_ms = A.end_utc_ms (well-formed, editorial-consistent).
+//
+// Expected sequence:
+//   OnAir → seam observed (A.0→A.1, intra).
+//   T~1s → seam fires: cursor 0→1, A.0 retired, A.1 active. Observe
+//          next → inter-block seam (A.1→B.0) armed; is_block_transition=true.
+//   T~2s → inter-block seam fires: PromoteActiveBlock pops B to active,
+//          cursor resets to 0, block_transitions_total=1. Observe next →
+//          intra-block seam (B.0→B.1) armed.
+//   T~3s → seam fires: cursor 0→1 within B. Observe next → inter-block
+//          attempt; queue empty; nothing armed.
+//   B.1 plays to EOF.
+//
+// Asserted state at each transition: cursor monotonicity, queue depth,
+// per-segment state, counter increments, event is_block_transition flag.
+TEST(AirSessionSeamIntegrationTest, InterBlockSeamPromotesQueuedFrontAtomically) {
+  const std::string asset = ResolveSampleA();
+  if (!std::filesystem::exists(asset)) {
+    GTEST_SKIP() << "SampleA not found";
+  }
+
+  const std::string uds =
+      "/tmp/air_promote_" + std::to_string(getpid()) + ".sock";
+  ::unlink(uds.c_str());
+  int listen_fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+  ASSERT_GE(listen_fd, 0);
+  sockaddr_un addr{};
+  addr.sun_family = AF_UNIX;
+  std::strncpy(addr.sun_path, uds.c_str(), sizeof(addr.sun_path) - 1);
+  ASSERT_EQ(::bind(listen_fd, reinterpret_cast<sockaddr*>(&addr),
+                   sizeof(addr)), 0);
+  ASSERT_EQ(::listen(listen_fd, 1), 0);
+
+  std::atomic<bool> reader_running{true};
+  std::thread reader([&]() {
+    int conn = ::accept(listen_fd, nullptr, nullptr);
+    if (conn < 0) return;
+    uint8_t buf[16 * 1024];
+    while (reader_running.load()) {
+      ssize_t n = ::read(conn, buf, sizeof(buf));
+      if (n <= 0) break;
+    }
+    ::close(conn);
+  });
+
+  // Capture every seam event so we can verify is_block_transition per seam.
+  std::mutex ev_mu;
+  std::vector<SeamEvent> events;
+
+  AirSession session;
+  session.SetSeamEventObserver([&](const SeamEvent& e) {
+    std::lock_guard<std::mutex> lk(ev_mu);
+    events.push_back(e);
+  });
+
+  int client_fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+  ASSERT_GE(client_fd, 0);
+  sockaddr_un client_addr{};
+  client_addr.sun_family = AF_UNIX;
+  std::strncpy(client_addr.sun_path, uds.c_str(),
+               sizeof(client_addr.sun_path) - 1);
+  ASSERT_EQ(::connect(client_fd, reinterpret_cast<sockaddr*>(&client_addr),
+                      sizeof(client_addr)), 0);
+  ASSERT_TRUE(session.AttachOutput(client_fd));
+
+  // Build Block A (2 segments × 1s) and Block B (2 segments × 1s,
+  // starting at A's end).
+  Block block_a;
+  block_a.block_id = "A";
+  block_a.start_utc_ms = 1'700'000'000'000LL;
+  block_a.end_utc_ms = block_a.start_utc_ms + 2 * 1000;
+  block_a.canonical = CheersCanonical();
+  for (int i = 0; i < 2; ++i) {
+    Segment s;
+    s.segment_id = "A:" + std::to_string(i);
+    s.asset_uri = asset;
+    s.asset_start_offset_ms = 0;
+    s.duration_ms = 1000;
+    s.segment_index = i;
+    block_a.segments.push_back(s);
+  }
+
+  Block block_b;
+  block_b.block_id = "B";
+  block_b.start_utc_ms = block_a.end_utc_ms;  // well-formed: B.start == A.end
+  block_b.end_utc_ms = block_b.start_utc_ms + 2 * 1000;
+  block_b.canonical = CheersCanonical();
+  for (int i = 0; i < 2; ++i) {
+    Segment s;
+    s.segment_id = "B:" + std::to_string(i);
+    s.asset_uri = asset;
+    s.asset_start_offset_ms = 0;
+    s.duration_ms = 1000;
+    s.segment_index = i;
+    block_b.segments.push_back(s);
+  }
+
+  ASSERT_TRUE(session.SeedActiveBlock(block_a));
+  std::string queue_reason;
+  ASSERT_TRUE(session.AddQueuedBlock(block_b, "A", &queue_reason))
+      << "AddQueuedBlock rejected: " << queue_reason;
+
+  // Pre-OpenAir snapshot.
+  EXPECT_EQ(session.QueueDepth(), 2);  // active A + queued B
+  EXPECT_EQ(session.SegmentDepth(), 4);
+  EXPECT_EQ(session.ActiveSegmentIndex(), 0);
+  EXPECT_EQ(session.BlockTransitionsTotal(), 0);
+
+  ASSERT_TRUE(session.OpenAir());
+
+  // Wait for two seams to fire (A.0→A.1 intra, A.1→B.0 inter).
+  const auto on_air_start = std::chrono::steady_clock::now();
+  const auto two_seams_deadline =
+      on_air_start + std::chrono::seconds(5);
+  while (session.SeamsExecuted() < 2 &&
+         std::chrono::steady_clock::now() < two_seams_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  ASSERT_GE(session.SeamsExecuted(), 2)
+      << "A.0→A.1 and A.1→B.0 should both have fired within 3s of OnAir";
+
+  // Post-promotion assertions. Cursor reset to 0 (of B); active block
+  // id is now B; queue depth dropped from 2 to 1 (B is now active, not
+  // queued). block_transitions_total incremented.
+  EXPECT_EQ(session.BlockTransitionsTotal(), 1);
+  EXPECT_EQ(session.ActiveSegmentIndex(), 0);
+  ASSERT_TRUE(session.ActiveBlock().has_value());
+  EXPECT_EQ(session.ActiveBlock()->block_id(), "B");
+  EXPECT_EQ(session.QueueDepth(), 1);  // B active; queue empty
+  EXPECT_EQ(session.SegmentDepth(), 2);
+
+  // Wait for the third seam (B.0→B.1, intra).
+  const auto three_seams_deadline =
+      on_air_start + std::chrono::seconds(6);
+  while (session.SeamsExecuted() < 3 &&
+         std::chrono::steady_clock::now() < three_seams_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  EXPECT_EQ(session.SeamsExecuted(), 3);
+  EXPECT_EQ(session.BlockTransitionsTotal(), 1)
+      << "B.0→B.1 is intra-block and MUST NOT increment block_transitions";
+  EXPECT_EQ(session.ActiveSegmentIndex(), 1);
+  EXPECT_EQ(session.ActiveBlock()->block_id(), "B");
+
+  session.Close();
+  reader_running.store(false);
+  reader.join();
+  ::close(listen_fd);
+  ::unlink(uds.c_str());
+
+  // Post-mortem: verify event stream had exactly ONE kExecuted event
+  // with is_block_transition=true, and it corresponded to the A→B
+  // transition.
+  int block_transition_executed = 0;
+  int intra_executed = 0;
+  std::vector<SeamEvent> final_events;
+  {
+    std::lock_guard<std::mutex> lk(ev_mu);
+    final_events = events;
+  }
+  for (const auto& e : final_events) {
+    if (e.kind != SeamEventKind::kExecuted) continue;
+    if (e.target.is_block_transition) {
+      ++block_transition_executed;
+      EXPECT_EQ(e.target.from_block_id, "A");
+      EXPECT_EQ(e.target.from_segment_index, 1);
+      EXPECT_EQ(e.target.to_block_id, "B");
+      EXPECT_EQ(e.target.to_segment_index, 0);
+    } else {
+      ++intra_executed;
+    }
+  }
+  EXPECT_EQ(block_transition_executed, 1);
+  EXPECT_EQ(intra_executed, 2);  // A.0→A.1 and B.0→B.1
+}
+
 }  // namespace
 }  // namespace retrovue::air
