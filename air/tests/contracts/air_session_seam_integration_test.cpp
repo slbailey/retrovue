@@ -499,5 +499,142 @@ TEST(AirSessionSeamIntegrationTest, LateSeg1DoesNotRippleIntoSeg2Fence) {
   ::unlink(uds.c_str());
 }
 
+// C1.H1a: successor whose asset_start_offset_ms + lateness_ms exceeds
+// the asset's actual duration fails frame-accurate positioning at pad-
+// bridge exit. The seam MUST NOT fire; cursor MUST NOT advance; the
+// successor MUST be marked kFailed with reason SEEK_PAST_EOF; pad MUST
+// continue emitting per INV-PLAYBACK-QUEUE-EMPTY-PAD-BRIDGE-001 semantics.
+TEST(AirSessionSeamIntegrationTest, SuccessorSeekPastEofKeepsPadRunning) {
+  const std::string asset = ResolveSampleA();
+  if (!std::filesystem::exists(asset)) {
+    GTEST_SKIP() << "SampleA not found";
+  }
+
+  const std::string uds =
+      "/tmp/air_seek_eof_" + std::to_string(getpid()) + ".sock";
+  ::unlink(uds.c_str());
+  int listen_fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+  ASSERT_GE(listen_fd, 0);
+  sockaddr_un addr{};
+  addr.sun_family = AF_UNIX;
+  std::strncpy(addr.sun_path, uds.c_str(), sizeof(addr.sun_path) - 1);
+  ASSERT_EQ(::bind(listen_fd, reinterpret_cast<sockaddr*>(&addr),
+                   sizeof(addr)), 0);
+  ASSERT_EQ(::listen(listen_fd, 1), 0);
+
+  std::atomic<bool> reader_running{true};
+  std::atomic<int64_t> bytes_read{0};
+  std::thread reader([&]() {
+    int conn = ::accept(listen_fd, nullptr, nullptr);
+    if (conn < 0) return;
+    uint8_t buf[16 * 1024];
+    while (reader_running.load()) {
+      ssize_t n = ::read(conn, buf, sizeof(buf));
+      if (n <= 0) break;
+      bytes_read.fetch_add(n);
+    }
+    ::close(conn);
+  });
+
+  AirSession session;
+  // Force pad bridge to engage (seg 1 primes after fence_0) so the
+  // pad-exit seek is exercised. 1500ms delay > 1000ms seg 0 duration.
+  session.SetTestPrimeDelayMs(1500);
+
+  int client_fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+  ASSERT_GE(client_fd, 0);
+  sockaddr_un client_addr{};
+  client_addr.sun_family = AF_UNIX;
+  std::strncpy(client_addr.sun_path, uds.c_str(),
+               sizeof(client_addr.sun_path) - 1);
+  ASSERT_EQ(::connect(client_fd, reinterpret_cast<sockaddr*>(&client_addr),
+                      sizeof(client_addr)), 0);
+  ASSERT_TRUE(session.AttachOutput(client_fd));
+
+  // Build a 2-segment block where segment 1 has asset_start_offset_ms
+  // beyond the asset's actual duration. SampleA is ~30s; 120s is past.
+  // At seam-fire detect, jip_offset_ms = 120000 + ~500 (lateness) →
+  // SeekFrameAccurate will return false.
+  Block block;
+  block.block_id = "seek-eof-block";
+  block.start_utc_ms = 1'700'000'000'000LL;
+  block.end_utc_ms = block.start_utc_ms + 2 * 1000;
+  block.canonical = CheersCanonical();
+  {
+    Segment s0;
+    s0.segment_id = "seek-eof-block:0";
+    s0.asset_uri = asset;
+    s0.asset_start_offset_ms = 0;
+    s0.duration_ms = 1000;
+    s0.segment_index = 0;
+    block.segments.push_back(s0);
+  }
+  {
+    Segment s1;
+    s1.segment_id = "seek-eof-block:1";
+    s1.asset_uri = asset;
+    s1.asset_start_offset_ms = 120'000;  // past SampleA's ~30s duration
+    s1.duration_ms = 1000;
+    s1.segment_index = 1;
+    block.segments.push_back(s1);
+  }
+  ASSERT_TRUE(session.SeedActiveBlock(block));
+
+  ASSERT_TRUE(session.OpenAir());
+
+  // Wait for OnAir.
+  const auto on_air_deadline = std::chrono::steady_clock::now() +
+                               std::chrono::seconds(5);
+  while (session.State() != SessionState::OnAir &&
+         std::chrono::steady_clock::now() < on_air_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  ASSERT_EQ(session.State(), SessionState::OnAir);
+
+  // Wait for pad bridge to engage.
+  const auto bridge_deadline = std::chrono::steady_clock::now() +
+                               std::chrono::seconds(3);
+  while (session.PadBridgeEventsTotal() == 0 &&
+         std::chrono::steady_clock::now() < bridge_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  ASSERT_EQ(session.PadBridgeEventsTotal(), 1)
+      << "pad bridge should engage when fence_0 passes with seg 1 still priming";
+
+  // Wait long enough for seg 1 to finish priming (~1500ms after OpenAir)
+  // AND for the seek-fire attempt to happen and fail. 3-second window
+  // is well past that; any seam fire would have happened by then.
+  const auto settle_deadline = std::chrono::steady_clock::now() +
+                               std::chrono::seconds(3);
+  while (session.ActiveBlock()->State(1) == SegmentPrimeState::kRaw ||
+         session.ActiveBlock()->State(1) == SegmentPrimeState::kPriming) {
+    if (std::chrono::steady_clock::now() >= settle_deadline) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  // Give one more tick cycle for the seam fire attempt + failure path.
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+  // H1a assertions.
+  EXPECT_EQ(session.SeamsExecuted(), 0)
+      << "seam MUST NOT fire when successor cannot be frame-accurately positioned";
+  EXPECT_EQ(session.ActiveSegmentIndex(), 0)
+      << "cursor MUST NOT advance on failed position";
+  EXPECT_EQ(session.ActiveBlock()->State(1), SegmentPrimeState::kFailed)
+      << "successor MUST be marked kFailed on SeekFrameAccurate failure";
+  // Pad continues — bytes still flowing.
+  const int64_t bytes_mid = bytes_read.load();
+  EXPECT_GT(bytes_mid, 0);
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  EXPECT_GT(bytes_read.load(), bytes_mid)
+      << "pad MUST continue emitting after seek failure "
+         "(INV-PLAYBACK-QUEUE-EMPTY-PAD-BRIDGE-001 semantics)";
+
+  session.Close();
+  reader_running.store(false);
+  reader.join();
+  ::close(listen_fd);
+  ::unlink(uds.c_str());
+}
+
 }  // namespace
 }  // namespace retrovue::air

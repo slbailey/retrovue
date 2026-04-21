@@ -119,6 +119,26 @@ TEST(FileSeekFrameAccurateTest, ZeroOffsetLandsAtAssetStart) {
       << "offset=0 should land within 100ms of asset start";
 }
 
+TEST(FileSeekFrameAccurateTest, SeekPastAssetEndReturnsFalse) {
+  // C1.H1a contract: SeekFrameAccurate MUST return false when the
+  // forward decode-and-discard loop EOFs without reaching the target.
+  // Target 120s into SampleA (~30s) lands beyond any keyframe in-asset;
+  // the backward seek lands on the last keyframe, forward discard pops
+  // every remaining frame (all at source_pts < target), and the loop
+  // exits with v_out empty. Return MUST be false so seam-recovery
+  // callers can treat the successor as un-positionable.
+  auto src = OpenSampleA();
+  if (!src) GTEST_SKIP() << "SampleA not available";
+
+  const int64_t target_ms = 120'000;  // SampleA is ~30s; 120s is past EOF
+  EXPECT_FALSE(src->SeekFrameAccurate(target_ms))
+      << "SeekFrameAccurate should return false when target is past EOF";
+
+  // No frames queued; subsequent PullVideo returns nullopt.
+  EXPECT_FALSE(src->PullVideo().has_value())
+      << "after EOF-before-target, PullVideo MUST return nullopt";
+}
+
 TEST(FileSeekFrameAccurateTest, FailsGracefullyInWrongLifecycle) {
   const std::string asset = ResolveSampleA();
   if (!std::filesystem::exists(asset)) {

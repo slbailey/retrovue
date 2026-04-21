@@ -496,33 +496,22 @@ void AirSession::EncodeLoop() {
     }
 
     // Seam-commit check. Two paths: pad-bridge exit (install primed
-    // successor after a gap) or happy-path direct swap.
+    // successor after a gap) or happy-path direct swap. Pad-exit may
+    // also abort if the successor cannot be frame-accurately positioned
+    // (C1.H1a: SeekFrameAccurate returns false → keep pad running,
+    // mark successor kFailed, do not fire the seam).
     if (seam_controller_->ShouldCommitAt(now)) {
       const int32_t new_idx = active_segment_index_.load() + 1;
       auto& successor_rt = active_block_->at(new_idx);
+      bool swap_ok = true;
 
       if (in_pad_bridge_) {
-        // Pad PTS advance: pad frames were emitted at channel rate;
-        // their cumulative duration is the right offset advance so the
-        // successor's 0-based normalizer picks up past pad's last PTS.
-        channel_pts_offset_us_ +=
-            pad_frames_in_current_bridge_ * video_period_us;
-        if (pad_source_) pad_source_->Retire();
-        pad_source_.reset();
-        pad_normalizer_.reset();
-        const int64_t bridge_ms =
-            (now - pad_bridge_start_mono_us_) / 1000;
-        if (bridge_ms > 0) pad_bridge_ms_total_.fetch_add(bridge_ms);
-        in_pad_bridge_ = false;
-
-        // JIP per INV-SEAM-LATE-SUCCESSOR-JIP-001. Frame-accurate
-        // entry is required: backward keyframe seek + forward decode-
-        // and-discard until the first queued frame is at-or-after
-        // target. Call MUST complete before MarkFired so the seam
-        // does not activate until the successor is positioned. Runs
-        // synchronously on the encode thread; this is a real-time
-        // trade-off for v1 (async pre-seek during pad is a future
-        // optimisation).
+        // Attempt JIP seek BEFORE any pad teardown so a failed seek
+        // can leave pad in flight without requiring re-engagement.
+        // JIP per INV-SEAM-LATE-SUCCESSOR-JIP-001: backward keyframe
+        // seek + forward decode-and-discard until first queued frame
+        // is at-or-after target. Runs synchronously on the encode
+        // thread (H1b moves this to prime completion).
         const int64_t fence_mono_us =
             seam_controller_->CurrentTarget()->fence_monotonic_us;
         const int64_t lateness_ms = (now - fence_mono_us) / 1000;
@@ -530,10 +519,51 @@ void AirSession::EncodeLoop() {
             active_block_->block().segments[new_idx];
         const int64_t jip_offset_ms =
             successor_seg.asset_start_offset_ms + lateness_ms;
-        if (successor_rt.source) {
-          successor_rt.source->SeekFrameAccurate(jip_offset_ms);
+        const bool positioned =
+            successor_rt.source
+                ? successor_rt.source->SeekFrameAccurate(jip_offset_ms)
+                : false;
+
+        if (!positioned) {
+          // C1.H1a failure path per INV-PLAYBACK-SEGMENT-STATE-SEQUENCE-001.
+          // Successor cannot be positioned (seek past asset end, or
+          // source missing). Mark kFailed with SEEK_PAST_EOF, release
+          // seam state, keep pad running. No MarkFired, no cursor
+          // advance, no kActive transition. Per
+          // INV-PLAYBACK-QUEUE-EMPTY-PAD-BRIDGE-001 semantics, pad is
+          // the legal fallback when no viable successor exists; here
+          // the successor existed but proved unusable.
+          //
+          // NOTE ON Reset vs Retract: SeamController::Retract is valid
+          // only from kObserving/kArmed (vault: commit-is-sticky from
+          // kCommittedForTick). At ShouldCommitAt==true we are in
+          // kFiring, so Retract is a no-op by design. Reset() clears
+          // the seam target and returns to kIdle, which is the
+          // correct post-failure cleanup. The seam's failure IS
+          // observable via the segment's kFailed state + failure
+          // reason; a first-class seam.disarmed event at this site
+          // would be a SeamController API extension and is out of
+          // H1a scope.
+          if (successor_rt.source) successor_rt.source->Retire();
+          active_block_->RecordFailure(new_idx, "SEEK_PAST_EOF");
+          seam_controller_->Reset();
+          swap_ok = false;
+          // pad_source_, pad_normalizer_, in_pad_bridge_, and
+          // pad_frames_in_current_bridge_ all preserved — pad
+          // continues emitting on the next loop iteration.
+        } else {
+          // Pad-exit success path.
+          channel_pts_offset_us_ +=
+              pad_frames_in_current_bridge_ * video_period_us;
+          if (pad_source_) pad_source_->Retire();
+          pad_source_.reset();
+          pad_normalizer_.reset();
+          const int64_t bridge_ms =
+              (now - pad_bridge_start_mono_us_) / 1000;
+          if (bridge_ms > 0) pad_bridge_ms_total_.fetch_add(bridge_ms);
+          in_pad_bridge_ = false;
+          successor_rt.jip_lateness_ms = lateness_ms;
         }
-        successor_rt.jip_lateness_ms = lateness_ms;
       } else {
         // Happy path: current segment's normalizer is still live.
         // Offset advances by (duration − jip_lateness_ms) — for a
@@ -551,16 +581,19 @@ void AirSession::EncodeLoop() {
         active_block_->SetState(cur_idx, SegmentPrimeState::kRetired);
       }
 
-      active_segment_index_.store(new_idx);
-      active_block_->SetState(new_idx, SegmentPrimeState::kActive);
+      if (swap_ok) {
+        active_segment_index_.store(new_idx);
+        active_block_->SetState(new_idx, SegmentPrimeState::kActive);
 
-      seam_controller_->MarkFired(now);
-      seams_executed_.fetch_add(1);
-      seam_controller_->Reset();
+        seam_controller_->MarkFired(now);
+        seams_executed_.fetch_add(1);
+        seam_controller_->Reset();
 
-      // Arm next seam if another segment follows.
-      if (new_idx + 1 < static_cast<int32_t>(active_block_->segment_count())) {
-        ObserveNextSeam();
+        // Arm next seam if another segment follows.
+        if (new_idx + 1 <
+            static_cast<int32_t>(active_block_->segment_count())) {
+          ObserveNextSeam();
+        }
       }
     }
 

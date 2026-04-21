@@ -366,12 +366,16 @@ bool FileSourceProducer::SeekFrameAccurate(int64_t offset_ms) {
 
   // Forward decode-and-discard on video: pump until v_out has a frame;
   // if its source_pts_us is before the target, discard and keep pumping.
-  // Exit when the front frame is at-or-after target or the stream EOFs.
+  // Exit when the front frame is at-or-after target (success) or the
+  // stream EOFs before reaching the target (failure). EOF-before-target
+  // returns false per C1.H1a so callers can distinguish "positioned"
+  // from "cannot position"; activating a seam on a non-positioned
+  // successor is a silent-failure path downstream.
   while (true) {
     while (impl_->v_out.empty() && !impl_->eof) {
       if (!Pump(impl_.get())) break;
     }
-    if (impl_->v_out.empty()) return true;  // EOF before target
+    if (impl_->v_out.empty()) return false;
     if (impl_->v_out.front().source_pts_us >= target_us) break;
     impl_->v_out.pop_front();
   }
