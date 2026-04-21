@@ -77,6 +77,27 @@ void AirSession::SetSeamEventObserver(SeamEventObserver obs) {
   seam_event_observer_ = std::move(obs);
 }
 
+void AirSession::SetSegmentFailedObserver(SegmentFailedObserver obs) {
+  segment_failed_observer_ = std::move(obs);
+}
+
+void AirSession::EmitSeamEvent(const SeamEvent& ev) {
+  if (seam_event_observer_) seam_event_observer_(ev);
+}
+
+void AirSession::FailSegment(BlockRuntime& rt, int32_t segment_index,
+                             const std::string& reason) {
+  rt.RecordFailure(segment_index, reason);
+  if (segment_failed_observer_) {
+    segment_failed_observer_(SegmentFailedEvent{
+        .mono_us = MonoUs(),
+        .block_id = rt.block_id(),
+        .segment_index = segment_index,
+        .reason = reason,
+    });
+  }
+}
+
 void AirSession::TransitionTo(SessionState to, const char* reason_class) {
   const SessionState from = state_.exchange(to);
   if (from == to) return;  // no-op
@@ -112,11 +133,11 @@ bool AirSession::PrimeSegmentSync(BlockRuntime& rt, int32_t segment_index) {
   auto source = std::make_unique<FileSourceProducer>(
       FileSourceProducer::Config{.file_path = seg.asset_uri});
   if (!source->Prepare()) {
-    rt.RecordFailure(segment_index, "ASSET_OPEN_FAILED");
+    FailSegment(rt, segment_index, "ASSET_OPEN_FAILED");
     return false;
   }
   if (!source->Activate()) {
-    rt.RecordFailure(segment_index, "ACTIVATE_FAILED");
+    FailSegment(rt, segment_index, "ACTIVATE_FAILED");
     return false;
   }
 
@@ -127,7 +148,7 @@ bool AirSession::PrimeSegmentSync(BlockRuntime& rt, int32_t segment_index) {
   // asset_start_offset_ms == 0 (the common test case) this is a
   // near-no-op; the discard loop exits on the first at-or-after frame.
   if (!source->SeekFrameAccurate(seg.asset_start_offset_ms)) {
-    rt.RecordFailure(segment_index, "SEEK_PAST_EOF");
+    FailSegment(rt, segment_index, "SEEK_PAST_EOF");
     return false;
   }
 
@@ -331,7 +352,7 @@ bool AirSession::OpenAir() {
                            const std::string& reason) {
     std::lock_guard<std::mutex> lk(queue_mutex_);
     if (active_block_.has_value() && active_block_->block_id() == block_id) {
-      active_block_->RecordFailure(idx, reason);
+      FailSegment(*active_block_, idx, reason);
     }
   };
   priming_pipeline_ = std::make_unique<PrimingPipeline>(std::move(hooks));
@@ -405,6 +426,16 @@ void AirSession::EngagePadBridge() {
   pad_bridge_start_mono_us_ = MonoUs();
   pad_frames_in_current_bridge_ = 0;
   pad_bridge_events_total_.fetch_add(1);
+
+  // Emit seam.pad_bridge_started tied to the current seam target.
+  if (const auto& target = seam_controller_->CurrentTarget();
+      target.has_value()) {
+    EmitSeamEvent(SeamEvent{
+        .kind = SeamEventKind::kPadBridgeStarted,
+        .mono_us = pad_bridge_start_mono_us_,
+        .target = *target,
+    });
+  }
 }
 
 void AirSession::ObserveNextSeam() {
@@ -485,7 +516,7 @@ void AirSession::PositionAndInstallPrimed(PrimedSegment primed) {
     // Mark kFailed; seam will never arm because readiness returns false
     // for non-kPrimed segments. Pad bridge (if/when engaged) continues
     // indefinitely until session stops or another source appears.
-    active_block_->RecordFailure(primed.segment_index, "SEEK_PAST_EOF");
+    FailSegment(*active_block_, primed.segment_index, "SEEK_PAST_EOF");
     return;
   }
   const int32_t idx = primed.segment_index;
@@ -606,6 +637,17 @@ void AirSession::EncodeLoop() {
         if (bridge_ms > 0) pad_bridge_ms_total_.fetch_add(bridge_ms);
         in_pad_bridge_ = false;
         // successor_rt.jip_lateness_ms was set at prime time; keep it.
+
+        // Emit seam.pad_bridge_ended tied to the current seam target.
+        if (const auto& target = seam_controller_->CurrentTarget();
+            target.has_value()) {
+          EmitSeamEvent(SeamEvent{
+              .kind = SeamEventKind::kPadBridgeEnded,
+              .mono_us = now,
+              .target = *target,
+              .pad_bridge_duration_ms = bridge_ms,
+          });
+        }
       } else {
         // Happy path: current segment's normalizer is still live.
         // Offset advances by (duration − jip_lateness_ms) — for a

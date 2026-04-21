@@ -37,10 +37,12 @@ const char* ToString(SeamPhase p) {
 
 const char* ToString(SeamEventKind k) {
   switch (k) {
-    case SeamEventKind::kArmed:     return "seam.armed";
-    case SeamEventKind::kDisarmed:  return "seam.disarmed";
-    case SeamEventKind::kCommitted: return "seam.committed";
-    case SeamEventKind::kExecuted:  return "seam.executed";
+    case SeamEventKind::kArmed:             return "seam.armed";
+    case SeamEventKind::kDisarmed:          return "seam.disarmed";
+    case SeamEventKind::kCommitted:         return "seam.committed";
+    case SeamEventKind::kExecuted:          return "seam.executed";
+    case SeamEventKind::kPadBridgeStarted:  return "seam.pad_bridge_started";
+    case SeamEventKind::kPadBridgeEnded:    return "seam.pad_bridge_ended";
   }
   return "?";
 }

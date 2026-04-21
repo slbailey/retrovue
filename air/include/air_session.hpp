@@ -86,6 +86,20 @@ struct StateTransitionEvent {
 
 using LifecycleObserver = std::function<void(const StateTransitionEvent&)>;
 
+// Structured event fired when a Segment's state transitions to kFailed
+// (per INV-PLAYBACK-SEGMENT-STATE-SEQUENCE-001). Failure sources include
+// ASSET_OPEN_FAILED, ACTIVATE_FAILED, INVALID_CANONICAL, NO_VIDEO_OR_AUDIO_STREAM
+// (from PrimingPipeline), and SEEK_PAST_EOF (from frame-accurate positioning
+// at prime completion per INV-SEAM-LATE-SUCCESSOR-JIP-001).
+struct SegmentFailedEvent {
+  int64_t mono_us = 0;
+  std::string block_id;
+  int32_t segment_index = 0;
+  std::string reason;  // stable reason code
+};
+
+using SegmentFailedObserver = std::function<void(const SegmentFailedEvent&)>;
+
 class AirSession {
  public:
   AirSession();
@@ -151,8 +165,17 @@ class AirSession {
 
   // Install a seam event observer. Forwarded to the internal
   // SeamController on OpenAir. Set before OpenAir. Receives
-  // seam.armed / seam.disarmed / seam.committed / seam.executed.
+  // seam.armed / seam.disarmed / seam.committed / seam.executed, AND
+  // pad-bridge events (seam.pad_bridge_started / seam.pad_bridge_ended)
+  // which are emitted by AirSession's encode loop rather than by
+  // SeamController itself.
   void SetSeamEventObserver(SeamEventObserver obs);
+
+  // Install a segment-failed observer. Fires when a Segment's state
+  // transitions to kFailed (per INV-PLAYBACK-SEGMENT-STATE-SEQUENCE-001)
+  // from any source: priming failure, activation failure, or seek-past-
+  // EOF at prime completion. Set before OpenAir.
+  void SetSegmentFailedObserver(SegmentFailedObserver obs);
 
   // Inspection.
   bool HasOutput() const { return owned_fd_ >= 0; }
@@ -278,6 +301,7 @@ class AirSession {
   std::atomic<std::size_t> test_prime_call_idx_{0};
   LifecycleObserver lifecycle_observer_;
   SeamEventObserver seam_event_observer_;
+  SegmentFailedObserver segment_failed_observer_;
 
   // ---- Seam controller + priming pipeline ----
   // SeamController (C1.4a): owns seam lifecycle; driven by the encode
@@ -378,6 +402,17 @@ class AirSession {
   // Retires the current segment (sets kRetired, advances offset),
   // constructs pad source + normalizer, flags in_pad_bridge_.
   void EngagePadBridge();
+
+  // Single-call-site failure dispatch. Records the failure on the given
+  // BlockRuntime AND emits a SegmentFailedEvent through the observer.
+  // Caller is responsible for holding any necessary lock on `rt` before
+  // calling. rt.block_id() is read for the event.
+  void FailSegment(BlockRuntime& rt, int32_t segment_index,
+                   const std::string& reason);
+
+  // Emit a seam event (pad-bridge events in C1; potentially more later)
+  // through the observer. No-op if no observer installed.
+  void EmitSeamEvent(const SeamEvent& ev);
 };
 
 }  // namespace retrovue::air

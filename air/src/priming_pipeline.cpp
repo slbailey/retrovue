@@ -87,6 +87,12 @@ bool PrimingPipeline::RunOnce() {
 }
 
 void PrimingPipeline::WorkerLoop() {
+  // Defensive exception boundary (C1.Ops1). FFmpeg bindings used by
+  // PrimeOne don't throw; std::make_unique can theoretically throw
+  // bad_alloc. A thrown exception out of WorkerLoop would terminate
+  // the worker thread silently. Catch, route to on_failed if we have
+  // enough context, else drop the pipeline and leave in_progress
+  // false so the host can see the worker stopped making progress.
   for (;;) {
     {
       std::unique_lock<std::mutex> lk(mu_);
@@ -100,9 +106,31 @@ void PrimingPipeline::WorkerLoop() {
         std::lock_guard<std::mutex> lk(mu_);
         if (stop_) return;
       }
-      auto req = hooks_.next_raw ? hooks_.next_raw() : std::nullopt;
+      std::optional<PrimingRequest> req;
+      try {
+        req = hooks_.next_raw ? hooks_.next_raw() : std::nullopt;
+      } catch (...) {
+        // next_raw threw. Nothing to route; clear any stale priming
+        // flag and wait for the next kick.
+        priming_in_progress_.store(false);
+        break;
+      }
       if (!req.has_value()) break;
-      PrimeOne(*req);
+      try {
+        PrimeOne(*req);
+      } catch (...) {
+        // PrimeOne threw. Route to on_failed if possible; always
+        // clear in-progress so asserts on IsPriming() are honest.
+        priming_in_progress_.store(false);
+        if (hooks_.on_failed) {
+          try {
+            hooks_.on_failed(req->block_id, req->segment_index,
+                             "PRIME_EXCEPTION");
+          } catch (...) {
+            // on_failed itself threw. No further routing possible.
+          }
+        }
+      }
     }
   }
 }

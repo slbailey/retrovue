@@ -78,10 +78,13 @@ struct SeamConfig {
 };
 
 enum class SeamEventKind {
-  kArmed,      // seam.armed
-  kDisarmed,   // seam.disarmed
-  kCommitted,  // seam.committed
-  kExecuted,   // seam.executed
+  kArmed,              // seam.armed
+  kDisarmed,           // seam.disarmed
+  kCommitted,          // seam.committed
+  kExecuted,           // seam.executed
+  kPadBridgeStarted,   // seam.pad_bridge_started (emitted by AIR_Pipeline
+                       // layer per INV-SEAM-MISSED-RESOLUTION-001)
+  kPadBridgeEnded,     // seam.pad_bridge_ended
 };
 
 const char* ToString(SeamEventKind k);
@@ -94,6 +97,8 @@ struct SeamEvent {
   std::string reason;
   // Populated only for kExecuted.
   int64_t executed_at_tick_us = 0;
+  // Populated only for kPadBridgeEnded.
+  int64_t pad_bridge_duration_ms = 0;
 };
 
 using SeamEventObserver = std::function<void(const SeamEvent&)>;
