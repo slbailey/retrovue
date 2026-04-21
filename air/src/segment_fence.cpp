@@ -44,4 +44,10 @@ int64_t TotalSegmentDurationMs(const Block& block) {
   return total;
 }
 
+bool IsLastSegmentOfBlock(const Block& block, int32_t segment_index) {
+  if (block.segments.empty()) return false;
+  if (segment_index < 0) return false;
+  return static_cast<size_t>(segment_index) == block.segments.size() - 1;
+}
+
 }  // namespace retrovue::air

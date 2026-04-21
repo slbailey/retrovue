@@ -57,6 +57,13 @@ std::optional<int64_t> BlockFinalFenceMonotonicUs(const Block& block,
 // blocks (sum != end - start).
 int64_t TotalSegmentDurationMs(const Block& block);
 
+// Predicate: is `segment_index` the final segment of `block`? Used by the
+// encode loop to distinguish intra-block seams (successor = next segment
+// of same block) from inter-block seams (successor = first segment of
+// queued_blocks.front()). Returns false for out-of-range indices and for
+// blocks with no segments.
+bool IsLastSegmentOfBlock(const Block& block, int32_t segment_index);
+
 }  // namespace retrovue::air
 
 #endif  // AIR_SEGMENT_FENCE_HPP_
