@@ -145,6 +145,7 @@ add_executable(air_vnext_contract_tests
   tests/contracts/air_session_c1_end_to_end_test.cpp
   tests/contracts/air_session_ops_soak_test.cpp
   tests/contracts/air_session_pull_test.cpp
+  tests/contracts/air_session_mutability_test.cpp
 )
 
 target_link_libraries(air_vnext_contract_tests PRIVATE

@@ -273,6 +273,134 @@ bool AirSession::AddQueuedBlock(const Block& block,
   return true;
 }
 
+bool AirSession::PutBlockRevision(const Block& block,
+                                  std::string* reason_out) {
+  auto set_reason = [&](const char* r) {
+    if (reason_out) *reason_out = r;
+  };
+
+  if (block.segments.empty()) {
+    set_reason("EMPTY_SEGMENTS");
+    return false;
+  }
+
+  std::lock_guard<std::mutex> lk(queue_mutex_);
+  if (!active_block_.has_value()) {
+    set_reason("NO_SESSION");
+    return false;
+  }
+
+  // Active-block match takes precedence per vault: a revision against
+  // active is ACTIVE_BLOCK_IMMUTABLE regardless of segment states.
+  if (active_block_->block_id() == block.block_id) {
+    set_reason("ACTIVE_BLOCK_IMMUTABLE");
+    return false;
+  }
+
+  // Locate in queued_blocks_.
+  int idx = -1;
+  for (std::size_t i = 0; i < queued_blocks_.size(); ++i) {
+    if (queued_blocks_[i].block_id() == block.block_id) {
+      idx = static_cast<int>(i);
+      break;
+    }
+  }
+  if (idx < 0) {
+    set_reason("BLOCK_NOT_IN_QUEUE");
+    return false;
+  }
+
+  // Scan target for non-kRaw segments. Vault precedence:
+  // priming > armed/primed/retired/failed > active.
+  const BlockRuntime& target = queued_blocks_[idx];
+  bool has_priming = false;
+  bool has_non_raw = false;
+  for (std::size_t i = 0; i < target.segment_count(); ++i) {
+    const auto s = target.State(static_cast<int32_t>(i));
+    if (s == SegmentPrimeState::kRaw) continue;
+    has_non_raw = true;
+    if (s == SegmentPrimeState::kPriming) has_priming = true;
+  }
+  if (has_priming) {
+    set_reason("BLOCK_PRIMING");
+    return false;
+  }
+  if (has_non_raw) {
+    set_reason("BLOCK_ARMED");
+    return false;
+  }
+
+  // Accept: replace the queued BlockRuntime with a fresh one from the
+  // revision. Per Pass-B decision, this is a NEW candidate — the
+  // previous BlockRuntime (and any attached resources) is destroyed.
+  // A queued-primed segment in the old BlockRuntime would have its
+  // source retired via BlockRuntime's destructor. No in-place revival.
+  queued_blocks_[idx] = BlockRuntime(block);
+  if (priming_pipeline_) priming_pipeline_->Kick();
+  return true;
+}
+
+bool AirSession::RetireBlock(const std::string& block_id,
+                             std::string* reason_out) {
+  auto set_reason = [&](const char* r) {
+    if (reason_out) *reason_out = r;
+  };
+
+  std::lock_guard<std::mutex> lk(queue_mutex_);
+  if (!active_block_.has_value()) {
+    set_reason("NO_SESSION");
+    return false;
+  }
+
+  if (active_block_->block_id() == block_id) {
+    set_reason("ACTIVE_BLOCK_IMMUTABLE");
+    return false;
+  }
+
+  int idx = -1;
+  for (std::size_t i = 0; i < queued_blocks_.size(); ++i) {
+    if (queued_blocks_[i].block_id() == block_id) {
+      idx = static_cast<int>(i);
+      break;
+    }
+  }
+  if (idx < 0) {
+    set_reason("BLOCK_NOT_IN_QUEUE");
+    return false;
+  }
+
+  // If the SeamController has an armable target whose to_block_id
+  // matches the retiree, Retract (valid from kObserving/kArmed only;
+  // past kCommittedForTick, Retract is a no-op per the vault's commit-
+  // is-sticky rule, and the seam will fire with stale intent — a
+  // narrow race acknowledged for C2.5). Retract emits seam.disarmed
+  // through the observer, so external consumers see the effect.
+  if (seam_controller_) {
+    const auto& target = seam_controller_->CurrentTarget();
+    if (target.has_value() && target->to_block_id == block_id) {
+      seam_controller_->Retract("block_retirement");
+    }
+  }
+
+  // Remove. BlockRuntime destructor retires any held source and
+  // drops normalizer. A priming worker that is concurrently mid-seek
+  // on a segment in this block discovers the removal at its publish
+  // step (FindBlockRuntimeByIdLocked returns nullptr) and silently
+  // discards its local primed payload. The worker thread itself is
+  // unaffected.
+  queued_blocks_.erase(queued_blocks_.begin() + idx);
+  return true;
+}
+
+void AirSession::ForceSetSegmentStateForTest(const std::string& block_id,
+                                             int32_t segment_index,
+                                             SegmentPrimeState state) {
+  std::lock_guard<std::mutex> lk(queue_mutex_);
+  if (auto* br = FindBlockRuntimeByIdLocked(block_id)) {
+    br->SetState(segment_index, state);
+  }
+}
+
 int32_t AirSession::QueueDepth() const {
   std::lock_guard<std::mutex> lk(queue_mutex_);
   int32_t depth = 0;

@@ -160,6 +160,39 @@ class AirSession {
                       const std::string& predecessor_id,
                       std::string* reason_out = nullptr);
 
+  // C2.5 — replace a queued Block's contents with a revised Block,
+  // per INV-PLAYBACK-BLOCK-MUTABILITY-001. Accept only when every
+  // segment of the target block is kRaw. Rejections set `reason_out`
+  // to one of:
+  //   "NO_SESSION", "EMPTY_SEGMENTS", "ACTIVE_BLOCK_IMMUTABLE",
+  //   "BLOCK_NOT_IN_QUEUE", "BLOCK_PRIMING", "BLOCK_ARMED".
+  // BLOCK_PRIMING signals at least one segment is mid-prime.
+  // BLOCK_ARMED signals at least one segment is past kRaw and not
+  // kPriming (kPrimed, kRetired, or kFailed). Vault-compliant by
+  // collapsing any non-raw, non-priming state into BLOCK_ARMED per
+  // the doctrine's three named reason codes.
+  //
+  // On accept, the target slot's BlockRuntime is replaced with a fresh
+  // BlockRuntime constructed from `block`. Segments start kRaw; the
+  // revised block is a NEW candidate per the Pass-B kFailed decision
+  // (no in-place revival of previous state). Priming pipeline is
+  // Kicked so the revised segments can begin priming.
+  bool PutBlockRevision(const Block& block,
+                        std::string* reason_out = nullptr);
+
+  // C2.5 — retire a queued Block. Accepts any non-active block.
+  // Rejections set `reason_out` to one of:
+  //   "NO_SESSION", "ACTIVE_BLOCK_IMMUTABLE", "BLOCK_NOT_IN_QUEUE".
+  // On accept, the block is removed from queued_blocks_; its
+  // BlockRuntime destructor retires any held source and drops the
+  // normalizer. If the SeamController currently has a target whose
+  // to_block_id matches and is in kObserving or kArmed, Retract is
+  // called (commit is sticky from kCommittedForTick onward — later-
+  // window retirements leave a race window where the seam fires with
+  // stale intent; documented but not handled in C2.5).
+  bool RetireBlock(const std::string& block_id,
+                   std::string* reason_out = nullptr);
+
   // Phase 3 — start encode loop. Emission begins at the first pulled frame.
   // Preconditions: AttachOutput and AssignContent both succeeded.
   bool OpenAir();
@@ -260,6 +293,15 @@ class AirSession {
   // active block as depth 1). Default: 2 (= active + 1 queued). Set
   // before OpenAir; mid-session changes take effect on the next poll.
   void SetPullTargetDepth(int depth) { pull_target_depth_ = depth; }
+
+  // Test hook: directly set a Segment's state. Bypasses the priming
+  // pipeline to let tests construct specific mutability scenarios
+  // (BLOCK_PRIMING, BLOCK_ARMED) without relying on timing. Locates
+  // the owning BlockRuntime via FindBlockRuntimeByIdLocked. No-op if
+  // block_id is unknown. Not for production use.
+  void ForceSetSegmentStateForTest(const std::string& block_id,
+                                   int32_t segment_index,
+                                   SegmentPrimeState state);
 
   // Lifecycle state. Safe to read from any thread.
   SessionState State() const { return state_.load(); }
