@@ -17,6 +17,7 @@
 
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
 #include <iostream>
 #include <utility>
@@ -116,6 +117,17 @@ bool AirSession::PrimeSegmentSync(BlockRuntime& rt, int32_t segment_index) {
   }
   if (!source->Activate()) {
     rt.RecordFailure(segment_index, "ACTIVATE_FAILED");
+    return false;
+  }
+
+  // C1.H1b: frame-accurately position at asset_start_offset_ms before
+  // publishing as kPrimed, per INV-PLAYBACK-SEGMENT-STATE-SEQUENCE-001.
+  // This path is synchronous (used for segment 0 at SeedActiveBlock);
+  // lateness is zero because there is no predecessor fence. For
+  // asset_start_offset_ms == 0 (the common test case) this is a
+  // near-no-op; the discard loop exits on the first at-or-after frame.
+  if (!source->SeekFrameAccurate(seg.asset_start_offset_ms)) {
+    rt.RecordFailure(segment_index, "SEEK_PAST_EOF");
     return false;
   }
 
@@ -310,11 +322,10 @@ bool AirSession::OpenAir() {
     }
   };
   hooks.on_primed = [this](PrimedSegment primed) {
-    std::lock_guard<std::mutex> lk(queue_mutex_);
-    if (active_block_.has_value() &&
-        active_block_->block_id() == primed.block_id) {
-      active_block_->InstallPrimed(primed.segment_index, std::move(primed));
-    }
+    // C1.H1b: position frame-accurately BEFORE publishing as kPrimed.
+    // The helper handles lock discipline, target computation, and the
+    // seek+install atomic unit.
+    PositionAndInstallPrimed(std::move(primed));
   };
   hooks.on_failed = [this](const std::string& block_id, int32_t idx,
                            const std::string& reason) {
@@ -340,7 +351,9 @@ bool AirSession::OpenAir() {
   warmup_audio_.clear();
 
   priming_pipeline_->Start();
-  priming_pipeline_->Kick();  // immediately look for raw segments
+  // NOTE: deliberately do NOT Kick here. Kick moves to EncodeLoop after
+  // the session anchor is set, so PositionAndInstallPrimed always sees a
+  // valid anchor when computing lateness (C1.H1b ordering invariant).
 
   encode_thread_ = std::thread([this]() { EncodeLoop(); });
   return true;
@@ -400,8 +413,8 @@ void AirSession::ObserveNextSeam() {
   const auto& block = active_block_->block();
   const auto fence_us = SegmentFenceMonotonicUs(
       block, from_idx,
-      SessionAnchor{.anchor_monotonic_us = anchor_monotonic_us_,
-                    .anchor_utc_ms = anchor_utc_ms_});
+      SessionAnchor{.anchor_monotonic_us = anchor_monotonic_us_.load(),
+                    .anchor_utc_ms = anchor_utc_ms_.load()});
   if (!fence_us.has_value()) return;  // no next segment / out-of-range
   seam_controller_.get()->ObserveSeam(SeamTarget{
       .from_block_id = block.block_id,
@@ -411,6 +424,73 @@ void AirSession::ObserveNextSeam() {
       .fence_monotonic_us = *fence_us,
       .is_block_transition = false,
   });
+}
+
+void AirSession::PositionAndInstallPrimed(PrimedSegment primed) {
+  // Compute positioning target under lock (read block + anchor atomics),
+  // then release lock for the long SeekFrameAccurate call, then reacquire
+  // for publish. Priming worker thread is the sole owner of `primed` for
+  // the duration of this call; no one else reads its source/normalizer
+  // until it's installed and state flips to kPrimed.
+  //
+  // NOTE: active_block_ is set at SeedActiveBlock (pre-OpenAir) and cleared
+  // only after the priming worker joins in Close(). So during this call
+  // active_block_ is stable; the early-return stale-check is defensive.
+  int64_t target_ms = 0;
+  int64_t lateness_ms = 0;
+  {
+    std::lock_guard<std::mutex> lk(queue_mutex_);
+    if (!active_block_.has_value() ||
+        active_block_->block_id() != primed.block_id) {
+      return;  // session changed under us; discard silently
+    }
+    const int32_t idx = primed.segment_index;
+    const int64_t asset_offset =
+        active_block_->block().segments[idx].asset_start_offset_ms;
+    const int32_t pred_idx = idx - 1;
+    if (pred_idx < 0) {
+      // Segment 0 — no predecessor fence. Position at editorial offset
+      // with no lateness. In practice segment 0 is primed synchronously
+      // via PrimeSegmentSync; this branch is defensive.
+      target_ms = asset_offset;
+      lateness_ms = 0;
+    } else {
+      const auto fence_mono = SegmentFenceMonotonicUs(
+          active_block_->block(), pred_idx,
+          SessionAnchor{.anchor_monotonic_us = anchor_monotonic_us_.load(),
+                        .anchor_utc_ms = anchor_utc_ms_.load()});
+      if (!fence_mono.has_value()) return;  // arithmetic failure; bail
+      const int64_t now = MonoUs();
+      // Clamp at 0: pre-fence primes have negative "lateness" which is
+      // semantically zero (not late).
+      lateness_ms = std::max<int64_t>(0, (now - *fence_mono) / 1000);
+      target_ms = asset_offset + lateness_ms;
+    }
+  }
+
+  // Seek without holding the lock. This is the slow step (tens to
+  // hundreds of milliseconds for typical GOPs). Encode thread's
+  // readiness callback may briefly block on queue_mutex_ if it checks
+  // during the publish step below, but not during the seek itself.
+  const bool positioned = primed.source->SeekFrameAccurate(target_ms);
+
+  // Publish under lock.
+  std::lock_guard<std::mutex> lk(queue_mutex_);
+  if (!active_block_.has_value() ||
+      active_block_->block_id() != primed.block_id) {
+    return;
+  }
+  if (!positioned) {
+    // C1.H1a semantics at prime time: successor cannot be positioned.
+    // Mark kFailed; seam will never arm because readiness returns false
+    // for non-kPrimed segments. Pad bridge (if/when engaged) continues
+    // indefinitely until session stops or another source appears.
+    active_block_->RecordFailure(primed.segment_index, "SEEK_PAST_EOF");
+    return;
+  }
+  const int32_t idx = primed.segment_index;
+  active_block_->InstallPrimed(idx, std::move(primed));
+  active_block_->at(idx).jip_lateness_ms = lateness_ms;
 }
 
 void AirSession::FailStart(const char* reason_class) {
@@ -468,9 +548,16 @@ void AirSession::EncodeLoop() {
 
   // Establish the session anchor. monotonic side = now; UTC side = the
   // active Block's start_utc_ms. Segment fence arithmetic (C1.1) consumes
-  // this anchor; encoder-loop swap timing derives from it.
-  anchor_monotonic_us_ = on_air_entered_mono_us;
-  anchor_utc_ms_ = active_block_->block().start_utc_ms;
+  // this anchor; encoder-loop swap timing derives from it. Atomic writes
+  // because the priming worker reads these to compute JIP lateness at
+  // prime completion (C1.H1b).
+  anchor_monotonic_us_.store(on_air_entered_mono_us);
+  anchor_utc_ms_.store(active_block_->block().start_utc_ms);
+
+  // Wake the priming worker NOW that the anchor is valid. Kick was
+  // deferred from OpenAir so PositionAndInstallPrimed always observes a
+  // non-zero anchor when it runs. Kick is cheap and idempotent.
+  if (priming_pipeline_) priming_pipeline_->Kick();
 
   // If more than one segment, arm the first seam (0→1).
   if (active_block_->segment_count() >= 2) {
@@ -495,75 +582,30 @@ void AirSession::EncodeLoop() {
       }
     }
 
-    // Seam-commit check. Two paths: pad-bridge exit (install primed
-    // successor after a gap) or happy-path direct swap. Pad-exit may
-    // also abort if the successor cannot be frame-accurately positioned
-    // (C1.H1a: SeekFrameAccurate returns false → keep pad running,
-    // mark successor kFailed, do not fire the seam).
+    // Seam-commit check. Two paths: pad-bridge exit or happy-path
+    // direct swap. Both are pointer-swap operations; no seek runs here.
+    // The successor's frame-accurate positioning and `jip_lateness_ms`
+    // are established at prime completion by PositionAndInstallPrimed
+    // (C1.H1b). Failed positioning marks the successor kFailed before
+    // readiness can return true, so ShouldCommitAt never fires for
+    // an un-positioned successor.
     if (seam_controller_->ShouldCommitAt(now)) {
       const int32_t new_idx = active_segment_index_.load() + 1;
       auto& successor_rt = active_block_->at(new_idx);
-      bool swap_ok = true;
 
       if (in_pad_bridge_) {
-        // Attempt JIP seek BEFORE any pad teardown so a failed seek
-        // can leave pad in flight without requiring re-engagement.
-        // JIP per INV-SEAM-LATE-SUCCESSOR-JIP-001: backward keyframe
-        // seek + forward decode-and-discard until first queued frame
-        // is at-or-after target. Runs synchronously on the encode
-        // thread (H1b moves this to prime completion).
-        const int64_t fence_mono_us =
-            seam_controller_->CurrentTarget()->fence_monotonic_us;
-        const int64_t lateness_ms = (now - fence_mono_us) / 1000;
-        const auto& successor_seg =
-            active_block_->block().segments[new_idx];
-        const int64_t jip_offset_ms =
-            successor_seg.asset_start_offset_ms + lateness_ms;
-        const bool positioned =
-            successor_rt.source
-                ? successor_rt.source->SeekFrameAccurate(jip_offset_ms)
-                : false;
-
-        if (!positioned) {
-          // C1.H1a failure path per INV-PLAYBACK-SEGMENT-STATE-SEQUENCE-001.
-          // Successor cannot be positioned (seek past asset end, or
-          // source missing). Mark kFailed with SEEK_PAST_EOF, release
-          // seam state, keep pad running. No MarkFired, no cursor
-          // advance, no kActive transition. Per
-          // INV-PLAYBACK-QUEUE-EMPTY-PAD-BRIDGE-001 semantics, pad is
-          // the legal fallback when no viable successor exists; here
-          // the successor existed but proved unusable.
-          //
-          // NOTE ON Reset vs Retract: SeamController::Retract is valid
-          // only from kObserving/kArmed (vault: commit-is-sticky from
-          // kCommittedForTick). At ShouldCommitAt==true we are in
-          // kFiring, so Retract is a no-op by design. Reset() clears
-          // the seam target and returns to kIdle, which is the
-          // correct post-failure cleanup. The seam's failure IS
-          // observable via the segment's kFailed state + failure
-          // reason; a first-class seam.disarmed event at this site
-          // would be a SeamController API extension and is out of
-          // H1a scope.
-          if (successor_rt.source) successor_rt.source->Retire();
-          active_block_->RecordFailure(new_idx, "SEEK_PAST_EOF");
-          seam_controller_->Reset();
-          swap_ok = false;
-          // pad_source_, pad_normalizer_, in_pad_bridge_, and
-          // pad_frames_in_current_bridge_ all preserved — pad
-          // continues emitting on the next loop iteration.
-        } else {
-          // Pad-exit success path.
-          channel_pts_offset_us_ +=
-              pad_frames_in_current_bridge_ * video_period_us;
-          if (pad_source_) pad_source_->Retire();
-          pad_source_.reset();
-          pad_normalizer_.reset();
-          const int64_t bridge_ms =
-              (now - pad_bridge_start_mono_us_) / 1000;
-          if (bridge_ms > 0) pad_bridge_ms_total_.fetch_add(bridge_ms);
-          in_pad_bridge_ = false;
-          successor_rt.jip_lateness_ms = lateness_ms;
-        }
+        // Pad-exit: retire pad, advance offset by pad-emitted channel
+        // time, clear bridge state. Successor is already positioned.
+        channel_pts_offset_us_ +=
+            pad_frames_in_current_bridge_ * video_period_us;
+        if (pad_source_) pad_source_->Retire();
+        pad_source_.reset();
+        pad_normalizer_.reset();
+        const int64_t bridge_ms =
+            (now - pad_bridge_start_mono_us_) / 1000;
+        if (bridge_ms > 0) pad_bridge_ms_total_.fetch_add(bridge_ms);
+        in_pad_bridge_ = false;
+        // successor_rt.jip_lateness_ms was set at prime time; keep it.
       } else {
         // Happy path: current segment's normalizer is still live.
         // Offset advances by (duration − jip_lateness_ms) — for a
@@ -581,19 +623,17 @@ void AirSession::EncodeLoop() {
         active_block_->SetState(cur_idx, SegmentPrimeState::kRetired);
       }
 
-      if (swap_ok) {
-        active_segment_index_.store(new_idx);
-        active_block_->SetState(new_idx, SegmentPrimeState::kActive);
+      active_segment_index_.store(new_idx);
+      active_block_->SetState(new_idx, SegmentPrimeState::kActive);
 
-        seam_controller_->MarkFired(now);
-        seams_executed_.fetch_add(1);
-        seam_controller_->Reset();
+      seam_controller_->MarkFired(now);
+      seams_executed_.fetch_add(1);
+      seam_controller_->Reset();
 
-        // Arm next seam if another segment follows.
-        if (new_idx + 1 <
-            static_cast<int32_t>(active_block_->segment_count())) {
-          ObserveNextSeam();
-        }
+      // Arm next seam if another segment follows.
+      if (new_idx + 1 <
+          static_cast<int32_t>(active_block_->segment_count())) {
+        ObserveNextSeam();
       }
     }
 

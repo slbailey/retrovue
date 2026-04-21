@@ -636,5 +636,114 @@ TEST(AirSessionSeamIntegrationTest, SuccessorSeekPastEofKeepsPadRunning) {
   ::unlink(uds.c_str());
 }
 
+// C1.H1b: successor positioning runs at prime completion (priming
+// worker thread), not at seam fire (encode thread). Observable
+// consequence: when seg 1 transitions to kPrimed, it is ALREADY
+// positioned at its computed JIP entry point. At seam fire, the
+// encode thread does a pointer swap with no SeekFrameAccurate call.
+//
+// This test proves the ordering by inspecting `jip_lateness_ms` on
+// the SegmentRuntime. Under pre-position, `jip_lateness_ms` is
+// populated at the moment the segment reaches kPrimed (by the priming
+// worker's on_primed hook via PositionAndInstallPrimed). Under the
+// old at-fire design, `jip_lateness_ms` was populated at seam fire
+// only after the seek completed. So reading jip_lateness_ms as soon
+// as State(1) == kPrimed, BEFORE the seam has fired, distinguishes
+// the two designs: pre-position yields a stable non-zero value here;
+// at-fire yielded zero.
+TEST(AirSessionSeamIntegrationTest, SuccessorPositionedAtPrimeCompletion) {
+  const std::string asset = ResolveSampleA();
+  if (!std::filesystem::exists(asset)) {
+    GTEST_SKIP() << "SampleA not found";
+  }
+
+  const std::string uds =
+      "/tmp/air_prepos_" + std::to_string(getpid()) + ".sock";
+  ::unlink(uds.c_str());
+  int listen_fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+  ASSERT_GE(listen_fd, 0);
+  sockaddr_un addr{};
+  addr.sun_family = AF_UNIX;
+  std::strncpy(addr.sun_path, uds.c_str(), sizeof(addr.sun_path) - 1);
+  ASSERT_EQ(::bind(listen_fd, reinterpret_cast<sockaddr*>(&addr),
+                   sizeof(addr)), 0);
+  ASSERT_EQ(::listen(listen_fd, 1), 0);
+
+  std::atomic<bool> reader_running{true};
+  std::thread reader([&]() {
+    int conn = ::accept(listen_fd, nullptr, nullptr);
+    if (conn < 0) return;
+    uint8_t buf[16 * 1024];
+    while (reader_running.load()) {
+      ssize_t n = ::read(conn, buf, sizeof(buf));
+      if (n <= 0) break;
+    }
+    ::close(conn);
+  });
+
+  AirSession session;
+  // Force a late-successor scenario so jip_lateness_ms is clearly
+  // non-zero and distinguishable from default-zero.
+  session.SetTestPrimeDelayMs(1500);
+
+  int client_fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+  ASSERT_GE(client_fd, 0);
+  sockaddr_un client_addr{};
+  client_addr.sun_family = AF_UNIX;
+  std::strncpy(client_addr.sun_path, uds.c_str(),
+               sizeof(client_addr.sun_path) - 1);
+  ASSERT_EQ(::connect(client_fd, reinterpret_cast<sockaddr*>(&client_addr),
+                      sizeof(client_addr)), 0);
+  ASSERT_TRUE(session.AttachOutput(client_fd));
+
+  const Block block = MakeTwoSegmentBlock(asset);
+  ASSERT_TRUE(session.SeedActiveBlock(block));
+  ASSERT_TRUE(session.OpenAir());
+
+  // Wait until seg 1 transitions to kPrimed. This happens on the
+  // priming worker thread AFTER SeekFrameAccurate completes — i.e.,
+  // positioning is done before we observe kPrimed here.
+  const auto primed_deadline = std::chrono::steady_clock::now() +
+                               std::chrono::seconds(5);
+  while (session.ActiveBlock()->State(1) != SegmentPrimeState::kPrimed &&
+         std::chrono::steady_clock::now() < primed_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  ASSERT_EQ(session.ActiveBlock()->State(1), SegmentPrimeState::kPrimed);
+
+  // Key H1b assertion: jip_lateness_ms is populated at prime time.
+  // Under the old at-fire design this would still be zero at this
+  // moment (seam has not yet fired). Under H1b it is set by
+  // PositionAndInstallPrimed as part of the kRaw→kPrimed transition.
+  const int64_t lateness_at_prime =
+      session.ActiveBlock()->at(1).jip_lateness_ms;
+  EXPECT_GT(lateness_at_prime, 0)
+      << "jip_lateness_ms should be set at prime completion (H1b), "
+         "not at seam fire (H1a/pre-H1b design).";
+
+  // Let the seam fire. Under H1b this is a pointer swap — no seek
+  // runs on the encode thread.
+  const auto seam_deadline = std::chrono::steady_clock::now() +
+                             std::chrono::seconds(3);
+  while (session.SeamsExecuted() == 0 &&
+         std::chrono::steady_clock::now() < seam_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  EXPECT_EQ(session.SeamsExecuted(), 1);
+
+  // jip_lateness_ms persists unchanged from prime time through fire —
+  // the encode thread does not recompute it at fire. (This is the
+  // value the next happy-path swap would consume for offset advance.)
+  EXPECT_EQ(session.ActiveBlock()->at(1).jip_lateness_ms, lateness_at_prime)
+      << "jip_lateness_ms MUST be stable between prime completion and "
+         "seam fire; recomputation at fire violates H1b ordering.";
+
+  session.Close();
+  reader_running.store(false);
+  reader.join();
+  ::close(listen_fd);
+  ::unlink(uds.c_str());
+}
+
 }  // namespace
 }  // namespace retrovue::air

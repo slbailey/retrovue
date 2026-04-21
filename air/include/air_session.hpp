@@ -301,9 +301,14 @@ class AirSession {
 
   // Session anchor. Established at OnAir entry: maps monotonic time to
   // wall-clock UTC so segment fence ticks can be computed via
-  // SegmentFenceMonotonicUs (INV-SEAM-FENCE-ARITHMETIC-001).
-  int64_t anchor_monotonic_us_ = 0;
-  int64_t anchor_utc_ms_ = 0;
+  // SegmentFenceMonotonicUs (INV-SEAM-FENCE-ARITHMETIC-001). Atomic
+  // because the priming worker reads these from a different thread
+  // (C1.H1b) to compute JIP lateness at prime completion. Encode
+  // thread is the sole writer, at OnAir entry, before Kick()ing the
+  // priming pipeline — so the priming worker always observes non-zero
+  // values.
+  std::atomic<int64_t> anchor_monotonic_us_{0};
+  std::atomic<int64_t> anchor_utc_ms_{0};
 
   // Channel-PTS offset applied to frames pulled from the current segment's
   // normalizer. Each segment's normalizer emits pts_us_relative starting
@@ -356,6 +361,18 @@ class AirSession {
   // from (active_segment_index_ + 1) for the first kRaw segment and
   // returns a PrimingRequest for it, or nullopt if none.
   std::optional<PrimingRequest> FindNextRawSegment();
+
+  // PrimingPipeline::Hooks::on_primed impl (C1.H1b). Realises the
+  // strengthened kPrimed semantics ("primed AND positioned") per
+  // [[PlaybackDirector]] INV-PLAYBACK-SEGMENT-STATE-SEQUENCE-001:
+  // seeks the freshly primed source frame-accurately to its expected
+  // activation entry point (asset_start_offset_ms + lateness_ms),
+  // then publishes via InstallPrimed. On seek failure (EOF before
+  // target, per C1.H1a semantics) the segment is marked kFailed
+  // with SEEK_PAST_EOF and NOT published; readiness will remain
+  // false and the seam will not arm. Segment 0 has no predecessor
+  // fence; lateness=0 and the seek is to asset_start_offset_ms.
+  void PositionAndInstallPrimed(PrimedSegment primed);
 
   // Engage pad bridge: fence passed with successor not yet primed.
   // Retires the current segment (sets kRetired, advances offset),
