@@ -457,5 +457,55 @@ TEST(GrpcMutabilityTest, GetSessionStatusTalliesAcceptsAndRejects) {
   f.Teardown();
 }
 
+// --- IR2.1: structural admission over the wire -------------------------
+//
+// Light gRPC-path coverage proving AirSession's IR2.1 reason codes flow
+// through each push RPC verbatim. Exhaustive per-code coverage lives in
+// block_validation_test.cpp and air_session_admission_test.cpp.
+
+TEST(GrpcMutabilityTest, PutBlockRevision_DurationMismatchRejected) {
+  GrpcFixture f;
+  if (!f.Setup("ir21_revise_dm", /*seed_and_queue=*/true)) GTEST_SKIP();
+
+  grpc::ClientContext ctx;
+  retrovue::air::v1::PutBlockRevisionRequest req;
+  req.set_channel_id(1);
+  auto* b = req.mutable_block();
+  BuildBlockProto(b, "B", ResolveSampleA(), 2,
+                  1'700'000'000'000LL + 20000);
+  // Stretch the window so sum(durations) no longer matches: block spans
+  // 30000ms by wall clock but segments sum to 20000ms.
+  b->set_end_utc_ms(b->start_utc_ms() + 30000);
+
+  retrovue::air::v1::PutBlockRevisionResponse resp;
+  ASSERT_TRUE(f.stub->PutBlockRevision(&ctx, req, &resp).ok());
+  EXPECT_FALSE(resp.ok());
+  EXPECT_EQ(resp.reason(), "DURATION_MISMATCH");
+
+  f.Teardown();
+}
+
+TEST(GrpcMutabilityTest, SupplyBlock_MalformedSegmentRejected) {
+  GrpcFixture f;
+  if (!f.Setup("ir21_supply_mf", /*seed_and_queue=*/true)) GTEST_SKIP();
+
+  grpc::ClientContext ctx;
+  retrovue::air::v1::SupplyBlockRequest req;
+  req.set_channel_id(1);
+  req.set_predecessor_id("B");
+  auto* c = req.mutable_block();
+  BuildBlockProto(c, "C", ResolveSampleA(), 2,
+                  1'700'000'000'000LL + 40000);
+  // Break a segment: empty asset_uri on segments[1] → MALFORMED_SEGMENT.
+  c->mutable_segments(1)->clear_asset_uri();
+
+  retrovue::air::v1::SupplyBlockResponse resp;
+  ASSERT_TRUE(f.stub->SupplyBlock(&ctx, req, &resp).ok());
+  EXPECT_FALSE(resp.ok());
+  EXPECT_EQ(resp.reason(), "MALFORMED_SEGMENT");
+
+  f.Teardown();
+}
+
 }  // namespace
 }  // namespace retrovue::air

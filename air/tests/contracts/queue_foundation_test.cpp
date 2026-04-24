@@ -328,7 +328,10 @@ TEST(QueueFoundationTest, SupplyBlockWithoutSessionReturnsNoSession) {
   req.set_channel_id(1);
   auto* b = req.mutable_block();
   b->set_block_id("orphan");
-  // Add one dummy segment so we pass the empty-segments gate.
+  // Structurally valid block (IR2.1) so the only admission failure
+  // here is NO_SESSION.
+  b->set_start_utc_ms(1'700'000'000'000LL);
+  b->set_end_utc_ms(1'700'000'000'000LL + 1000);
   auto* seg = b->add_segments();
   seg->set_segment_id("orphan:0");
   seg->set_asset_uri("/does/not/matter");

@@ -22,6 +22,7 @@
 #include <iostream>
 #include <utility>
 
+#include "block_validation.hpp"
 #include "bootstrap_content_gate.hpp"
 #include "egress_pacer.hpp"
 #include "file_source_producer.hpp"
@@ -197,15 +198,27 @@ bool AirSession::AssignContent(const std::string& input_path,
   s.duration_ms = 0;  // unknown; legacy mode plays until EOF
   s.segment_index = 0;
   legacy.segments.push_back(std::move(s));
-  return SeedActiveBlock(legacy);
+  // Legacy single-file path: synthesized block has zero window and
+  // unknown segment duration, which is not a valid editorial Block by
+  // IR2.1 rules. AssignContent bypasses ValidateBlockStructure and
+  // routes straight to the internal seed path.
+  return SeedActiveBlockInternal(legacy);
 }
 
-bool AirSession::SeedActiveBlock(const Block& block) {
+bool AirSession::SeedActiveBlock(const Block& block,
+                                 std::string* reason_out) {
+  // IR2.1: structural admission first. Pre-existing pre-conditions
+  // (emitter attached, not seeded, canonical valid) do not set
+  // reason_out — their failure modes predate the IR2.1 reason-code
+  // catalog.
+  if (!ValidateBlockStructure(block, reason_out)) return false;
+  return SeedActiveBlockInternal(block);
+}
+
+bool AirSession::SeedActiveBlockInternal(const Block& block) {
   // Preconditions: output attached; not already seeded.
   if (emitter_ == nullptr) return false;
   if (active_block_.has_value()) return false;
-  if (block.segments.empty()) return false;
-  if (block.segments[0].asset_uri.empty()) return false;
   if (!block.canonical.IsValid()) return false;
 
   canonical_ = block.canonical;
@@ -252,16 +265,13 @@ bool AirSession::SeedActiveBlock(const Block& block) {
 bool AirSession::AddQueuedBlock(const Block& block,
                                 const std::string& /*predecessor_id*/,
                                 std::string* reason_out) {
-  // Phase B scope: validate session exists + block has ≥1 segment.
-  // Predecessor validation, canonical-mismatch, and mutation-state rules
-  // land in Phase C.
+  // IR2.1: structural admission runs first, without holding the queue
+  // lock. Predecessor continuity and canonical matching land in IR2.2+.
+  if (!ValidateBlockStructure(block, reason_out)) return false;
+
   std::lock_guard<std::mutex> lk(queue_mutex_);
   if (!active_block_.has_value()) {
     if (reason_out) *reason_out = "NO_SESSION";
-    return false;
-  }
-  if (block.segments.empty()) {
-    if (reason_out) *reason_out = "EMPTY_SEGMENTS";
     return false;
   }
   queued_blocks_.emplace_back(block);
@@ -284,7 +294,13 @@ bool AirSession::PutBlockRevision(const Block& block,
     return false;
   };
 
-  if (block.segments.empty()) return reject("EMPTY_SEGMENTS");
+  // IR2.1: structural admission (EMPTY_SEGMENTS / INVALID_TIME_WINDOW /
+  // MALFORMED_SEGMENT / DURATION_MISMATCH) gates everything else. Still
+  // counts as a revision rejection for observability.
+  if (!ValidateBlockStructure(block, reason_out)) {
+    revisions_rejected_total_.fetch_add(1, std::memory_order_relaxed);
+    return false;
+  }
 
   std::lock_guard<std::mutex> lk(queue_mutex_);
   if (!active_block_.has_value()) return reject("NO_SESSION");

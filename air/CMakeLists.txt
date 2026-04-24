@@ -94,6 +94,7 @@ add_library(air_vnext STATIC
   src/priming_pipeline.cpp
   src/seam_controller.cpp
   src/grpc_pull_responder.cpp
+  src/block_validation.cpp
 )
 
 target_include_directories(air_vnext PUBLIC
@@ -150,6 +151,8 @@ add_executable(air_vnext_contract_tests
   tests/contracts/air_session_c2_end_to_end_test.cpp
   tests/contracts/grpc_mutability_test.cpp
   tests/contracts/grpc_pull_responder_test.cpp
+  tests/contracts/block_validation_test.cpp
+  tests/contracts/air_session_admission_test.cpp
 )
 
 target_link_libraries(air_vnext_contract_tests PRIVATE

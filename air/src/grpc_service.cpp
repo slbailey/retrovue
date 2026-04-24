@@ -151,14 +151,19 @@ grpc::Status AirControlServiceImpl::StartChannel(
   std::string assign_detail;
   if (request->has_seed_block()) {
     const Block seed = BuildBlockFromProto(request->seed_block(), canonical);
-    if (seed.segments.empty()) {
+    // IR2.1: SeedActiveBlock now runs ValidateBlockStructure internally
+    // and surfaces the reason through seed_reason. Structural codes
+    // (EMPTY_SEGMENTS / INVALID_TIME_WINDOW / MALFORMED_SEGMENT /
+    // DURATION_MISMATCH) are returned verbatim in the response message.
+    std::string seed_reason;
+    assigned = session_.SeedActiveBlock(seed, &seed_reason);
+    if (!assigned && !seed_reason.empty()) {
       session_.Close();
       response->set_ok(false);
-      response->set_message("seed_block has no segments; Block MUST contain 1..N Segments");
+      response->set_message("seed_block rejected: " + seed_reason);
       return grpc::Status::OK;
     }
-    assigned = session_.SeedActiveBlock(seed);
-    assign_detail = "seed_block.segments[0].asset_uri=" + seed.segments[0].asset_uri;
+    assign_detail = "seed_block.block_id=" + seed.block_id;
   } else {
     assigned = session_.AssignContent(request->input_path(), canonical);
     assign_detail = "input_path=" + request->input_path();

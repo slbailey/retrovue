@@ -145,7 +145,14 @@ class AirSession {
   // mode the encoder would move into AttachOutput with a device canonical.)
   bool AssignContent(const std::string& input_path,
                      const ChannelCanonical& canonical);
-  bool SeedActiveBlock(const Block& block);
+  // reason_out (optional): on structural rejection from
+  // ValidateBlockStructure, receives one of the IR2.1 codes
+  // ("EMPTY_SEGMENTS", "INVALID_TIME_WINDOW", "MALFORMED_SEGMENT",
+  // "DURATION_MISMATCH"). Pre-existing pre-condition failures (emitter
+  // not attached, already-seeded, invalid canonical, encoder open
+  // failure) still return false and leave reason_out untouched.
+  bool SeedActiveBlock(const Block& block,
+                       std::string* reason_out = nullptr);
 
   // Phase 2b — append a queued block via SupplyBlock RPC. Core pushes; AIR
   // stores. Phase B scope: simple append with basic validation (segments
@@ -351,6 +358,14 @@ class AirSession {
   std::string FailedStartReason() const;
 
  private:
+  // Shared seed path used by the public SeedActiveBlock (post-validation)
+  // and by the legacy AssignContent synthesized one-segment block.
+  // Legacy AssignContent bypasses ValidateBlockStructure because the
+  // block it synthesizes is not an editorial record — it carries
+  // start_utc_ms=0, duration_ms=0 placeholders that legitimately
+  // signal "play until EOF, no editorial window."
+  bool SeedActiveBlockInternal(const Block& block);
+
   // ---- Sink group (swappable independently; persists across retune) ----
   std::unique_ptr<SocketEmitter> emitter_;
   int owned_fd_ = -1;
