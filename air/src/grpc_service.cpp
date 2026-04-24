@@ -269,24 +269,46 @@ grpc::Status AirControlServiceImpl::SupplyBlock(
   return grpc::Status::OK;
 }
 
+// Reason-code semantics (IR1a):
+// gRPC status reflects transport only: a well-formed RPC that the
+// service could process returns Status::OK regardless of
+// accept/reject. Admission decisions live in the response body
+// (`ok` flag + `reason` string). Reason codes are the stable wire
+// contract — defined by INV-PLAYBACK-BLOCK-MUTABILITY-001 and
+// returned verbatim from AirSession. The only gRPC-level error path
+// is transport-layer failure (none arises here beyond what grpc++
+// itself produces).
+
 grpc::Status AirControlServiceImpl::PutBlockRevision(
     grpc::ServerContext* /*context*/,
-    const retrovue::air::v1::PutBlockRevisionRequest* /*request*/,
+    const retrovue::air::v1::PutBlockRevisionRequest* request,
     retrovue::air::v1::PutBlockRevisionResponse* response) {
-  response->set_ok(false);
-  response->set_reason("UNIMPLEMENTED_PHASE_A");
-  return grpc::Status(grpc::StatusCode::UNIMPLEMENTED,
-                      "PutBlockRevision: Phase A stub");
+  std::lock_guard<std::mutex> lock(mu_);
+  const ChannelCanonical fallback_canonical{};
+  const Block block = BuildBlockFromProto(request->block(), fallback_canonical);
+  std::string reason;
+  if (!session_.PutBlockRevision(block, &reason)) {
+    response->set_ok(false);
+    response->set_reason(reason.empty() ? "UNKNOWN" : reason);
+    return grpc::Status::OK;
+  }
+  response->set_ok(true);
+  return grpc::Status::OK;
 }
 
 grpc::Status AirControlServiceImpl::RetireBlock(
     grpc::ServerContext* /*context*/,
-    const retrovue::air::v1::RetireBlockRequest* /*request*/,
+    const retrovue::air::v1::RetireBlockRequest* request,
     retrovue::air::v1::RetireBlockResponse* response) {
-  response->set_ok(false);
-  response->set_reason("UNIMPLEMENTED_PHASE_A");
-  return grpc::Status(grpc::StatusCode::UNIMPLEMENTED,
-                      "RetireBlock: Phase A stub");
+  std::lock_guard<std::mutex> lock(mu_);
+  std::string reason;
+  if (!session_.RetireBlock(request->block_id(), &reason)) {
+    response->set_ok(false);
+    response->set_reason(reason.empty() ? "UNKNOWN" : reason);
+    return grpc::Status::OK;
+  }
+  response->set_ok(true);
+  return grpc::Status::OK;
 }
 
 }  // namespace retrovue::air
