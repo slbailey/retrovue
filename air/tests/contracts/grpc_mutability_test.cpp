@@ -507,5 +507,49 @@ TEST(GrpcMutabilityTest, SupplyBlock_MalformedSegmentRejected) {
   f.Teardown();
 }
 
+// --- IR2.2: canonical mismatch over the wire ---------------------------
+
+TEST(GrpcMutabilityTest, SupplyBlock_CanonicalMismatchRejected) {
+  GrpcFixture f;
+  if (!f.Setup("ir22_supply_cm", /*seed_and_queue=*/true)) GTEST_SKIP();
+
+  grpc::ClientContext ctx;
+  retrovue::air::v1::SupplyBlockRequest req;
+  req.set_channel_id(1);
+  req.set_predecessor_id("B");
+  auto* c = req.mutable_block();
+  BuildBlockProto(c, "C", ResolveSampleA(), 2,
+                  1'700'000'000'000LL + 40000);
+  // Override the filled-in canonical with a mismatched audio rate.
+  c->mutable_canonical()->set_audio_sample_rate(44100);
+
+  retrovue::air::v1::SupplyBlockResponse resp;
+  ASSERT_TRUE(f.stub->SupplyBlock(&ctx, req, &resp).ok());
+  EXPECT_FALSE(resp.ok());
+  EXPECT_EQ(resp.reason(), "CANONICAL_MISMATCH");
+
+  f.Teardown();
+}
+
+TEST(GrpcMutabilityTest, PutBlockRevision_CanonicalMismatchRejected) {
+  GrpcFixture f;
+  if (!f.Setup("ir22_revise_cm", /*seed_and_queue=*/true)) GTEST_SKIP();
+
+  grpc::ClientContext ctx;
+  retrovue::air::v1::PutBlockRevisionRequest req;
+  req.set_channel_id(1);
+  auto* b = req.mutable_block();
+  BuildBlockProto(b, "B", ResolveSampleA(), 2,
+                  1'700'000'000'000LL + 20000);
+  b->mutable_canonical()->set_video_width(1280);  // was 968
+
+  retrovue::air::v1::PutBlockRevisionResponse resp;
+  ASSERT_TRUE(f.stub->PutBlockRevision(&ctx, req, &resp).ok());
+  EXPECT_FALSE(resp.ok());
+  EXPECT_EQ(resp.reason(), "CANONICAL_MISMATCH");
+
+  f.Teardown();
+}
+
 }  // namespace
 }  // namespace retrovue::air

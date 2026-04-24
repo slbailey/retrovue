@@ -219,5 +219,102 @@ TEST(AirSessionAdmissionTest,
   uds.Teardown();
 }
 
+// --- IR2.2: canonical inheritance + CANONICAL_MISMATCH -----------------
+
+// Seed has no prior session canonical to inherit from, so an absent
+// canonical on the seed block collapses to CANONICAL_MISMATCH.
+TEST(AirSessionAdmissionTest, SeedActiveBlockRejectsInvalidCanonical) {
+  AirSession session;
+  Block b = MakeBlock("A", "/tmp/asset.mp4", 2, 1'700'000'000'000LL);
+  b.canonical = ChannelCanonical{};  // default/invalid — must reject
+
+  std::string reason;
+  EXPECT_FALSE(session.SeedActiveBlock(b, &reason));
+  EXPECT_EQ(reason, "CANONICAL_MISMATCH");
+}
+
+// Happy-path inheritance: a queued block with absent canonical is
+// accepted and inherits the session canonical silently.
+TEST(AirSessionAdmissionTest, AddQueuedBlockInheritsAbsentCanonical) {
+  const std::string asset = ResolveSampleA();
+  if (!std::filesystem::exists(asset)) GTEST_SKIP() << "SampleA not found";
+
+  UdsFixture uds;
+  uds.Setup("queue_inherit");
+
+  AirSession session;
+  ASSERT_TRUE(session.AttachOutput(uds.client_fd));
+  ASSERT_TRUE(session.SeedActiveBlock(
+      MakeBlock("A", asset, 2, 1'700'000'000'000LL)));
+  ASSERT_EQ(session.QueueDepth(), 1);
+
+  Block b = MakeBlock("B", asset, 2, 1'700'000'000'002'000LL);
+  b.canonical = ChannelCanonical{};  // absent — inheritance branch
+
+  std::string reason;
+  EXPECT_TRUE(session.AddQueuedBlock(b, "A", &reason));
+  EXPECT_TRUE(reason.empty()) << "accept path must not set a reason";
+  EXPECT_EQ(session.QueueDepth(), 2) << "block was enqueued";
+
+  session.Close();
+  uds.Teardown();
+}
+
+// Present-but-different canonical → CANONICAL_MISMATCH, not enqueued.
+TEST(AirSessionAdmissionTest, AddQueuedBlockRejectsMismatchedCanonical) {
+  const std::string asset = ResolveSampleA();
+  if (!std::filesystem::exists(asset)) GTEST_SKIP() << "SampleA not found";
+
+  UdsFixture uds;
+  uds.Setup("queue_mismatch");
+
+  AirSession session;
+  ASSERT_TRUE(session.AttachOutput(uds.client_fd));
+  ASSERT_TRUE(session.SeedActiveBlock(
+      MakeBlock("A", asset, 2, 1'700'000'000'000LL)));
+
+  Block b = MakeBlock("B", asset, 2, 1'700'000'000'002'000LL);
+  b.canonical.audio.sample_rate = 44100;  // was 48000 in TestCanonical()
+
+  std::string reason;
+  EXPECT_FALSE(session.AddQueuedBlock(b, "A", &reason));
+  EXPECT_EQ(reason, "CANONICAL_MISMATCH");
+  EXPECT_EQ(session.QueueDepth(), 1) << "rejected block must not enqueue";
+
+  session.Close();
+  uds.Teardown();
+}
+
+// Revision with mismatched canonical → CANONICAL_MISMATCH and the
+// rejected counter increments (observability contract still holds).
+TEST(AirSessionAdmissionTest, PutBlockRevisionRejectsMismatchedCanonical) {
+  const std::string asset = ResolveSampleA();
+  if (!std::filesystem::exists(asset)) GTEST_SKIP() << "SampleA not found";
+
+  UdsFixture uds;
+  uds.Setup("revise_mismatch");
+
+  AirSession session;
+  ASSERT_TRUE(session.AttachOutput(uds.client_fd));
+  ASSERT_TRUE(session.SeedActiveBlock(
+      MakeBlock("A", asset, 2, 1'700'000'000'000LL)));
+  std::string r;
+  ASSERT_TRUE(session.AddQueuedBlock(
+      MakeBlock("B", asset, 2, 1'700'000'000'002'000LL), "A", &r));
+
+  const int64_t before = session.RevisionsRejectedTotal();
+
+  Block b_rev = MakeBlock("B", asset, 2, 1'700'000'000'002'000LL);
+  b_rev.canonical.video.width = 1280;  // was 968 in TestCanonical()
+
+  std::string reason;
+  EXPECT_FALSE(session.PutBlockRevision(b_rev, &reason));
+  EXPECT_EQ(reason, "CANONICAL_MISMATCH");
+  EXPECT_EQ(session.RevisionsRejectedTotal(), before + 1);
+
+  session.Close();
+  uds.Teardown();
+}
+
 }  // namespace
 }  // namespace retrovue::air

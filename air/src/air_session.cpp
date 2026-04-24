@@ -53,6 +53,40 @@ void DefaultLifecycleObserver(const StateTransitionEvent& e) {
             << std::endl;
 }
 
+// IR2.2 — structural equality on ChannelCanonical. Rational comparison
+// is field-identity, not mathematical equivalence (30000/1001 != 60000/2002);
+// Core is expected to send the same rational representation consistently.
+bool CanonicalsEqual(const ChannelCanonical& a, const ChannelCanonical& b) {
+  return a.video.width == b.video.width &&
+         a.video.height == b.video.height &&
+         a.video.frame_rate.num == b.video.frame_rate.num &&
+         a.video.frame_rate.den == b.video.frame_rate.den &&
+         a.video.pixel_format == b.video.pixel_format &&
+         a.audio.sample_rate == b.audio.sample_rate &&
+         a.audio.channels == b.audio.channels;
+}
+
+// IR2.2 — canonical reconciliation used by AddQueuedBlock and
+// PutBlockRevision after an active session is confirmed.
+//   - If the block's canonical is absent/default (!IsValid), inherit
+//     the session canonical into the block.
+//   - If present and matches, accept.
+//   - If present and differs, set reason CANONICAL_MISMATCH and reject.
+// Precondition: session_canonical is itself valid (caller has
+// already checked active session exists).
+bool ReconcileBlockCanonical(const ChannelCanonical& session_canonical,
+                             Block& block, std::string* reason_out) {
+  if (!block.canonical.IsValid()) {
+    block.canonical = session_canonical;
+    return true;
+  }
+  if (!CanonicalsEqual(block.canonical, session_canonical)) {
+    if (reason_out) *reason_out = "CANONICAL_MISMATCH";
+    return false;
+  }
+  return true;
+}
+
 }  // namespace
 
 const char* ToString(SessionState s) {
@@ -207,11 +241,22 @@ bool AirSession::AssignContent(const std::string& input_path,
 
 bool AirSession::SeedActiveBlock(const Block& block,
                                  std::string* reason_out) {
-  // IR2.1: structural admission first. Pre-existing pre-conditions
-  // (emitter attached, not seeded, canonical valid) do not set
-  // reason_out — their failure modes predate the IR2.1 reason-code
-  // catalog.
+  // IR2.1: structural admission first.
   if (!ValidateBlockStructure(block, reason_out)) return false;
+
+  // IR2.2: seed establishes the session canonical from the supplied
+  // Block, so block.canonical MUST be valid — there is no prior
+  // session canonical to inherit from. "Absent canonical at seed"
+  // collapses to CANONICAL_MISMATCH (the channel's canonical and the
+  // block's canonical are irreconcilable).
+  if (!block.canonical.IsValid()) {
+    if (reason_out) *reason_out = "CANONICAL_MISMATCH";
+    return false;
+  }
+
+  // Pre-existing pre-conditions (emitter attached, not seeded) live in
+  // SeedActiveBlockInternal and do not produce reason codes — they
+  // predate the IR2.x catalog.
   return SeedActiveBlockInternal(block);
 }
 
@@ -266,7 +311,7 @@ bool AirSession::AddQueuedBlock(const Block& block,
                                 const std::string& /*predecessor_id*/,
                                 std::string* reason_out) {
   // IR2.1: structural admission runs first, without holding the queue
-  // lock. Predecessor continuity and canonical matching land in IR2.2+.
+  // lock. Predecessor continuity lands in IR2.3.
   if (!ValidateBlockStructure(block, reason_out)) return false;
 
   std::lock_guard<std::mutex> lk(queue_mutex_);
@@ -274,7 +319,15 @@ bool AirSession::AddQueuedBlock(const Block& block,
     if (reason_out) *reason_out = "NO_SESSION";
     return false;
   }
-  queued_blocks_.emplace_back(block);
+
+  // IR2.2: reconcile canonical against the session canonical
+  // (established at seed). Absent/default inherits; explicit mismatch
+  // rejects with CANONICAL_MISMATCH.
+  Block admitted = block;
+  if (!ReconcileBlockCanonical(canonical_, admitted, reason_out)) {
+    return false;
+  }
+  queued_blocks_.emplace_back(std::move(admitted));
   // If the priming pipeline is running (OpenAir occurred), wake it so
   // the new block's segments get primed eagerly. next_raw currently
   // scans only active_block_ — queued-block priming lands in C2, but
@@ -335,12 +388,22 @@ bool AirSession::PutBlockRevision(const Block& block,
   if (has_priming) return reject("BLOCK_PRIMING");
   if (has_non_raw) return reject("BLOCK_ARMED");
 
+  // IR2.2: reconcile canonical against session. Runs after mutation-
+  // state checks because ACTIVE_BLOCK_IMMUTABLE / BLOCK_NOT_IN_QUEUE /
+  // BLOCK_PRIMING / BLOCK_ARMED are cheaper and more specific — the
+  // caller should fix those before we bother with canonical.
+  Block admitted = block;
+  if (!ReconcileBlockCanonical(canonical_, admitted, reason_out)) {
+    revisions_rejected_total_.fetch_add(1, std::memory_order_relaxed);
+    return false;
+  }
+
   // Accept: replace the queued BlockRuntime with a fresh one from the
   // revision. Per Pass-B decision, this is a NEW candidate — the
   // previous BlockRuntime (and any attached resources) is destroyed.
   // A queued-primed segment in the old BlockRuntime would have its
   // source retired via BlockRuntime's destructor. No in-place revival.
-  queued_blocks_[idx] = BlockRuntime(block);
+  queued_blocks_[idx] = BlockRuntime(admitted);
   if (priming_pipeline_) priming_pipeline_->Kick();
   revisions_accepted_total_.fetch_add(1, std::memory_order_relaxed);
   return true;
