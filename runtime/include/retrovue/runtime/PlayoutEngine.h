@@ -29,8 +29,8 @@
 #include <mutex>
 #include <string>
 #include <optional>
-#include <unordered_map>
 
+#include "retrovue/bootstrap/BootstrapCommand.h"
 #include "retrovue/readiness/ReadinessSignals.hpp"
 #include "retrovue/runtime/ProgramFormat.h"
 
@@ -154,6 +154,19 @@ class PlayoutEngine {
                                    BlockPlanSignalGetter getter);
   void DetachBlockPlanSignalSource(int32_t channel_id);
 
+  // Option C bootstrap content-gate — Turn D observer-only metrics bridge.
+  // PipelineManager owns the gate and evaluates it inline during bootstrap.
+  // A getter bridges the gate's state + last kickoff event into a
+  // per-channel CustomMetricsProvider that publishes them on /metrics
+  // scrape. Attach/detach lifecycle mirrors the BlockPlan signal source.
+  //
+  // Contracts: docs/contracts/invariants/air/INV-BOOTSTRAP-*.md.
+  using BootstrapGateSnapshotGetter =
+      std::function<bootstrap::GateMetricsSnapshot()>;
+  void AttachBootstrapGateSource(int32_t channel_id,
+                                 BootstrapGateSnapshotGetter getter);
+  void DetachBootstrapGateSource(int32_t channel_id);
+
   // Phase 9.0: OutputBus/OutputSink architecture
   // Attaches an output sink to the channel's OutputBus.
   // The sink will receive frames routed through the bus.
@@ -228,9 +241,14 @@ class PlayoutEngine {
   // Ensures ProgramOutput is connected to OutputBus so frames route to sink.
   void FinalizeLiveOutput(int32_t channel_id);
 
-  // TODO: Legacy/transitional. Air runs one playout session; channel identity is external (Core).
+  // Single-session enforcement: at most one PlayoutInstance alive per process.
+  // channel_id on methods is validated against instance_->channel_id; mismatch → error.
   mutable std::mutex channels_mutex_;
-  std::unordered_map<int32_t, std::unique_ptr<PlayoutInstance>> channels_;
+  std::unique_ptr<PlayoutInstance> instance_;
+
+  // Helper: returns the active PlayoutInstance iff channel_id matches; otherwise nullptr.
+  // Caller MUST hold channels_mutex_. Replaces the map find+check pattern used throughout this file.
+  PlayoutInstance* FindInstanceLocked(int32_t channel_id) const;
 };
 
 }  // namespace retrovue::runtime

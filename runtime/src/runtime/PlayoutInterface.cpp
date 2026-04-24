@@ -147,4 +147,14 @@ void PlayoutInterface::DetachBlockPlanSignalSource(int32_t channel_id) {
   engine_->DetachBlockPlanSignalSource(channel_id);
 }
 
+void PlayoutInterface::AttachBootstrapGateSource(
+    int32_t channel_id,
+    std::function<bootstrap::GateMetricsSnapshot()> getter) {
+  engine_->AttachBootstrapGateSource(channel_id, std::move(getter));
+}
+
+void PlayoutInterface::DetachBootstrapGateSource(int32_t channel_id) {
+  engine_->DetachBootstrapGateSource(channel_id);
+}
+
 }  // namespace retrovue::runtime

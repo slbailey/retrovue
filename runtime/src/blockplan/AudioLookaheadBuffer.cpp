@@ -263,6 +263,20 @@ bool AudioLookaheadBuffer::IsPrimed() const {
   return primed_;
 }
 
+int64_t AudioLookaheadBuffer::PeekFrontPtsUs() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (has_partial_) {
+    int64_t offset_us = (sample_rate_ > 0)
+        ? (static_cast<int64_t>(partial_consumed_samples_) * 1000000) / sample_rate_
+        : 0;
+    return partial_.pts_us + offset_us;
+  }
+  if (!frames_.empty()) {
+    return frames_.front().pts_us;
+  }
+  return -1;
+}
+
 int64_t AudioLookaheadBuffer::HardCapDrops() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return hard_cap_drops_;

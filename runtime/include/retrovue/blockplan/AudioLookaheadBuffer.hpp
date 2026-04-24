@@ -95,6 +95,11 @@ class AudioLookaheadBuffer {
   // True once at least one audio frame has been pushed.
   bool IsPrimed() const;
 
+  // TURN0_INSTRUMENTATION (temporary): source-PTS (microseconds) of the
+  // sample that the next TryPopSamples will deliver first. Returns -1 if
+  // the buffer is empty. Read-only; does not consume.
+  int64_t PeekFrontPtsUs() const;
+
   // Target depth in milliseconds (configuration).
   int TargetDepthMs() const { return target_depth_ms_; }
 

@@ -28,6 +28,7 @@
 
 #include "retrovue/blockplan/AudioLookaheadBuffer.hpp"
 #include "retrovue/blockplan/BlockPlanSessionTypes.hpp"
+#include "retrovue/bootstrap/BootstrapContentGate.h"
 #include "retrovue/readiness/ReadinessSignals.hpp"
 #include "retrovue/blockplan/BroadcastAudioProcessor.hpp"
 #include "retrovue/blockplan/BlockPlanTypes.hpp"
@@ -208,6 +209,16 @@ class PipelineManager : public IPlayoutExecutionEngine {
   // Contract: docs/contracts/invariants/air/INV-READINESS-*.md.
   readiness::PipelineSignals CaptureReadinessSignals() const;
 
+  // Option C bootstrap content-gate — Turn D observer-only snapshot.
+  // Thread-safe, read-only snapshot that compares the new gate
+  // (BootstrapContentGate / Option C) against the existing gate
+  // (EvaluateBootstrapPhaseGate phase_valid break). Both gates' open
+  // moments and front-delta values are captured so consumers can answer
+  // "did new open before, same, or after existing, and by how much".
+  // Contracts: docs/contracts/invariants/air/INV-BOOTSTRAP-*.md.
+  using BootstrapGateSnapshot = bootstrap::GateMetricsSnapshot;
+  BootstrapGateSnapshot GetBootstrapGateSnapshot() const;
+
   // P3.2: Test-only - forward delay hook to internal ProducerPreloader.
   void SetPreloaderDelayHook(std::function<void(const std::atomic<bool>&)> hook);
 
@@ -387,6 +398,57 @@ class PipelineManager : public IPlayoutExecutionEngine {
 
   mutable std::mutex metrics_mutex_;
   PipelineMetrics metrics_;
+
+  // Option C bootstrap content-gate — Turn D observer-only.
+  //
+  // The gate is evaluated each iteration of the existing bootstrap gate
+  // wait loop and each of the first bootstrap_observe_ticks_ main-loop
+  // ticks. It does not control emission; it records the tick index at
+  // which Option C's predicate WOULD have opened the gate, plus the
+  // source-time delta between the two buffer fronts at that moment.
+  //
+  // Source-time origins are captured on first observation of a valid
+  // front on each stream so the gate's snapshot values are segment-local
+  // microseconds for both streams and directly comparable.
+  std::unique_ptr<bootstrap::BootstrapContentGate> bootstrap_gate_;
+  std::atomic<int64_t> bootstrap_audio_origin_pts_us_{INT64_MIN};
+  std::atomic<int64_t> bootstrap_video_origin_block_ct_us_{INT64_MIN};
+  std::atomic<bool> bootstrap_kickoff_fired_{false};
+  mutable std::mutex bootstrap_mutex_;
+  bootstrap::KickoffEvent bootstrap_last_kickoff_{};
+
+  // Existing gate (phase_valid break) observation fields. Populated once
+  // at the moment EvaluateBootstrapPhaseGate returns phase_valid=true.
+  std::atomic<bool> bootstrap_existing_gate_opened_{false};
+  int64_t bootstrap_existing_gate_front_delta_us_ = 0;
+  int bootstrap_existing_gate_audio_depth_ms_ = 0;
+  int bootstrap_existing_gate_video_depth_frames_ = 0;
+  bool bootstrap_new_gate_was_open_at_existing_open_ = false;
+
+  // Floors used by the new gate, matching the existing gate's nominal
+  // configuration so the predicates are directly comparable. Captured
+  // in the gate-wait loop where both values are in scope.
+  std::atomic<int> bootstrap_new_gate_audio_floor_ms_{0};
+  std::atomic<int> bootstrap_new_gate_video_floor_frames_{0};
+
+  // Record the existing gate's open moment and emit the comparison log
+  // line. Called once from the gate-wait loop when phase_valid flips
+  // true, immediately after the final EvaluateBootstrapGate call on that
+  // iteration.
+  void RecordExistingGateOpen(int audio_depth_ms, int video_depth_frames);
+
+  // Number of main-loop ticks after gate-open on which the observer
+  // continues to evaluate (bounded; once gate opens it is sticky so
+  // further evaluation is a no-op, but the bound avoids unbounded
+  // observation cost if the predicate never opens).
+  static constexpr int64_t kBootstrapObserveTicks = 30;
+
+  // Feed one snapshot to bootstrap_gate_. Called from the gate-wait loop
+  // and from the first kBootstrapObserveTicks main-loop ticks. Safe to
+  // call after the gate has opened (sticky no-op).
+  void EvaluateBootstrapGate(int64_t tick_index,
+                             int audio_floor_ms,
+                             int video_floor_frames);
 
   // Guard against on_session_ended firing more than once.
   bool session_ended_fired_ = false;

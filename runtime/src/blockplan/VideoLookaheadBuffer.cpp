@@ -528,6 +528,47 @@ void VideoLookaheadBuffer::FillLoop() {
       auto should_park_for_lookahead = [&]() -> bool {
         // Memory safety: always park at hard cap regardless of lookahead.
         if (gate_store_size >= hard_cap_frames_) return true;
+
+        // INV-AUDIO-LIVENESS-001 (Step 2 hysteresis): if audio is
+        // starving, do NOT park on video lookahead alone. Enter burst
+        // mode at LowWaterMs and exit at HighWaterMs. While in burst,
+        // keep decoding so audio can refill; the drop-video-for-audio
+        // path inside the fill loop discards surplus video frames.
+        // Memory safety is preserved by the hard_cap check above.
+        if (audio_buffer) {
+          const int audio_ms = audio_buffer->DepthMs();
+          const int low_ms = audio_buffer->LowWaterMs();
+          const int high_ms = audio_buffer->HighWaterMs();
+          const bool was_burst =
+              audio_burst_active_.load(std::memory_order_relaxed);
+          bool is_burst = was_burst;
+          if (audio_ms < low_ms) {
+            is_burst = true;
+          } else if (audio_ms >= high_ms) {
+            is_burst = false;
+          }
+          if (is_burst != was_burst) {
+            audio_burst_active_.store(is_burst, std::memory_order_relaxed);
+            if (buffer_label_ == "LIVE_VIDEO_BUFFER") {
+              std::ostringstream oss;
+              oss << "[FillLoop:" << buffer_label_
+                  << "] AUDIO_BURST_TRANSITION"
+                  << " state=" << (is_burst ? "ENTER" : "EXIT")
+                  << " audio_depth_ms=" << audio_ms
+                  << " low_ms=" << low_ms
+                  << " high_ms=" << high_ms
+                  << " store_size=" << gate_store_size
+                  << " lookahead=" << gate_lookahead;
+              Logger::Info(oss.str());
+            }
+          }
+          if (is_burst) {
+            // Audio still recovering — keep decoding regardless of
+            // video lookahead. Hard cap above is the safety floor.
+            return false;
+          }
+        }
+
         // INV-AIR-EOF-NON-REPEATABLE-001: After EOF, pad frames share the
         // same source_frame_index, so FIVS doesn't grow. Use deque size
         // (gate_deque_size) for parking decisions to prevent infinite spin
@@ -565,13 +606,21 @@ void VideoLookaheadBuffer::FillLoop() {
         // FILLING path (steady only): park when lookahead >= target.
         if (should_park_for_lookahead()) {
           steady_filling_.store(false, std::memory_order_relaxed);
-          { std::ostringstream oss;
-            oss << "[FillLoop:" << buffer_label_ << "] PARK"
+          // FILL_PARK_DIAG (temporary): promote to Info so park transitions
+          // are visible without -DRETROVUE_VERBOSE_LOGS. Used to correlate
+          // fill-thread parking with AUDIO_FLOW silence_underflow events.
+          if (buffer_label_ == "LIVE_VIDEO_BUFFER") {
+            std::ostringstream oss;
+            oss << "[FillLoop:" << buffer_label_ << "] FILL_PARK"
                 << " lookahead=" << gate_lookahead
                 << " lookahead_target=" << lookahead_target_
                 << " store_size=" << gate_store_size
-                << " audio_depth_ms=" << (audio_buffer ? audio_buffer->DepthMs() : -1);
-            Logger::Debug(oss.str()); }
+                << " audio_depth_ms=" << (audio_buffer ? audio_buffer->DepthMs() : -1)
+                << " audio_low_ms=" << (audio_buffer ? audio_buffer->LowWaterMs() : -1)
+                << " audio_boost=" << audio_boost_.load(std::memory_order_relaxed)
+                << " total_pushed=" << total_pushed_;
+            Logger::Info(oss.str());
+          }
           // Fall through to the condvar path below so we park properly.
         } else {
           // INV-FIVS-LOOKAHEAD-001: Lookahead below target — burst decode
@@ -619,6 +668,7 @@ void VideoLookaheadBuffer::FillLoop() {
 
       if (!skip_wait) {
         // PARKED path (or bootstrap): block on condvar.
+        auto wait_diag_start = std::chrono::steady_clock::now();
 #if defined(RETROVUE_VERBOSE_FILL)
         {
           std::ostringstream oss;
@@ -705,13 +755,18 @@ void VideoLookaheadBuffer::FillLoop() {
               }
               if (need_more) {
                 steady_filling_.store(true, std::memory_order_relaxed);
-                { std::ostringstream oss;
-                  oss << "[FillLoop:" << buffer_label_ << "] UNPARK"
+                // FILL_UNPARK_DIAG (temporary): promote to Info to track
+                // unpark cadence vs AUDIO_FLOW silence_underflow events.
+                if (buffer_label_ == "LIVE_VIDEO_BUFFER") {
+                  std::ostringstream oss;
+                  oss << "[FillLoop:" << buffer_label_ << "] FILL_UNPARK"
+                      << " reason=lookahead"
                       << " lookahead=" << la
                       << " lookahead_target=" << lookahead_target_
                       << " store_size=" << frame_store_.Size()
                       << " audio_depth_ms=" << (audio_buffer ? audio_buffer->DepthMs() : -1);
-                  Logger::Debug(oss.str()); }
+                  Logger::Info(oss.str());
+                }
                 wake_reason = "lookahead";
                 return true;
               }
@@ -726,6 +781,18 @@ void VideoLookaheadBuffer::FillLoop() {
                 const int low_ms = audio_buffer->LowWaterMs();
                 if (audio_ms < low_ms) {
                   steady_filling_.store(true, std::memory_order_relaxed);
+                  // FILL_UNPARK_DIAG: audio-liveness wakeups are the
+                  // critical path for the starvation hypothesis.
+                  if (buffer_label_ == "LIVE_VIDEO_BUFFER") {
+                    std::ostringstream oss;
+                    oss << "[FillLoop:" << buffer_label_ << "] FILL_UNPARK"
+                        << " reason=audio_liveness"
+                        << " audio_depth_ms=" << audio_ms
+                        << " audio_low_ms=" << low_ms
+                        << " store_size=" << store_sz
+                        << " hard_cap=" << hard_cap_frames_;
+                    Logger::Info(oss.str());
+                  }
                   wake_reason = "audio_liveness";
                   return true;
                 }
@@ -741,6 +808,33 @@ void VideoLookaheadBuffer::FillLoop() {
           std::lock_guard<std::mutex> lock(mutex_);
           post_lookahead = ComputeLookaheadLocked();
           post_store_size = static_cast<int>(frame_store_.Size());
+        }
+
+        // WAIT_DIAG (Step 3c): how long did this condvar wait block?
+        // Aggregates wait time so we can answer "is the fill thread
+        // spending time in waits (producer-bound) or in decodes
+        // (decoder-bound)".
+        if (buffer_label_ == "LIVE_VIDEO_BUFFER") {
+          const auto wait_us =
+              std::chrono::duration_cast<std::chrono::microseconds>(
+                  std::chrono::steady_clock::now() - wait_diag_start).count();
+          static thread_local int64_t wait_diag_n = 0;
+          static thread_local int64_t wait_diag_sum_us = 0;
+          static thread_local int64_t wait_diag_max_us = 0;
+          ++wait_diag_n;
+          wait_diag_sum_us += wait_us;
+          if (wait_us > wait_diag_max_us) wait_diag_max_us = wait_us;
+          if ((wait_diag_n % 300) == 0) {
+            const int64_t avg_us = wait_diag_sum_us / wait_diag_n;
+            std::ostringstream oss;
+            oss << "[FillLoop:" << buffer_label_ << "] WAIT_AGG"
+                << " count=" << wait_diag_n
+                << " avg_us=" << avg_us
+                << " max_us=" << wait_diag_max_us
+                << " sum_ms=" << (wait_diag_sum_us / 1000)
+                << " last_wake_reason=" << wake_reason;
+            Logger::Info(oss.str());
+          }
         }
 #if defined(RETROVUE_VERBOSE_FILL)
         if (!wake_reason.empty()) {
@@ -766,8 +860,27 @@ void VideoLookaheadBuffer::FillLoop() {
               : post_lookahead >= lookahead_target_;
           const int a_ms = audio_buffer->DepthMs();
           const int low_ms = audio_buffer->LowWaterMs();
-          if (video_ahead && a_ms < low_ms)
+          if (video_ahead && a_ms < low_ms) {
             drop_video_this_cycle = true;
+            // FILL_DROP_VIDEO_DIAG (temporary): promote to Info. Each
+            // event represents one decode cycle that produced audio-only
+            // (video frame dropped) to feed the starving audio buffer.
+            if (buffer_label_ == "LIVE_VIDEO_BUFFER") {
+              static thread_local int64_t drop_video_log_count = 0;
+              if (drop_video_log_count < 10 ||
+                  (drop_video_log_count % 50) == 0) {
+                std::ostringstream oss;
+                oss << "[FillLoop:" << buffer_label_ << "] FILL_DROP_VIDEO_FOR_AUDIO"
+                    << " event_count=" << drop_video_log_count
+                    << " audio_depth_ms=" << a_ms
+                    << " audio_low_ms=" << low_ms
+                    << " video_lookahead=" << post_lookahead
+                    << " store_size=" << post_store_size;
+                Logger::Info(oss.str());
+              }
+              ++drop_video_log_count;
+            }
+          }
         }
 
 #if defined(RETROVUE_VERBOSE_LOGS)
@@ -889,6 +1002,21 @@ void VideoLookaheadBuffer::FillLoop() {
         Logger::Debug(oss.str());
       }
 #endif
+      // DECODE_DIAG (temporary Step 3c): capture per-decode state
+      // before/after the TryGetFrame call. Used to test the
+      // decoder-bound hypothesis: if decode_us is comparable to the
+      // tick period (33367us at 29.97fps), the producer is structurally
+      // rate-limited and no fill-thread tweak will help.
+      const int decode_diag_audio_depth_before =
+          (buffer_label_ == "LIVE_VIDEO_BUFFER" && audio_buffer)
+              ? audio_buffer->DepthMs() : -1;
+      const int decode_diag_store_size_before =
+          (buffer_label_ == "LIVE_VIDEO_BUFFER")
+              ? static_cast<int>([&] {
+                  std::lock_guard<std::mutex> lock(mutex_);
+                  return frame_store_.Size();
+                }())
+              : -1;
       auto decode_start = std::chrono::steady_clock::now();
       auto fd = producer->TryGetFrame();
       auto decode_end = std::chrono::steady_clock::now();
@@ -950,6 +1078,90 @@ void VideoLookaheadBuffer::FillLoop() {
         has_decoded_audio = !fd.frame->audio.empty();
         // Stash audio for deferred push — do NOT push yet.
         pending_audio_frames = std::move(fd.frame->audio);
+
+        // DECODE_DIAG (Step 3c): per-decode + aggregated latency log.
+        if (buffer_label_ == "LIVE_VIDEO_BUFFER") {
+          static thread_local int64_t decode_diag_n = 0;
+          static thread_local int64_t decode_diag_sum_us = 0;
+          static thread_local int64_t decode_diag_max_us = 0;
+          static thread_local int64_t decode_diag_sum_audio_samples = 0;
+          static thread_local int64_t decode_diag_video_count = 0;
+          static thread_local auto decode_diag_window_start =
+              std::chrono::steady_clock::now();
+
+          const auto decode_us =
+              std::chrono::duration_cast<std::chrono::microseconds>(
+                  decode_end - decode_start).count();
+          int64_t audio_samples_this = 0;
+          for (const auto& af : pending_audio_frames) {
+            audio_samples_this += af.nb_samples;
+          }
+
+          ++decode_diag_n;
+          decode_diag_sum_us += decode_us;
+          if (decode_us > decode_diag_max_us) decode_diag_max_us = decode_us;
+          decode_diag_sum_audio_samples += audio_samples_this;
+          ++decode_diag_video_count;  // fd.frame is non-null here
+
+          const bool outlier = decode_us > 50000;  // >50ms = concerning
+          if (decode_diag_n <= 10 ||
+              (decode_diag_n % 30) == 0 ||
+              outlier) {
+            const int a_after =
+                audio_buffer ? audio_buffer->DepthMs() : -1;
+            const int s_after = static_cast<int>([&] {
+              std::lock_guard<std::mutex> lock(mutex_);
+              return frame_store_.Size();
+            }());
+            std::ostringstream oss;
+            oss << "[FillLoop:" << buffer_label_ << "] DECODE_DIAG"
+                << " n=" << decode_diag_n
+                << " src_idx=" << fd.frame->source_frame_index
+                << " decode_us=" << decode_us
+                << " audio_samples=" << audio_samples_this
+                << " video_produced=1"
+                << " audio_depth_ms_before=" << decode_diag_audio_depth_before
+                << " audio_depth_ms_after=" << a_after
+                << " store_before=" << decode_diag_store_size_before
+                << " store_after=" << s_after
+                << (outlier ? " OUTLIER=1" : "");
+            Logger::Info(oss.str());
+          }
+
+          // Aggregate every 300 decodes.
+          if ((decode_diag_n % 300) == 0) {
+            auto now = std::chrono::steady_clock::now();
+            const int64_t window_us =
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    now - decode_diag_window_start).count();
+            const int64_t avg_us = decode_diag_n > 0
+                ? (decode_diag_sum_us / decode_diag_n) : 0;
+            // Derived rates: samples/sec and frames/sec across the
+            // entire aggregate window (wall-clock).
+            const double samples_per_sec = window_us > 0
+                ? (static_cast<double>(decode_diag_sum_audio_samples) *
+                   1'000'000.0 / window_us)
+                : 0.0;
+            const double fps = window_us > 0
+                ? (static_cast<double>(decode_diag_video_count) *
+                   1'000'000.0 / window_us)
+                : 0.0;
+            // Burst max rate: fastest 300-decode window so far.
+            static thread_local double decode_diag_burst_max_fps = 0.0;
+            if (fps > decode_diag_burst_max_fps)
+              decode_diag_burst_max_fps = fps;
+            std::ostringstream oss;
+            oss << "[FillLoop:" << buffer_label_ << "] DECODE_AGG"
+                << " count=" << decode_diag_n
+                << " window_ms=" << (window_us / 1000)
+                << " avg_us=" << avg_us
+                << " max_us=" << decode_diag_max_us
+                << " audio_samples_per_sec=" << static_cast<int64_t>(samples_per_sec)
+                << " video_fps=" << fps
+                << " burst_max_fps=" << decode_diag_burst_max_fps;
+            Logger::Info(oss.str());
+          }
+        }
       } else if (fd.status == DecodeStatus::kEof || fd.status == DecodeStatus::kError) {
         // INV-AIR-EOF-NON-REPEATABLE-001: Terminal — emit pad frame.
         // INV-AIR-ERROR-FAILSAFE-001: Error → same as EOF for emission.
@@ -1069,13 +1281,51 @@ void VideoLookaheadBuffer::FillLoop() {
       const bool projected_av_lead_too_high =
           projected_av_delta_ms > av_phase_tolerance_ms_;
       const bool clamp_enabled = !ValidationDisableAvLeadClamp();
-      const bool want_clamp = clamp_enabled &&
+
+      // INV-AUDIO-LIVENESS-001 (Step 4): AV_LEAD_CLAMP starvation bypass.
+      // When audio depth is below low-water, the clamp's overshoot-
+      // prevention purpose is inverted: rejecting a decoded burst would
+      // leave the consumer starving. Bypass the clamp until audio
+      // recovers to high-water (hysteresis — prevents flapping near
+      // low-water). Audio buffer's own hard_cap_ms (default 2000 ms)
+      // remains the safety ceiling.
+      bool clamp_bypass_starvation = false;
+      {
+        const int low_ms = audio_buffer->LowWaterMs();
+        const int high_ms = audio_buffer->HighWaterMs();
+        const bool was_bypass =
+            av_lead_clamp_bypass_active_.load(std::memory_order_relaxed);
+        bool is_bypass = was_bypass;
+        if (audio_ms < low_ms) {
+          is_bypass = true;
+        } else if (audio_ms >= high_ms) {
+          is_bypass = false;
+        }
+        if (is_bypass != was_bypass) {
+          av_lead_clamp_bypass_active_.store(is_bypass,
+                                              std::memory_order_relaxed);
+          if (buffer_label_ == "LIVE_VIDEO_BUFFER") {
+            std::ostringstream oss;
+            oss << "[FillLoop:" << buffer_label_
+                << "] AV_LEAD_CLAMP_BYPASS_TRANSITION"
+                << " state=" << (is_bypass ? "ENTER" : "EXIT")
+                << " audio_depth_ms=" << audio_ms
+                << " low_ms=" << low_ms
+                << " high_ms=" << high_ms
+                << " pending_audio_ms=" << pending_audio_ms;
+            Logger::Info(oss.str());
+          }
+        }
+        clamp_bypass_starvation = is_bypass;
+      }
+
+      const bool want_clamp = clamp_enabled && !clamp_bypass_starvation &&
                               (audio_high || projected_audio_high ||
                                av_lead_too_high ||
                                projected_av_lead_too_high);
 
       int64_t max_admissible_samples = pending_audio_samples;
-      if (clamp_enabled) {
+      if (clamp_enabled && !clamp_bypass_starvation) {
         if (audio_high || av_lead_too_high) {
           max_admissible_samples = 0;
         } else {

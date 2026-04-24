@@ -12,6 +12,7 @@
 #include <string>
 #include <optional>
 
+#include "retrovue/bootstrap/BootstrapCommand.h"
 #include "retrovue/readiness/ReadinessSignals.hpp"
 
 namespace retrovue::buffer {
@@ -138,6 +139,13 @@ class PlayoutInterface {
       int32_t channel_id,
       std::function<readiness::PipelineSignals()> getter);
   void DetachBlockPlanSignalSource(int32_t channel_id);
+
+  // Option C bootstrap content-gate — Turn D observer-only pass-through.
+  // Additive observational integration; does not gate any decision.
+  void AttachBootstrapGateSource(
+      int32_t channel_id,
+      std::function<bootstrap::GateMetricsSnapshot()> getter);
+  void DetachBootstrapGateSource(int32_t channel_id);
 
   // Update the playout plan for an active channel
   InterfaceResult UpdatePlan(

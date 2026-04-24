@@ -237,6 +237,11 @@ set(AIR_CORE_SOURCES
   # and the four peer INV-SEAM-*-001 files.
   src/seam/SeamEvaluator.cpp
   src/seam/SeamController.cpp
+  # Bootstrap content gate (Option C — Phase 1 additive). See
+  # docs/contracts/invariants/air/INV-BOOTSTRAP-CONTINUITY-001.md and the
+  # four peer INV-BOOTSTRAP-*-001 files.
+  src/bootstrap/BootstrapGateEvaluator.cpp
+  src/bootstrap/BootstrapContentGate.cpp
 )
 
 # Optional: enable PAD/audio priming diagnostic logging (PipelineManager).
@@ -720,6 +725,39 @@ add_test(
 )
 set_tests_properties(SeamContracts PROPERTIES LABELS "contract")
 
+# ---- Bootstrap Content-Gate Contract Tests (INV-BOOTSTRAP-CONTINUITY / CONTENT-PARKED / CONTENT-ORIGIN / KICKOFF-ATOMIC / PTS-CONTINUOUS -001) ----
+# Phase 1 contract tests for the bootstrap content gate (Option C).
+# GREEN under the Turn C production code in src/bootstrap/. Invoke via:
+#   cmake --build runtime/build --target bootstrap_contract_tests
+#   ctest --test-dir runtime/build -R BootstrapContracts --output-on-failure
+add_executable(bootstrap_contract_tests
+  tests/contracts/bootstrap/BootstrapContentGateInvariantTests.cpp
+)
+
+target_link_libraries(bootstrap_contract_tests
+  PRIVATE
+    retrovue_air_core
+    GTest::gtest
+    GTest::gtest_main
+)
+
+target_link_options(bootstrap_contract_tests PRIVATE
+  "LINKER:-rpath,${X264_RPATH}"
+  "LINKER:-rpath,${FFMPEG_RPATH}"
+)
+
+target_include_directories(bootstrap_contract_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/contracts/bootstrap
+)
+
+add_test(
+  NAME BootstrapContracts
+  COMMAND bootstrap_contract_tests
+)
+set_tests_properties(BootstrapContracts PROPERTIES LABELS "contract")
+
 target_link_libraries(fatal_underflow_visibility_tests
   PRIVATE
     retrovue_air_core
@@ -928,4 +966,21 @@ add_executable(retrovue_air_seam_verify
 target_link_libraries(retrovue_air_seam_verify PRIVATE retrovue_air_core)
 target_include_directories(retrovue_air_seam_verify PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+# ---- Step 5a: Synthetic Segment-Seam Reproduction Harness ----
+# Constructs a single FedBlock with N segments and plays it out through
+# PipelineManager, writing MPEG-TS to a file for offline playback. Used
+# to force segment-seam transitions on demand so SEAM_JUMP / SKIP_DETECT
+# instrumentation can be correlated with perceived playback skip.
+add_executable(retrovue_seam_segment_test
+  src/standalone/SeamSegmentTest.cpp
+)
+target_link_libraries(retrovue_seam_segment_test PRIVATE retrovue_air_core)
+target_include_directories(retrovue_seam_segment_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_options(retrovue_seam_segment_test PRIVATE
+  "LINKER:-rpath,${X264_RPATH}"
+  "LINKER:-rpath,${FFMPEG_RPATH}"
 )

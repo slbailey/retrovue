@@ -699,6 +699,11 @@ Canonical contract: [delivery_hls.md](delivery_hls.md)
 | INV-SEAM-MISSED-RESOLUTION-001 | [invariants/air/INV-SEAM-MISSED-RESOLUTION-001.md](invariants/air/INV-SEAM-MISSED-RESOLUTION-001.md) | Derived — enforces INV-CONTINUOUS-FRAME-AUTHORITY-001 at missed-seam disposition; derives LAW-LIVENESS |
 | INV-SEAM-EDITORIAL-EXTERNAL-001 | [invariants/air/INV-SEAM-EDITORIAL-EXTERNAL-001.md](invariants/air/INV-SEAM-EDITORIAL-EXTERNAL-001.md) | Primary — derives LAW-RUNTIME-AUTHORITY, LAW-CONTENT-AUTHORITY |
 | INV-SEAM-OBSERVABLE-001 | [invariants/air/INV-SEAM-OBSERVABLE-001.md](invariants/air/INV-SEAM-OBSERVABLE-001.md) | Primary — derives LAW-LIVENESS |
+| INV-BOOTSTRAP-CONTINUITY-001 | [invariants/air/INV-BOOTSTRAP-CONTINUITY-001.md](invariants/air/INV-BOOTSTRAP-CONTINUITY-001.md) | Primary — derives LAW-LIVENESS |
+| INV-BOOTSTRAP-CONTENT-PARKED-001 | [invariants/air/INV-BOOTSTRAP-CONTENT-PARKED-001.md](invariants/air/INV-BOOTSTRAP-CONTENT-PARKED-001.md) | Primary — derives LAW-LIVENESS, LAW-SWITCHING |
+| INV-BOOTSTRAP-CONTENT-ORIGIN-001 | [invariants/air/INV-BOOTSTRAP-CONTENT-ORIGIN-001.md](invariants/air/INV-BOOTSTRAP-CONTENT-ORIGIN-001.md) | Primary — derives LAW-CLOCK, LAW-LIVENESS |
+| INV-BOOTSTRAP-KICKOFF-ATOMIC-001 | [invariants/air/INV-BOOTSTRAP-KICKOFF-ATOMIC-001.md](invariants/air/INV-BOOTSTRAP-KICKOFF-ATOMIC-001.md) | Primary — derives LAW-SWITCHING, LAW-LIVENESS |
+| INV-BOOTSTRAP-PTS-CONTINUOUS-001 | [invariants/air/INV-BOOTSTRAP-PTS-CONTINUOUS-001.md](invariants/air/INV-BOOTSTRAP-PTS-CONTINUOUS-001.md) | Primary — derives LAW-CLOCK, LAW-LIVENESS |
 
 ---
 
@@ -776,6 +781,11 @@ The following invariants lack test matrix entries and are flagged for follow-up:
 | INV-SEAM-MISSED-RESOLUTION-001 | AIR seam authority invariant; no test matrix entry; Required Tests cite `runtime/tests/contracts/seam/SeamAuthorityInvariantTests.cpp` (file to be created) |
 | INV-SEAM-EDITORIAL-EXTERNAL-001 | AIR seam authority invariant; no test matrix entry; Required Tests cite `runtime/tests/contracts/seam/SeamAuthorityInvariantTests.cpp` (file to be created) |
 | INV-SEAM-OBSERVABLE-001 | AIR seam authority invariant; no test matrix entry; Required Tests cite `runtime/tests/contracts/seam/SeamAuthorityInvariantTests.cpp` (file to be created) |
+| INV-BOOTSTRAP-CONTINUITY-001 | AIR bootstrap content-gate invariant; no test matrix entry; Required Tests cite `runtime/tests/contracts/bootstrap/BootstrapContentGateInvariantTests.cpp` (file to be created; RED contract test is Turn B of the bootstrap content-gate path) |
+| INV-BOOTSTRAP-CONTENT-PARKED-001 | AIR bootstrap content-gate invariant; no test matrix entry; Required Tests cite `runtime/tests/contracts/bootstrap/BootstrapContentGateInvariantTests.cpp` (file to be created) |
+| INV-BOOTSTRAP-CONTENT-ORIGIN-001 | AIR bootstrap content-gate invariant; no test matrix entry; Required Tests cite `runtime/tests/contracts/bootstrap/BootstrapContentGateInvariantTests.cpp` (file to be created) |
+| INV-BOOTSTRAP-KICKOFF-ATOMIC-001 | AIR bootstrap content-gate invariant; no test matrix entry; Required Tests cite `runtime/tests/contracts/bootstrap/BootstrapContentGateInvariantTests.cpp` (file to be created) |
+| INV-BOOTSTRAP-PTS-CONTINUOUS-001 | AIR bootstrap content-gate invariant; no test matrix entry; Required Tests cite `runtime/tests/contracts/bootstrap/BootstrapContentGateInvariantTests.cpp` (file to be created) |
 
 See [audit/TEST_ANCHOR_BACKLOG.md](audit/TEST_ANCHOR_BACKLOG.md) for prioritized action.
 

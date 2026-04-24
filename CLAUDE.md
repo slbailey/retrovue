@@ -441,3 +441,50 @@ For any architectural, behavioral, domain, runtime, scheduling, or ownership cha
 
 The vault is part of the system.
 Code and docs are not complete until the vault is current.
+
+────────────────────────
+VAULT-COMPLIANCE PRE-CHECK (MANDATORY, BEFORE EACH DECISION)
+────────────────────────
+Before writing or modifying any code that touches a concept the vault
+governs (component, truth, invariant, authority domain), verify vault
+compliance FIRST — not afterward. Vault compliance is a gate on
+starting, not a gate on finishing.
+
+For every non-trivial decision — class name, method signature, data
+ownership, computation derivation, vocabulary — the sequence is:
+
+  1. Identify the vault specs that govern the decision.
+  2. Read them literally. Re-read if it's been more than a few turns.
+  3. Check the decision against the vault:
+     - Does the vault already name an authority that owns this runtime
+       state? If yes, the class must map to that authority (either BE
+       that authority, or be a mechanism used by it). Do NOT invent a
+       new owner class.
+     - Does the vault specify HOW a value is derived? If yes,
+       implement that derivation literally. Do NOT substitute a
+       shortcut that happens to produce the same value today.
+     - Does the vault use specific vocabulary for the concept? Use
+       the vault's terms.
+  4. If the vault is SILENT on something you are about to decide,
+     STOP and raise it. Do not guess, do not pick the "convenient"
+     shape, do not proceed on best-effort.
+
+"Convenience" is not a reason to deviate. If the vault-aligned shape
+is harder, do the harder thing — or propose a vault change through
+the proper channel first.
+
+This is prevention, not audit. Auditing after the fact pushes the
+gating cost onto the reviewer; pre-checking keeps it on the
+implementer where it belongs.
+
+FAILURE PATTERNS THIS PREVENTS:
+- Standalone "pointer" / "selector" / "registry" class quietly owning
+  truth the vault has assigned to a named authority. (Example: a
+  LivePointer class inventing its own active-assignment ownership
+  when the vault assigns that truth to PlaybackDirector.)
+- Value X computed by forwarding upstream Y because Y happens to
+  equal X in the current test, when the vault specifies X must come
+  from a specific derivation. (Example: a Normalizer forwarding
+  source PTS as channel PTS when the vault requires channel PTS to
+  be derived from the channel frame index.)
+- New names introduced for concepts the vault already names.

@@ -301,6 +301,58 @@ PipelineManager::PipelineManager(
   // INV-ASPECT-PRESERVE-001: Propagate aspect policy to live producer.
   // INV-AIR-PRODUCER-INTERFACE-001: Use interface method, not concrete downcast.
   AsTickProducer(live_.get())->SetAspectPolicy(ctx->aspect_policy);
+
+  // Option C bootstrap content-gate — Turn D observer-only construction.
+  // The callback records the kickoff event and emits a structured log
+  // line. If the existing gate has already opened by this point, a
+  // second BOOTSTRAP_GATE_COMPARISON line is emitted with both gates'
+  // front-delta values and the ordering. No emission behaviour depends
+  // on this gate in Turn D.
+  // Contracts: docs/contracts/invariants/air/INV-BOOTSTRAP-*.md.
+  bootstrap_gate_ = std::make_unique<bootstrap::BootstrapContentGate>(
+      [this](const bootstrap::KickoffEvent& e) {
+        bootstrap_kickoff_fired_.store(true, std::memory_order_release);
+        int64_t existing_delta_us = 0;
+        int existing_audio_depth = 0;
+        int existing_video_depth = 0;
+        bool emit_comparison = false;
+        {
+          std::lock_guard<std::mutex> lk(bootstrap_mutex_);
+          bootstrap_last_kickoff_ = e;
+          if (bootstrap_existing_gate_opened_.load(std::memory_order_acquire)) {
+            existing_delta_us = bootstrap_existing_gate_front_delta_us_;
+            existing_audio_depth = bootstrap_existing_gate_audio_depth_ms_;
+            existing_video_depth = bootstrap_existing_gate_video_depth_frames_;
+            emit_comparison = true;
+          }
+        }
+        {
+          std::ostringstream oss;
+          oss << "[PipelineManager] BOOTSTRAP_GATE_KICKOFF"
+              << " tick=" << e.tick_index
+              << " audio_front_src_pts_us=" << e.audio_front_src_pts_us
+              << " video_front_src_pts_us=" << e.video_front_src_pts_us
+              << " front_delta_us=" << e.front_delta_us;
+          Logger::Info(oss.str());
+        }
+        if (emit_comparison) {
+          // Existing gate fired first — new gate just fired AFTER it.
+          // tick_index encodes how many main-loop ticks later (>=0 =
+          // main-loop, -1 = same wait-loop iteration but after
+          // existing, which shouldn't reach here because in that case
+          // new_was_open_at_existing_open would be true and the
+          // comparison would have been emitted from RecordExistingGateOpen).
+          std::ostringstream oss;
+          oss << "[PipelineManager] BOOTSTRAP_GATE_COMPARISON"
+              << " ordering=new_after_existing"
+              << " new_vs_existing_ticks=" << e.tick_index
+              << " new_front_delta_us=" << e.front_delta_us
+              << " existing_front_delta_us=" << existing_delta_us
+              << " existing_audio_depth_ms=" << existing_audio_depth
+              << " existing_video_depth_frames=" << existing_video_depth;
+          Logger::Info(oss.str());
+        }
+      });
 }
 
 PipelineManager::~PipelineManager() {
@@ -623,6 +675,191 @@ PipelineMetrics PipelineManager::SnapshotMetrics() const {
 std::string PipelineManager::GenerateMetricsText() const {
   std::lock_guard<std::mutex> lock(metrics_mutex_);
   return metrics_.GeneratePrometheusText();
+}
+
+void PipelineManager::EvaluateBootstrapGate(int64_t tick_index,
+                                            int audio_floor_ms,
+                                            int video_floor_frames) {
+  if (!bootstrap_gate_) return;
+  const auto* ab = audio_buffer_.get();
+  const auto* vb = video_buffer_.get();
+  if (ab == nullptr || vb == nullptr) return;
+
+  // Raw front source timestamps. Audio is source-stream PTS in
+  // microseconds (may be file-relative). Video block_ct_ms is
+  // segment-relative content-time; convert to microseconds.
+  const int64_t a_front_raw = ab->PeekFrontPtsUs();
+  VideoBufferFrame v_peek{};
+  const bool v_present = video_buffer_->TryPeekFront(v_peek);
+  const int64_t v_front_raw =
+      v_present && v_peek.block_ct_ms >= 0
+          ? static_cast<int64_t>(v_peek.block_ct_ms) * 1000
+          : -1;
+
+  // Capture origins on first observation so subsequent snapshots are
+  // in a shared segment-local microsecond coordinate system.
+  if (a_front_raw >= 0 &&
+      bootstrap_audio_origin_pts_us_.load(std::memory_order_relaxed) ==
+          INT64_MIN) {
+    bootstrap_audio_origin_pts_us_.store(a_front_raw,
+                                          std::memory_order_relaxed);
+  }
+  if (v_front_raw >= 0 &&
+      bootstrap_video_origin_block_ct_us_.load(std::memory_order_relaxed) ==
+          INT64_MIN) {
+    bootstrap_video_origin_block_ct_us_.store(v_front_raw,
+                                                std::memory_order_relaxed);
+  }
+  const int64_t a_origin =
+      bootstrap_audio_origin_pts_us_.load(std::memory_order_relaxed);
+  const int64_t v_origin =
+      bootstrap_video_origin_block_ct_us_.load(std::memory_order_relaxed);
+
+  bootstrap::BootstrapSnapshot snap;
+  snap.tick_index = tick_index;
+  snap.audio_depth_ms = ab->DepthMs();
+  snap.audio_floor_ms = audio_floor_ms;
+  snap.video_depth_frames = vb->DepthFrames();
+  snap.video_floor_frames = video_floor_frames;
+  snap.audio_front_src_pts_us =
+      (a_front_raw >= 0 && a_origin != INT64_MIN) ? (a_front_raw - a_origin)
+                                                   : -1;
+  snap.video_front_src_pts_us =
+      (v_front_raw >= 0 && v_origin != INT64_MIN) ? (v_front_raw - v_origin)
+                                                   : -1;
+  // One nominal output-frame duration in microseconds.
+  const int64_t frame_us =
+      ctx_->fps.num > 0
+          ? static_cast<int64_t>(ctx_->fps.den) * 1'000'000 / ctx_->fps.num
+          : 33367;
+  snap.output_frame_duration_us = static_cast<int>(frame_us);
+
+  // Diagnostic: log a small number of snapshots so we can see exactly
+  // what the predicate saw when the gate never opened in production.
+  static thread_local int bootstrap_gate_diag_count = 0;
+  if (bootstrap_gate_diag_count < 6 &&
+      !bootstrap_kickoff_fired_.load(std::memory_order_relaxed)) {
+    ++bootstrap_gate_diag_count;
+    std::ostringstream oss;
+    oss << "[PipelineManager] BOOTSTRAP_GATE_DIAG"
+        << " tick=" << tick_index
+        << " audio_depth_ms=" << snap.audio_depth_ms
+        << " audio_floor_ms=" << snap.audio_floor_ms
+        << " video_depth_frames=" << snap.video_depth_frames
+        << " video_floor_frames=" << snap.video_floor_frames
+        << " audio_front_norm_us=" << snap.audio_front_src_pts_us
+        << " video_front_norm_us=" << snap.video_front_src_pts_us
+        << " frame_us=" << snap.output_frame_duration_us
+        << " a_front_raw=" << a_front_raw
+        << " v_front_raw=" << v_front_raw
+        << " a_origin=" << a_origin
+        << " v_origin=" << v_origin;
+    Logger::Info(oss.str());
+  }
+
+  bootstrap_gate_->Evaluate(snap);
+}
+
+PipelineManager::BootstrapGateSnapshot
+PipelineManager::GetBootstrapGateSnapshot() const {
+  BootstrapGateSnapshot out{};
+  if (!bootstrap_gate_) return out;
+  out.state = bootstrap_gate_->State();
+  out.kickoff_fired =
+      bootstrap_kickoff_fired_.load(std::memory_order_acquire);
+  out.existing_gate_opened =
+      bootstrap_existing_gate_opened_.load(std::memory_order_acquire);
+  if (out.kickoff_fired || out.existing_gate_opened) {
+    std::lock_guard<std::mutex> lk(bootstrap_mutex_);
+    if (out.kickoff_fired) {
+      out.last_kickoff = bootstrap_last_kickoff_;
+    }
+    if (out.existing_gate_opened) {
+      out.existing_gate_front_delta_us =
+          bootstrap_existing_gate_front_delta_us_;
+      out.existing_gate_audio_depth_ms =
+          bootstrap_existing_gate_audio_depth_ms_;
+      out.existing_gate_video_depth_frames =
+          bootstrap_existing_gate_video_depth_frames_;
+      out.new_gate_was_open_at_existing_open =
+          bootstrap_new_gate_was_open_at_existing_open_;
+    }
+  }
+  return out;
+}
+
+void PipelineManager::RecordExistingGateOpen(int audio_depth_ms,
+                                             int video_depth_frames) {
+  if (bootstrap_existing_gate_opened_.load(std::memory_order_acquire)) return;
+
+  // Compute front_delta at this exact moment using the same origin-
+  // corrected scheme the new-gate snapshot uses, so the two delta
+  // numbers are directly comparable.
+  int64_t front_delta_us = 0;
+  {
+    const auto* ab = audio_buffer_.get();
+    const int64_t a_front_raw = ab ? ab->PeekFrontPtsUs() : -1;
+    VideoBufferFrame v_peek{};
+    const bool v_present =
+        video_buffer_ ? video_buffer_->TryPeekFront(v_peek) : false;
+    const int64_t v_front_raw = v_present && v_peek.block_ct_ms >= 0
+                                    ? static_cast<int64_t>(v_peek.block_ct_ms) *
+                                          1000
+                                    : -1;
+    const int64_t a_origin =
+        bootstrap_audio_origin_pts_us_.load(std::memory_order_relaxed);
+    const int64_t v_origin =
+        bootstrap_video_origin_block_ct_us_.load(std::memory_order_relaxed);
+    if (a_front_raw >= 0 && v_front_raw >= 0 && a_origin != INT64_MIN &&
+        v_origin != INT64_MIN) {
+      front_delta_us = std::llabs((a_front_raw - a_origin) -
+                                   (v_front_raw - v_origin));
+    }
+  }
+
+  const bool new_was_open =
+      bootstrap_gate_ &&
+      bootstrap_gate_->State() == bootstrap::GateState::kOpen;
+
+  {
+    std::lock_guard<std::mutex> lk(bootstrap_mutex_);
+    bootstrap_existing_gate_front_delta_us_ = front_delta_us;
+    bootstrap_existing_gate_audio_depth_ms_ = audio_depth_ms;
+    bootstrap_existing_gate_video_depth_frames_ = video_depth_frames;
+    bootstrap_new_gate_was_open_at_existing_open_ = new_was_open;
+  }
+  bootstrap_existing_gate_opened_.store(true, std::memory_order_release);
+
+  {
+    std::ostringstream oss;
+    oss << "[PipelineManager] BOOTSTRAP_EXISTING_GATE_OPEN"
+        << " audio_depth_ms=" << audio_depth_ms
+        << " video_depth_frames=" << video_depth_frames
+        << " front_delta_us=" << front_delta_us
+        << " new_gate_already_open=" << (new_was_open ? 1 : 0);
+    Logger::Info(oss.str());
+  }
+
+  if (new_was_open) {
+    // New gate opened first (strictly before, or in the same wait-loop
+    // iteration where EvaluateBootstrapGate runs before the phase-valid
+    // break check). Emit comparison here since kickoff callback already
+    // fired and will not fire again.
+    bootstrap::KickoffEvent e{};
+    {
+      std::lock_guard<std::mutex> lk(bootstrap_mutex_);
+      e = bootstrap_last_kickoff_;
+    }
+    std::ostringstream oss;
+    oss << "[PipelineManager] BOOTSTRAP_GATE_COMPARISON"
+        << " ordering=new_before_or_same_as_existing"
+        << " new_vs_existing_ticks=" << e.tick_index
+        << " new_front_delta_us=" << e.front_delta_us
+        << " existing_front_delta_us=" << front_delta_us
+        << " existing_audio_depth_ms=" << audio_depth_ms
+        << " existing_video_depth_frames=" << video_depth_frames;
+    Logger::Info(oss.str());
+  }
 }
 
 readiness::PipelineSignals PipelineManager::CaptureReadinessSignals() const {
@@ -1706,6 +1943,21 @@ void PipelineManager::Run() {
       int gate_poll_count = 0;
       int prev_gate_depth_ms = depth_ms;
       observed_bootstrap_quantum_ms = 0;
+
+      // Turn D+0.5 observer parameterization: publish the floors that
+      // mirror the existing gate's PRACTICAL acceptance behaviour, not
+      // the nominal bootstrap_target. The existing gate's quantized-
+      // floor-crossing fallback accepts video depth at the audio-driven
+      // minimum (frames_for_prime) once the audio quantum crosses its
+      // floor — this is the threshold the gate actually opens at in
+      // production, not the steady-state target. Using bootstrap_target
+      // (= max(steady_target, frames_for_prime + margin)) over-demands
+      // and produces false-negative comparisons.
+      bootstrap_new_gate_audio_floor_ms_.store(kMinAudioPrimeMs,
+                                                std::memory_order_relaxed);
+      bootstrap_new_gate_video_floor_frames_.store(
+          static_cast<int>(frames_for_prime), std::memory_order_relaxed);
+
       while (true) {
         depth_ms = audio_buffer_->DepthMs();
         observed_bootstrap_quantum_ms = std::max(
@@ -1719,7 +1971,32 @@ void PipelineManager::Run() {
             kMaxBootstrapAudioMs,
             options_.av_phase_tolerance_ms,
             prev_gate_depth_ms);
-        if (gate_snap.phase_valid) break;
+        // Option C Turn D+1: the new gate is now the AUTHORITATIVE
+        // break condition. The existing gate's phase_valid flag
+        // continues to be evaluated for telemetry (comparison logging)
+        // but does not control the loop. Wait-loop break happens iff
+        // BootstrapContentGate transitions to kOpen — i.e. both depth
+        // floors are met AND the audio/video buffer fronts are
+        // source-aligned within one output-frame duration.
+        EvaluateBootstrapGate(
+            /*tick_index=*/-1,
+            bootstrap_new_gate_audio_floor_ms_.load(
+                std::memory_order_relaxed),
+            bootstrap_new_gate_video_floor_frames_.load(
+                std::memory_order_relaxed));
+        if (gate_snap.phase_valid) {
+          // Telemetry-only: record the existing gate's open moment if
+          // it would have opened on this iteration. RecordExistingGateOpen
+          // is idempotent (early-returns once opened) so multiple
+          // phase_valid iterations are safe.
+          RecordExistingGateOpen(depth_ms, video_buffer_->DepthFrames());
+        }
+        if (bootstrap_gate_->State() == bootstrap::GateState::kOpen) {
+          // INV-BOOTSTRAP-CONTENT-ORIGIN-001 satisfied: both buffer
+          // fronts are source-aligned. Break the wait loop and proceed
+          // to main tick loop with synchronized A/V kickoff.
+          break;
+        }
 
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - gate_start).count();
@@ -1771,8 +2048,16 @@ void PipelineManager::Run() {
       // INV-BOOTSTRAP-AV-PHASE-001 atomic handoff:
       // Defer EndBootstrap until first consumer position update in tick loop,
       // so the validated bootstrap state is preserved across clock start.
+      //
+      // Option C Turn D+1: under the new gate, buffer fronts are
+      // already source-aligned at this point. The post-handoff
+      // transition drain (a band-aid that parked video fill while
+      // attempting to drain audio depth toward symmetry) is no longer
+      // needed and is skipped. EndBootstrap fires on the first tick's
+      // maybe_end_bootstrap_after_transition call without entering the
+      // drain branch.
       bootstrap_end_pending = true;
-      post_handoff_transition_pending = true;
+      post_handoff_transition_pending = false;
       post_handoff_transition_armed = false;
       post_handoff_transition_arm_tick = -1;
       const int output_frame_ms = ComputeVideoTimeMsGate(1, ctx_->fps);
@@ -1805,6 +2090,32 @@ void PipelineManager::Run() {
             << " steady_target=" << video_buffer_->TargetDepthFrames()
             << " gate_ms=" << gate_elapsed;
         Logger::Info(oss.str()); }
+
+      // TURN0_INSTRUMENTATION (temporary): dump source-PTS of both buffer
+      // fronts at gate-open to determine whether they are source-time
+      // aligned before main-loop emission begins. No behavior change.
+      {
+        const int64_t a_front_us = audio_buffer_->PeekFrontPtsUs();
+        VideoBufferFrame v_front{};
+        const bool v_present = video_buffer_->TryPeekFront(v_front);
+        const int64_t v_front_src_idx = v_present ? v_front.source_frame_index : -1;
+        const int64_t v_front_pts = v_present ? v_front.video.metadata.pts : -1;
+        const int64_t v_front_block_ct_ms = v_present ? v_front.block_ct_ms : -1;
+        const int64_t a_front_ms = (a_front_us >= 0) ? (a_front_us / 1000) : -1;
+        const int64_t delta_ms = (a_front_ms >= 0 && v_front_block_ct_ms >= 0)
+            ? (a_front_ms - v_front_block_ct_ms) : -999999;
+        std::ostringstream oss;
+        oss << "[PipelineManager] TURN0_GATE_OPEN_FRONTS"
+            << " audio_front_pts_us=" << a_front_us
+            << " audio_front_pts_ms=" << a_front_ms
+            << " video_front_source_frame_index=" << v_front_src_idx
+            << " video_front_block_ct_ms=" << v_front_block_ct_ms
+            << " video_front_metadata_pts=" << v_front_pts
+            << " front_delta_ms=" << delta_ms
+            << " audio_depth_ms=" << audio_buffer_->DepthMs()
+            << " video_depth_frames=" << video_buffer_->DepthFrames();
+        Logger::Info(oss.str());
+      }
     }
   }
 
@@ -1921,6 +2232,46 @@ void PipelineManager::Run() {
          !output_detached.load(std::memory_order_acquire)) {
     // Hook A: set thread-local tick/block so write callback can log on first EPIPE
     output::SetTickContext(session_frame_index, live_parent_block_.block_id);
+
+    // Option C Turn D: observer-only bootstrap gate evaluation for the
+    // first kBootstrapObserveTicks main-loop ticks. Sticky — once open,
+    // further calls are no-ops. No influence on emission path. Uses the
+    // SAME floors the existing gate was configured with (captured in
+    // the gate-wait loop) so the two predicates are directly comparable.
+    if (session_frame_index < kBootstrapObserveTicks) {
+      EvaluateBootstrapGate(
+          session_frame_index,
+          bootstrap_new_gate_audio_floor_ms_.load(std::memory_order_relaxed),
+          bootstrap_new_gate_video_floor_frames_.load(
+              std::memory_order_relaxed));
+    }
+
+    // TURN0_INSTRUMENTATION (temporary): per-tick front-of-buffer snapshot
+    // for the first 10 main-loop ticks. Determines what is actually about
+    // to be consumed for emission. Read-only; does not consume.
+    if (session_frame_index < 10) {
+      const int64_t a_front_us = audio_buffer_->PeekFrontPtsUs();
+      VideoBufferFrame v_front{};
+      const bool v_present = video_buffer_->TryPeekFront(v_front);
+      const int64_t v_front_src_idx = v_present ? v_front.source_frame_index : -1;
+      const int64_t v_front_pts = v_present ? v_front.video.metadata.pts : -1;
+      const int64_t v_front_block_ct_ms = v_present ? v_front.block_ct_ms : -1;
+      const int64_t a_front_ms = (a_front_us >= 0) ? (a_front_us / 1000) : -1;
+      const int64_t delta_ms = (a_front_ms >= 0 && v_front_block_ct_ms >= 0)
+          ? (a_front_ms - v_front_block_ct_ms) : -999999;
+      std::ostringstream oss;
+      oss << "[PipelineManager] TURN0_TICK_FRONTS"
+          << " tick=" << session_frame_index
+          << " audio_front_pts_us=" << a_front_us
+          << " audio_front_pts_ms=" << a_front_ms
+          << " video_front_source_frame_index=" << v_front_src_idx
+          << " video_front_block_ct_ms=" << v_front_block_ct_ms
+          << " video_front_metadata_pts=" << v_front_pts
+          << " front_delta_ms=" << delta_ms
+          << " audio_depth_ms=" << audio_buffer_->DepthMs()
+          << " video_depth_frames=" << video_buffer_->DepthFrames();
+      Logger::Info(oss.str());
+    }
     // INV-TICK-DEADLINE-DISCIPLINE-001 R1 + INV-TICK-MONOTONIC-UTC-ANCHOR-001 R2:
     // Real clock: sleep until deadline. Deterministic clock: advances virtual time (no sleep).
     auto deadline = clock->DeadlineFor(session_frame_index);
@@ -2437,6 +2788,51 @@ void PipelineManager::Run() {
                 resample_in_num_, resample_in_den_, resample_out_num_, resample_out_den_)
           : -1;
       resample_tick_++;
+
+      // SKIP_DETECT (Step 5 instrumentation): flag any tick where the
+      // source-frame advancement exceeds the expected cadence bound.
+      // For any input→output FPS ratio, a single output tick advances
+      // source by at most ceil(in/out) frames. Anything larger is a
+      // content-time jump (jump-ahead or resample_tick_ reset).
+      {
+        static thread_local int64_t skip_detect_last_src = -1;
+        static thread_local int64_t skip_detect_last_session_tick = -1;
+        const int64_t expected_max_step =
+            (resample_out_num_ > 0)
+                ? ((static_cast<int64_t>(resample_in_num_) *
+                    static_cast<int64_t>(resample_out_den_) +
+                    static_cast<int64_t>(resample_out_num_) *
+                        static_cast<int64_t>(resample_in_den_) - 1) /
+                   (static_cast<int64_t>(resample_out_num_) *
+                    static_cast<int64_t>(resample_in_den_)))
+                : 1;
+        const int64_t tolerance = std::max<int64_t>(2, expected_max_step + 1);
+        if (skip_detect_last_src >= 0 && curr_src >= 0) {
+          const int64_t src_delta = curr_src - skip_detect_last_src;
+          const int64_t tick_delta =
+              session_frame_index - skip_detect_last_session_tick;
+          if (tick_delta == 1 && std::llabs(src_delta) > tolerance) {
+            std::ostringstream oss;
+            oss << "[PipelineManager] SKIP_DETECT"
+                << " session_tick=" << session_frame_index
+                << " prev_src=" << skip_detect_last_src
+                << " curr_src=" << curr_src
+                << " src_delta=" << src_delta
+                << " tolerance=" << tolerance
+                << " resample_tick=" << resample_tick_
+                << " resample_in=" << resample_in_num_ << "/"
+                << resample_in_den_
+                << " resample_out=" << resample_out_num_ << "/"
+                << resample_out_den_
+                << " audio_depth_ms=" << (audio_buffer_ ? audio_buffer_->DepthMs() : -1)
+                << " video_depth_frames=" << (video_buffer_ ? video_buffer_->DepthFrames() : -1);
+            Logger::Info(oss.str());
+          }
+        }
+        skip_detect_last_src = curr_src;
+        skip_detect_last_session_tick = session_frame_index;
+      }
+
       if (curr_src > prev_src) {
         should_advance_video = true;
         cadence_diag_advance_++;
@@ -4342,10 +4738,42 @@ void PipelineManager::Run() {
       Logger::Debug(oss.str()); }
 #endif
 
+    // AUDIO_FLOW_DIAG (temporary): per-tick instrumentation for audio
+    // continuity investigation. Captures requested/delivered/silence
+    // sample counts and buffer depth before/after pop. Always logs on
+    // silence events; logs every tick for the first 300 ticks; logs
+    // every 30th tick after that.
+    auto audio_flow_log =
+        [&](const char* source, int delivered_real, int delivered_silence,
+            int depth_before_ms, int depth_after_ms, int64_t reserve_samples) {
+          static thread_local int64_t audio_flow_diag_count = 0;
+          const bool is_silence = delivered_silence > 0;
+          const bool log_now = is_silence ||
+                                audio_flow_diag_count < 300 ||
+                                (audio_flow_diag_count % 30) == 0;
+          ++audio_flow_diag_count;
+          if (!log_now) return;
+          std::ostringstream oss;
+          oss << "[PipelineManager] AUDIO_FLOW"
+              << " tick=" << session_frame_index
+              << " requested=" << samples_this_tick
+              << " delivered_real=" << delivered_real
+              << " delivered_silence=" << delivered_silence
+              << " depth_before_ms=" << depth_before_ms
+              << " depth_after_ms=" << depth_after_ms
+              << " reserve_samples=" << reserve_samples
+              << " source=" << source;
+          Logger::Info(oss.str());
+        };
+
     if (using_degraded_held_this_tick) {
       // DEGRADED_TAKE_MODE: hold last video frame + silence (no pop from B).
       static constexpr int kChannels = buffer::kHouseAudioChannels;
       static constexpr int kSampleRate = buffer::kHouseAudioSampleRate;
+      const int depth_before = a_emit ? a_emit->DepthMs() : -1;
+      const int64_t reserve_before =
+          a_emit ? (a_emit->TotalSamplesPushed() - a_emit->TotalSamplesPopped())
+                  : -1;
       buffer::AudioFrame silence;
       silence.sample_rate = kSampleRate;
       silence.channels = kChannels;
@@ -4357,6 +4785,8 @@ void PipelineManager::Run() {
       audio_samples_emitted += samples_this_tick;
       audio_frames_this_tick = 1;
       current_consecutive_fallback_ticks++;
+      audio_flow_log("silence_degraded", 0, samples_this_tick, depth_before,
+                     depth_before, reserve_before);
     } else if (a_emit && (a_emit->IsPrimed() || IsPadDecision(decision) || active_segment_is_pad)) {
       if (seam_tick_pad_this_tick && active_segment_is_pad) {
         { std::ostringstream oss; oss << "[PipelineManager] SEAM_ORDER tick=" << session_frame_index << " before_TryPopSamples"; Logger::Debug(oss.str()); }
@@ -4383,6 +4813,7 @@ void PipelineManager::Run() {
             << " samples_this_tick=" << samples_this_tick;
         Logger::Debug(oss.str());
       }
+      const int audio_flow_depth_before_ms = a_emit->DepthMs();
       buffer::AudioFrame audio_out;
       bool popped = a_emit->TryPopSamples(samples_this_tick, audio_out);
       bool low_reserve_retry_attempted = false;
@@ -4459,6 +4890,9 @@ void PipelineManager::Run() {
           // OUT-SEG-005b: Real decoded audio — reset fallback streak.
           current_consecutive_fallback_ticks = 0;
         }
+        audio_flow_log(IsPadDecision(decision) ? "content_pad" : "content",
+                       audio_out.nb_samples, 0, audio_flow_depth_before_ms,
+                       a_emit->DepthMs(), reserve_samples_before_pop);
       } else {
           // INV-TICK-GUARANTEED-OUTPUT: Audio underflow MUST NOT terminate
           // the session.  Inject silence to bridge the gap (e.g. segment
@@ -4500,6 +4934,9 @@ void PipelineManager::Run() {
           { std::lock_guard<std::mutex> lock(metrics_mutex_); metrics_.audio_silence_injected++; }
           // OUT-SEG-005b: Underflow silence = fallback tick.
           current_consecutive_fallback_ticks++;
+          audio_flow_log("silence_underflow", 0, samples_this_tick,
+                         audio_flow_depth_before_ms, a_emit->DepthMs(),
+                         reserve_samples_before_pop);
         }
     } else {
       if (seam_tick_pad_this_tick && active_segment_is_pad) {
@@ -4509,6 +4946,11 @@ void PipelineManager::Run() {
       // that just pushed).  Emit inline silence to prevent A/V drift.
       static constexpr int kChannels = buffer::kHouseAudioChannels;
       static constexpr int kSampleRate = buffer::kHouseAudioSampleRate;
+
+      const int fence_depth_before = a_emit ? a_emit->DepthMs() : -1;
+      const int64_t fence_reserve_before =
+          a_emit ? (a_emit->TotalSamplesPushed() - a_emit->TotalSamplesPopped())
+                  : -1;
 
       buffer::AudioFrame silence;
       silence.sample_rate = kSampleRate;
@@ -4522,10 +4964,18 @@ void PipelineManager::Run() {
       audio_samples_emitted += samples_this_tick;
       audio_frames_this_tick = 1;
 
+      audio_flow_log("silence_fence_pad", 0, samples_this_tick,
+                     fence_depth_before, fence_depth_before,
+                     fence_reserve_before);
+
       { std::ostringstream oss;
         oss << "[PipelineManager] WARNING FENCE_AUDIO_PAD: audio not primed"
             << " tick=" << session_frame_index
             << " samples=" << samples_this_tick
+            << " a_emit_null=" << (a_emit == nullptr)
+            << " a_emit_primed=" << (a_emit ? a_emit->IsPrimed() : false)
+            << " decision_is_pad=" << IsPadDecision(decision)
+            << " active_segment_is_pad=" << active_segment_is_pad
             << " audio_pts_90k=" << audio_pts_90k
             << " video_pts_90k=" << video_pts_90k;
         Logger::Warn(oss.str()); }
@@ -6350,6 +6800,105 @@ void PipelineManager::PerformSegmentSwap(int64_t session_frame_index) {
   const char* to_type = "UNKNOWN";
   if (from_seg < static_cast<int32_t>(live_parent_block_.segments.size())) {
     from_type = SegmentTypeName(live_parent_block_.segments[from_seg].segment_type);
+  }
+
+  // SEAM_JUMP (Step 5 instrumentation): capture full state at every
+  // segment swap so the investigation can correlate skips with seam
+  // offset calculations, buffer state, resample tick, and scheduled
+  // asset start offsets.
+  //
+  // Step 5 AIR-only expansion: also capture the source-content identity
+  // immediately before AND after the swap (peek outgoing last-popped
+  // frame; peek incoming buffer fronts). This answers:
+  //   - How much content is being DISCARDED from the outgoing buffer?
+  //   - What source-content moment does the incoming buffer present as
+  //     its first frame, and does it match asset_start_offset_ms?
+  //   - Content delta across the seam = incoming_first - outgoing_last.
+  {
+    const auto& segs = live_parent_block_.segments;
+    const int64_t from_offset_ms =
+        (from_seg < static_cast<int32_t>(segs.size()))
+            ? segs[from_seg].asset_start_offset_ms : -1;
+    const int64_t from_duration_ms =
+        (from_seg < static_cast<int32_t>(segs.size()))
+            ? segs[from_seg].segment_duration_ms : -1;
+    const int64_t to_offset_ms =
+        (to_seg < static_cast<int32_t>(segs.size()))
+            ? segs[to_seg].asset_start_offset_ms : -1;
+    const int64_t to_duration_ms =
+        (to_seg < static_cast<int32_t>(segs.size()))
+            ? segs[to_seg].segment_duration_ms : -1;
+    const std::string to_asset =
+        (to_seg < static_cast<int32_t>(segs.size()))
+            ? segs[to_seg].asset_uri : std::string();
+
+    // Outgoing buffer state about to be DISCARDED.
+    const int outgoing_audio_depth_ms =
+        audio_buffer_ ? audio_buffer_->DepthMs() : -1;
+    const int outgoing_video_depth_frames =
+        video_buffer_ ? video_buffer_->DepthFrames() : -1;
+    const int64_t outgoing_audio_front_pts_us =
+        audio_buffer_ ? audio_buffer_->PeekFrontPtsUs() : -1;
+    // Last real video source_frame_index consumed from outgoing buffer.
+    const int64_t outgoing_last_source_frame_index =
+        has_last_good_video_frame_ ? last_good_source_frame_index_ : -1;
+
+    // Incoming buffer = either segment_b_* (content seam) or pad_b_*
+    // (pad seam). Peek its front to see what the FIRST frame/sample
+    // presented after the swap will be.
+    VideoLookaheadBuffer* incoming_v =
+        segment_b_video_buffer_ ? segment_b_video_buffer_.get()
+        : pad_b_video_buffer_.get();
+    AudioLookaheadBuffer* incoming_a =
+        segment_b_audio_buffer_ ? segment_b_audio_buffer_.get()
+        : pad_b_audio_buffer_.get();
+    const int incoming_audio_depth_ms =
+        incoming_a ? incoming_a->DepthMs() : -1;
+    const int incoming_video_depth_frames =
+        incoming_v ? incoming_v->DepthFrames() : -1;
+    int64_t incoming_first_video_source_frame_index = -1;
+    int64_t incoming_first_video_metadata_pts = -1;
+    int64_t incoming_first_video_block_ct_ms = -1;
+    if (incoming_v) {
+      VideoBufferFrame v_peek{};
+      if (incoming_v->TryPeekFront(v_peek)) {
+        incoming_first_video_source_frame_index = v_peek.source_frame_index;
+        incoming_first_video_metadata_pts = v_peek.video.metadata.pts;
+        incoming_first_video_block_ct_ms = v_peek.block_ct_ms;
+      }
+    }
+    const int64_t incoming_first_audio_pts_us =
+        incoming_a ? incoming_a->PeekFrontPtsUs() : -1;
+
+    std::ostringstream oss;
+    oss << "[PipelineManager] SEAM_JUMP"
+        << " session_tick=" << session_frame_index
+        << " from_seg=" << from_seg << " (" << from_type << ")"
+        << " to_seg=" << to_seg << " (" << to_type << ")"
+        << " from_asset_offset_ms=" << from_offset_ms
+        << " from_duration_ms=" << from_duration_ms
+        << " to_asset_offset_ms=" << to_offset_ms
+        << " to_duration_ms=" << to_duration_ms
+        << " resample_tick_before=" << resample_tick_
+        << " block_fence_frame=" << block_fence_frame_
+        // Outgoing (about to be discarded)
+        << " outgoing_last_source_frame_index="
+        << outgoing_last_source_frame_index
+        << " outgoing_audio_depth_ms=" << outgoing_audio_depth_ms
+        << " outgoing_video_depth_frames=" << outgoing_video_depth_frames
+        << " outgoing_audio_front_pts_us=" << outgoing_audio_front_pts_us
+        // Incoming (will become the new live buffer)
+        << " incoming_audio_depth_ms=" << incoming_audio_depth_ms
+        << " incoming_video_depth_frames=" << incoming_video_depth_frames
+        << " incoming_first_video_source_frame_index="
+        << incoming_first_video_source_frame_index
+        << " incoming_first_video_metadata_pts="
+        << incoming_first_video_metadata_pts
+        << " incoming_first_video_block_ct_ms="
+        << incoming_first_video_block_ct_ms
+        << " incoming_first_audio_pts_us=" << incoming_first_audio_pts_us
+        << " to_asset=" << to_asset;
+    Logger::Info(oss.str());
   }
   SegmentType to_seg_type = SegmentType::kContent;
   if (to_seg < static_cast<int32_t>(live_parent_block_.segments.size())) {

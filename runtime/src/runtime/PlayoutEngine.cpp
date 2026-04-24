@@ -201,6 +201,21 @@ struct PlayoutEngine::PlayoutInstance {
   std::shared_ptr<seam::SeamController> seam_controller;
   std::string seam_provider_name;
 
+  // Option C bootstrap content-gate — Turn D observer-only metrics bridge.
+  // The gate itself lives inside PipelineManager and is evaluated inline
+  // on every tick during bootstrap. This ControlBox holds a getter that
+  // captures the pipeline's BootstrapGateSnapshot accessor so an /metrics
+  // scrape can surface the current state + kickoff event. Lifetime safety
+  // is provided by the mutex: playout_service detaches the getter before
+  // the pipeline is destroyed; any in-flight scrape either completes with
+  // a valid getter or exits cleanly.
+  struct BootstrapGateControlBox {
+    std::mutex mtx;
+    PlayoutEngine::BootstrapGateSnapshotGetter getter;  // guarded by mtx
+  };
+  std::shared_ptr<BootstrapGateControlBox> bootstrap_gate_control_box;
+  std::string bootstrap_gate_provider_name;
+
   PlayoutInstance(int32_t id, const std::string& plan, int32_t p,
                  const std::optional<std::string>& uds, const ProgramFormat& format)
       : channel_id(id), plan_handle(plan), port(p), uds_path(uds), program_format(format) {}
@@ -216,22 +231,25 @@ PlayoutEngine::PlayoutEngine(
 }
 
 PlayoutEngine::~PlayoutEngine() {
-  // Collect channel IDs under the lock, then stop each without holding it
-  // (StopChannel also acquires channels_mutex_).
-  std::vector<int32_t> ids;
+  // Single-session: at most one instance. Capture id under lock, then stop
+  // without holding it (StopChannel also acquires channels_mutex_).
+  int32_t id = -1;
   {
     std::lock_guard<std::mutex> lock(channels_mutex_);
     if (control_surface_only_) {
-      channels_.clear();
+      instance_.reset();
       return;
     }
-    for (auto& [channel_id, state] : channels_) {
-      if (state) ids.push_back(channel_id);
-    }
+    if (instance_) id = instance_->channel_id;
   }
-  for (int32_t id : ids) {
+  if (id != -1) {
     StopChannel(id);
   }
+}
+
+PlayoutEngine::PlayoutInstance* PlayoutEngine::FindInstanceLocked(int32_t channel_id) const {
+  if (!instance_ || instance_->channel_id != channel_id) return nullptr;
+  return instance_.get();
 }
 
 EngineResult PlayoutEngine::StartChannel(
@@ -244,8 +262,8 @@ EngineResult PlayoutEngine::StartChannel(
 
   // Air supports exactly one active playout session at a time.
   // Channel identity is external and used only for correlation.
-  if (!channels_.empty()) {
-    if (channels_.find(channel_id) != channels_.end()) {
+  if (instance_) {
+    if (instance_->channel_id == channel_id) {
       return EngineResult(true, "Channel " + std::to_string(channel_id) + " already started");
     }
     return EngineResult(false, "PlayoutEngine already has an active session");
@@ -272,7 +290,7 @@ EngineResult PlayoutEngine::StartChannel(
     
     if (control_surface_only_) {
       // Phase 6A.0: no media, no producers, no frames — channel state only
-      channels_[channel_id] = std::move(state);
+      instance_ = std::move(state);
       return EngineResult(true, "Channel " + std::to_string(channel_id) + " started (control surface only)");
     }
     
@@ -495,6 +513,113 @@ EngineResult PlayoutEngine::StartChannel(
           return out.str();
         });
 
+    // ========================================================================
+    // Bootstrap content-gate wiring (Option C, Turn D — observer-only).
+    //
+    // Contracts: docs/contracts/invariants/air/INV-BOOTSTRAP-*.md.
+    //
+    // The gate lives inside PipelineManager and is evaluated on every
+    // tick during bootstrap. This block wires a CustomMetricsProvider
+    // that reads the gate snapshot via the attached getter and publishes
+    // state + last-kickoff fields as Prometheus gauges. Turn D does not
+    // influence emission; the existing phase-gate loop still controls
+    // session start.
+    // ========================================================================
+    state->bootstrap_gate_control_box =
+        std::make_shared<PlayoutInstance::BootstrapGateControlBox>();
+    std::weak_ptr<PlayoutInstance::BootstrapGateControlBox>
+        bootstrap_box_weak = state->bootstrap_gate_control_box;
+    state->bootstrap_gate_provider_name =
+        "bootstrap_gate_channel_" + std::to_string(channel_id);
+    metrics_exporter_->RegisterCustomMetricsProvider(
+        state->bootstrap_gate_provider_name,
+        [channel_id, bootstrap_box_weak]() -> std::string {
+          auto box = bootstrap_box_weak.lock();
+          if (!box) return "";
+          bootstrap::GateMetricsSnapshot snap{};
+          {
+            std::lock_guard<std::mutex> lk(box->mtx);
+            if (!box->getter) return "";
+            snap = box->getter();
+          }
+          std::ostringstream out;
+          out << "# HELP retrovue_bootstrap_gate_state Bootstrap content-"
+                 "gate state (0=kClosed, 1=kOpen)\n";
+          out << "# TYPE retrovue_bootstrap_gate_state gauge\n";
+          out << "retrovue_bootstrap_gate_state{channel=\"" << channel_id
+              << "\"} " << static_cast<int>(snap.state) << "\n";
+          out << "# HELP retrovue_bootstrap_gate_kickoff_fired 1 once the "
+                 "bootstrap content gate has opened this session\n";
+          out << "# TYPE retrovue_bootstrap_gate_kickoff_fired gauge\n";
+          out << "retrovue_bootstrap_gate_kickoff_fired{channel=\""
+              << channel_id << "\"} " << (snap.kickoff_fired ? 1 : 0)
+              << "\n";
+          out << "# HELP retrovue_bootstrap_gate_kickoff_tick Main-loop "
+                 "tick index at which the bootstrap content gate opened "
+                 "(-1 if not yet)\n";
+          out << "# TYPE retrovue_bootstrap_gate_kickoff_tick gauge\n";
+          out << "retrovue_bootstrap_gate_kickoff_tick{channel=\""
+              << channel_id << "\"} "
+              << (snap.kickoff_fired ? snap.last_kickoff.tick_index
+                                      : int64_t{-1})
+              << "\n";
+          out << "# HELP retrovue_bootstrap_gate_kickoff_front_delta_us "
+                 "Source-time delta between audio_buffer.front() and "
+                 "video_buffer.front() at kickoff (microseconds; "
+                 "segment-local, origin-corrected)\n";
+          out << "# TYPE retrovue_bootstrap_gate_kickoff_front_delta_us "
+                 "gauge\n";
+          out << "retrovue_bootstrap_gate_kickoff_front_delta_us{channel="
+                 "\""
+              << channel_id << "\"} "
+              << (snap.kickoff_fired ? snap.last_kickoff.front_delta_us
+                                      : int64_t{0})
+              << "\n";
+          out << "# HELP retrovue_bootstrap_existing_gate_opened 1 once "
+                 "EvaluateBootstrapPhaseGate phase_valid break has "
+                 "fired this session\n";
+          out << "# TYPE retrovue_bootstrap_existing_gate_opened gauge\n";
+          out << "retrovue_bootstrap_existing_gate_opened{channel=\""
+              << channel_id << "\"} "
+              << (snap.existing_gate_opened ? 1 : 0) << "\n";
+          out << "# HELP retrovue_bootstrap_existing_gate_front_delta_us "
+                 "Source-time delta between audio and video buffer "
+                 "fronts at the moment the existing phase gate opened "
+                 "(microseconds; segment-local, origin-corrected). "
+                 "Directly comparable to "
+                 "retrovue_bootstrap_gate_kickoff_front_delta_us.\n";
+          out << "# TYPE retrovue_bootstrap_existing_gate_front_delta_us "
+                 "gauge\n";
+          out << "retrovue_bootstrap_existing_gate_front_delta_us{channel="
+                 "\""
+              << channel_id << "\"} "
+              << snap.existing_gate_front_delta_us << "\n";
+          // Ordering code:
+          //   -1 = new gate never opened (or hasn't yet) after existing
+          //   0  = new gate was already open when existing gate opened
+          //        (new opened first, same wait-loop iteration or earlier)
+          //   N  = new gate opened N main-loop ticks AFTER existing gate
+          //        (tick_index encodes the delay)
+          int64_t new_vs_existing = -1;
+          if (snap.kickoff_fired && snap.existing_gate_opened) {
+            new_vs_existing = snap.new_gate_was_open_at_existing_open
+                                  ? 0
+                                  : std::max<int64_t>(
+                                        0, snap.last_kickoff.tick_index);
+          }
+          out << "# HELP retrovue_bootstrap_new_vs_existing_ticks "
+                 "Ordering of the new Option-C gate relative to the "
+                 "existing phase gate. -1 = new has not opened; "
+                 "0 = new opened first (or same wait-loop iteration); "
+                 ">0 = new opened that many main-loop ticks AFTER the "
+                 "existing gate.\n";
+          out << "# TYPE retrovue_bootstrap_new_vs_existing_ticks "
+                 "gauge\n";
+          out << "retrovue_bootstrap_new_vs_existing_ticks{channel=\""
+              << channel_id << "\"} " << new_vs_existing << "\n";
+          return out.str();
+        });
+
     // Submit ready metrics
     telemetry::ChannelMetrics metrics{};
     metrics.state = telemetry::ChannelState::BUFFERING;
@@ -502,8 +627,8 @@ EngineResult PlayoutEngine::StartChannel(
     metrics_exporter_->SubmitChannelMetrics(channel_id, metrics);
     
     // Store channel state
-    channels_[channel_id] = std::move(state);
-    
+    instance_ = std::move(state);
+
     return EngineResult(true, "Channel " + std::to_string(channel_id) + " initialized for BlockPlan session");
   } catch (const std::exception& e) {
     return EngineResult(false, "Exception starting channel " + std::to_string(channel_id) + ": " + e.what());
@@ -512,16 +637,11 @@ EngineResult PlayoutEngine::StartChannel(
 
 EngineResult PlayoutEngine::StopChannel(int32_t channel_id) {
   std::lock_guard<std::mutex> lock(channels_mutex_);
-  
-  auto it = channels_.find(channel_id);
-  if (it == channels_.end()) {
-    // Phase 6A.0: idempotent success — broadcast systems favor safe, idempotent stop
-    return EngineResult(true, "Channel " + std::to_string(channel_id) + " already stopped or unknown");
-  }
-  
-  auto& state = it->second;
+
+  auto* state = FindInstanceLocked(channel_id);
   if (!state) {
-    return EngineResult(false, "Channel " + std::to_string(channel_id) + " state is null");
+    // Idempotent success — broadcast systems favor safe, idempotent stop
+    return EngineResult(true, "Channel " + std::to_string(channel_id) + " already stopped or unknown");
   }
 
   // Readiness observer teardown (additive, observational only).
@@ -531,7 +651,7 @@ EngineResult PlayoutEngine::StopChannel(int32_t channel_id) {
   //      valid pointer; any scrape entering after sees null and exits.
   //   2. Unregister the CustomMetricsProvider so no new scrape fires.
   //   3. Proceed with normal teardown (state destruction happens at
-  //      channels_.erase(it) later in this function).
+  //      instance_.reset() later in this function).
   if (state->readiness_control_box) {
     std::lock_guard<std::mutex> box_lock(state->readiness_control_box->mtx);
     state->readiness_control_box->control = nullptr;
@@ -545,14 +665,30 @@ EngineResult PlayoutEngine::StopChannel(int32_t channel_id) {
   // scope: the provider captures a weak_ptr<SeamController>; the lambda
   // early-exits if lock() fails. Unregister here so no new scrape fires
   // during state destruction. The controller's shared_ptr on PlayoutInstance
-  // is dropped naturally when state is destroyed at channels_.erase().
+  // is dropped naturally when state is destroyed at instance_.reset().
   if (!state->seam_provider_name.empty() && metrics_exporter_) {
     metrics_exporter_->UnregisterCustomMetricsProvider(
         state->seam_provider_name);
   }
 
+  // Bootstrap gate teardown (additive, observational only). Same pattern
+  // as readiness: null the getter under the box's mutex first, then
+  // unregister the provider so no new scrape fires while state is torn
+  // down. playout_service detaches the getter earlier as well — this is
+  // a belt-and-braces guard in case StopChannel is called on a session
+  // that never ran a BlockPlan detach.
+  if (state->bootstrap_gate_control_box) {
+    std::lock_guard<std::mutex> box_lock(
+        state->bootstrap_gate_control_box->mtx);
+    state->bootstrap_gate_control_box->getter = nullptr;
+  }
+  if (!state->bootstrap_gate_provider_name.empty() && metrics_exporter_) {
+    metrics_exporter_->UnregisterCustomMetricsProvider(
+        state->bootstrap_gate_provider_name);
+  }
+
   if (control_surface_only_) {
-    channels_.erase(it);
+    instance_.reset();
     return EngineResult(true, "Channel " + std::to_string(channel_id) + " stopped successfully");
   }
 
@@ -639,7 +775,7 @@ EngineResult PlayoutEngine::StopChannel(int32_t channel_id) {
     }
 
     // Remove channel
-    channels_.erase(it);
+    instance_.reset();
 
     return EngineResult(true, "Channel " + std::to_string(channel_id) + " stopped successfully");
   } catch (const std::exception& e) {
@@ -656,14 +792,9 @@ EngineResult PlayoutEngine::LoadPreview(
     int32_t fps_denominator) {
   std::lock_guard<std::mutex> lock(channels_mutex_);
 
-  auto it = channels_.find(channel_id);
-  if (it == channels_.end()) {
-    return EngineResult(false, "Channel " + std::to_string(channel_id) + " not found");
-  }
-
-  auto& state = it->second;
+  auto* state = FindInstanceLocked(channel_id);
   if (!state) {
-    return EngineResult(false, "Channel " + std::to_string(channel_id) + " state is null");
+    return EngineResult(false, "Channel " + std::to_string(channel_id) + " not found");
   }
 
   if (control_surface_only_) {
@@ -701,7 +832,7 @@ EngineResult PlayoutEngine::LoadPreview(
   // Direction: frame → time (never time → frame)
   retrovue::blockplan::RationalFps fps_r = (fps_denominator > 0)
       ? retrovue::blockplan::RationalFps(fps_numerator, fps_denominator)
-      : retrovue::blockplan::DeriveRationalFPS(it->second->program_format.GetFrameRateAsDouble());
+      : retrovue::blockplan::DeriveRationalFPS(state->program_format.GetFrameRateAsDouble());
   int64_t start_offset_ms = fps_r.DurationFromFramesUs(start_frame) / 1000;
   // frame_count is authoritative - no need to convert back to wall-clock time
   // (hard_stop_time_ms was deprecated, we use frame_count directly now)
@@ -712,8 +843,8 @@ EngineResult PlayoutEngine::LoadPreview(
     preview_config.asset_uri = asset_path;
     preview_config.target_fps = fps_r;
     preview_config.stub_mode = false;
-    preview_config.target_width = it->second->program_format.video.width;
-    preview_config.target_height = it->second->program_format.video.height;
+    preview_config.target_width = state->program_format.video.width;
+    preview_config.target_height = state->program_format.video.height;
     // Frame-indexed execution (INV-FRAME-001/002)
     preview_config.start_frame = start_frame;
     preview_config.frame_count = frame_count;
@@ -831,10 +962,9 @@ void PlayoutEngine::SpawnSwitchWatcher(int32_t channel_id, PlayoutInstance* stat
       std::this_thread::sleep_for(std::chrono::milliseconds(kPollIntervalMs));
 
       std::lock_guard<std::mutex> lock(channels_mutex_);
-      auto it = channels_.find(channel_id);
-      if (it == channels_.end() || !it->second) break;
+      auto* s = FindInstanceLocked(channel_id);
+      if (!s) break;
 
-      auto& s = it->second;
       if (s->switch_watcher_stop.load()) break;
       if (!s->switch_in_progress) break;
 
@@ -910,7 +1040,7 @@ void PlayoutEngine::SpawnSwitchWatcher(int32_t channel_id, PlayoutInstance* stat
         }
 
         // P8-FILL-003: End content deficit fill when watcher completes switch
-        EndContentDeficitFill(s.get());
+        EndContentDeficitFill(s);
 
         // Capture PTS for as-run log before redirect (SetInputBuffer resets first_pts).
         const int64_t first_pts_us = s->program_output ? s->program_output->GetFirstEmittedPTS() : 0;
@@ -978,9 +1108,9 @@ void PlayoutEngine::SpawnSwitchWatcher(int32_t channel_id, PlayoutInstance* stat
     // Timeout - this is a potential invariant violation
     {
       std::lock_guard<std::mutex> lock(channels_mutex_);
-      auto it = channels_.find(channel_id);
-      if (it != channels_.end() && it->second) {
-        it->second->switch_watcher_running.store(false);
+      auto* s = FindInstanceLocked(channel_id);
+      if (s) {
+        s->switch_watcher_running.store(false);
       }
     }
     std::cerr << "[SwitchWatcher] INV-P8-SWITCH-READINESS: TIMEOUT after 10s" << std::endl;
@@ -990,14 +1120,9 @@ void PlayoutEngine::SpawnSwitchWatcher(int32_t channel_id, PlayoutInstance* stat
 EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id, int64_t target_boundary_time_ms, int64_t issued_at_time_ms) {
   std::unique_lock<std::mutex> lock(channels_mutex_);
 
-  auto it = channels_.find(channel_id);
-  if (it == channels_.end()) {
-    return EngineResult(false, "Channel " + std::to_string(channel_id) + " not found");
-  }
-  
-  auto& state = it->second;
+  auto* state = FindInstanceLocked(channel_id);
   if (!state) {
-    return EngineResult(false, "Channel " + std::to_string(channel_id) + " state is null");
+    return EngineResult(false, "Channel " + std::to_string(channel_id) + " not found");
   }
 
   // P11C-003: INV-BOUNDARY-DECLARED-001 — log receipt of target boundary time
@@ -1135,11 +1260,11 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id, int64_t target_boun
       }
     }
     lock.lock();
-    it = channels_.find(channel_id);
-    if (it == channels_.end() || !it->second) {
+    state = FindInstanceLocked(channel_id);
+    if (!state) {
       return EngineResult(false, "Channel " + std::to_string(channel_id) + " not found after wait");
     }
-    if (!it->second->preview_producer) {
+    if (!state->preview_producer) {
       return EngineResult(false, "No preview producer for channel " + std::to_string(channel_id) + " at deadline");
     }
     return ExecuteSwitchAtDeadline(channel_id, target_boundary_time_ms, lock);
@@ -1218,7 +1343,7 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id, int64_t target_boun
             // BUG FIX: The watcher was only spawned in the first-time path, not here.
             // This caused NOT_READY to never transition to READY.
             if (!state->switch_watcher_running.load()) {
-              SpawnSwitchWatcher(channel_id, state.get());
+              SpawnSwitchWatcher(channel_id, state);
             }
             std::cout << "[SwitchToLive] INV-SWITCH-READINESS: NOT_READY "
                       << "(video=" << preview_video_depth << "/" << kMinPreviewVideoDepth
@@ -1406,7 +1531,7 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id, int64_t target_boun
           state->timeline_controller->GetSegmentCommitGeneration() : 0;
 
       // Spawn watcher for auto-completion
-      SpawnSwitchWatcher(channel_id, state.get());
+      SpawnSwitchWatcher(channel_id, state);
 
       // INV-P8-SWITCH-READINESS: NOT_READY (one-shot log, watcher handles completion)
       std::cout << "[SwitchToLive] INV-P8-SWITCH-READINESS: NOT_READY "
@@ -1432,7 +1557,7 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id, int64_t target_boun
     const int64_t first_pts_us = state->program_output ? state->program_output->GetFirstEmittedPTS() : 0;
     const int64_t last_pts_us = state->program_output ? state->program_output->GetLastEmittedPTS() : 0;
 
-    EndContentDeficitFill(state.get());
+    EndContentDeficitFill(state);
 
     MaybeRequestStop(state->live_producer.get());
     auto old_producer = std::move(state->live_producer);
@@ -1487,16 +1612,15 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id, int64_t target_boun
     // This is NOT a timing or pressure mechanism.
     constexpr auto kSuccessorEmitWaitTimeout = std::chrono::seconds(30);
     const auto wait_start = std::chrono::steady_clock::now();
-    PlayoutInstance* state_ptr = state.get();
+    PlayoutInstance* state_ptr = state;
     while (!state_ptr->successor_video_emitted_.load(std::memory_order_acquire)) {
       lock.unlock();
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
       lock.lock();
-      it = channels_.find(channel_id);
-      if (it == channels_.end() || !it->second) {
+      state_ptr = FindInstanceLocked(channel_id);
+      if (!state_ptr) {
         return EngineResult(false, "Channel " + std::to_string(channel_id) + " lost during switch wait");
       }
-      state_ptr = it->second.get();
       if (std::chrono::steady_clock::now() - wait_start > kSuccessorEmitWaitTimeout) {
         std::cerr << "[SwitchToLive] ORCH-SWITCH-SUCCESSOR-OBSERVED VIOLATION: timeout waiting for successor video emission" << std::endl;
         return EngineResult(false, "ORCH-SWITCH-SUCCESSOR-OBSERVED: timeout waiting for successor video emission");
@@ -1541,11 +1665,10 @@ EngineResult PlayoutEngine::SwitchToLive(int32_t channel_id, int64_t target_boun
 EngineResult PlayoutEngine::ExecuteSwitchAtDeadline(int32_t channel_id, int64_t target_boundary_time_ms,
                                                    std::unique_lock<std::mutex>& lock) {
   // P11D-001/002/003: Caller holds lock; execute switch at deadline regardless of readiness.
-  auto it = channels_.find(channel_id);
-  if (it == channels_.end() || !it->second) {
+  PlayoutInstance* state = FindInstanceLocked(channel_id);
+  if (!state) {
     return EngineResult(false, "Channel " + std::to_string(channel_id) + " not found");
   }
-  PlayoutInstance* state = it->second.get();
   if (!state->preview_producer) {
     return EngineResult(false, "No preview producer for channel " + std::to_string(channel_id));
   }
@@ -1687,11 +1810,10 @@ EngineResult PlayoutEngine::ExecuteSwitchAtDeadline(int32_t channel_id, int64_t 
     lock.unlock();
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
     lock.lock();
-    it = channels_.find(channel_id);
-    if (it == channels_.end() || !it->second) {
+    state_ptr = FindInstanceLocked(channel_id);
+    if (!state_ptr) {
       return EngineResult(false, "Channel " + std::to_string(channel_id) + " lost during switch wait");
     }
-    state_ptr = it->second.get();
     if (std::chrono::steady_clock::now() - wait_start > kSuccessorEmitWaitTimeout) {
       std::cerr << "[SwitchToLive] ORCH-SWITCH-SUCCESSOR-OBSERVED VIOLATION: timeout waiting for successor video emission" << std::endl;
       return EngineResult(false, "ORCH-SWITCH-SUCCESSOR-OBSERVED: timeout waiting for successor video emission");
@@ -1729,10 +1851,10 @@ EngineResult PlayoutEngine::ExecuteSwitchAtDeadline(int32_t channel_id, int64_t 
 
 std::optional<std::string> PlayoutEngine::GetLiveAssetPath(int32_t channel_id) {
   std::lock_guard<std::mutex> lock(channels_mutex_);
-  auto it = channels_.find(channel_id);
-  if (it == channels_.end() || !it->second)
+  auto* state = FindInstanceLocked(channel_id);
+  if (!state)
     return std::nullopt;
-  const std::string& path = it->second->live_asset_path;
+  const std::string& path = state->live_asset_path;
   if (path.empty())
     return std::nullopt;
   return path;
@@ -1741,55 +1863,78 @@ std::optional<std::string> PlayoutEngine::GetLiveAssetPath(int32_t channel_id) {
 void PlayoutEngine::RegisterMuxFrameCallback(int32_t channel_id,
                                              std::function<void(const buffer::Frame&)> callback) {
   std::lock_guard<std::mutex> lock(channels_mutex_);
-  auto it = channels_.find(channel_id);
-  if (it == channels_.end() || !it->second || !it->second->program_output)
+  auto* state = FindInstanceLocked(channel_id);
+  if (!state || !state->program_output)
     return;
-  it->second->program_output->SetSideSink(std::move(callback));
+  state->program_output->SetSideSink(std::move(callback));
 }
 
 void PlayoutEngine::UnregisterMuxFrameCallback(int32_t channel_id) {
   std::lock_guard<std::mutex> lock(channels_mutex_);
-  auto it = channels_.find(channel_id);
-  if (it == channels_.end() || !it->second || !it->second->program_output)
+  auto* state = FindInstanceLocked(channel_id);
+  if (!state || !state->program_output)
     return;
-  it->second->program_output->ClearSideSink();
+  state->program_output->ClearSideSink();
 }
 
 // Phase 8.9: Audio frame callback registration
 void PlayoutEngine::RegisterMuxAudioFrameCallback(int32_t channel_id,
                                                   std::function<void(const buffer::AudioFrame&)> callback) {
   std::lock_guard<std::mutex> lock(channels_mutex_);
-  auto it = channels_.find(channel_id);
-  if (it == channels_.end() || !it->second || !it->second->program_output)
+  auto* state = FindInstanceLocked(channel_id);
+  if (!state || !state->program_output)
     return;
-  it->second->program_output->SetAudioSideSink(std::move(callback));
+  state->program_output->SetAudioSideSink(std::move(callback));
 }
 
 void PlayoutEngine::UnregisterMuxAudioFrameCallback(int32_t channel_id) {
   std::lock_guard<std::mutex> lock(channels_mutex_);
-  auto it = channels_.find(channel_id);
-  if (it == channels_.end() || !it->second || !it->second->program_output)
+  auto* state = FindInstanceLocked(channel_id);
+  if (!state || !state->program_output)
     return;
-  it->second->program_output->ClearAudioSideSink();
+  state->program_output->ClearAudioSideSink();
 }
 
 void PlayoutEngine::AttachBlockPlanSignalSource(
     int32_t channel_id, BlockPlanSignalGetter getter) {
   std::lock_guard<std::mutex> lock(channels_mutex_);
-  auto it = channels_.find(channel_id);
-  if (it == channels_.end() || !it->second || !it->second->readiness_control_box)
+  auto* state = FindInstanceLocked(channel_id);
+  if (!state || !state->readiness_control_box)
     return;
-  auto& box = it->second->readiness_control_box;
+  auto& box = state->readiness_control_box;
   std::lock_guard<std::mutex> box_lock(box->mtx);
   box->blockplan_signal_getter = std::move(getter);
 }
 
+void PlayoutEngine::AttachBootstrapGateSource(
+    int32_t channel_id, BootstrapGateSnapshotGetter getter) {
+  std::lock_guard<std::mutex> lock(channels_mutex_);
+  auto* state = FindInstanceLocked(channel_id);
+  if (!state || !state->bootstrap_gate_control_box) {
+    return;
+  }
+  auto& box = state->bootstrap_gate_control_box;
+  std::lock_guard<std::mutex> box_lock(box->mtx);
+  box->getter = std::move(getter);
+}
+
+void PlayoutEngine::DetachBootstrapGateSource(int32_t channel_id) {
+  std::lock_guard<std::mutex> lock(channels_mutex_);
+  auto* state = FindInstanceLocked(channel_id);
+  if (!state || !state->bootstrap_gate_control_box) {
+    return;
+  }
+  auto& box = state->bootstrap_gate_control_box;
+  std::lock_guard<std::mutex> box_lock(box->mtx);
+  box->getter = nullptr;
+}
+
 void PlayoutEngine::DetachBlockPlanSignalSource(int32_t channel_id) {
   std::lock_guard<std::mutex> lock(channels_mutex_);
-  auto it = channels_.find(channel_id);
-  if (it == channels_.end() || !it->second || !it->second->readiness_control_box)
+  auto* state = FindInstanceLocked(channel_id);
+  if (!state || !state->readiness_control_box)
     return;
-  auto& box = it->second->readiness_control_box;
+  auto& box = state->readiness_control_box;
   std::lock_guard<std::mutex> box_lock(box->mtx);
   box->blockplan_signal_getter = nullptr;
 }
@@ -1799,14 +1944,9 @@ EngineResult PlayoutEngine::UpdatePlan(
     const std::string& plan_handle) {
   std::lock_guard<std::mutex> lock(channels_mutex_);
 
-  auto it = channels_.find(channel_id);
-  if (it == channels_.end()) {
-    return EngineResult(false, "Channel " + std::to_string(channel_id) + " not found");
-  }
-
-  auto& state = it->second;
+  auto* state = FindInstanceLocked(channel_id);
   if (!state) {
-    return EngineResult(false, "Channel " + std::to_string(channel_id) + " state is null");
+    return EngineResult(false, "Channel " + std::to_string(channel_id) + " not found");
   }
 
   try {
@@ -1828,14 +1968,9 @@ EngineResult PlayoutEngine::AttachOutputSink(
     std::unique_ptr<output::IOutputSink> sink) {
   std::lock_guard<std::mutex> lock(channels_mutex_);
 
-  auto it = channels_.find(channel_id);
-  if (it == channels_.end()) {
-    return EngineResult(false, "Channel " + std::to_string(channel_id) + " not found");
-  }
-
-  auto& state = it->second;
+  auto* state = FindInstanceLocked(channel_id);
   if (!state) {
-    return EngineResult(false, "Channel " + std::to_string(channel_id) + " state is null");
+    return EngineResult(false, "Channel " + std::to_string(channel_id) + " not found");
   }
 
   if (!state->output_bus) {
@@ -1863,14 +1998,9 @@ EngineResult PlayoutEngine::AttachOutputSink(
 EngineResult PlayoutEngine::DetachOutputSink(int32_t channel_id) {
   std::lock_guard<std::mutex> lock(channels_mutex_);
 
-  auto it = channels_.find(channel_id);
-  if (it == channels_.end()) {
-    return EngineResult(true, "Channel " + std::to_string(channel_id) + " not found (idempotent)");
-  }
-
-  auto& state = it->second;
+  auto* state = FindInstanceLocked(channel_id);
   if (!state) {
-    return EngineResult(true, "Channel " + std::to_string(channel_id) + " state is null (idempotent)");
+    return EngineResult(true, "Channel " + std::to_string(channel_id) + " not found (idempotent)");
   }
 
   if (!state->output_bus) {
@@ -1893,44 +2023,42 @@ bool PlayoutEngine::IsOutputSinkAttached(int32_t channel_id) {
 
 bool PlayoutEngine::IsOutputSinkAttachedLocked(int32_t channel_id) const {
   // Caller must hold channels_mutex_
-  auto it = channels_.find(channel_id);
-  if (it == channels_.end() || !it->second || !it->second->output_bus) {
+  auto* state = FindInstanceLocked(channel_id);
+  if (!state || !state->output_bus) {
     return false;
   }
-  return it->second->output_bus->HasSink();
+  return state->output_bus->HasSink();
 }
 
 output::OutputBus* PlayoutEngine::GetOutputBus(int32_t channel_id) {
   std::lock_guard<std::mutex> lock(channels_mutex_);
 
-  auto it = channels_.find(channel_id);
-  if (it == channels_.end() || !it->second) {
+  auto* state = FindInstanceLocked(channel_id);
+  if (!state) {
     return nullptr;
   }
 
-  return it->second->output_bus.get();
+  return state->output_bus.get();
 }
 
 std::optional<ProgramFormat> PlayoutEngine::GetProgramFormat(int32_t channel_id) {
   std::lock_guard<std::mutex> lock(channels_mutex_);
 
-  auto it = channels_.find(channel_id);
-  if (it == channels_.end() || !it->second) {
+  auto* state = FindInstanceLocked(channel_id);
+  if (!state) {
     return std::nullopt;
   }
 
-  return it->second->program_format;
+  return state->program_format;
 }
 
 void PlayoutEngine::FinalizeLiveOutput(int32_t channel_id) {
   std::lock_guard<std::mutex> lock(channels_mutex_);
 
-  auto it = channels_.find(channel_id);
-  if (it == channels_.end() || !it->second) {
+  auto* state = FindInstanceLocked(channel_id);
+  if (!state) {
     return;
   }
-
-  auto& state = it->second;
 
   // INV-P9-NO-BUS-REPLACEMENT: OutputBus is created once at StartChannel, never replaced.
   // Do NOT create a new bus here; use the existing one from channel state.
@@ -1957,12 +2085,11 @@ void PlayoutEngine::ConnectRendererToOutputBus(int32_t channel_id) {
 void PlayoutEngine::DisconnectRendererFromOutputBus(int32_t channel_id) {
   std::lock_guard<std::mutex> lock(channels_mutex_);
 
-  auto it = channels_.find(channel_id);
-  if (it == channels_.end() || !it->second) {
+  auto* state = FindInstanceLocked(channel_id);
+  if (!state) {
     return;
   }
 
-  auto& state = it->second;
   if (state->program_output) {
     state->program_output->ClearOutputBus();
     std::cout << "[PlayoutEngine] Renderer disconnected from OutputBus for channel " << channel_id << std::endl;
@@ -1979,9 +2106,8 @@ void PlayoutEngine::OnLiveProducerEOF(int32_t channel_id, const std::string& seg
             << " (boundary remains at scheduled time)" << std::endl;
 
   std::lock_guard<std::mutex> lock(channels_mutex_);
-  auto it = channels_.find(channel_id);
-  if (it == channels_.end() || !it->second) return;
-  PlayoutInstance* state = it->second.get();
+  auto* state = FindInstanceLocked(channel_id);
+  if (!state) return;
   if (!state->timeline_controller) return;
 
   int64_t boundary_ct_us = 0;

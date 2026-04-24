@@ -1269,6 +1269,20 @@ namespace retrovue
           interface_->AttachBlockPlanSignalSource(
               channel_id,
               [engine_ptr]() { return engine_ptr->CaptureReadinessSignals(); });
+
+          // Option C Turn D: bridge the bootstrap gate snapshot into the
+          // per-channel CustomMetricsProvider. Observational only; detach
+          // in the session-stop path below mirrors the readiness detach.
+          interface_->AttachBootstrapGateSource(
+              channel_id,
+              [engine_ptr]() {
+                auto s = engine_ptr->GetBootstrapGateSnapshot();
+                bootstrap::GateMetricsSnapshot out{};
+                out.state = s.state;
+                out.kickoff_fired = s.kickoff_fired;
+                out.last_kickoff = s.last_kickoff;
+                return out;
+              });
         }
 
         blockplan_session_->engine->Start();
@@ -1391,6 +1405,10 @@ namespace retrovue
       // invoke the captured PipelineManager* — the attach/detach mutex on
       // ReadinessControlBox guarantees any in-flight scrape has completed.
       interface_->DetachBlockPlanSignalSource(blockplan_session_->channel_id);
+
+      // Option C Turn D: detach bootstrap-gate snapshot getter for the
+      // same lifetime-safety reason — the getter captures PipelineManager*.
+      interface_->DetachBootstrapGateSource(blockplan_session_->channel_id);
 
       // Stop execution engine (joins thread internally)
       if (blockplan_session_->engine) {

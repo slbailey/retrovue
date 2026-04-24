@@ -294,6 +294,24 @@ class VideoLookaheadBuffer {
   int lookahead_target_;  // INV-FIVS-LOOKAHEAD-001: frames ahead of consumer before parking
   std::atomic<bool> audio_boost_{false};
 
+  // INV-AUDIO-LIVENESS-001 (Step 2 — audio-burst hysteresis):
+  // Sticky flag set when audio depth drops below LowWaterMs(), cleared
+  // when audio depth crosses HighWaterMs(). While set, the fill thread
+  // does NOT park on video lookahead — it keeps decoding (and the
+  // drop-video-for-audio path discards surplus video frames) until
+  // audio is comfortably above high-water. This prevents the park/
+  // unpark pingpong where audio_liveness wakes decode exactly one
+  // frame and immediately re-park.
+  std::atomic<bool> audio_burst_active_{false};
+
+  // INV-AUDIO-LIVENESS-001 (Step 4 — AV_LEAD_CLAMP starvation bypass):
+  // Hysteresis flag: set when audio_buffer depth drops below LowWaterMs,
+  // cleared when depth crosses HighWaterMs. While set, AV_LEAD_CLAMP is
+  // bypassed so the full decoded audio burst can reach the buffer — the
+  // clamp's overshoot-prevention purpose is inverted during starvation.
+  // Audio buffer's own hard_cap_ms remains the safety ceiling.
+  std::atomic<bool> av_lead_clamp_bypass_active_{false};
+
   // INV-BUFFER-HYSTERESIS-001: Dual-threshold steady-state fill control.
   // true  = fill thread is actively decoding (depth <= low water).
   // false = fill thread is parked (depth >= high water).
