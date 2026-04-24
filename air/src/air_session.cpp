@@ -308,10 +308,10 @@ bool AirSession::SeedActiveBlockInternal(const Block& block) {
 }
 
 bool AirSession::AddQueuedBlock(const Block& block,
-                                const std::string& /*predecessor_id*/,
+                                const std::string& predecessor_id,
                                 std::string* reason_out) {
   // IR2.1: structural admission runs first, without holding the queue
-  // lock. Predecessor continuity lands in IR2.3.
+  // lock.
   if (!ValidateBlockStructure(block, reason_out)) return false;
 
   std::lock_guard<std::mutex> lk(queue_mutex_);
@@ -327,6 +327,24 @@ bool AirSession::AddQueuedBlock(const Block& block,
   if (!ReconcileBlockCanonical(canonical_, admitted, reason_out)) {
     return false;
   }
+
+  // IR2.3: predecessor continuity. The tail is the last queued block
+  // if any, else the active block (NO_SESSION above guarantees an
+  // active block exists). predecessor_id MUST name the tail, and the
+  // incoming block's start_utc_ms MUST equal the tail's end_utc_ms —
+  // gaps and overlaps are both rejected with GAP_OR_OVERLAP in v1.
+  const Block& tail_block = queued_blocks_.empty()
+                                ? active_block_->block()
+                                : queued_blocks_.back().block();
+  if (predecessor_id != tail_block.block_id) {
+    if (reason_out) *reason_out = "PREDECESSOR_MISMATCH";
+    return false;
+  }
+  if (admitted.start_utc_ms != tail_block.end_utc_ms) {
+    if (reason_out) *reason_out = "GAP_OR_OVERLAP";
+    return false;
+  }
+
   queued_blocks_.emplace_back(std::move(admitted));
   // If the priming pipeline is running (OpenAir occurred), wake it so
   // the new block's segments get primed eagerly. next_raw currently

@@ -149,7 +149,7 @@ TEST(AirSessionAdmissionTest, AddQueuedBlockRejectsInvalidTimeWindow) {
   ASSERT_TRUE(session.AttachOutput(uds.client_fd));
   ASSERT_TRUE(session.SeedActiveBlock(MakeBlock("A", asset, 2, 1'700'000'000'000LL)));
 
-  Block bad = MakeBlock("B", asset, 2, 1'700'000'000'002'000LL);
+  Block bad = MakeBlock("B", asset, 2, 1'700'000'000'000LL + 2000);
   bad.end_utc_ms = bad.start_utc_ms;  // INVALID_TIME_WINDOW
 
   std::string reason;
@@ -173,8 +173,8 @@ TEST(AirSessionAdmissionTest, AddQueuedBlockRejectsEmptySegments) {
 
   Block bad;
   bad.block_id = "B";
-  bad.start_utc_ms = 1'700'000'000'002'000LL;
-  bad.end_utc_ms = 1'700'000'000'004'000LL;
+  bad.start_utc_ms = 1'700'000'000'000LL + 2000;
+  bad.end_utc_ms = 1'700'000'000'000LL + 4000;
   bad.canonical = TestCanonical();
   // segments deliberately empty
 
@@ -203,11 +203,11 @@ TEST(AirSessionAdmissionTest,
   ASSERT_TRUE(session.SeedActiveBlock(MakeBlock("A", asset, 2, 1'700'000'000'000LL)));
   std::string r;
   ASSERT_TRUE(session.AddQueuedBlock(
-      MakeBlock("B", asset, 2, 1'700'000'000'002'000LL), "A", &r));
+      MakeBlock("B", asset, 2, 1'700'000'000'000LL + 2000), "A", &r));
 
   const int64_t before = session.RevisionsRejectedTotal();
 
-  Block bad = MakeBlock("B", asset, 2, 1'700'000'000'002'000LL);
+  Block bad = MakeBlock("B", asset, 2, 1'700'000'000'000LL + 2000);
   bad.segments[0].duration_ms = 3000;  // sum = 4000, window = 2000
 
   std::string reason;
@@ -248,7 +248,7 @@ TEST(AirSessionAdmissionTest, AddQueuedBlockInheritsAbsentCanonical) {
       MakeBlock("A", asset, 2, 1'700'000'000'000LL)));
   ASSERT_EQ(session.QueueDepth(), 1);
 
-  Block b = MakeBlock("B", asset, 2, 1'700'000'000'002'000LL);
+  Block b = MakeBlock("B", asset, 2, 1'700'000'000'000LL + 2000);
   b.canonical = ChannelCanonical{};  // absent — inheritance branch
 
   std::string reason;
@@ -273,7 +273,7 @@ TEST(AirSessionAdmissionTest, AddQueuedBlockRejectsMismatchedCanonical) {
   ASSERT_TRUE(session.SeedActiveBlock(
       MakeBlock("A", asset, 2, 1'700'000'000'000LL)));
 
-  Block b = MakeBlock("B", asset, 2, 1'700'000'000'002'000LL);
+  Block b = MakeBlock("B", asset, 2, 1'700'000'000'000LL + 2000);
   b.canonical.audio.sample_rate = 44100;  // was 48000 in TestCanonical()
 
   std::string reason;
@@ -300,17 +300,130 @@ TEST(AirSessionAdmissionTest, PutBlockRevisionRejectsMismatchedCanonical) {
       MakeBlock("A", asset, 2, 1'700'000'000'000LL)));
   std::string r;
   ASSERT_TRUE(session.AddQueuedBlock(
-      MakeBlock("B", asset, 2, 1'700'000'000'002'000LL), "A", &r));
+      MakeBlock("B", asset, 2, 1'700'000'000'000LL + 2000), "A", &r));
 
   const int64_t before = session.RevisionsRejectedTotal();
 
-  Block b_rev = MakeBlock("B", asset, 2, 1'700'000'000'002'000LL);
+  Block b_rev = MakeBlock("B", asset, 2, 1'700'000'000'000LL + 2000);
   b_rev.canonical.video.width = 1280;  // was 968 in TestCanonical()
 
   std::string reason;
   EXPECT_FALSE(session.PutBlockRevision(b_rev, &reason));
   EXPECT_EQ(reason, "CANONICAL_MISMATCH");
   EXPECT_EQ(session.RevisionsRejectedTotal(), before + 1);
+
+  session.Close();
+  uds.Teardown();
+}
+
+// --- IR2.3: predecessor continuity -------------------------------------
+
+// predecessor_id must name the current queue tail. Queue empty beyond
+// active → tail is active; here predecessor="Z" names neither.
+TEST(AirSessionAdmissionTest, AddQueuedBlockRejectsPredecessorMismatch) {
+  const std::string asset = ResolveSampleA();
+  if (!std::filesystem::exists(asset)) GTEST_SKIP() << "SampleA not found";
+
+  UdsFixture uds;
+  uds.Setup("pred_mismatch");
+
+  AirSession session;
+  ASSERT_TRUE(session.AttachOutput(uds.client_fd));
+  ASSERT_TRUE(session.SeedActiveBlock(
+      MakeBlock("A", asset, 2, 1'700'000'000'000LL)));
+
+  Block b = MakeBlock("B", asset, 2, 1'700'000'000'000LL + 2000);
+
+  std::string reason;
+  EXPECT_FALSE(session.AddQueuedBlock(b, "Z", &reason));
+  EXPECT_EQ(reason, "PREDECESSOR_MISMATCH");
+  EXPECT_EQ(session.QueueDepth(), 1);
+
+  session.Close();
+  uds.Teardown();
+}
+
+// Gap: supplied block starts after tail.end_utc_ms.
+TEST(AirSessionAdmissionTest, AddQueuedBlockRejectsGap) {
+  const std::string asset = ResolveSampleA();
+  if (!std::filesystem::exists(asset)) GTEST_SKIP() << "SampleA not found";
+
+  UdsFixture uds;
+  uds.Setup("gap");
+
+  AirSession session;
+  ASSERT_TRUE(session.AttachOutput(uds.client_fd));
+  ASSERT_TRUE(session.SeedActiveBlock(
+      MakeBlock("A", asset, 2, 1'700'000'000'000LL)));  // A.end = a+2000
+
+  // B starts 500ms after A ends → gap.
+  Block b = MakeBlock("B", asset, 2, 1'700'000'000'000LL + 2500);
+
+  std::string reason;
+  EXPECT_FALSE(session.AddQueuedBlock(b, "A", &reason));
+  EXPECT_EQ(reason, "GAP_OR_OVERLAP");
+  EXPECT_EQ(session.QueueDepth(), 1);
+
+  session.Close();
+  uds.Teardown();
+}
+
+// Overlap: supplied block starts before tail.end_utc_ms.
+TEST(AirSessionAdmissionTest, AddQueuedBlockRejectsOverlap) {
+  const std::string asset = ResolveSampleA();
+  if (!std::filesystem::exists(asset)) GTEST_SKIP() << "SampleA not found";
+
+  UdsFixture uds;
+  uds.Setup("overlap");
+
+  AirSession session;
+  ASSERT_TRUE(session.AttachOutput(uds.client_fd));
+  ASSERT_TRUE(session.SeedActiveBlock(
+      MakeBlock("A", asset, 2, 1'700'000'000'000LL)));  // A.end = a+2000
+
+  // B starts 500ms before A ends → overlap.
+  Block b = MakeBlock("B", asset, 2, 1'700'000'000'000LL + 1500);
+
+  std::string reason;
+  EXPECT_FALSE(session.AddQueuedBlock(b, "A", &reason));
+  EXPECT_EQ(reason, "GAP_OR_OVERLAP");
+  EXPECT_EQ(session.QueueDepth(), 1);
+
+  session.Close();
+  uds.Teardown();
+}
+
+// Predecessor must be the queue TAIL, not just any block. With A active
+// and B queued, supplying C with predecessor="A" is a mismatch — the
+// tail is B, and Core's view of the editorial chain is broken if it
+// thinks C follows A.
+TEST(AirSessionAdmissionTest, AddQueuedBlockRejectsTailShadowedByQueued) {
+  const std::string asset = ResolveSampleA();
+  if (!std::filesystem::exists(asset)) GTEST_SKIP() << "SampleA not found";
+
+  UdsFixture uds;
+  uds.Setup("tail_is_queued");
+
+  AirSession session;
+  ASSERT_TRUE(session.AttachOutput(uds.client_fd));
+  ASSERT_TRUE(session.SeedActiveBlock(
+      MakeBlock("A", asset, 2, 1'700'000'000'000LL)));
+  std::string r;
+  ASSERT_TRUE(session.AddQueuedBlock(
+      MakeBlock("B", asset, 2, 1'700'000'000'000LL + 2000), "A", &r));
+  // Queue state: A active, B queued. Tail is B.
+
+  Block c = MakeBlock("C", asset, 2, 1'700'000'000'000LL + 4000);
+
+  std::string reason;
+  EXPECT_FALSE(session.AddQueuedBlock(c, "A", &reason));
+  EXPECT_EQ(reason, "PREDECESSOR_MISMATCH")
+      << "predecessor must name the queue tail, not the active block";
+  EXPECT_EQ(session.QueueDepth(), 2);  // C was not enqueued
+
+  // Supplying C with correct predecessor="B" accepts.
+  ASSERT_TRUE(session.AddQueuedBlock(c, "B", &reason));
+  EXPECT_EQ(session.QueueDepth(), 3);
 
   session.Close();
   uds.Teardown();

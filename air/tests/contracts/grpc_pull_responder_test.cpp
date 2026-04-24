@@ -209,7 +209,9 @@ TEST(GrpcPullResponderTest, QueueLowTriggersRequestAndEnqueuesReturnedBlock) {
   session.SetPullResponder(MakeGrpcPullResponder(channel, /*channel_id=*/1));
   session.SetPullTargetDepth(2);  // active + 1 queued
 
-  const Block a = MakeBlock("A", asset, 2, a_start);
+  // Single-segment A (1000ms). The stub returns B at a_start+1000 —
+  // flush with A.end under the IR2.3 continuity rule.
+  const Block a = MakeBlock("A", asset, 1, a_start);
   ASSERT_TRUE(session.SeedActiveBlock(a));
   ASSERT_TRUE(session.OpenAir());
 

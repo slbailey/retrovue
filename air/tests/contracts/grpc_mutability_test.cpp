@@ -551,5 +551,50 @@ TEST(GrpcMutabilityTest, PutBlockRevision_CanonicalMismatchRejected) {
   f.Teardown();
 }
 
+// --- IR2.3: predecessor continuity over the wire -----------------------
+
+TEST(GrpcMutabilityTest, SupplyBlock_PredecessorMismatchRejected) {
+  // Fixture seeds A active, B queued. Tail is B; supplying C with
+  // predecessor="A" is a PREDECESSOR_MISMATCH.
+  GrpcFixture f;
+  if (!f.Setup("ir23_supply_pm", /*seed_and_queue=*/true)) GTEST_SKIP();
+
+  grpc::ClientContext ctx;
+  retrovue::air::v1::SupplyBlockRequest req;
+  req.set_channel_id(1);
+  req.set_predecessor_id("A");  // tail is actually B
+  BuildBlockProto(req.mutable_block(), "C", ResolveSampleA(), 2,
+                  1'700'000'000'000LL + 40000);
+
+  retrovue::air::v1::SupplyBlockResponse resp;
+  ASSERT_TRUE(f.stub->SupplyBlock(&ctx, req, &resp).ok());
+  EXPECT_FALSE(resp.ok());
+  EXPECT_EQ(resp.reason(), "PREDECESSOR_MISMATCH");
+
+  f.Teardown();
+}
+
+TEST(GrpcMutabilityTest, SupplyBlock_GapOrOverlapRejected) {
+  // Fixture: A active (a_start..a_start+20000), B queued
+  // (a_start+20000..a_start+40000). Tail is B. Supply C with
+  // predecessor="B" but a window starting 5000ms after B.end — a gap.
+  GrpcFixture f;
+  if (!f.Setup("ir23_supply_gap", /*seed_and_queue=*/true)) GTEST_SKIP();
+
+  grpc::ClientContext ctx;
+  retrovue::air::v1::SupplyBlockRequest req;
+  req.set_channel_id(1);
+  req.set_predecessor_id("B");
+  BuildBlockProto(req.mutable_block(), "C", ResolveSampleA(), 2,
+                  1'700'000'000'000LL + 45000);  // B.end is +40000
+
+  retrovue::air::v1::SupplyBlockResponse resp;
+  ASSERT_TRUE(f.stub->SupplyBlock(&ctx, req, &resp).ok());
+  EXPECT_FALSE(resp.ok());
+  EXPECT_EQ(resp.reason(), "GAP_OR_OVERLAP");
+
+  f.Teardown();
+}
+
 }  // namespace
 }  // namespace retrovue::air
