@@ -43,8 +43,11 @@ class AirControlServiceImpl final
       const retrovue::air::v1::GetSessionStatusRequest* request,
       retrovue::air::v1::GetSessionStatusResponse* response) override;
 
-  // --- Execution queue surface (Phase A: stubs returning UNIMPLEMENTED) ---
-  // Semantics land in Phase B (queue model) and Phase C (SeamController).
+  // --- Execution queue surface ---
+  // SupplyBlock / PutBlockRevision / RetireBlock are wired to AirSession.
+  // All three return grpc::Status::OK for well-formed requests; admission
+  // outcomes live in the response body (ok + reason) per the IR1
+  // transport-vs-business contract.
   grpc::Status SupplyBlock(
       grpc::ServerContext* context,
       const retrovue::air::v1::SupplyBlockRequest* request,

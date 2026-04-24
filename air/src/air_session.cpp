@@ -275,26 +275,24 @@ bool AirSession::AddQueuedBlock(const Block& block,
 
 bool AirSession::PutBlockRevision(const Block& block,
                                   std::string* reason_out) {
-  auto set_reason = [&](const char* r) {
+  // IR1a.5: every early return is a rejection; increment the rejected
+  // tally from a single choke point. The accept path below increments
+  // the accepted tally.
+  auto reject = [&](const char* r) {
     if (reason_out) *reason_out = r;
+    revisions_rejected_total_.fetch_add(1, std::memory_order_relaxed);
+    return false;
   };
 
-  if (block.segments.empty()) {
-    set_reason("EMPTY_SEGMENTS");
-    return false;
-  }
+  if (block.segments.empty()) return reject("EMPTY_SEGMENTS");
 
   std::lock_guard<std::mutex> lk(queue_mutex_);
-  if (!active_block_.has_value()) {
-    set_reason("NO_SESSION");
-    return false;
-  }
+  if (!active_block_.has_value()) return reject("NO_SESSION");
 
   // Active-block match takes precedence per vault: a revision against
   // active is ACTIVE_BLOCK_IMMUTABLE regardless of segment states.
   if (active_block_->block_id() == block.block_id) {
-    set_reason("ACTIVE_BLOCK_IMMUTABLE");
-    return false;
+    return reject("ACTIVE_BLOCK_IMMUTABLE");
   }
 
   // Locate in queued_blocks_.
@@ -305,10 +303,7 @@ bool AirSession::PutBlockRevision(const Block& block,
       break;
     }
   }
-  if (idx < 0) {
-    set_reason("BLOCK_NOT_IN_QUEUE");
-    return false;
-  }
+  if (idx < 0) return reject("BLOCK_NOT_IN_QUEUE");
 
   // Scan target for non-kRaw segments. Vault precedence:
   // priming > armed/primed/retired/failed > active.
@@ -321,14 +316,8 @@ bool AirSession::PutBlockRevision(const Block& block,
     has_non_raw = true;
     if (s == SegmentPrimeState::kPriming) has_priming = true;
   }
-  if (has_priming) {
-    set_reason("BLOCK_PRIMING");
-    return false;
-  }
-  if (has_non_raw) {
-    set_reason("BLOCK_ARMED");
-    return false;
-  }
+  if (has_priming) return reject("BLOCK_PRIMING");
+  if (has_non_raw) return reject("BLOCK_ARMED");
 
   // Accept: replace the queued BlockRuntime with a fresh one from the
   // revision. Per Pass-B decision, this is a NEW candidate — the
@@ -337,24 +326,27 @@ bool AirSession::PutBlockRevision(const Block& block,
   // source retired via BlockRuntime's destructor. No in-place revival.
   queued_blocks_[idx] = BlockRuntime(block);
   if (priming_pipeline_) priming_pipeline_->Kick();
+  revisions_accepted_total_.fetch_add(1, std::memory_order_relaxed);
   return true;
 }
 
 bool AirSession::RetireBlock(const std::string& block_id,
                              std::string* reason_out) {
-  auto set_reason = [&](const char* r) {
+  // IR1a.5: mirrors PutBlockRevision — single reject choke-point plus
+  // one accept increment. Retirements and revisions share the same
+  // accepted/rejected tallies because they are two halves of the same
+  // "Core mutates the queue" surface.
+  auto reject = [&](const char* r) {
     if (reason_out) *reason_out = r;
+    revisions_rejected_total_.fetch_add(1, std::memory_order_relaxed);
+    return false;
   };
 
   std::lock_guard<std::mutex> lk(queue_mutex_);
-  if (!active_block_.has_value()) {
-    set_reason("NO_SESSION");
-    return false;
-  }
+  if (!active_block_.has_value()) return reject("NO_SESSION");
 
   if (active_block_->block_id() == block_id) {
-    set_reason("ACTIVE_BLOCK_IMMUTABLE");
-    return false;
+    return reject("ACTIVE_BLOCK_IMMUTABLE");
   }
 
   int idx = -1;
@@ -364,10 +356,7 @@ bool AirSession::RetireBlock(const std::string& block_id,
       break;
     }
   }
-  if (idx < 0) {
-    set_reason("BLOCK_NOT_IN_QUEUE");
-    return false;
-  }
+  if (idx < 0) return reject("BLOCK_NOT_IN_QUEUE");
 
   // If the SeamController has an armable target whose to_block_id
   // matches the retiree, Retract (valid from kObserving/kArmed only;
@@ -389,6 +378,7 @@ bool AirSession::RetireBlock(const std::string& block_id,
   // discards its local primed payload. The worker thread itself is
   // unaffected.
   queued_blocks_.erase(queued_blocks_.begin() + idx);
+  revisions_accepted_total_.fetch_add(1, std::memory_order_relaxed);
   return true;
 }
 

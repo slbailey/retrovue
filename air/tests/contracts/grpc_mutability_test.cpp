@@ -358,5 +358,104 @@ TEST(GrpcMutabilityTest, GrpcStatusAlwaysOkOnAdmissionDecision) {
   f.Teardown();
 }
 
+// --- IR1a.5: mutation observability via GetSessionStatus ----------------
+
+TEST(GrpcMutabilityTest, GetSessionStatusTalliesAcceptsAndRejects) {
+  // Drive a mixed sequence of mutation RPCs through the wire and verify
+  // the admission outcomes are reflected in GetSessionStatus's
+  // revisions_accepted_total / revisions_rejected_total counters.
+  // Fixture seeds: A active, B queued (all-raw).
+  GrpcFixture f;
+  if (!f.Setup("status_tally", /*seed_and_queue=*/true)) GTEST_SKIP();
+
+  const std::string asset = ResolveSampleA();
+  int expected_accepts = 0;
+  int expected_rejects = 0;
+
+  // Reject 1: revision of active A → ACTIVE_BLOCK_IMMUTABLE.
+  {
+    grpc::ClientContext ctx;
+    retrovue::air::v1::PutBlockRevisionRequest req;
+    req.set_channel_id(1);
+    BuildBlockProto(req.mutable_block(), "A", asset, 2, 1'700'000'000'000LL);
+    retrovue::air::v1::PutBlockRevisionResponse resp;
+    ASSERT_TRUE(f.stub->PutBlockRevision(&ctx, req, &resp).ok());
+    EXPECT_FALSE(resp.ok());
+    ++expected_rejects;
+  }
+  // Reject 2: revision of unknown Z → BLOCK_NOT_IN_QUEUE.
+  {
+    grpc::ClientContext ctx;
+    retrovue::air::v1::PutBlockRevisionRequest req;
+    req.set_channel_id(1);
+    BuildBlockProto(req.mutable_block(), "Z", asset, 2, 1'700'000'000'000LL);
+    retrovue::air::v1::PutBlockRevisionResponse resp;
+    ASSERT_TRUE(f.stub->PutBlockRevision(&ctx, req, &resp).ok());
+    EXPECT_FALSE(resp.ok());
+    ++expected_rejects;
+  }
+  // Reject 3: revision of B with no segments → EMPTY_SEGMENTS.
+  {
+    grpc::ClientContext ctx;
+    retrovue::air::v1::PutBlockRevisionRequest req;
+    req.set_channel_id(1);
+    req.mutable_block()->set_block_id("B");
+    FillCanonical(req.mutable_block()->mutable_canonical());
+    retrovue::air::v1::PutBlockRevisionResponse resp;
+    ASSERT_TRUE(f.stub->PutBlockRevision(&ctx, req, &resp).ok());
+    EXPECT_FALSE(resp.ok());
+    ++expected_rejects;
+  }
+  // Accept 1: revision of all-raw queued B.
+  {
+    grpc::ClientContext ctx;
+    retrovue::air::v1::PutBlockRevisionRequest req;
+    req.set_channel_id(1);
+    BuildBlockProto(req.mutable_block(), "B", asset, 3,
+                    1'700'000'000'000LL + 20000);
+    retrovue::air::v1::PutBlockRevisionResponse resp;
+    ASSERT_TRUE(f.stub->PutBlockRevision(&ctx, req, &resp).ok());
+    EXPECT_TRUE(resp.ok());
+    ++expected_accepts;
+  }
+  // Reject 4: retire unknown Z → BLOCK_NOT_IN_QUEUE.
+  {
+    grpc::ClientContext ctx;
+    retrovue::air::v1::RetireBlockRequest req;
+    req.set_channel_id(1);
+    req.set_block_id("Z");
+    retrovue::air::v1::RetireBlockResponse resp;
+    ASSERT_TRUE(f.stub->RetireBlock(&ctx, req, &resp).ok());
+    EXPECT_FALSE(resp.ok());
+    ++expected_rejects;
+  }
+  // Accept 2: retire queued B.
+  {
+    grpc::ClientContext ctx;
+    retrovue::air::v1::RetireBlockRequest req;
+    req.set_channel_id(1);
+    req.set_block_id("B");
+    retrovue::air::v1::RetireBlockResponse resp;
+    ASSERT_TRUE(f.stub->RetireBlock(&ctx, req, &resp).ok());
+    EXPECT_TRUE(resp.ok());
+    ++expected_accepts;
+  }
+
+  // Readback via GetSessionStatus. Counters must match the tallies we
+  // observed in the response bodies — same truth from the body-level
+  // outcome and the status-level snapshot.
+  {
+    grpc::ClientContext ctx;
+    retrovue::air::v1::GetSessionStatusRequest req;
+    req.set_channel_id(1);
+    retrovue::air::v1::GetSessionStatusResponse resp;
+    ASSERT_TRUE(f.stub->GetSessionStatus(&ctx, req, &resp).ok());
+    EXPECT_EQ(resp.revisions_accepted_total(), expected_accepts);
+    EXPECT_EQ(resp.revisions_rejected_total(), expected_rejects);
+  }
+
+  f.Teardown();
+}
+
 }  // namespace
 }  // namespace retrovue::air

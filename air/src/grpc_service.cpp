@@ -231,23 +231,26 @@ grpc::Status AirControlServiceImpl::GetSessionStatus(
   response->set_warming_duration_us(session_.WarmingDurationUs());
   response->set_bootstrap_total_duration_us(session_.BootstrapTotalDurationUs());
   response->set_failed_start_reason(session_.FailedStartReason());
-  // Execution-queue diagnostics. Phase B: queue_depth and segment_depth are
-  // real. Other counters are still placeholders — they'll land with
-  // SeamController (Phase C) and revision/retirement wiring.
+  // Execution-queue diagnostics. queue_depth / segment_depth land in
+  // Phase B; revisions_accepted_total / revisions_rejected_total land
+  // in IR1a.5 (mutation observability). pad_bridge_ms_total,
+  // seams_executed_total, and block_transitions_total remain hardcoded
+  // to 0 pending the C-phase seam-execution wiring.
   response->set_queue_depth(session_.QueueDepth());
   response->set_segment_depth(session_.SegmentDepth());
   response->set_pad_bridge_ms_total(0);
   response->set_seams_executed_total(0);
   response->set_block_transitions_total(0);
-  response->set_revisions_accepted_total(0);
-  response->set_revisions_rejected_total(0);
+  response->set_revisions_accepted_total(session_.RevisionsAcceptedTotal());
+  response->set_revisions_rejected_total(session_.RevisionsRejectedTotal());
   return grpc::Status::OK;
 }
 
-// --- Execution queue handlers (Phase A: proto surface declared; semantics
-// arrive in Phase B with the queue model and Phase C with SeamController).
-// Stubs return UNIMPLEMENTED so callers see an honest "not yet implemented"
-// rather than a silent success.
+// --- Execution queue handlers ---
+// SupplyBlock, PutBlockRevision, and RetireBlock are wired through to
+// AirSession. All three return grpc::Status::OK for every well-formed
+// request and encode admission outcomes as (ok, reason) in the response
+// body per the IR1 transport-vs-business contract.
 
 grpc::Status AirControlServiceImpl::SupplyBlock(
     grpc::ServerContext* /*context*/,

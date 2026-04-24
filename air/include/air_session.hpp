@@ -244,6 +244,18 @@ class AirSession {
     return block_transitions_total_.load();
   }
 
+  // Mutation-outcome tallies (IR1a.5). Every call to PutBlockRevision or
+  // RetireBlock increments exactly one of these: accepted on the single
+  // accept return, rejected on every reason-coded early return. Observable
+  // via GetSessionStatus so Core / operators can correlate push decisions
+  // with admission outcomes without parsing per-call response bodies.
+  int64_t RevisionsAcceptedTotal() const {
+    return revisions_accepted_total_.load();
+  }
+  int64_t RevisionsRejectedTotal() const {
+    return revisions_rejected_total_.load();
+  }
+
   // Pull-loop diagnostics (C2.4). Counters for pull requests issued by
   // AirSession's pull worker, requests that returned a Block (supplied),
   // and requests that returned nullopt (empty). Single-outstanding per
@@ -386,6 +398,8 @@ class AirSession {
   std::atomic<int64_t> block_transitions_total_{0};
   std::atomic<int64_t> pad_bridge_events_total_{0};
   std::atomic<int64_t> pad_bridge_ms_total_{0};
+  std::atomic<int64_t> revisions_accepted_total_{0};
+  std::atomic<int64_t> revisions_rejected_total_{0};
   std::atomic<int64_t> test_prime_delay_ms_{0};
   std::vector<int64_t> test_prime_delays_ms_;
   std::atomic<std::size_t> test_prime_call_idx_{0};
