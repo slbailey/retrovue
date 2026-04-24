@@ -64,6 +64,21 @@ service AirControl {
   rpc RetireBlock(RetireBlockRequest) returns (RetireBlockResponse);
 }
 
+// --- Pull-path surface (IR1b) -------------------------------------------
+// Inverse of AirControl: AIR is the client; Core hosts this service.
+// When AIR's execution queue is below target depth, the pull worker
+// invokes GetSuccessorOf(predecessor_block_id) and Core either returns
+// a successor Block (supplied=true) or signals "no successor ready"
+// (supplied=false), in which case the pull worker backs off and retries
+// per INV-PULL-SINGLE-OUTSTANDING-001.
+//
+// IR1b deliberately carries no admission-validation fields; that lands
+// later alongside reason codes. Transport errors on this RPC are
+// treated as equivalent to supplied=false.
+service CoreBlockSupply {
+  rpc GetSuccessorOf(GetSuccessorOfRequest) returns (GetSuccessorOfResponse);
+}
+
 enum SessionStateProto {
   SESSION_STATE_UNSPECIFIED = 0;
   SESSION_STATE_NONE = 1;           // no session active
@@ -266,4 +281,21 @@ message RetireBlockResponse {
   bool ok = 1;
   // Reason codes: "ACTIVE_BLOCK_IMMUTABLE", "BLOCK_NOT_IN_QUEUE".
   string reason = 2;
+}
+
+// --- Pull-path messages (IR1b) -------------------------------------------
+
+message GetSuccessorOfRequest {
+  int32 channel_id = 1;
+  // The block_id AIR wants a successor for. Either the active block's
+  // id (when the queue is empty beyond active) or the id of the tail
+  // queued block.
+  string predecessor_block_id = 2;
+}
+
+message GetSuccessorOfResponse {
+  // True when Core is returning a successor. When false, `block` is
+  // ignored and AIR's pull worker backs off.
+  bool supplied = 1;
+  Block block = 2;
 }
