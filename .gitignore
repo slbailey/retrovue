@@ -3,6 +3,10 @@ legacy/pkg/air/build/
 legacy/pkg/air/out/
 legacy/pkg/core/test_tmp.db
 legacy/pkg/core/=1.60.0
+
+# Local CMake build trees
+air/build/
+runtime/build/
 #========================================================================
 # General Ignores
 #========================================================================
