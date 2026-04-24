@@ -429,5 +429,40 @@ TEST(AirSessionAdmissionTest, AddQueuedBlockRejectsTailShadowedByQueued) {
   uds.Teardown();
 }
 
+// --- IR2.4: PutBlockRevision window-lock --------------------------------
+
+// A revision whose window differs from the queued block's current
+// window is rejected with WINDOW_CHANGED; the rejection bumps the
+// revisions_rejected_total_ counter per the IR1a.5 contract.
+TEST(AirSessionAdmissionTest, PutBlockRevisionRejectsWindowChanged) {
+  const std::string asset = ResolveSampleA();
+  if (!std::filesystem::exists(asset)) GTEST_SKIP() << "SampleA not found";
+
+  UdsFixture uds;
+  uds.Setup("window_lock");
+
+  AirSession session;
+  ASSERT_TRUE(session.AttachOutput(uds.client_fd));
+  ASSERT_TRUE(session.SeedActiveBlock(
+      MakeBlock("A", asset, 2, 1'700'000'000'000LL)));
+  std::string r;
+  ASSERT_TRUE(session.AddQueuedBlock(
+      MakeBlock("B", asset, 2, 1'700'000'000'000LL + 2000), "A", &r));
+
+  const int64_t before = session.RevisionsRejectedTotal();
+
+  // Structurally valid block, same block_id, but a 4000ms window
+  // instead of 2000ms (4 segs x 1000ms). Window-changed.
+  Block b_rev = MakeBlock("B", asset, 4, 1'700'000'000'000LL + 2000);
+
+  std::string reason;
+  EXPECT_FALSE(session.PutBlockRevision(b_rev, &reason));
+  EXPECT_EQ(reason, "WINDOW_CHANGED");
+  EXPECT_EQ(session.RevisionsRejectedTotal(), before + 1);
+
+  session.Close();
+  uds.Teardown();
+}
+
 }  // namespace
 }  // namespace retrovue::air

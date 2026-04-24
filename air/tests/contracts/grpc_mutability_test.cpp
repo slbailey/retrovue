@@ -71,6 +71,35 @@ void BuildBlockProto(retrovue::air::v1::Block* out,
   }
 }
 
+// IR2.4 helper: build a block proto whose window is preserved at
+// `window_ms` total but split across `segment_count` segments with
+// varied durations. Used for revision-accept tests that want to
+// change segment layout without changing the editorial window.
+// Durations: all 10000ms except the last, which absorbs the remainder.
+void BuildBlockProtoWithWindow(retrovue::air::v1::Block* out,
+                               const std::string& block_id,
+                               const std::string& asset_path,
+                               int segment_count, int64_t start_utc_ms,
+                               int64_t window_ms) {
+  out->set_block_id(block_id);
+  out->set_start_utc_ms(start_utc_ms);
+  out->set_end_utc_ms(start_utc_ms + window_ms);
+  FillCanonical(out->mutable_canonical());
+  const int64_t uniform_ms = window_ms / segment_count;
+  int64_t accumulated = 0;
+  for (int i = 0; i < segment_count; ++i) {
+    auto* seg = out->add_segments();
+    seg->set_segment_id(block_id + ":" + std::to_string(i));
+    seg->set_asset_uri(asset_path);
+    seg->set_asset_start_offset_ms(0);
+    const int64_t d =
+        (i == segment_count - 1) ? (window_ms - accumulated) : uniform_ms;
+    seg->set_duration_ms(d);
+    seg->set_segment_index(i);
+    accumulated += d;
+  }
+}
+
 // Fixture: in-process gRPC server + client stub + seeded session with
 // Block A active and Block B queued. AirSession is NOT OpenAir()ed,
 // so queued B remains all-raw for mutability testing.
@@ -192,8 +221,10 @@ TEST(GrpcMutabilityTest, PutBlockRevision_AllRawAccepted) {
   grpc::ClientContext ctx;
   retrovue::air::v1::PutBlockRevisionRequest req;
   req.set_channel_id(1);
-  BuildBlockProto(req.mutable_block(), "B", ResolveSampleA(), 3,
-                  1'700'000'000'000LL + 20000);
+  // Window-preserving 3-segment revision (IR2.4): queued B is 20000ms
+  // wide, so the revision must be too.
+  BuildBlockProtoWithWindow(req.mutable_block(), "B", ResolveSampleA(), 3,
+                            1'700'000'000'000LL + 20000, 20000);
   retrovue::air::v1::PutBlockRevisionResponse resp;
   const auto status = f.stub->PutBlockRevision(&ctx, req, &resp);
   EXPECT_TRUE(status.ok())
@@ -406,13 +437,14 @@ TEST(GrpcMutabilityTest, GetSessionStatusTalliesAcceptsAndRejects) {
     EXPECT_FALSE(resp.ok());
     ++expected_rejects;
   }
-  // Accept 1: revision of all-raw queued B.
+  // Accept 1: revision of all-raw queued B. Window-preserving
+  // (IR2.4) so the 3-segment revision matches B's 20000ms window.
   {
     grpc::ClientContext ctx;
     retrovue::air::v1::PutBlockRevisionRequest req;
     req.set_channel_id(1);
-    BuildBlockProto(req.mutable_block(), "B", asset, 3,
-                    1'700'000'000'000LL + 20000);
+    BuildBlockProtoWithWindow(req.mutable_block(), "B", asset, 3,
+                              1'700'000'000'000LL + 20000, 20000);
     retrovue::air::v1::PutBlockRevisionResponse resp;
     ASSERT_TRUE(f.stub->PutBlockRevision(&ctx, req, &resp).ok());
     EXPECT_TRUE(resp.ok());
@@ -570,6 +602,27 @@ TEST(GrpcMutabilityTest, SupplyBlock_PredecessorMismatchRejected) {
   ASSERT_TRUE(f.stub->SupplyBlock(&ctx, req, &resp).ok());
   EXPECT_FALSE(resp.ok());
   EXPECT_EQ(resp.reason(), "PREDECESSOR_MISMATCH");
+
+  f.Teardown();
+}
+
+TEST(GrpcMutabilityTest, PutBlockRevision_WindowChangedRejected) {
+  // Fixture: B is queued with window start=a+20000, end=a+40000.
+  // Revise with a stretched window (3 segs x 10000ms = 30000ms) —
+  // window-lock rejects with WINDOW_CHANGED.
+  GrpcFixture f;
+  if (!f.Setup("ir24_revise_wc", /*seed_and_queue=*/true)) GTEST_SKIP();
+
+  grpc::ClientContext ctx;
+  retrovue::air::v1::PutBlockRevisionRequest req;
+  req.set_channel_id(1);
+  BuildBlockProto(req.mutable_block(), "B", ResolveSampleA(), 3,
+                  1'700'000'000'000LL + 20000);
+
+  retrovue::air::v1::PutBlockRevisionResponse resp;
+  ASSERT_TRUE(f.stub->PutBlockRevision(&ctx, req, &resp).ok());
+  EXPECT_FALSE(resp.ok());
+  EXPECT_EQ(resp.reason(), "WINDOW_CHANGED");
 
   f.Teardown();
 }

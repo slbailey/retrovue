@@ -266,9 +266,23 @@ TEST(AirSessionMutabilityTest, RevisionAcceptsAllRawBlockAndReplacesContents) {
   std::string r;
   ASSERT_TRUE(session.AddQueuedBlock(f.b, "A", &r));
 
-  // B has 2 segments; revision renames to a 3-segment variant.
-  Block b_rev = MakeBlock("B", f.asset, 3, f.b.start_utc_ms, 1000);
-  b_rev.end_utc_ms = f.b.start_utc_ms + 3000;
+  // B has 2x1000ms segments (window = 2000ms); revision renames to a
+  // 3-segment variant that preserves the editorial window per IR2.4:
+  // 500 + 500 + 1000 = 2000ms, same start/end as f.b.
+  Block b_rev;
+  b_rev.block_id = "B";
+  b_rev.start_utc_ms = f.b.start_utc_ms;
+  b_rev.end_utc_ms = f.b.end_utc_ms;
+  b_rev.canonical = f.b.canonical;
+  for (int i = 0; i < 3; ++i) {
+    Segment s;
+    s.segment_id = "B:" + std::to_string(i);
+    s.asset_uri = f.asset;
+    s.asset_start_offset_ms = 0;
+    s.duration_ms = (i < 2) ? 500 : 1000;
+    s.segment_index = i;
+    b_rev.segments.push_back(s);
+  }
   std::string reason;
   ASSERT_TRUE(session.PutBlockRevision(b_rev, &reason));
   EXPECT_TRUE(reason.empty());
@@ -392,9 +406,9 @@ TEST(AirSessionMutabilityTest,
   ASSERT_TRUE(session.ActiveBlock().has_value());
   // Can't easily access queued[0] from here without exposing another
   // helper; instead test via PutBlockRevision acceptance. A fresh block
-  // with all-raw segments accepts a revision.
-  Block b_rev = MakeBlock("B", f.asset, 1, f.b.start_utc_ms, 500);
-  b_rev.end_utc_ms = f.b.start_utc_ms + 500;
+  // with all-raw segments accepts a revision. IR2.4: the revision must
+  // preserve f.b's window (2000ms), so use a single 2000ms segment.
+  Block b_rev = MakeBlock("B", f.asset, 1, f.b.start_utc_ms, 2000);
   ASSERT_TRUE(session.PutBlockRevision(b_rev, &reason));
   EXPECT_EQ(session.SegmentDepth(), 2 + 1);  // A:2 + new B:1
 

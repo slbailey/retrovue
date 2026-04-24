@@ -416,6 +416,19 @@ bool AirSession::PutBlockRevision(const Block& block,
     return false;
   }
 
+  // IR2.4: revision preserves the editorial window. Revisions may
+  // freely change segment layout / asset URIs / segment_count, but
+  // start_utc_ms and end_utc_ms MUST match the queued block's current
+  // window — otherwise downstream continuity (IR2.3) silently breaks
+  // and Core's editorial snapshot is stale.
+  const Block& target_block = queued_blocks_[idx].block();
+  if (admitted.start_utc_ms != target_block.start_utc_ms ||
+      admitted.end_utc_ms != target_block.end_utc_ms) {
+    if (reason_out) *reason_out = "WINDOW_CHANGED";
+    revisions_rejected_total_.fetch_add(1, std::memory_order_relaxed);
+    return false;
+  }
+
   // Accept: replace the queued BlockRuntime with a fresh one from the
   // revision. Per Pass-B decision, this is a NEW candidate — the
   // previous BlockRuntime (and any attached resources) is destroyed.
